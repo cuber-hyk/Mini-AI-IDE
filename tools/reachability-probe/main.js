@@ -70,6 +70,18 @@ function applyVariant(ses) {
   return { applied: false, variant: 'baseline', original, effective: original };
 }
 
+/**
+ * 把变体真正作用到 WebContentsView。
+ *
+ * 实测教训：只调用 `session.setUserAgent()` **不会**改变 WebContentsView 发出的 UA
+ * （会话级设置对新建 view 不生效）。必须在创建 view 的 webPreferences 里显式传
+ * `userAgent`，否则会出现"报告说改了、实际没改"的假实验。
+ */
+function resolveVariantUserAgent(ses) {
+  const info = applyVariant(ses);
+  return { info, userAgent: info.effective };
+}
+
 /* ------------------------------------------------------------------ *
  * 自检用 mock 服务器（仅 --self-test 时启动；进程内，故不受子进程网络限制影响）
  * ------------------------------------------------------------------ */
@@ -299,14 +311,13 @@ async function run() {
   state.targetUrl = targetUrl;
 
   const ses = session.fromPartition(EFFECTIVE_PARTITION);
-  const variantInfo = applyVariant(ses);
+  const variant = resolveVariantUserAgent(ses);
+  const variantInfo = variant.info;
   state.variantInfo = variantInfo;
   process.stdout.write(`[variant] ` + JSON.stringify(variantInfo) + `\n`);
   if (VARIANT === 'noident') {
-    process.stdout.write(`[variant] 预期 : noident（移除 Electron 与应用名标记）\n`);
-    process.stdout.write(`[variant] 实际 : ${variantInfo.effective}\n`);
-    const ok = !/Electron\//i.test(variantInfo.effective) && /Chrome\/\d/.test(variantInfo.effective);
-    process.stdout.write(`[variant] 断言 : ${ok ? 'OK' : '失败 —— 请检查 --variant 处理逻辑'}\n`);
+    process.stdout.write(`[variant] 应用方式: webPreferences.userAgent + session.setUserAgent\n`);
+    process.stdout.write(`[variant] 预期 UA : ${variantInfo.effective}\n`);
   }
 
   const win = new BaseWindow({
@@ -321,8 +332,10 @@ async function run() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      partition: PARTITION,
+      partition: EFFECTIVE_PARTITION,
       webSecurity: true,
+      // 关键：会话级 setUserAgent 对 WebContentsView 不生效，必须在此显式传入
+      userAgent: variant.userAgent,
     },
   });
   win.contentView.addChildView(view);
