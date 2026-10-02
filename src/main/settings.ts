@@ -17,9 +17,13 @@ export interface Settings {
   lastRoot: string | null;
   /** 编辑器面板宽度（像素） */
   editorWidth: number | null;
+  /** 左侧目录树是否显示 */
+  sidebarVisible: boolean;
+  /** 左侧目录树宽度（像素） */
+  sidebarWidth: number | null;
 }
 
-const DEFAULTS: Settings = { lastRoot: null, editorWidth: null };
+const DEFAULTS: Settings = { lastRoot: null, editorWidth: null, sidebarVisible: true, sidebarWidth: null };
 
 /**
  * 生产设置文件名。
@@ -65,6 +69,10 @@ export class SettingsStore {
       if (typeof parsed.lastRoot === 'string' && parsed.lastRoot.length > 0) out.lastRoot = parsed.lastRoot;
       if (typeof parsed.editorWidth === 'number' && Number.isFinite(parsed.editorWidth) && parsed.editorWidth > 0) {
         out.editorWidth = Math.round(parsed.editorWidth);
+      }
+      if (typeof parsed.sidebarVisible === 'boolean') out.sidebarVisible = parsed.sidebarVisible;
+      if (typeof parsed.sidebarWidth === 'number' && Number.isFinite(parsed.sidebarWidth) && parsed.sidebarWidth > 0) {
+        out.sidebarWidth = Math.round(parsed.sidebarWidth);
       }
       return out;
     } catch (err) {

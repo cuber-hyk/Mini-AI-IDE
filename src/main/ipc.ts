@@ -79,5 +79,9 @@ export function registerFileIpc(getEditorWindow: () => BrowserWindow | null, ser
     CHANNELS.applyChange,
     CHANNELS.undoSave,
     CHANNELS.setPreviewPanel,
+    CHANNELS.setWebVisible,
+    CHANNELS.setSidebarVisible,
+    CHANNELS.setSidebarWidth,
+    CHANNELS.showDiffInEditor,
   ];
 }

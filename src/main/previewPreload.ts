@@ -14,12 +14,16 @@ const CH = {
   undoSave: 'return:undo',
   previewData: 'preview:data',
   setPreviewPanel: 'ui:set-preview-panel',
+  showDiffInEditor: 'ui:show-diff-in-editor',
 } as const;
 
 const bridge = {
   applyChange: (input: unknown) => ipcRenderer.invoke(CH.applyChange, input),
   undoSave: () => ipcRenderer.invoke(CH.undoSave),
   setPreviewPanel: (height: number) => ipcRenderer.invoke(CH.setPreviewPanel, height),
+  /** 请求在**编辑器内**显示该变更的 diff（与主流编辑器一致：先看 diff 再应用） */
+  showDiffInEditor: (collectionId: string, index: number) =>
+    ipcRenderer.invoke(CH.showDiffInEditor, collectionId, index),
   onPreviewData: (listener: (preview: unknown) => void) => {
     ipcRenderer.on(CH.previewData, (_e, preview) => listener(preview));
   },

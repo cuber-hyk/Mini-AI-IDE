@@ -179,6 +179,22 @@ body {
   cursor: default;
 }
 
+.pv-item-head button.pv-btn-compare {
+  background: #262a33;
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.pv-item-head button.pv-btn-compare:hover {
+  border-color: var(--accent);
+}
+
+/* 面板内仍保留可滚动的 diff 预览；但确认改动请用「在编辑器中对比」（更清晰） */
+.pv-hunks {
+  max-height: 220px;
+  overflow: auto;
+}
+
 .pv-hint {
   padding: 4px 7px;
   color: #e8c07a;

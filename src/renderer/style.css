@@ -276,56 +276,125 @@ body {
   font-style: italic;
 }
 
-/* 需求输入区：应用内写需求 → 复制 prompt → 自己粘贴到右侧网页 */
+/* 需求输入区：参考右侧 DeepSeek 输入框的观感（圆角外壳 + 聚焦描边 + 圆形按钮） */
 .prompt-bar {
   flex: 0 0 auto;
-  height: 104px;
+  padding: 8px 10px 10px;
+  background: var(--bg);
   border-top: 1px solid var(--border);
-  background: #191c22;
-  padding: 7px 10px 9px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
 }
 
-.prompt-row {
+.prompt-shell {
   display: flex;
-  gap: 6px;
-  flex: 1;
-  min-height: 0;
+  align-items: flex-end;
+  gap: 8px;
+  background: #1e222b;
+  border: 1px solid #333a47;
+  border-radius: 14px;
+  padding: 7px 8px 7px 14px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.prompt-shell:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(91, 141, 239, 0.18);
 }
 
 .requirement {
-  flex: 1;
-  min-height: 0;
+  flex: 1 1 auto;
+  min-height: 22px;
+  max-height: 120px;
   resize: none;
-  background: #14161b;
+  background: transparent;
   color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 6px 8px;
+  border: none;
+  outline: none;
+  padding: 2px 0;
   font: inherit;
   line-height: 1.5;
 }
 
-.requirement:focus {
-  outline: none;
-  border-color: var(--accent);
+.requirement::placeholder {
+  color: #6b7280;
 }
 
+/* 圆形主按钮（DeepSeek 的发送键观感） */
 .prompt-bar button.primary {
-  align-self: stretch;
-  min-width: 104px;
-  background: #2c5cc5;
-  border-color: #3f6fd8;
-  color: #fff;
-  font-weight: 600;
-  white-space: nowrap;
   flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  border-radius: 50%;
+  border: none;
+  background: #4d6bfe;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.05;
+  cursor: pointer;
+  white-space: normal;
+  padding: 0;
 }
 
 .prompt-bar button.primary:hover:not(:disabled) {
-  background: #3768d8;
+  background: #6280ff;
+}
+
+/* 目录树与编辑器之间的拖拽边线 */
+.sidebar-resizer {
+  flex: 0 0 auto;
+  width: 4px;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.12s ease;
+}
+
+.sidebar-resizer:hover,
+.sidebar-resizer.dragging {
+  background: var(--accent);
+}
+
+.sidebar[hidden],
+.sidebar-resizer[hidden] {
+  display: none;
+}
+
+/* diff 视图操作条 */
+.diff-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.diff-actions[hidden] {
+  display: none;
+}
+
+.diff-label {
+  color: #e8c07a;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.diff-actions button {
+  background: #262a33;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.diff-actions button.primary {
+  background: #2c5cc5;
+  border-color: #3f6fd8;
+  color: #fff;
+}
+
+.monaco[hidden] {
+  display: none;
 }
 
 .sidebar {

@@ -259,14 +259,16 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   add('D9', '左右分栏布局已计算且满足最小宽度', layoutOk, input.layout);
 
   /* ---- E) 通道名一致性（preload 在沙箱下无法 require shared，故用源码比对兜底）---- */
-  // rootChanged / rootStale / previewData 是主进程 → 渲染进程的单向通道（不需要 ipcMain.handle）
-  const requiredChannels = Object.values(CHANNELS).filter(
-    (c) =>
-      c !== CHANNELS.setRootInternal &&
-      c !== CHANNELS.rootChanged &&
-      c !== CHANNELS.rootStale &&
-      c !== CHANNELS.previewData
-  );
+  // 主进程 → 渲染进程的单向通道（不需要 ipcMain.handle）
+  const oneWayChannels: string[] = [
+    CHANNELS.setRootInternal,
+    CHANNELS.rootChanged,
+    CHANNELS.rootStale,
+    CHANNELS.previewData,
+    CHANNELS.diffData,
+    CHANNELS.sidebarChanged,
+  ];
+  const requiredChannels = Object.values(CHANNELS).filter((c) => !oneWayChannels.includes(c));
   const missingHandlers = requiredChannels.filter((c) => !registeredChannels.includes(c));
   add('E1', '所有约定通道均已注册 ipcMain 处理器', missingHandlers.length === 0, {
     required: requiredChannels,
@@ -478,16 +480,19 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     }
     add('L2', 'renderer.js 语法可被解析（渲染进程脚本不走 tsc）', parseError === null, parseError ?? 'OK');
 
-    // 编辑器关键选项：换行 / 字体 / 行高 / 不设只读
-    const hasWordWrap = /wordWrap:\s*'on'/.test(js);
-    const hasFont = /fontFamily:/.test(js);
-    const hasLineHeight = /lineHeight:/.test(js);
-    const hasReadOnly = /readOnly:\s*true/.test(js);
+    // 编辑器关键选项：换行 / 字体 / 行高 / 普通编辑器不设只读。
+    // 注意必须**只检查 EDITOR_OPTIONS 块**：diff 编辑器本来就应当 readOnly，
+    // 早先按全文搜索 readOnly 会因此误报。
+    const editorOptionsBlock = /const EDITOR_OPTIONS = \{([\s\S]*?)\n  \};/.exec(js)?.[1] ?? '';
+    const hasWordWrap = /wordWrap:\s*'on'/.test(editorOptionsBlock);
+    const hasFont = /fontFamily:/.test(editorOptionsBlock);
+    const hasLineHeight = /lineHeight:/.test(editorOptionsBlock);
+    const hasReadOnly = /readOnly:\s*true/.test(editorOptionsBlock);
     add(
       'L3',
-      '编辑器默认：开启自动换行 + 设置字体与行高，且**不设只读**',
-      hasWordWrap && hasFont && hasLineHeight && !hasReadOnly,
-      { hasWordWrap, hasFont, hasLineHeight, hasReadOnly }
+      '编辑器默认：开启自动换行 + 设置字体与行高，且**普通编辑器不设只读**',
+      hasWordWrap && hasFont && hasLineHeight && !hasReadOnly && editorOptionsBlock.length > 0,
+      { hasWordWrap, hasFont, hasLineHeight, hasReadOnly, blockFound: editorOptionsBlock.length > 0 }
     );
 
     // 目录树必须是"可展开"结构（原地展开），而不是"进入式"

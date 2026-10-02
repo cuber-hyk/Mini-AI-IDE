@@ -64,18 +64,41 @@ interface Layout {
   splitY: number;
 }
 
+/** 分区宽度（编辑器内部左侧目录树，渲染进程自绘，这里只持久化用户选择） */
+const SIDEBAR_MIN_WIDTH = 140;
+const SIDEBAR_MAX_WIDTH = 520;
+const SIDEBAR_DEFAULT_WIDTH = 230;
+
+/** 由文件扩展名推断 Monaco 语言 id（用于 diff 视图的语法高亮） */
+function languageIdFor(relPath: string): string {
+  const ext = (relPath.split('.').pop() ?? '').toLowerCase();
+  const map: Record<string, string> = {
+    ts: 'typescript', tsx: 'typescript', mts: 'typescript', cts: 'typescript',
+    js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript',
+    json: 'json', md: 'markdown', markdown: 'markdown', py: 'python', go: 'go',
+    rs: 'rust', java: 'java', kt: 'kotlin', c: 'c', h: 'cpp', cc: 'cpp', cpp: 'cpp',
+    hpp: 'cpp', cs: 'csharp', php: 'php', swift: 'swift', rb: 'ruby', lua: 'lua',
+    sh: 'shell', bash: 'shell', zsh: 'shell', ps1: 'powershell', bat: 'bat',
+    sql: 'sql', css: 'css', scss: 'scss', less: 'less', html: 'html', htm: 'html',
+    xml: 'xml', yml: 'yaml', yaml: 'yaml', toml: 'ini', ini: 'ini', conf: 'ini',
+    csv: 'plaintext', txt: 'plaintext',
+  };
+  return map[ext] ?? 'plaintext';
+}
+
 /**
  * 三区布局：左侧编辑器 | 右上网页 | **右下回程预览**
  *
  * 为什么把预览放右下角（用户建议）：原先预览挤在编辑器下方，把编辑器高度压得很低，
- * 而且 diff 只有一百多像素高，根本没法看。放到右列下半区后，编辑器高度不受影响，
- * 预览也能拿到足够高度展示逐行差异。
+ * 而且 diff 只有一百多像素高，根本没法看。放到右列下半区后，编辑器高度不受影响。
+ * 右侧网页可整体隐藏（`webVisible=false`），此时预览占满右列。
  */
 function computeLayout(
   width: number,
   height: number,
   editorWidth: number,
-  previewHeight = 0
+  previewHeight = 0,
+  webVisible = true
 ): Layout {
   const w = Math.max(editorWidth, EDITOR_MIN_WIDTH);
   const rightX = w;
@@ -84,14 +107,17 @@ function computeLayout(
   const maxPreview = Math.max(PREVIEW_MIN_HEIGHT, height - WEB_MIN_HEIGHT);
   const ph = Math.min(Math.max(wanted, PREVIEW_MIN_HEIGHT), maxPreview);
   const showPreview = previewHeight > 0;
-  const webH = showPreview ? Math.max(WEB_MIN_HEIGHT, height - ph) : height;
-  const finalPh = showPreview ? height - webH : 0;
+
+  // 网页隐藏时，预览占满右列（不再保留 WEB_MIN_HEIGHT）
+  const webH = !webVisible ? 0 : showPreview ? Math.max(WEB_MIN_HEIGHT, height - ph) : height;
+  const previewY = webVisible ? webH : 0;
+  const finalPh = showPreview ? height - previewY : 0;
   return {
     editorBounds: { x: 0, y: 0, width: w, height },
     webBounds: { x: rightX, y: 0, width: rightW, height: webH },
-    previewBounds: { x: rightX, y: webH, width: rightW, height: finalPh },
+    previewBounds: { x: rightX, y: previewY, width: rightW, height: finalPh },
     dividerX: w,
-    splitY: showPreview ? webH : height,
+    splitY: showPreview ? previewY : height,
   };
 }
 
@@ -110,6 +136,8 @@ interface BootInfo {
  * ------------------------------------------------------------------ */
 /** 预览面板是否可见 + 其高度（随窗口持久化在内存里；0 表示隐藏） */
 let previewHeight = 0;
+/** 右侧 AI 网页是否显示（可隐藏，把空间让给预览面板或编辑器） */
+let webVisible = true;
 
 async function bootstrap(): Promise<void> {
   // Electron 的应用名会影响 userData 目录；显式设定以保证分区落盘位置可预期。
@@ -120,6 +148,8 @@ async function bootstrap(): Promise<void> {
   const fileService = new FileService();
   const settings = new SettingsStore(SELF_TEST ? SELF_TEST_SETTINGS_FILE : PRODUCTION_SETTINGS_FILE);
   const saved = settings.get();
+  /** 左侧目录树宽度（编辑器内部布局；主进程负责持久化与约束） */
+  let sidebarWidth = saved.sidebarWidth ?? SIDEBAR_DEFAULT_WIDTH;
   const targetSession = session.fromPartition(SESSION_PARTITION);
 
   // UA 处理：移除自我声明标记，保留真实内核版本（ADR-0001）
@@ -204,15 +234,16 @@ async function bootstrap(): Promise<void> {
   previewView.setBounds(layout.previewBounds);
   previewView.setVisible(false);
 
-  /** 按当前 previewHeight 重算三区并应用 */
+  /** 按当前 previewHeight / webVisible 重算三区并应用 */
   function relayout(): void {
     const s = win.getContentSize();
     const w = s[0] ?? 1440;
     const h = s[1] ?? 900;
     editorWidth = Math.min(Math.max(editorWidth, EDITOR_MIN_WIDTH), Math.max(EDITOR_MIN_WIDTH, w - WEB_MIN_WIDTH));
-    layout = computeLayout(w, h, editorWidth, previewHeight);
+    layout = computeLayout(w, h, editorWidth, previewHeight, webVisible);
     editorView.setBounds(layout.editorBounds);
     webView.setBounds(layout.webBounds);
+    webView.setVisible(webVisible && layout.webBounds.height > 0);
     previewView.setBounds(layout.previewBounds);
     previewView.setVisible(previewHeight > 0);
   }
@@ -234,12 +265,56 @@ async function bootstrap(): Promise<void> {
     const height = s[1] ?? 900;
     const requested = typeof desiredWidth === 'number' && Number.isFinite(desiredWidth) ? desiredWidth : editorWidth;
     editorWidth = Math.min(Math.max(Math.round(requested), EDITOR_MIN_WIDTH), Math.max(EDITOR_MIN_WIDTH, total - WEB_MIN_WIDTH));
-    layout = computeLayout(total, height, editorWidth, previewHeight);
+    layout = computeLayout(total, height, editorWidth, previewHeight, webVisible);
     editorView.setBounds(layout.editorBounds);
     webView.setBounds(layout.webBounds);
     previewView.setBounds(layout.previewBounds);
     settings.update({ editorWidth: layout.editorBounds.width });
     return { editorWidth: layout.editorBounds.width };
+  });
+
+  /** 显示/隐藏右侧 AI 网页（工具栏开关 / Ctrl+Shift+A） */
+  ipcMain.handle(CHANNELS.setWebVisible, (_e, visible: unknown) => {
+    webVisible = visible !== false;
+    relayout();
+    return { visible: webVisible };
+  });
+
+  /** 显示/隐藏左侧目录树（编辑器内部面板，主进程只广播 + 持久化） */
+  ipcMain.handle(CHANNELS.setSidebarVisible, (_e, visible: unknown) => {
+    const v = visible !== false;
+    settings.update({ sidebarVisible: v });
+    if (!editorView.webContents.isDestroyed()) {
+      editorView.webContents.send(CHANNELS.sidebarChanged, { visible: v, width: sidebarWidth });
+    }
+    return { visible: v };
+  });
+
+  /** 调整左侧目录树宽度（约束在 [SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH]） */
+  ipcMain.handle(CHANNELS.setSidebarWidth, (_e, width: unknown) => {
+    const raw = typeof width === 'number' && Number.isFinite(width) ? Math.round(width) : sidebarWidth;
+    sidebarWidth = Math.min(Math.max(raw, SIDEBAR_MIN_WIDTH), SIDEBAR_MAX_WIDTH);
+    settings.update({ sidebarWidth });
+    if (!editorView.webContents.isDestroyed()) {
+      editorView.webContents.send(CHANNELS.sidebarChanged, { visible: settings.get().sidebarVisible, width: sidebarWidth });
+    }
+    return { width: sidebarWidth };
+  });
+
+  /**
+   * 在**编辑器内**以 Monaco DiffEditor 显示某个变更（与主流编辑器一致：先看 diff 再应用）。
+   * 主进程负责算出两侧完整文本，编辑器只负责渲染。
+   */
+  ipcMain.handle(CHANNELS.showDiffInEditor, async (_e, collectionId: unknown, index: unknown) => {
+    if (typeof collectionId !== 'string' || typeof index !== 'number') {
+      return { ok: false, error: '参数不合法' };
+    }
+    const payload = await buildEditorDiff(collectionId, index);
+    if (!payload) return { ok: false, error: '采集结果已过期或该变更不存在，请重新采集' };
+    if (!editorView.webContents.isDestroyed()) {
+      editorView.webContents.send(CHANNELS.diffData, payload);
+    }
+    return { ok: true };
   });
 
   /**
@@ -258,6 +333,50 @@ async function bootstrap(): Promise<void> {
     if (!previewView.webContents.isDestroyed()) {
       previewView.webContents.send(CHANNELS.previewData, preview);
     }
+  }
+
+  /**
+   * 构造"编辑器内 diff"所需的两侧完整文本。
+   *
+   * 与预览面板共用同一份三向校验：算不出（或校验不过）就返回 null，
+   * 由调用方报错——**不会出现"显示了 diff 但应用会失败"**的情况。
+   */
+  async function buildEditorDiff(
+    collectionId: string,
+    index: number
+  ): Promise<import('../shared/contract').EditorDiffPayload | null> {
+    const cached = collections.get(collectionId);
+    const block = cached?.blocks[index];
+    if (!cached || !block || !block.filePath) return null;
+
+    const read = await fileService.readRawText(block.filePath);
+    if (!read.ok) return null;
+
+    const lines = read.text.split(/\r\n|\r|\n/);
+    const mode: Parameters<typeof computeApply>[2] = block.range
+      ? {
+          kind: 'replace-lines',
+          start: block.range.start,
+          end: block.range.end,
+          expectedOriginal: lines.slice(block.range.start - 1, block.range.end).join('\n'),
+          contextPrev: block.range.start - 2 >= 0 ? (lines[block.range.start - 2] ?? null) : null,
+          contextNext: block.range.end < lines.length ? (lines[block.range.end] ?? null) : null,
+        }
+      : { kind: 'replace-whole-file' };
+
+    const computed = computeApply(read.text, block, mode);
+    if (!computed.ok) return null;
+
+    return {
+      active: true,
+      filePath: read.relPath,
+      original: read.text,
+      modified: computed.text,
+      language: languageIdFor(read.relPath),
+      collectionId,
+      index,
+      identical: computed.text === read.text,
+    };
   }
 
   /**
@@ -843,6 +962,27 @@ async function bootstrap(): Promise<void> {
     );
 
     // 预览面板已移到右下角独立视图，其界面契约由自检 L8–L11 覆盖
+
+    // 差异视图实测（仅在 `--test-diff` 时做）：确认 Monaco DiffEditor 真能创建并拿到两侧模型
+    if (process.argv.includes('--test-diff')) {
+      const sample = 'const a = 1;\nconst b = 2;\n';
+      const changed = 'const a = 1;\nconst b = 22;\nconst c = 3;\n';
+      let diffProbe: unknown = null;
+      try {
+        diffProbe = await editorView.webContents.executeJavaScript(
+          `typeof window.__uiDiffProbe === "function" ? window.__uiDiffProbe(${JSON.stringify(sample)}, ${JSON.stringify(changed)}) : null`,
+          true
+        );
+      } catch (err) {
+        diffProbe = { ok: false, error: err instanceof Error ? err.message : String(err) };
+      }
+      process.stdout.write(`\n===== 差异视图探针 =====\n${JSON.stringify(diffProbe, null, 2)}\n`);
+      const d = diffProbe as { ok?: boolean } | null;
+      process.stdout.write(`[ui-probe] 编辑器内差异视图可用：${d?.ok ? '是' : '否'}\n`);
+      app.exit(editable && wraps && layoutOk && d?.ok === true ? 0 : 1);
+      return;
+    }
+
     app.exit(editable && wraps && layoutOk ? 0 : 1);
     return;
   }

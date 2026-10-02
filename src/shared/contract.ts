@@ -43,6 +43,18 @@ export const CHANNELS = {
   setPreviewPanel: 'ui:set-preview-panel',
   /** 主进程 → 右下角预览面板：推送待预览数据 */
   previewData: 'preview:data',
+  /** 显示/隐藏右侧 AI 网页视图 */
+  setWebVisible: 'ui:set-web-visible',
+  /** 显示/隐藏左侧目录树（文件）面板 */
+  setSidebarVisible: 'ui:set-sidebar-visible',
+  /** 调整左侧目录树宽度（像素） */
+  setSidebarWidth: 'ui:set-sidebar-width',
+  /** 编辑器 → 主进程：请求在**编辑器内**显示某个变更的 diff */
+  showDiffInEditor: 'ui:show-diff-in-editor',
+  /** 主进程 → 编辑器：指示进入/退出 diff 视图 */
+  diffData: 'editor:diff-data',
+  /** 主进程 → 编辑器：目录树可见性/宽度变化 */
+  sidebarChanged: 'ui:sidebar-changed',
   /** 主进程 → 渲染进程：记忆的根目录已失效 */
   rootStale: 'fs:root-stale',
   /** 主进程 → 渲染进程：根目录已变更 */
@@ -277,6 +289,30 @@ export interface UndoResult {
   error?: string;
 }
 
+/**
+ * 编辑器内 diff 视图的数据。
+ *
+ * 设计说明：差异**在编辑器里渲染**（Monaco 的 DiffEditor），而不是另开一块面板 ——
+ * 与主流编辑器一致：先看 diff，再决定是否应用。`original` / `modified` 是两侧完整文本。
+ */
+export interface EditorDiffPayload {
+  /** 退出 diff 视图时为 false */
+  active: boolean;
+  /** 目标文件（相对根目录） */
+  filePath?: string;
+  /** 变更前的完整原文（左侧） */
+  original?: string;
+  /** 应用后的完整新文（右侧） */
+  modified?: string;
+  /** 语言标注（用于语法高亮） */
+  language?: string;
+  /** 引用该变更以便应用 */
+  collectionId?: string;
+  index?: number;
+  /** 应用后与当前文件完全相同时为 true */
+  identical?: boolean;
+}
+
 /** preload 通过 contextBridge 暴露给渲染进程的唯一接口面 */
 export interface EditorBridge {
   chooseRoot(): Promise<RootInfo>;
@@ -311,6 +347,18 @@ export interface EditorBridge {
   copyWholeFile(relPath: string): Promise<CopyWholeFileResult>;
   /** 显示/隐藏右下角回程预览面板（height <= 0 表示隐藏） */
   setPreviewPanel(height: number): Promise<{ height: number; visible: boolean }>;
+  /** 显示/隐藏右侧 AI 网页视图 */
+  setWebVisible(visible: boolean): Promise<{ visible: boolean }>;
+  /** 显示/隐藏左侧目录树面板 */
+  setSidebarVisible(visible: boolean): Promise<{ visible: boolean }>;
+  /** 调整左侧目录树宽度（像素） */
+  setSidebarWidth(width: number): Promise<{ width: number }>;
+  /** 请求在编辑器内以 diff 视图显示某个变更 */
+  showDiffInEditor(collectionId: string, index: number): Promise<{ ok: boolean; error?: string }>;
+  /** 主进程 → 编辑器：进入（或退出）diff 视图 */
+  onDiffData(listener: (data: EditorDiffPayload) => void): void;
+  /** 主进程 → 编辑器：目录树可见性/宽度变化 */
+  onSidebarChanged(listener: (state: { visible: boolean; width: number }) => void): void;
   /**
    * 从网页视图**只读**采集最新回复并解析为待应用变更。
    * 不落盘、不修改页面；只回传预览数据。

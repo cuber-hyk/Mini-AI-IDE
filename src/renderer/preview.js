@@ -127,6 +127,16 @@
         if (block.diff.removed > 0) head.appendChild(tag('−' + block.diff.removed, 'stat-del'));
       }
 
+      const btnCompare = document.createElement('button');
+      btnCompare.type = 'button';
+      btnCompare.className = 'pv-btn-compare';
+      btnCompare.textContent = '在编辑器中对比';
+      btnCompare.title = '在左侧编辑器里以差异视图打开（先看 diff 再决定是否应用）';
+      btnCompare.addEventListener('click', function () {
+        void bridge.showDiffInEditor(lastPreview.collectionId, block.index);
+      });
+      head.appendChild(btnCompare);
+
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.textContent = block.applicable ? '应用' : '不可应用';

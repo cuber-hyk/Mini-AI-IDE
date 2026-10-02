@@ -32,6 +32,12 @@ const CH = {
   copyNumberedSnippet: 'ui:copy-numbered-snippet',
   copyWholeFile: 'ui:copy-whole-file',
   setPreviewPanel: 'ui:set-preview-panel',
+  setWebVisible: 'ui:set-web-visible',
+  setSidebarVisible: 'ui:set-sidebar-visible',
+  setSidebarWidth: 'ui:set-sidebar-width',
+  showDiffInEditor: 'ui:show-diff-in-editor',
+  diffData: 'editor:diff-data',
+  sidebarChanged: 'ui:sidebar-changed',
   collectReply: 'return:collect',
   applyChange: 'return:apply',
   undoSave: 'return:undo',
@@ -54,6 +60,17 @@ const bridge = {
   copyNumberedSnippet: (input: unknown) => ipcRenderer.invoke(CH.copyNumberedSnippet, input),
   copyWholeFile: (relPath: string) => ipcRenderer.invoke(CH.copyWholeFile, relPath),
   setPreviewPanel: (height: number) => ipcRenderer.invoke(CH.setPreviewPanel, height),
+  setWebVisible: (visible: boolean) => ipcRenderer.invoke(CH.setWebVisible, visible),
+  setSidebarVisible: (visible: boolean) => ipcRenderer.invoke(CH.setSidebarVisible, visible),
+  setSidebarWidth: (width: number) => ipcRenderer.invoke(CH.setSidebarWidth, width),
+  showDiffInEditor: (collectionId: string, index: number) =>
+    ipcRenderer.invoke(CH.showDiffInEditor, collectionId, index),
+  onDiffData: (listener: (data: unknown) => void) => {
+    ipcRenderer.on(CH.diffData, (_e, data) => listener(data));
+  },
+  onSidebarChanged: (listener: (state: unknown) => void) => {
+    ipcRenderer.on(CH.sidebarChanged, (_e, state) => listener(state));
+  },
   collectReply: () => ipcRenderer.invoke(CH.collectReply),
   applyChange: (input: unknown) => ipcRenderer.invoke(CH.applyChange, input),
   undoSave: () => ipcRenderer.invoke(CH.undoSave),

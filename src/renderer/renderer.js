@@ -27,12 +27,25 @@
     btnSave: document.getElementById('btn-save'),
     btnSnippet: document.getElementById('btn-snippet'),
     btnWholeFile: document.getElementById('btn-whole-file'),
+    // 注意：这里**不要**用键名 `monaco`，否则会遮蔽全局的 `window.monaco`（AMD 模块对象），
+    // 导致 `window.monaco.editor.createDiffEditor` 之类的调用难以排查。
     monacoHost: document.getElementById('monaco'),
     resizer: document.getElementById('resizer'),
     requirement: document.getElementById('requirement'),
     btnCopyPrompt: document.getElementById('btn-copy-prompt'),
     // 回程预览已移到**右下角独立面板**（preview.html / preview.js），此处只保留触发按钮
     btnCollect: document.getElementById('btn-collect'),
+    // 面板显示控制与 diff 视图
+    sidebar: document.getElementById('sidebar'),
+    sidebarResizer: document.getElementById('sidebar-resizer'),
+    btnSidebar: document.getElementById('btn-sidebar'),
+    btnWeb: document.getElementById('btn-web'),
+    btnPreviewToggle: document.getElementById('btn-preview-toggle'),
+    monacoDiff: document.getElementById('monaco-diff'),
+    diffActions: document.getElementById('diff-actions'),
+    diffLabel: document.getElementById('diff-label'),
+    btnDiffApply: document.getElementById('btn-diff-apply'),
+    btnDiffClose: document.getElementById('btn-diff-close'),
   };
 
   /**
@@ -64,6 +77,14 @@
     currentText: '',
     savedText: '',
     editor: null,
+    /** Monaco DiffEditor 实例（进入对比视图时惰性创建） */
+    diffEditor: null,
+    /** 当前正在对比的变更（退出对比时清理） */
+    diffTarget: null,
+    /** 右侧 AI 网页当前是否显示（由主进程广播同步） */
+    webVisible: true,
+    /** 回程预览面板当前是否显示 */
+    previewVisible: false,
   };
 
   /**
@@ -224,6 +245,248 @@
       });
     });
   }
+
+  /* ---------------- 目录树宽度与可见性 ---------------- */
+  function applySidebar(width, visible) {
+    if (typeof width === 'number' && Number.isFinite(width)) {
+      el.sidebar.style.width = Math.round(width) + 'px';
+    }
+    el.sidebar.hidden = !visible;
+    el.sidebarResizer.hidden = !visible;
+    el.btnSidebar.classList.toggle('active', visible);
+  }
+
+  /* ---------------- 编辑器内 diff 视图 ----------------
+   * 与主流编辑器一致：差异**在编辑器里**渲染（Monaco DiffEditor），
+   * 看清楚了再决定是否应用；而不是另开一块面板。
+   */
+  function ensureDiffEditor() {
+    if (state.diffEditor || !window.monaco) return state.diffEditor;
+    state.diffEditor = window.monaco.editor.createDiffEditor(el.monacoDiff, {
+      theme: 'vs-dark',
+      automaticLayout: true,
+      readOnly: true,
+      renderSideBySide: true,
+      fontFamily: EDITOR_OPTIONS.fontFamily,
+      fontSize: EDITOR_OPTIONS.fontSize,
+      lineHeight: EDITOR_OPTIONS.lineHeight,
+      minimap: { enabled: false },
+      scrollBeyondLastLine: false,
+      renderOverviewRuler: false,
+      padding: { top: 8, bottom: 8 },
+      scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10, useShadows: false },
+    });
+    return state.diffEditor;
+  }
+
+  function enterDiff(payload) {
+    const diffEditor = ensureDiffEditor();
+    if (!diffEditor) {
+      setInfo('Monaco 尚未就绪，无法显示差异视图', true);
+      return;
+    }
+    const original = window.monaco.editor.createModel(payload.original || '', payload.language || 'plaintext');
+    const modified = window.monaco.editor.createModel(payload.modified || '', payload.language || 'plaintext');
+    const previous = diffEditor.getModel();
+    diffEditor.setModel({ original, modified });
+    if (previous) {
+      previous.original.dispose();
+      previous.modified.dispose();
+    }
+
+    state.diffTarget = { collectionId: payload.collectionId, index: payload.index, filePath: payload.filePath };
+    el.monacoHost.hidden = true;
+    el.monacoDiff.hidden = false;
+    el.diffActions.hidden = false;
+    el.diffLabel.textContent =
+      '对比：' + (payload.filePath || '') + (payload.identical ? '（无差异，应用后内容与当前文件相同）' : '');
+    diffEditor.layout();
+    setInfo('差异视图：左侧是当前文件，右侧是应用后的内容 —— 确认无误后点「应用此变更」');
+  }
+
+  function exitDiff() {
+    const diffEditor = state.diffEditor;
+    if (diffEditor) {
+      const model = diffEditor.getModel();
+      diffEditor.setModel(null);
+      if (model) {
+        model.original.dispose();
+        model.modified.dispose();
+      }
+    }
+    state.diffTarget = null;
+    el.monacoHost.hidden = false;
+    el.monacoDiff.hidden = true;
+    el.diffActions.hidden = true;
+    el.diffLabel.textContent = '';
+    if (state.editor) state.editor.layout();
+  }
+
+  el.btnDiffClose.addEventListener('click', function () {
+    exitDiff();
+    setInfo('已退出差异视图');
+  });
+
+  el.btnDiffApply.addEventListener('click', async function () {
+    const target = state.diffTarget;
+    if (!target) return;
+    el.btnDiffApply.disabled = true;
+    el.btnDiffApply.textContent = '应用中…';
+    const result = await bridge.applyChange({
+      collectionId: target.collectionId,
+      index: target.index,
+      filePath: target.filePath,
+    });
+    el.btnDiffApply.disabled = false;
+    el.btnDiffApply.textContent = '应用此变更';
+    if (!result.ok) {
+      setInfo('应用失败：' + (result.error || '未知错误'), true);
+      return;
+    }
+    exitDiff();
+    setInfo('已应用 ' + result.filePath + '（模式 ' + result.mode + '）—— 可在右下角预览面板点「撤销」回退');
+    if (state.currentPath === result.filePath) await openFile(state.currentPath, null);
+  });
+
+  /* ---------------- 目录树与编辑器之间的拖拽 ---------------- */
+  (function setupSidebarResizer() {
+    let dragging = false;
+    let startX = 0;
+    let startWidth = 0;
+
+    el.sidebarResizer.addEventListener('pointerdown', function (e) {
+      dragging = true;
+      startX = e.clientX;
+      startWidth = el.sidebar.getBoundingClientRect().width;
+      el.sidebarResizer.classList.add('dragging');
+      el.sidebarResizer.setPointerCapture(e.pointerId);
+      e.preventDefault();
+    });
+
+    el.sidebarResizer.addEventListener('pointermove', function (e) {
+      if (!dragging) return;
+      const next = Math.round(startWidth + (e.clientX - startX));
+      el.sidebar.style.width = next + 'px';
+      if (state.editor) state.editor.layout();
+    });
+
+    function end(e) {
+      if (!dragging) return;
+      dragging = false;
+      el.sidebarResizer.classList.remove('dragging');
+      try {
+        el.sidebarResizer.releasePointerCapture(e.pointerId);
+      } catch (err) {
+        /* 指针可能已释放 */
+      }
+      void bridge.setSidebarWidth(el.sidebar.getBoundingClientRect().width);
+    }
+    el.sidebarResizer.addEventListener('pointerup', end);
+    el.sidebarResizer.addEventListener('pointercancel', end);
+
+    // 双击复位
+    el.sidebarResizer.addEventListener('dblclick', function () {
+      el.sidebar.style.width = '230px';
+      if (state.editor) state.editor.layout();
+      void bridge.setSidebarWidth(230);
+    });
+  })();
+
+  /* ---------------- 面板开关 ---------------- */
+  el.btnSidebar.addEventListener('click', function () {
+    const next = el.sidebar.hidden;
+    applySidebar(undefined, next);
+    void bridge.setSidebarVisible(next);
+  });
+
+  el.btnWeb.addEventListener('click', async function () {
+    const result = await bridge.setWebVisible(!state.webVisible);
+    state.webVisible = Boolean(result && result.visible);
+    el.btnWeb.classList.toggle('active', state.webVisible);
+    setInfo(state.webVisible ? '已显示右侧 AI 网页' : '已隐藏右侧 AI 网页（空间让给回程预览）');
+  });
+
+  el.btnPreviewToggle.addEventListener('click', async function () {
+    const next = !state.previewVisible;
+    const height = next ? Math.max(220, Math.round(window.innerHeight * 0.4)) : 0;
+    const result = await bridge.setPreviewPanel(height);
+    state.previewVisible = Boolean(result && result.visible);
+    el.btnPreviewToggle.classList.toggle('active', state.previewVisible);
+  });
+
+  // 快捷键：Ctrl+B 目录树 / Ctrl+Shift+A AI 网页
+  document.addEventListener('keydown', function (e) {
+    if (!e.ctrlKey && !e.metaKey) return;
+    if (e.key === 'b' || e.key === 'B') {
+      e.preventDefault();
+      el.btnSidebar.click();
+    } else if (e.shiftKey && (e.key === 'A' || e.key === 'a')) {
+      e.preventDefault();
+      el.btnWeb.click();
+    }
+  });
+
+  bridge.onDiffData(function (payload) {
+    if (payload && payload.active) enterDiff(payload);
+    else exitDiff();
+  });
+
+  bridge.onSidebarChanged(function (s) {
+    applySidebar(s && s.width, !(s && s.visible === false));
+  });
+
+  /**
+   * 差异视图探针（`--ui-probe --test-diff` 使用）。
+   *
+   * 为什么需要：Monaco 的 DiffEditor 是否真的能创建、能否拿到两侧模型，
+   * 只能实测 —— 曾经吃过"配置写了但运行期没生效"的亏（多项）。
+   */
+  window.__uiDiffProbe = function (original, modified) {
+    try {
+      enterDiff({
+        active: true,
+        filePath: 'probe.ts',
+        original: original,
+        modified: modified,
+        language: 'typescript',
+        collectionId: 'probe',
+        index: 0,
+        identical: false,
+      });
+      const diffEditor = state.diffEditor;
+      const model = diffEditor ? diffEditor.getModel() : null;
+      const originalValue = model && model.original ? model.original.getValue() : '';
+      const modifiedValue = model && model.modified ? model.modified.getValue() : '';
+      const diffHostVisible = !el.monacoDiff.hidden;
+      const normalHostHidden = el.monacoHost.hidden;
+      const actionsVisible = !el.diffActions.hidden;
+      const label = el.diffLabel.textContent;
+
+      // 复原，避免影响后续测量
+      exitDiff();
+
+      return {
+        diffEditorCreated: Boolean(diffEditor),
+        hasModel: Boolean(model && model.original && model.modified),
+        originalRoundTrip: originalValue === original,
+        modifiedRoundTrip: modifiedValue === modified,
+        diffHostVisible,
+        normalHostHidden,
+        actionsVisible,
+        label,
+        ok:
+          Boolean(diffEditor) &&
+          Boolean(model) &&
+          originalValue === original &&
+          modifiedValue === modified &&
+          diffHostVisible &&
+          normalHostHidden &&
+          actionsVisible,
+      };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  };
 
   /* ---------------- 界面渲染 ---------------- */
   function renderRoot() {
