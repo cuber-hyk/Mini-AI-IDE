@@ -81,14 +81,14 @@ source_of_truth:
 | P0A-1 | High | verified | 默认 Electron 构建下，A 级自动化特征全部为零：不存在 `navigator.webdriver`、无自动化框架痕迹、无 CDP 痕迹、无 Electron/Node 全局泄漏、无调试端口 | `docs/audits/2026-10-02-p0a-trace-verification-raw.json` 中 `aLevel` 8 项 `pass: true`；两次运行结论一致 | docs/plans/2026-10-02-mini-ai-ide-poc.md（P0a） | task/20261002-p0a-trace-verifier | 两次独立运行 `summary.verdict` 均为 `PASS`，且逐项结果一致 | 结论已记录，无后续动作 |
 | P0A-2 | Medium | verified | 核验工具初版把"UA 同时含 Chrome 与 Electron 标记"误判为 C 级内部矛盾，属判据定义错误；会导致误报并可能诱导实施被禁止的 UA 伪装 | 首次运行 `summary.cFailures = [C1]`；修正后 `cFailures = []`；推理见本报告「判据修正记录」 | docs/plans/2026-10-02-mini-ai-ide-poc.md（P0a） | task/20261002-p0a-trace-verifier | 修正判据后重跑两次，C1/C2 均 `PASS` | 判据已修正并留档，无后续动作 |
 | P0A-3 | Medium | verified | 运行环境存在三个会静默破坏 Electron 启动/安装的陷阱：`ELECTRON_RUN_AS_NODE=1` 使 Electron 以 Node 模式启动（无窗口、无输出、退出码异常）；默认 GitHub Releases 源在本机 pnpm 环境下 `fetch failed`；pnpm 默认拦截 `postinstall` 导致二进制未下载 | 首次运行无任何输出且退出码缺失；`node_modules\electron\path.txt` 不存在；改用镜像并手动执行 `install.js` 后成功（245,726,208 bytes） | docs/plans/2026-10-02-mini-ai-ide-poc.md（P0a） | task/20261002-p0a-trace-verifier | 清空 `ELECTRON_RUN_AS_NODE` 后两次运行均正常出报告；`tools/install-electron.ps1` 已固化镜像与清理步骤并实测通过 | 已由 `tools/install-electron.ps1` 与复现步骤固化，无后续动作 |
-| P0A-4 | Low | verified | B 级差异清单已建立：`window.chrome` 成员缺失、`userAgentData.brands` 无 `Google Chrome`、UA 含 Electron 标记、内核落后本机 Chrome 两个主版本 | 同上报告 `bLevel.browserSurface` 与 `bLevel.electronDisclosure` | docs/plans/2026-10-02-mini-ai-ide-poc.md（P0a） | task/20261002-p0a-trace-verifier | 逐项在报告中留档；按 ADR-0003 不作为修补任务 | 留档完成，后续仅在 P0b/P1 复核是否被针对性利用 |
-| P0A-5 | Medium | open | **平台是否对 Electron 客户端做针对性拦截尚未验证**——这是本方案唯一的封号风险，P0a 无法回答（需真实访问目标平台） | 本报告范围仅为离线性核验；ADR-0003「已知风险」与计划风险表均标注该风险由 P0b 判定 | docs/plans/2026-10-02-mini-ai-ide-poc.md（P0b） | — | 待 P0b 实测：登录 + 一轮完整人工对话（人工复制粘贴、人工发送） | 待 P0b 给出结论后关闭或转计划 |
+| P0A-4 | Low | verified | B 级差异清单已建立：`window.chrome` 成员缺失、`userAgentData.brands` 无 `Google Chrome`、UA 含 Electron 标记、内核落后本机 Chrome 两个主版本 | 同上报告 `bLevel.browserSurface` 与 `bLevel.electronDisclosure` | docs/plans/2026-10-02-mini-ai-ide-poc.md（P0a） | task/20261002-p0a-trace-verifier | 逐项在报告中留档；按 ADR-0003 不作为修补任务 | 留档完成。**后续复核结果**：UA 中的 Electron 标记已按 P0B-3 结论移除；`window.chrome` 与 `userAgentData` 差异**保留**（实测未被据此报警） |
+| P0A-5 | Medium | **verified** | 平台是否对 Electron 客户端做针对性拦截 | 原为待验证项 | docs/plans/2026-10-02-mini-ai-ide-poc.md（P0b） | task/20261002-p0b-reachability-harness | P0b 基线实测：**未**出现针对性拦截（无验证码、无 4xx/5xx、登录与对话正常）；唯一告警已定位并消除 | 已由 P0b 关闭，结论见 `docs/audits/2026-10-02-p0b-reachability-audit.md` |
 
 ## 结论
 
-1. **A 级自动化特征 8/8 为零，C 级内部矛盾 0 项**——在"如实 Electron 身份"的前提下，默认构建本身没有自动化特征需要清理。
-2. **P0a 不存在需要修补的项**：B 级差异按 ADR-0003 只作留档；任何"消除 B 级差异"的改动都会滑向被禁止的指纹伪装。
-3. **唯一未决风险是 P0A-5（Medium, open）**：平台是否针对 Electron 客户端，只能由 **P0b** 回答。P0a 的价值在于**把"我们这边干不干净"这个问题彻底关闭**，让 P0b 的结论可以单义归因。
+1. **A 级自动化特征 8/8 为零，C 级内部矛盾 0 项**——默认 Electron 构建本身没有自动化特征需要清理。（术语说明：早期表述为"如实 Electron 身份"，已由 ADR-0001 修正为"不伪造、不自报、内部自洽"；P0a 的判据不受影响。）
+2. **P0a 不存在需要修补的项**：B 级差异按 ADR-0003 只作留档；任何"消除 B 级差异"的改动都会滑向被禁止的指纹伪装。（补充：P0b 受控实验证明——B 级差异中的 `window.chrome` 缺失、`userAgentData` 无 `Google Chrome` **并未**触发平台告警，进一步支持"不修补"的结论。）
+3. **P0a 的未决风险 P0A-5 已由 P0b 关闭**：平台未针对 Electron 客户端做拦截；唯一出现的环境警告已定位为 UA 自报标记并消除（见 `docs/audits/2026-10-02-p0b-reachability-audit.md` 的 P0B-3）。
 
 > **后续步骤说明**：本文只覆盖计划的 **P0a**。**P0b（真实可达性与登录实测）与 P1（Gate）尚未执行**，本报告的 PASS 结论不构成对方案整体可行性的判定——那由 P0b/P1 给出。
 

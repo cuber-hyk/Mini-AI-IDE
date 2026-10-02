@@ -43,14 +43,21 @@ source_of_truth:
 2. **程序不向网页写入任何内容**：主进程不调度任何注入，对网页的接触只有回程**只读**采集（见 `human-machine-boundary`）。
 3. IPC 只暴露窄接口（声明式参数），不接受任意表达式或任意路径。
 4. **无自动化特征**（A 级判据，必须为零）：不暴露 CDP 调试端口；不引入 Selenium / Puppeteer / Playwright；不设置 `navigator.webdriver`；不注入任何"伪装浏览器身份"的脚本。
-5. **身份如实**：UA 表明 Electron 与真实内核版本，**不篡改、不冒充 Chrome**（见 ADR-0001）。
-6. 启动时自检"UA 声明 == 内核实际"，不一致即告警。
+5. **UA 规则（硬性）**：
+   - **移除**自我声明标记：`Electron/<ver>` 与 `<appName>/<ver>`；
+   - **保留**真实信息：`Chrome/<真实内核版本>`、平台段、`AppleWebKit/537.36`、`Safari/537.36`；
+   - **禁止**把版本号改成"最新 Chrome"、禁止伪造平台；
+   - **实现要点**：必须在创建 `WebContentsView` 时通过 `webPreferences.userAgent` 显式传入。**仅调用 `session.setUserAgent()` 不生效**（实测教训）。
+6. **不自报但不伪造**：只允许移除"我方主动声明的标识"；**禁止**为"看起来更像浏览器"而补齐 `window.chrome`、改 `userAgentData`、伪造 TLS/Canvas/字体。
+7. 启动时自检"UA 声明的内核版本 == 实际内核版本"，不一致即告警。
 
 ## 已知边界
 
 - 仅 Windows 10/11 x64。
 - 单窗口、单网页视图；多标签不在范围内。
-- **不 patch Chromium 构建**；不追求与官方 Chrome 指纹一致——与 Chrome 的差异（TLS、Canvas/WebGL、字体列表等）**只作为知情记录留档，不是修补目标**。
+- **不 patch Chromium 构建**；不追求与官方 Chrome 指纹一致——与 Chrome 的差异（TLS、Canvas/WebGL、字体列表、`window.chrome` 成员、`userAgentData` 的 `Google Chrome` 条目等）**只作为知情记录留档，不是修补目标**。
+  - 实测依据：P0b 受控实验显示，`window.chrome` 与 `userAgentData` 的差异**存在却没有**触发平台告警；触发告警的只有 UA 中的自报标记。
+- **UA 与会话分区正交**：UA 规则见上方第 5 条；会话分区见 `session-persistence` 能力文档（`persist:postcheck`）。
 
 ## 代码入口
 

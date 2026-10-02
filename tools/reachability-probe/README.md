@@ -2,6 +2,33 @@
 
 > 这是本项目**唯一的存亡关口**。P0a 已证明"我们这边没有自动化特征"；P0b 要回答的是
 > **平台会不会因此针对我们**。这个答案只能靠一次真实、完全人工的使用来取得。
+>
+> ✅ **P0b 已完成**（基线 + 受控实验）。结论：触发平台告警的是 **UA 中的 Electron 自报标记**，
+> 移除后告警消失；风控服务照常运行但不再判定环境异常。详见
+> `docs/audits/2026-10-02-p0b-reachability-audit.md`。
+>
+> **现在默认不需要再登录**：会话已持久化在 `persist:postcheck`（正式分区），
+> 且 P2 外壳将复用同一分区。**反复登录本身有风控风险，请勿为了"再确认一次"而重复登录。**
+
+## 常用命令
+
+| 目的 | 命令 |
+|---|---|
+| 工具自检（不联网） | `pwsh -File tools\run-p0b-reachability.ps1 -SelfTest` |
+| **检查登录态是否还在**（不登录、12 秒自动结束） | `pwsh -File tools\run-p0b-reachability.ps1 -ProbeOnly` |
+| 正常使用（会话已在，通常无需登录） | `pwsh -File tools\run-p0b-reachability.ps1` |
+| 基线对照（会触发告警，仅用于复核） | `pwsh -File tools\run-p0b-reachability.ps1 -Variant baseline -Profile baseline` |
+
+## 关于"重复登录"的风险（重要）
+
+反复登录是**异常登录信号**之一。因此：
+
+- 会话已持久化，**正常运行不需要重新登录**；
+- 想知道"是否还需登录"，用 **`-ProbeOnly`**，不要重新走登录流程；
+- 报告里的 `session` 字段给出判定：`{ loggedIn, hasSessionCookie, onSignIn, onChat, currentUrl }`。
+
+**已验证**：分区重命名后重跑，`loggedIn = true`、挑战命中 0 条、无验证码——**登录态确实跨进程持久**。
+
 
 ## 零、先跑自检（10 秒，不联网）
 
@@ -22,7 +49,12 @@ pwsh -File tools\run-p0b-reachability.ps1 -SelfTest
 > 使用环境异常 —— 当前页面的使用环境可能存在数据和隐私泄露风险，为保障安全，建议您使用我们的官方产品。
 
 平台**没有拦截**（登录成功、对话成功、0 个 4xx/5xx），但它**明确识别出我们不是官方客户端**。
-本轮实验的目标是把"未知"变成"已知"：**到底是不是"如实披露 Electron"这一条触发的？**
+本轮实验的目标是把"未知"变成"已知"：**到底是不是"自报 Electron"这一条触发的？**
+
+> ✅ **实验结果（已完成）**：**是**。单变量生效（UA 中移除 `Electron/<ver>` 与应用名标记），
+> 登录页警告**消失**，而 `window.chrome` 缺失、`userAgentData` 无 `Google Chrome`、TLS 差异
+> **全部照旧存在**却未触发警告。结论已写入 ADR-0001 并成为实现约束。
+> 详见 `docs/audits/2026-10-02-p0b-reachability-audit.md` 的 P0B-3 / P0B-6。
 
 ### 实验规则：一次只改一个变量
 

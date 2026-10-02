@@ -1,0 +1,406 @@
+{
+  "reportType": "p0b-reachability-observation",
+  "phase": "P0b",
+  "startedAt": "2026-10-02T09:21:44.469Z",
+  "endedAt": "2026-10-02T09:22:56.050Z",
+  "target": "https://chat.deepseek.com/",
+  "partition": "persist:neutral-profile-noident",
+  "variant": {
+    "applied": true,
+    "variant": "noident",
+    "original": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) reachability-probe/0.1.0 Chrome/152.0.7977.130 Electron/44.5.1 Safari/537.36",
+    "effective": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.7977.130 Safari/537.36",
+    "note": "仅移除 Electron/<ver> 与 <appName>/<ver>；其余一律未改，未做任何 JS 注入"
+  },
+  "environment": {
+    "electron": "44.5.1",
+    "chromium": "152.0.7977.130",
+    "node": "24.21.0",
+    "platform": "win32 x64",
+    "osRelease": "10.0.26200"
+  },
+  "summary": {
+    "challengesDetected": 1,
+    "httpErrors": 0,
+    "navigationCount": 5,
+    "loadFailed": 0,
+    "rendererGone": 0,
+    "signal": "blocking-signal-observed"
+  },
+  "challenges": [
+    {
+      "at": "2026-10-02T09:21:47.668Z",
+      "url": "https://chat.deepseek.com/sign_in",
+      "matched": [
+        "验证"
+      ],
+      "excerpt": "+86\n发送验证码\n注册登录即代表已阅读并同意我们的 \n用户协议 与 \n隐私政策，未注册的手机号将自动注册\n登录\n密码登录\n使用 Apple 账号登录\n微信扫码登录\n浙ICP备2023025841号\n · \n联系我们"
+    }
+  ],
+  "responsesWithErrorStatus": [],
+  "thirdPartyHosts": [
+    "apm.volccdn.com",
+    "apmplus.volces.com",
+    "appleid.cdn-apple.com",
+    "captcha1.fengkongcloud.cn",
+    "castatic.fengkongcloud.cn",
+    "fp-it-acc.portal101.cn",
+    "gator.volces.com",
+    "lf3-data.volccdn.com",
+    "localhost.weixin.qq.com:13013",
+    "localhost.weixin.qq.com:13014",
+    "localhost.weixin.qq.com:13015",
+    "localhost.weixin.qq.com:14013",
+    "localhost.weixin.qq.com:14014",
+    "localhost.weixin.qq.com:14015",
+    "lp.open.weixin.qq.com",
+    "open.weixin.qq.com",
+    "res.wx.qq.com",
+    "support.weixin.qq.com"
+  ],
+  "sessionFacts": {
+    "cookieCount": 5,
+    "cookieNames": [
+      "HWWAFSESTIME(len=13)",
+      "HWWAFSESID(len=20)",
+      "ds_session_id(len=32)",
+      "smidV2(len=63)",
+      ".thumbcache_6b2e5483f9d858d7c661c5e276b6a6ae(len=92)"
+    ],
+    "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.7977.130 Safari/537.36",
+    "currentUrl": "https://chat.deepseek.com/a/chat/s/968af23f-e0c7-4d6a-9a50-bc2d776cbfff"
+  },
+  "consoleMessages": [
+    {
+      "level": 2,
+      "message": "Unrecognized feature: 'local-network-access'.",
+      "source": "https://res.wx.qq.com/connect/zh_CN/htmledition/js/wxLogin.js",
+      "line": 1
+    },
+    {
+      "level": 0,
+      "message": "Error",
+      "source": "https://chat.deepseek.com/static/fp.min.js",
+      "line": 1
+    },
+    {
+      "level": 1,
+      "message": "fast_login:  null",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "fastLogin_enabled:  true",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "qrcode loaded， duration:  570",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "checklogin请求发起: Fri Oct 02 2026 17:21:46 GMT+0800 (中国标准时间)",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "checklogin post redirect_uri https://chat.deepseek.com/api/v0/users/oauth/wechat/callback",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "当前port:  14013",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "checklogin post redirect_uri https://chat.deepseek.com/api/v0/users/oauth/wechat/callback",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "当前port:  14014",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "checklogin post redirect_uri https://chat.deepseek.com/api/v0/users/oauth/wechat/callback",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "当前port:  14015",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "checklogin post redirect_uri https://chat.deepseek.com/api/v0/users/oauth/wechat/callback",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "当前port:  13013",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "checklogin post redirect_uri https://chat.deepseek.com/api/v0/users/oauth/wechat/callback",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "当前port:  13014",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "checklogin post redirect_uri https://chat.deepseek.com/api/v0/users/oauth/wechat/callback",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "当前port:  13015",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "端口14013连接失败，尝试下一个端口",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "before handle, fastLogin:  false",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "after handle, fastLogin:  false",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "%c %s color: yellow; background-color: black; [instance: default] appid: 20006317, userInfo:{\"user_unique_id\":\"7691998256305323267\",\"web_id\":\"7691998256305323267\"}",
+      "source": "https://lf3-data.volccdn.com/obj/data-static/log-sdk/collect/5.0/collect-rangers-v5.2.11.js",
+      "line": 1
+    },
+    {
+      "level": 1,
+      "message": "%c %s color: yellow; background-color: black; [instance: default] appid: 20006317, sdk is ready, version is 5.2.11_tob, you can report now !!!",
+      "source": "https://lf3-data.volccdn.com/obj/data-static/log-sdk/collect/5.0/collect-rangers-v5.2.11.js",
+      "line": 1
+    },
+    {
+      "level": 2,
+      "message": "%cElectron Security Warning (Insecure Content-Security-Policy) font-weight: bold; This renderer process has either no Content Security\n  Policy set or a policy with \"unsafe-eval\" enabled. This exposes users of\n  this app to unnecessary security risks.\n\nFor more information and help, consult\nhttps://electronjs.org/docs/tutorial/security.\nThis warning will not show up\nonce the app is packaged.",
+      "source": "nullelectron/js2c/sandbox_bundle",
+      "line": 2
+    },
+    {
+      "level": 1,
+      "message": "端口14014连接失败，尝试下一个端口",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "before handle, fastLogin:  false",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "after handle, fastLogin:  false",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "端口14015连接失败，尝试下一个端口",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "before handle, fastLogin:  false",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "after handle, fastLogin:  false",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "端口13013连接失败，尝试下一个端口",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "before handle, fastLogin:  false",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "after handle, fastLogin:  false",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "端口13014连接失败，尝试下一个端口",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "before handle, fastLogin:  false",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "after handle, fastLogin:  false",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "端口13015连接失败，尝试下一个端口",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "before handle, fastLogin:  false",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "after handle, fastLogin:  false",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "fastLogin:  false",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "请求结束: Fri Oct 02 2026 17:21:54 GMT+0800 (中国标准时间)",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "请求时长: 7531 ms",
+      "source": "https://open.weixin.qq.com/connect/qrconnect",
+      "line": 288
+    },
+    {
+      "level": 1,
+      "message": "%c undefined [object HTMLImageElement]",
+      "source": "https://castatic.fengkongcloud.cn/pr/auto-build/v1.0.4-208/captcha-sdk.min.js",
+      "line": 1
+    },
+    {
+      "level": 1,
+      "message": "%c %s color: yellow; background-color: black; [instance: default] appid: 20006317 token change, new userInfo:{\"user_unique_id\":\"3f355a16-7986-4269-bec3-8f7f751a138b\",\"web_id\":\"7691998256305323267\"}",
+      "source": "https://lf3-data.volccdn.com/obj/data-static/log-sdk/collect/5.0/collect-rangers-v5.2.11.js",
+      "line": 1
+    }
+  ],
+  "events": [
+    {
+      "at": "2026-10-02T09:21:44.715Z",
+      "type": "target",
+      "detail": {
+        "url": "https://chat.deepseek.com/",
+        "partition": "persist:neutral-profile-noident",
+        "variant": {
+          "applied": true,
+          "variant": "noident",
+          "original": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) reachability-probe/0.1.0 Chrome/152.0.7977.130 Electron/44.5.1 Safari/537.36",
+          "effective": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.7977.130 Safari/537.36",
+          "note": "仅移除 Electron/<ver> 与 <appName>/<ver>；其余一律未改，未做任何 JS 注入"
+        },
+        "note": "请手动登录并手动完成对话；本工具只记录，不代答任何验证",
+        "reportPath": "C:\\Users\\胡运宽\\Desktop\\Mini-AI-IDE\\docs\\audits\\2026-10-02-p0b-experiment-noident.json"
+      }
+    },
+    {
+      "at": "2026-10-02T09:21:44.748Z",
+      "type": "navigate",
+      "detail": "https://chat.deepseek.com/"
+    },
+    {
+      "at": "2026-10-02T09:21:45.639Z",
+      "type": "navigate",
+      "detail": "https://chat.deepseek.com/"
+    },
+    {
+      "at": "2026-10-02T09:21:45.658Z",
+      "type": "navigate",
+      "detail": "https://chat.deepseek.com/sign_in"
+    },
+    {
+      "at": "2026-10-02T09:21:45.663Z",
+      "type": "page-ready",
+      "detail": {
+        "url": "https://chat.deepseek.com/sign_in",
+        "title": "DeepSeek"
+      }
+    },
+    {
+      "at": "2026-10-02T09:21:46.820Z",
+      "type": "load-finished",
+      "detail": "https://chat.deepseek.com/sign_in"
+    },
+    {
+      "at": "2026-10-02T09:21:47.668Z",
+      "type": "challenge-signal",
+      "detail": {
+        "url": "https://chat.deepseek.com/sign_in",
+        "matched": [
+          "验证"
+        ]
+      }
+    },
+    {
+      "at": "2026-10-02T09:22:18.864Z",
+      "type": "navigate",
+      "detail": "https://chat.deepseek.com/"
+    },
+    {
+      "at": "2026-10-02T09:22:22.798Z",
+      "type": "navigate",
+      "detail": "https://chat.deepseek.com/a/chat/s/968af23f-e0c7-4d6a-9a50-bc2d776cbfff"
+    }
+  ]
+}

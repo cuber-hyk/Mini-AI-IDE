@@ -5,6 +5,10 @@
 
 ## [Unreleased]
 
+### Note
+
+- 术语演进：早期表述"如实 Electron 身份"已由 ADR-0001 修正为 **"不伪造、不自报、内部自洽"**（依据 P0b 受控实验）。下方历史条目中的旧提法保留原样，以反映当时的认知。
+
 ### Added
 
 - 建立 Dev Flow 仓储记忆骨架：`AGENTS.md`、`CONTEXT.md`、`CHANGELOG.md`、`docs/ai/context-map.md`、`docs/{plans,audits,adr,capabilities}/`。
@@ -22,3 +26,6 @@
 - **P0b 工具就绪**：新增 `tools/reachability-probe/`（只读采集：导航/加载失败/渲染崩溃事件、验证与风控关键词命中、HTTP 4xx-5xx、第三方域、会话事实；URL 去 query、Cookie 只记名与长度），配套 `tools/run-p0b-reachability.ps1`（含 `-SelfTest` 不联网自检）与操作手册。`tools/` 提升为 pnpm workspace，两个工具共享一份 Electron 二进制；新增 `tools/install-electron.ps1` 处理镜像源与 `ELECTRON_RUN_AS_NODE` 陷阱。
 - **P0b 基线实测完成（提示级警告，非拦截）**：真实访问 `chat.deepseek.com`，全人工操作。**登录成功、会话保持、对话正常**（0 个 4xx/5xx、无验证码挑战）；但登录页出现明确警告「使用环境异常…建议您使用我们的官方产品」，环境内实际运行了风控云验证码与设备指纹服务，网关侧为华为云 WAF。发现项 P0B-1 ~ P0B-5，其中 **P0B-3（警告触发点未定位）为 `open`**。证据见 `docs/audits/2026-10-02-p0b-reachability-audit.md`。
 - **受控实验工具就绪**：`tools/reachability-probe` 新增 `--variant noident`（**仅**移除 UA 中的 `Electron/<ver>` 与应用名标记；不做任何 JS 注入、不改其他任何属性）与 `--profile`（实验分区隔离），用于定位 P0B-3。
+- **P0b 受控实验完成（结论：触发点已定位）**：单变量生效后，登录页「使用环境异常」告警**消失**，而 `window.chrome` 缺失、`userAgentData` 无 `Google Chrome`、TLS 差异**全部照旧存在**却未触发告警。据此 ADR-0001 的原则修正为 **"不伪造、不自报、内部自洽"**，并把 UA 规则（移除自报标记、保留真实内核版本、必须经 `webPreferences.userAgent` 生效）写成实现约束。发现项 P0B-3/6/7 全部 `verified`。
+- **登录次数最小化**：会话分区确定为正式常量 **`persist:postcheck`**（P0b 登录产生的会话已迁移并生效），新增 `--probe-only` 只探测模式（加载后自动退出并报告 `session.loggedIn`），用于验证登录态而**无需重复登录**。实测：分区重命名后仍 `loggedIn = true`、挑战命中 0 条、无验证码。
+- **实现陷阱修复**：`session.setUserAgent()` 不会改变 `WebContentsView` 的 UA，必须在 `webPreferences.userAgent` 显式传入；否则实验会记录"变体已应用"而运行时 UA 未变，导致完全错误的结论。

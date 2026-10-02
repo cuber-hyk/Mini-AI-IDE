@@ -29,16 +29,24 @@ const TARGET_URL = process.argv.find((a) => a.startsWith('--url='))?.slice('--ur
 const OUT_PATH =
   process.argv.find((a) => a.startsWith('--out='))?.slice('--out='.length) ||
   path.join(process.cwd(), 'p0b-report.json');
-// 中性分区名（计划"待同步决策"要求：不含应用名/项目名）
-const PARTITION = 'persist:neutral-profile';
+// 会话分区名 —— **正式应用与 P0b 工具共用同一个分区**
+//
+// P0b 登录产生的会话就保存在此分区（磁盘目录 `Partitions\postcheck`），
+// 因此 P2 的外壳必须复用同一个名字，才能做到"登录一次、长期免登录"。
+// 分区名保持中性（不含应用名/项目名），且**禁止随意改名**——改名的代价是丢弃登录态，
+// 而反复重新登录本身可能触发风控。
+const PARTITION = 'persist:postcheck';
 // 自检模式：在**本进程内**起一个 mock 服务器，用于验证采集链路本身（不访问任何外部站点）
 const SELF_TEST = process.argv.includes('--self-test');
+// 只探测模式：加载页面后**不等待人工操作**，仅记录会话状态并自动退出（用于验证登录态是否还在）
+const PROBE_ONLY = process.argv.includes('--probe-only');
 // 分区后缀：让不同实验互不污染登录态（例如 --profile b）
 const PROFILE = process.argv.find((a) => a.startsWith('--profile='))?.slice('--profile='.length) || '';
-const EFFECTIVE_PARTITION = PROFILE ? `${PARTITION}-${PROFILE}` : PARTITION;
+// 实际使用的分区：无后缀时即正式分区（复用已登录会话）；带后缀时用于隔离实验
+const EFFECTIVE_PARTITION = PROFILE ? PARTITION + '-' + PROFILE : PARTITION;
 
 /* ------------------------------------------------------------------ *
- * 受控实验：UA 变体（--variant=noident）
+ * 受控实验：UA 变体
  *
  * 规则：**一次只改这一个变量**。除 UA 中移除两个识别标记外，不做任何其他改动：
  *  - 不改 window.chrome（本项目禁止任何 JS 注入）；
@@ -47,17 +55,23 @@ const EFFECTIVE_PARTITION = PROFILE ? `${PARTITION}-${PROFILE}` : PARTITION;
  *
  * 移除：`Electron/<ver>`（内核构建的自我披露）与 `<appName>/<ver>`（应用名）。
  * 保留：Chrome/<真实内核版本>、平台信息、WebKit/Safari —— 全部如实。
+ *
+ * 默认值已是 `noident`：P0b 受控实验证明自报标记会触发平台警告，因此它成为**稳态**。
+ * 需要对照基线时显式传 `--variant=baseline`。
  * ------------------------------------------------------------------ */
-const VARIANT = process.argv.find((a) => a.startsWith('--variant='))?.slice('--variant='.length) || '';
+const VARIANT = process.argv.find((a) => a.startsWith('--variant='))?.slice('--variant='.length) || 'noident';
 
 function applyVariant(ses) {
   const original = ses.getUserAgent();
-  if (VARIANT === 'noident') {
-    const cleaned = original
+  const strip = (ua) =>
+    ua
       .replace(/\s*Electron\/[\d.]+/i, '')
       .replace(/\s*reachability-probe\/[\d.]+/i, '')
       .replace(/\s{2,}/g, ' ')
       .trim();
+
+  if (VARIANT === 'noident') {
+    const cleaned = strip(original);
     ses.setUserAgent(cleaned);
     return {
       applied: true,
@@ -68,6 +82,25 @@ function applyVariant(ses) {
     };
   }
   return { applied: false, variant: 'baseline', original, effective: original };
+}
+
+/**
+ * 是否已登录（用于"免登录"验证）
+ *  - 命中 `/sign_in` 视为未登录；
+ *  - 命中 `/a/chat` 视为已登录；
+ *  - 同时参考是否存在会话 cookie `ds_session_id`。
+ */
+function detectSessionState(currentUrl, cookies) {
+  const hasSessionCookie = cookies.some((c) => c.name === 'ds_session_id' && (c.value || '').length > 0);
+  const onSignIn = /\/sign_in/.test(currentUrl || '');
+  const onChat = /\/a\/chat/.test(currentUrl || '');
+  return {
+    loggedIn: hasSessionCookie && !onSignIn,
+    hasSessionCookie,
+    onSignIn,
+    onChat,
+    currentUrl,
+  };
 }
 
 /**
@@ -142,6 +175,7 @@ function buildReport() {
     target: state.targetUrl || TARGET_URL,
     partition: EFFECTIVE_PARTITION,
     variant: state.variantInfo || null,
+    session: state.session || null,
     environment: {
       electron: process.versions.electron,
       chromium: process.versions.chrome,
@@ -359,6 +393,8 @@ async function run() {
       userAgent: destroyed ? null : view.webContents.getUserAgent(),
       currentUrl: destroyed ? null : sanitizeUrl(view.webContents.getURL()),
     };
+    // 会话状态（是否仍需登录）——"登录一次、长期免登录"的判定依据
+    state.session = detectSessionState(state.sessionFacts.currentUrl, cookies);
   }
 
   record('target', {
@@ -394,6 +430,25 @@ async function run() {
       win.close();
       app.quit();
     }, 8000);
+  }
+
+  // 只探测模式：不等待人工操作，记录会话状态后自动退出（用于验证"是否仍需登录"）
+  if (PROBE_ONLY) {
+    setTimeout(async () => {
+      await collectSessionFacts().catch(() => {});
+      const cookies = await ses.cookies.get({}).catch(() => []);
+      const currentUrl = view.webContents.isDestroyed() ? null : view.webContents.getURL();
+      state.session = detectSessionState(currentUrl, cookies);
+      process.stdout.write('[probe-only] 会话状态: ' + JSON.stringify(state.session) + '\n');
+      process.stdout.write(
+        state.session.loggedIn
+          ? '[probe-only] 结论：**已登录**，无需再次登录（会话分区已持久化）\n'
+          : '[probe-only] 结论：**未登录**（或会话已失效），需要登录一次\n'
+      );
+      writeNow('probe-only');
+      win.close();
+      app.quit();
+    }, 12000);
   }
 
   await new Promise((resolve) => {
@@ -449,5 +504,6 @@ app.whenReady().then(() =>
     app.exit(2);
   })
 );
+
 
 

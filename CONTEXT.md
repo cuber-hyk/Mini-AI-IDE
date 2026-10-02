@@ -11,7 +11,8 @@
 | **人机边界（Human-Machine Boundary）** | 程序与用户的职责划分：复制代码、粘贴、写提示词、按发送归用户；读取回复、解析、预览、写盘归程序（写盘需用户确认）。 |
 | **格式约定（Format Convention）** | 让"一键同步"可解析的输出约定。**由用户在自己的提示词里要求**（例如"用带路径的代码块回复"），程序只负责解析。 |
 | **回程通道（Return Path）** | 模型输出回到编辑器的**只读**链路（围栏切分 → 路径行 → diff 预览 → 用户确认落盘）。不授予网页层任何写本地能力。 |
-| **如实 Electron 身份（Honest Electron Identity）** | 项目的基本姿态：不伪装 Chrome、不对抗指纹识别，UA/内核/可观测表面三者自洽。平台知道我们是 Electron 应用是可接受的，被判定为"程序在操作"才是要避免的。 |
+| **不伪造、不自报、内部自洽（No Fabrication, No Self-Declaration）** | 项目的基本姿态（术语曾用"如实 Electron 身份"，**已修正**）：UA 如实反映真实内核版本、**但不主动声明 Electron 构建**；不伪造任何能力或指纹；UA/内核/可观测表面保持自洽。依据：P0b 受控实验证明"自报 Electron"会直接触发平台警告，而 `window.chrome`、`userAgentData`、TLS 等差异存在却未据此报警。 |
+| **自报（Self-Declaration）** | 我方主动提供的、平台据此可直接下判断的标识（如 UA 中的 `Electron/<ver>`、`<appName>/<ver>`）。与"平台自己推断出的差异"是两件事；本项目只消除前者。 |
 | **自动化特征（Automation Traces）** | 唯一需要主动消除的一类信号：`navigator.webdriver`、CDP 调试端口、Playwright/Puppeteer/Selenium 痕迹、无头模式特征、伪装脚本造成的内部矛盾。与"指纹差异"是两件事。 |
 | **指纹差异（Fingerprint Divergence）** | 与真实 Chrome 之间的差异（TLS 握手、Canvas/WebGL 串、字体与插件列表等）。在本项目中**只作为知情记录**，不作为修补目标。 |
 | **内部矛盾（Internal Contradiction）** | 伪装带来的自相矛盾（如 UA 声称 Chrome 而实为 Electron）。风险权重高于"差异"，属于 C 级阻断项。 |

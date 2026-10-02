@@ -9,7 +9,7 @@ Mini-AI-IDE 是一个 **Windows 桌面工具**：左侧用 Monaco 编辑本地�
 三条不可动摇的项目原则：
 
 1. **不逆向 API、不伪造网络协议。** 所有业务流量由内嵌 Chromium 内核直接发出，主进程绝不代理大模型相关请求。
-2. **如实表明 Electron 身份，只消除自动化特征。** 平台知道我们是 Electron 应用是可接受的；被判定为"程序在操作"才是要避免的。**不伪装 Chrome、不做指纹伪装**。
+2. **不伪造、不自报、内部自洽。** UA 如实反映真实内核版本，但**不主动声明 Electron 构建**（移除 UA 中的 `Electron/<ver>` 与应用名标记）；**不伪造任何能力或指纹**（不动 `window.chrome`、`userAgentData`、Canvas/WebGL、字体、TLS）。依据：P0b 受控实验证明"自报 Electron"会直接触发平台警告，而那些未被消除的差异反而未触发。
 3. **零注入：程序不向网页写入任何内容。** 复制代码、粘贴、写提示词、按发送全部由用户手动完成；程序对网页**只读不写**。
 
 本项目**不是**：通用浏览器、反检测浏览器、批量自动化工具、网页端 API 客户端、指纹伪装工具、任何形式的网页自动化工具。
@@ -54,15 +54,20 @@ Mini-AI-IDE 是一个 **Windows 桌面工具**：左侧用 Monaco 编辑本地�
 - **零注入（硬边界）**：程序**不向网页写入任何内容**。禁止 `SendInput`、`sendInputEvent`、合成事件、DOM 赋值、模拟回车或点击、代写剪贴板。对网页的接触**只有读取**。
 - **无自动化特征**：不得暴露 CDP 调试端口；不得引入 Selenium / Puppeteer / Playwright 及其默认驱动模式；不得设置 `navigator.webdriver` 等自动化标记。
 - **会话**：固定且中性的 `persist:` 分区名，禁止每次启动随机生成分区（会被判定为异常登录）。
-- **UA**：如实表明 Electron 与真实内核版本；**禁止篡改 UA 冒充 Chrome**（会造成"UA 与内核不一致"的内部矛盾，比不伪装更可疑）。
+- **UA（硬性规则）**：**移除**自我声明标记 `Electron/<ver>` 与 `<appName>/<ver>`；**保留**真实的 `Chrome/<内核版本>`、平台段与 `WebKit/Safari` 段。禁止把版本号改成"最新 Chrome"（造成 UA 与内核时空错乱），禁止伪造平台。实现上**必须**在创建 `WebContentsView` 时用 `webPreferences.userAgent` 显式传入（`session.setUserAgent` 不生效）。
+- **不自报但不伪造**：只允许移除"我方主动声明的标识"；**禁止**为"看起来更像浏览器"而补齐 `window.chrome`、改 `userAgentData`、伪造 TLS/Canvas/字体等任何能力或指纹。
 
 ## 5. 允许 / 禁止
 
-**允许**：如实暴露 Electron 身份与宿主真实属性；移除**非浏览器原生**的 Node 注入痕迹（`window.require`、`process` 等）以保持环境自洽；不引入任何自动化框架。
+**允许**：如实暴露宿主真实属性与内核真实能力；**移除自我声明标记**（UA 中的 `Electron/<ver>`、应用名）；移除**非浏览器原生**的 Node 注入痕迹（`window.require`、`process` 等）以保持环境自洽；不引入任何自动化框架。
 
-**禁止**：patch / fork Chromium 构建；伪造或篡改 UA、`window.chrome.*`、Canvas/WebGL、字体列表、CPU/内存/时区等任何身份或指纹属性；伪装成 Chrome；使用 Selenium/Puppeteer/Playwright 驱动；**任何向网页写入的手段**（键盘注入、DOM 修改、合成事件、模拟发送、代写剪贴板）；把大模型流量改走 Node。
+**禁止**：patch / fork Chromium 构建；伪造或篡改 `window.chrome.*`、`userAgentData`、Canvas/WebGL、字体列表、CPU/内存/时区、TLS 等任何身份或指纹属性；把 UA 版本号改成非真实内核版本；伪装成 Chrome；使用 Selenium/Puppeteer/Playwright 驱动；**任何向网页写入的手段**（键盘注入、DOM 修改、合成事件、模拟发送、代写剪贴板）；把大模型流量改走 Node。
 
-**边界判定**：改动前先问一句——这是在**消除自动化特征**（允许），还是在**伪造身份/指纹**（禁止）？前者让环境自洽，后者制造内部矛盾。
+**边界判定**：改动前先问两句——
+1. 这是在**消除自动化特征**（允许），还是在**伪造身份/指纹**（禁止）？
+2. 这是在**不再主动声明**（允许），还是在**谎报能力**（禁止）？
+
+依据见 ADR-0001「受控实验结论与 UA 规则」。
 
 ## 6. Dev Flow 文档路由
 

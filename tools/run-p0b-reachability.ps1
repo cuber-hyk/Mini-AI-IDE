@@ -19,10 +19,12 @@ param(
     [string]$Url = 'https://chat.deepseek.com/',
     [string]$Out = '',
     [switch]$SelfTest,
-    # 受控实验：noident = 仅移除 UA 中的 Electron/ 与应用名标记，其余一律不动
-    [ValidateSet('', 'noident')]
+    # 只探测模式：不等待人工操作，检查登录态是否还在（用于"免登录"验证，避免重复登录）
+    [switch]$ProbeOnly,
+    # 受控实验：noident = 仅移除 UA 中的 Electron/ 与应用名标记，其余一律不动（现为默认）
+    [ValidateSet('', 'noident', 'baseline')]
     [string]$Variant = '',
-    # 实验分区后缀：让不同实验互不污染登录态
+    # 实验分区后缀：让不同实验互不污染登录态（不传则复用正式分区与已登录会话）
     [string]$Profile = ''
 )
 
@@ -39,7 +41,8 @@ if (-not (Test-Path $exe)) {
 if (-not $Out) {
     $stamp = Get-Date -Format 'yyyy-MM-dd'
     $suffix = if ($SelfTest) { 'p0b-selftest' }
-              elseif ($Variant) { "p0b-experiment-$Variant" }
+              elseif ($ProbeOnly) { 'p0b-session-probe' }
+              elseif ($Profile) { "p0b-experiment-$Profile" }
               else { 'p0b-reachability-raw' }
     $Out = Join-Path $repoRoot "docs\audits\$stamp-$suffix.json"
 }
@@ -68,25 +71,47 @@ if ($SelfTest) {
     exit 0
 }
 
+if ($ProbeOnly) {
+    Write-Host '============================================================'
+    Write-Host ' P0b 会话探测（不登录，12 秒后自动结束）'
+    Write-Host '============================================================'
+    Write-Host " 目标地址 : $Url"
+    Write-Host " 报告输出 : $Out"
+    Write-Host " 会话分区 : $(if ($Profile) { "persist:postcheck-$Profile" } else { 'persist:postcheck' })"
+    Write-Host ''
+    Write-Host ' 用途：检查登录态是否还在（避免为了验证而反复登录——重复登录本身有风控风险）'
+    Write-Host '============================================================'
+    $argsP = @('--probe-only', "--url=$Url", "--out=$Out")
+    if ($Variant) { $argsP += "--variant=$Variant" }
+    if ($Profile) { $argsP += "--profile=$Profile" }
+    & $exe $appDir @argsP
+    Write-Host "退出码: $LASTEXITCODE"
+    if (Test-Path $Out) {
+        $r = Get-Content $Out -Raw | ConvertFrom-Json
+        Write-Host ("会话状态：loggedIn = {0}（会话 cookie: {1}）" -f $r.session.loggedIn, $r.session.hasSessionCookie)
+        Write-Host ("挑战命中：{0} 条；4xx/5xx：{1} 条" -f $r.summary.challengesDetected, $r.summary.httpErrors)
+        Write-Host ("UA：{0}" -f $r.sessionFacts.userAgent)
+    }
+    exit 0
+}
+
 Write-Host '============================================================'
 Write-Host ' P0b 可达性与登录实测'
 Write-Host '============================================================'
 Write-Host " 目标地址 : $Url"
 Write-Host " 报告输出 : $Out"
-Write-Host " 实验分区 : $(if ($Profile) { "persist:neutral-profile-$Profile" } else { 'persist:neutral-profile' })"
-if ($Variant) {
-    Write-Host " UA 变体  : $Variant （仅移除 Electron/ 与应用名标记，其余一律不动）"
-}
+Write-Host " 会话分区 : $(if ($Profile) { "persist:postcheck-$Profile" } else { 'persist:postcheck（正式分区）' })"
+Write-Host " UA 变体  : $(if ($Variant) { $Variant } else { 'noident（默认，稳态）' })"
+Write-Host ''
+Write-Host ' 注意：若会话仍在（用 -ProbeOnly 可查），本步骤通常**不需要再登录**。'
+Write-Host '       只有在确实被要求登录时才手动登录一次。'
 Write-Host ''
 Write-Host ' 请在打开的窗口里【全部手动】操作：'
-Write-Host '   1. 用你平时的方式登录（扫码 / 验证码 / 密码均可）'
-Write-Host '   2. 随便问一句话，确认能正常对话'
-Write-Host '   3. 【重要观察点】登录页是否出现这句话：'
-Write-Host '        「使用环境异常 / 当前页面的使用环境可能存在数据和隐私泄露风险，'
-Write-Host '          为保障安全，建议您使用我们的官方产品。」'
-Write-Host '      请明确记住：有 / 无。这是本次实验的判定依据。'
-Write-Host '   4. 若出现人机验证 —— 不要试图绕过，截图记下提示原文，然后关窗'
-Write-Host '   5. 结束时直接关闭窗口'
+Write-Host '   1. 如已登录：随便问一句话，确认能正常对话'
+Write-Host '      如未登录：用你平时的方式登录一次'
+Write-Host '   2. 观察登录页是否出现「使用环境异常…建议您使用我们的官方产品」'
+Write-Host '   3. 若出现人机验证 —— 不要试图绕过，截图记下提示原文，然后关窗'
+Write-Host '   4. 结束时直接关闭窗口'
 Write-Host ''
 Write-Host ' 本工具只做只读记录：不注入、不代填、不代答、不模拟点击。'
 Write-Host '============================================================'
