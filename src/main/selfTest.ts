@@ -20,7 +20,7 @@ import { getFormatSpec } from '../shared/formatSpec';
 import { computeApply, parseModelReply } from '../shared/returnPath';
 import { createFixtures, type FixturePaths } from './fixtures';
 import type { FileService } from './fileService';
-import { SettingsStore } from './settings';
+import { SettingsStore, isUsableRoot } from './settings';
 
 interface BootInfo {
   sessionPartition: string;
@@ -53,6 +53,11 @@ export interface SelfTestInput {
   registeredChannels: readonly string[];
   /** 设置存储（可选；用于验证"上次打开的目录"持久化） */
   settings?: SettingsStore;
+  /**
+   * 期望被恢复的根目录（仅在 `--simulate-restart --persist-root=<dir>` 启动时提供）。
+   * 用于验证"第二次启动自动恢复上次打开的目录"这条真实路径。
+   */
+  expectRestoredRoot?: string;
 }
 
 export async function runSelfTest(input: SelfTestInput): Promise<{
@@ -308,6 +313,24 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     replaced: appliedWhole.replaced,
     mode: appliedWhole.mode,
   });
+
+  /* ---- H) 目录记忆：真实"重启后恢复"验证 ----
+   * 期望值由主进程在**启动那一刻**捕获（startupRoot），因为自检自身会把
+   * 根目录改成临时样例目录；若在此处读取 fileService.getRoot()，比对的就是样例目录了。
+   */
+  if (input.expectRestoredRoot && input.settings) {
+    const remembered = input.settings.get().lastRoot;
+    const startupRoot = input.expectRestoredRoot;
+    add('H1', '启动时按记忆恢复了根目录（恢复路径生效）', startupRoot === input.expectRestoredRoot, {
+      startupRoot,
+      expected: input.expectRestoredRoot,
+    });
+    add('H2', '恢复的目录是可用目录（isUsableRoot）', isUsableRoot(startupRoot), startupRoot);
+    add('H3', '设置中仍记录该目录（未被自检污染）', remembered === input.expectRestoredRoot, {
+      remembered,
+      expected: input.expectRestoredRoot,
+    });
+  }
 
   /* ---- G) 设置持久化（上次打开的目录）---- */
   if (input.settings) {

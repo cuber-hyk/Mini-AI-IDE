@@ -249,6 +249,44 @@ async function bootstrap(): Promise<void> {
   ]);
   Menu.setApplicationMenu(menu);
 
+  /* ---------------- 先决定根目录，再加载页面 ----------------
+   * 顺序很重要：渲染进程在页面加载完成时就会调用 `getRoot()`。
+   * 早期实现先 `await loadFile()` 再恢复目录，渲染进程**永远拿不到**恢复结果，
+   * 表现为"目录记忆没生效"（P2-12）。
+   */
+  const rootArg = process.argv.find((a) => a.startsWith('--root='))?.slice('--root='.length);
+  let restoredRoot: string | null = null;
+  let staleRoot: string | null = null;
+
+  if (rootArg) {
+    restoredRoot = fileService.setRoot(rootArg);
+    process.stdout.write(`[fs] 命令行指定根目录：${restoredRoot}\n`);
+  } else if (isUsableRoot(saved.lastRoot)) {
+    restoredRoot = fileService.setRoot(saved.lastRoot);
+    process.stdout.write(`[fs] 已恢复上次打开的目录：${restoredRoot}\n`);
+  } else if (saved.lastRoot) {
+    staleRoot = saved.lastRoot;
+    settings.update({ lastRoot: null });
+    process.stdout.write(`[fs] 上次打开的目录已不存在，已清除记忆：${staleRoot}\n`);
+  } else {
+    process.stdout.write('[fs] 无历史目录记录\n');
+  }
+
+  // 记下启动时的恢复结果：自检会把根目录改成临时样例目录，
+  // 因此"恢复断言"必须比对**启动那一刻**的值（P2-12 的验证就靠它）。
+  const startupRoot = fileService.getRoot();
+
+  // 模拟"第二次启动"：把当前目录写入设置但不真正恢复，用于自检/验证记忆功能
+  if (process.argv.includes('--simulate-restart')) {
+    const target = process.argv.find((a) => a.startsWith('--persist-root='))?.slice('--persist-root='.length);
+    if (target) {
+      settings.update({ lastRoot: target });
+      process.stdout.write(`[simulate-restart] 已把 lastRoot 写入设置：${target}\n`);
+    } else {
+      process.stdout.write('[simulate-restart] 未提供 --persist-root，跳过写入\n');
+    }
+  }
+
   /* ---------------- 加载内容 ---------------- */
   // 诊断：把渲染进程的 console 与 preload 失败转写到主进程 stdout。
   // 自检模式下过滤 Electron 的 CSP 告警（Monaco 的 AMD loader 需要 unsafe-eval，
@@ -271,21 +309,9 @@ async function bootstrap(): Promise<void> {
 
   await editorView.webContents.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
 
-  // 命令行指定目录（含自检场景）；正常启动时也可用 --root 指定
-  const rootArg = process.argv.find((a) => a.startsWith('--root='))?.slice('--root='.length);
-  if (rootArg) {
-    process.stdout.write(`[fs] 命令行指定根目录：${fileService.setRoot(rootArg)}\n`);
-  } else if (isUsableRoot(saved.lastRoot)) {
-    // 恢复上次打开的目录（与其他编辑器的习惯一致）；渲染进程启动时会主动 getRoot() 取到它
-    fileService.setRoot(saved.lastRoot);
-    process.stdout.write(`[fs] 已恢复上次打开的目录：${saved.lastRoot}\n`);
-  } else if (saved.lastRoot) {
-    // 记忆失效：清掉并告知渲染进程（避免"看似有目录打开、实际读不了"）
-    process.stdout.write(`[fs] 上次打开的目录已不存在，已清除记忆：${saved.lastRoot}\n`);
-    settings.update({ lastRoot: null });
-    if (!editorView.webContents.isDestroyed()) {
-      editorView.webContents.send(CHANNELS.rootStale, { root: null, stale: true } satisfies RootInfo);
-    }
+  // 告知渲染进程：记忆的目录已失效（让界面明确提示，而不是"看似有目录、实际读不了"）
+  if (staleRoot && !editorView.webContents.isDestroyed()) {
+    editorView.webContents.send(CHANNELS.rootStale, { root: null, stale: true } satisfies RootInfo);
   }
 
   if (SELF_TEST) {
@@ -300,6 +326,7 @@ async function bootstrap(): Promise<void> {
       layout,
       registeredChannels,
       settings,
+      ...(process.argv.includes('--test-restore') && startupRoot ? { expectRestoredRoot: startupRoot } : {}),
     });
     process.stdout.write(`\n===== 自检结果 =====\n${JSON.stringify(report, null, 2)}\n`);
     app.exit(report.verdict === 'PASS' ? 0 : 1);
