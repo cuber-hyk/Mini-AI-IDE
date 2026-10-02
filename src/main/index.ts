@@ -15,7 +15,7 @@ import { app, BaseWindow, clipboard, ipcMain, Menu, session, WebContentsView } f
 import * as path from 'node:path';
 
 import { CHANNELS, type RootInfo } from '../shared/contract';
-import { getFormatSpec } from '../shared/formatSpec';
+import { buildPrompt, getFormatSpec } from '../shared/formatSpec';
 import { checkUaConsistency, stripSelfDeclarations } from '../shared/userAgent';
 import { FileService } from './fileService';
 import { registerFileIpc } from './ipc';
@@ -23,6 +23,7 @@ import { createFixtures } from './fixtures';
 import { runSelfTest } from './selfTest';
 import { runDiagnose } from './diagnose';
 import { SettingsStore, isUsableRoot } from './settings';
+import { buildContextSummary } from './contextSummary';
 
 /* ------------------------------------------------------------------ *
  * 常量
@@ -188,6 +189,38 @@ async function bootstrap(): Promise<void> {
       return { ok: true, length: text.length };
     } catch (err) {
       return { ok: false, length: 0, error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+  /** 取工作环境摘要（只读；不含"当前打开的文件"，见 contextSummary 注释） */
+  ipcMain.handle(CHANNELS.getContext, () => buildContextSummary(fileService.getRoot()));
+
+  /**
+   * 组装完整 prompt 并写入剪贴板。
+   *
+   * 边界（ADR-0003 零注入）：**只写剪贴板**。用户在应用内输入框写需求 →
+   * 点「复制 prompt」→ 自己 Ctrl+V 到网页 → 自己回车。
+   * 程序不接触网页输入框，因此不产生任何"程序在操作"的特征。
+   */
+  ipcMain.handle(CHANNELS.copyPrompt, (_e, requirement: unknown, targetFiles: unknown) => {
+    const req = typeof requirement === 'string' ? requirement : '';
+    const files = Array.isArray(targetFiles) ? targetFiles.filter((f): f is string => typeof f === 'string') : [];
+    const ctx = buildContextSummary(fileService.getRoot());
+    const prompt = buildPrompt({
+      requirement: req,
+      context: {
+        root: ctx.root,
+        environment: ctx.environment,
+        tree: ctx.tree ? `${ctx.tree}${ctx.treeTruncated ? '\n…（目录较多，已截断）' : ''}` : null,
+      },
+      formatSpec: getFormatSpec('short'),
+      targetFiles: files,
+    });
+    try {
+      clipboard.writeText(prompt);
+      return { ok: true, prompt, length: prompt.length };
+    } catch (err) {
+      return { ok: false, prompt, length: prompt.length, error: err instanceof Error ? err.message : String(err) };
     }
   });
 

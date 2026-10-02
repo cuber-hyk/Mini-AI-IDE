@@ -35,6 +35,30 @@
       <div id="resizer" class="resizer" title="拖动调整左右宽度"></div>
     </main>
 
+    <!-- 需求输入区：你在这里写需求，点「复制 prompt」后到右侧粘贴。
+         程序只写剪贴板，**绝不写入网页输入框**（零注入边界）。 -->
+    <footer class="prompt-bar">
+      <div class="prompt-row">
+        <input
+          id="target-files"
+          class="target-files"
+          type="text"
+          placeholder="要改的文件（可留空，多个用逗号分隔，如 src/a.ts, src/b.ts）"
+          spellcheck="false"
+        />
+      </div>
+      <div class="prompt-row">
+        <textarea
+          id="requirement"
+          class="requirement"
+          rows="2"
+          placeholder="在这里写你的需求（只有这段是你写的），点右侧「复制 prompt」→ 到右边 DeepSeek 输入框 Ctrl+V 粘贴 → 自己按发送"
+          spellcheck="false"
+        ></textarea>
+        <button id="btn-copy-prompt" type="button" class="primary">复制 prompt</button>
+      </div>
+    </footer>
+
     <script src="./vendor/monaco/vs/loader.js"></script>
     <script src="./renderer.js"></script>
   </body>

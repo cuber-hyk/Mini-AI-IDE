@@ -71,5 +71,7 @@ export function registerFileIpc(getEditorWindow: () => BrowserWindow | null, ser
     // 以下通道由 index.ts 注册（需要访问窗口/视图/剪贴板），此处一并声明以便自检核对
     CHANNELS.setSplit,
     CHANNELS.copyFormatSpec,
+    CHANNELS.getContext,
+    CHANNELS.copyPrompt,
   ];
 }

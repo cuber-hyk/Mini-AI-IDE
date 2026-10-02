@@ -14,6 +14,9 @@
  *  b) 围栏**上方**最近的标题式路径行（`### src/a.ts`、`**src/a.ts**`、`文件名：src/a.ts`）
  *  c) 全文中出现的、看起来像路径的 token（`` `src/a.ts` ``、裸 `src/a.ts`）→ 整篇唯一时才采用
  *  d) 都不满足 → path 为 null（UI 需用户指定或改为"插入光标处"）
+ *
+ * **不用「当前打开的文件」兜底**：编辑器里打开的文件与待改文件未必相关，
+ * 猜错会把代码写进错误的文件。宁可留空交预览，也不猜（用户明确要求）。
  */
 
 /** 代码块 */
@@ -25,7 +28,7 @@ export interface ParsedCodeBlock {
   /** 推断出的目标文件（相对根目录，正斜杠）；null 表示未能确定 */
   filePath: string | null;
   /** 路径线索来源 */
-  pathSource: 'fence-comment' | 'preceding-heading' | 'unique-mention' | 'current-file' | 'none';
+  pathSource: 'fence-comment' | 'preceding-heading' | 'unique-mention' | 'none';
   /** 在原文中的起止偏移（含围栏），便于回显 */
   start: number;
   end: number;
@@ -34,9 +37,7 @@ export interface ParsedCodeBlock {
 }
 
 export interface ParseOptions {
-  /** 当前在编辑器里打开的文件（相对根目录）；作为最后的兜底线索 */
-  currentFile?: string | null;
-  /** 仅当整篇只提到一个候选路径时才采用 (c) 线索 */
+  /** 仅当整篇只提到一个候选路径时才采用 (c) 线索（默认 true） */
   allowUniqueMention?: boolean;
 }
 
@@ -280,7 +281,7 @@ export function parseModelReply(replyText: string, options: ParseOptions = {}): 
     let filePath: string | null = null;
     let pathSource: ParsedCodeBlock['pathSource'] = 'none';
 
-    // (a) 围栏内首行路径注释
+    // (a) 围栏内首行路径注释 —— 最可信（就在代码里）
     const firstNewline = code.indexOf('\n');
     const firstLine = firstNewline >= 0 ? code.slice(0, firstNewline) : code;
     const fromComment = matchPathCommentLine(firstLine);
@@ -291,7 +292,7 @@ export function parseModelReply(replyText: string, options: ParseOptions = {}): 
       code = firstNewline >= 0 ? code.slice(firstNewline + 1) : '';
     }
 
-    // (b) 围栏上方标题式路径行
+    // (b) 围栏上方标题式路径行 —— 明确指定了"这段代码属于哪个文件"，优先于全局唯一候选
     if (!filePath) {
       const fromHeading = findPrecedingHeadingPath(text, f.start);
       if (fromHeading) {
@@ -300,17 +301,14 @@ export function parseModelReply(replyText: string, options: ParseOptions = {}): 
       }
     }
 
-    // (c) 全篇唯一候选
+    // (c) 全文唯一候选 —— 最后的自动线索，**可靠性最低**，必须提示用户核对
     if (!filePath && uniqueMention) {
       filePath = uniqueMention;
       pathSource = 'unique-mention';
     }
 
-    // (d) 兜底：当前打开的文件
-    if (!filePath && options.currentFile) {
-      filePath = normalizeRelPath(options.currentFile);
-      if (filePath) pathSource = 'current-file';
-    }
+    // 注意：不再用"当前打开的文件"兜底 —— 编辑器里打开的文件与待改文件未必相关，
+    // 猜错会把代码写进错误的文件。宁可 null（交预览让用户指定）。
 
     return {
       code: code.replace(/\s+$/, ''),
@@ -327,8 +325,11 @@ export function parseModelReply(replyText: string, options: ParseOptions = {}): 
   if (unresolved.length > 0) {
     notes.push(`${unresolved.length} 个代码块无法确定目标文件，需在预览中指定`);
   }
-  if (blocks.some((b) => b.pathSource === 'current-file')) {
-    notes.push('部分代码块按"当前打开的文件"兜底匹配，请确认');
+  const weak = blocks.filter((b) => b.pathSource === 'unique-mention');
+  if (weak.length > 0) {
+    notes.push(
+      `${weak.length} 个代码块的目标文件来自"全文唯一候选"推断（可靠性最低）—— 请务必核对：回复正文里出现的示例路径可能导致误匹配`
+    );
   }
 
   return { blocks, mentionedPaths, hasUnresolved: unresolved.length > 0, notes };

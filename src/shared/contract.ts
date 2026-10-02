@@ -25,6 +25,10 @@ export const CHANNELS = {
   setSplit: 'ui:set-split',
   /** 把"输出格式要求"模板写入系统剪贴板（**由用户自己粘贴到提示词**，程序绝不注入） */
   copyFormatSpec: 'ui:copy-format-spec',
+  /** 组装完整 prompt（需求 + 环境上下文 + 格式要求）并写入剪贴板；仍由用户自己粘贴 */
+  copyPrompt: 'ui:copy-prompt',
+  /** 取"工作环境摘要"（绝对路径 + 目录树 + 运行环境），供界面预览 */
+  getContext: 'ui:get-context',
   /** 主进程 → 渲染进程：记忆的根目录已失效 */
   rootStale: 'fs:root-stale',
   /** 主进程 → 渲染进程：根目录已变更 */
@@ -98,6 +102,23 @@ export interface CopyFormatResult {
   error?: string;
 }
 
+export interface ContextSummary {
+  root: string | null;
+  environment: string;
+  /** 目录树摘要（多行文本） */
+  tree: string | null;
+  /** 目录树是否被截断 */
+  treeTruncated: boolean;
+}
+
+export interface CopyPromptResult {
+  ok: boolean;
+  /** 写入剪贴板的 prompt 全文（便于界面回显与自查） */
+  prompt: string;
+  length: number;
+  error?: string;
+}
+
 /** preload 通过 contextBridge 暴露给渲染进程的唯一接口面 */
 export interface EditorBridge {
   chooseRoot(): Promise<RootInfo>;
@@ -113,6 +134,13 @@ export interface EditorBridge {
    * **程序不会把它送进输入框**——需要用户自己粘贴到提示词里（零注入边界，见 ADR-0003）。
    */
   copyFormatSpec(): Promise<CopyFormatResult>;
+  /** 取工作环境摘要（当前目录 + 目录树 + 运行环境），用于界面预览 */
+  getContext(): Promise<ContextSummary>;
+  /**
+   * 组装完整 prompt 并写入剪贴板。
+   * 仍**只写剪贴板**：由用户自己 Ctrl+V 到网页输入框（零注入边界）。
+   */
+  copyPrompt(requirement: string, targetFiles: string[]): Promise<CopyPromptResult>;
   onRootChanged(listener: (info: RootInfo) => void): void;
   /** 记忆的根目录已失效（被删除/移动）时的通知 */
   onRootStale(listener: (info: RootInfo) => void): void;

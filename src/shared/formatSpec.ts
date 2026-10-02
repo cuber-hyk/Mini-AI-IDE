@@ -19,6 +19,7 @@ export const FORMAT_SPEC_SHORT = [
   '2. 或把路径写在代码块第一行注释里（例如 // src/main/index.ts）',
   '3. 每个文件一个代码块，块内只放该文件的完整内容，不要行号、不要省略号',
   '4. 不要输出解释性前后缀；文件名一律用相对路径',
+  '5. 若涉及多个文件，**每个文件都单独标注** ### 文件：相对路径，一个文件一个代码块',
 ].join('\n');
 
 /** 完整版：需要严谨改动时使用（含"只改片段"的说明） */
@@ -47,3 +48,62 @@ export type FormatSpecVariant = 'short' | 'full';
 export function getFormatSpec(variant: FormatSpecVariant = 'short'): string {
   return variant === 'full' ? FORMAT_SPEC_FULL : FORMAT_SPEC_SHORT;
 }
+
+/* ------------------------------------------------------------------ *
+ * 完整 prompt 组装（由用户在本应用内点击"复制 prompt"触发）
+ * ------------------------------------------------------------------ */
+
+export interface PromptContext {
+  /** 工作目录（绝对路径，按用户机器如实给出） */
+  root: string | null;
+  /** 目录摘要（相对路径列表，已截断并注明） */
+  tree: string | null;
+  /** 运行环境摘要，如 "Windows 10.0.26200；Node 24.21.0" */
+  environment: string | null;
+}
+
+export interface BuildPromptInput {
+  /** 用户在应用内输入框里写的需求（唯一由人写的部分） */
+  requirement: string;
+  context: PromptContext;
+  /** 输出格式要求；传入空字符串则不附 */
+  formatSpec: string;
+  /** 可选：要改的文件路径（用户手填），会单独成段 */
+  targetFiles?: string[];
+}
+
+/**
+ * 把"用户需求 + 环境上下文 + 输出格式要求"组装成完整 prompt。
+ *
+ * 说明：本函数只产出**文本**，由调用方写入系统剪贴板；
+ * **绝不写入网页输入框** —— 最后那一下 Ctrl+V 必须由用户完成（ADR-0003）。
+ */
+export function buildPrompt(input: BuildPromptInput): string {
+  const parts: string[] = [];
+
+  if (input.requirement.trim().length > 0) {
+    parts.push(`## 用户需求\n${input.requirement.trim()}`);
+  }
+
+  const envLines: string[] = [];
+  if (input.context.environment) envLines.push(`- 运行环境: ${input.context.environment}`);
+  if (input.context.root) envLines.push(`- 当前工作目录: ${input.context.root}`);
+  if (envLines.length > 0) {
+    parts.push(`## 工作环境\n${envLines.join('\n')}`);
+  }
+
+  if (input.context.tree) {
+    parts.push(`## 目录结构（摘要）\n${input.context.tree}`);
+  }
+
+  if (input.targetFiles && input.targetFiles.length > 0) {
+    parts.push(`## 要改的文件\n${input.targetFiles.map((f) => `- ${f}`).join('\n')}`);
+  }
+
+  if (input.formatSpec.trim().length > 0) {
+    parts.push(input.formatSpec.trim());
+  }
+
+  return parts.join('\n\n');
+}
+

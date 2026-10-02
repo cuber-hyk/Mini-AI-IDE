@@ -141,19 +141,44 @@ describe('parseModelReply —— 路径线索优先级', () => {
     assert.equal(r.hasUnresolved, true);
   });
 
-  it('(d) 无任何线索时用"当前打开的文件"兜底并给出提示', () => {
+  it('(d) 无任何线索时**不猜测**：即使编辑器里打开了文件也不兜底（用户明确要求）', () => {
     const reply = ['```ts', 'const y = 1;', '```'].join('\n');
-    const r = parseModelReply(reply, { currentFile: 'src/current.ts' });
-    assert.equal(r.blocks[0]?.filePath, 'src/current.ts');
-    assert.equal(r.blocks[0]?.pathSource, 'current-file');
-    assert.ok(r.notes.some((n) => n.includes('当前打开的文件')));
-  });
-
-  it('无任何线索且无当前文件时保持 unresolved，不猜测', () => {
-    const reply = ['```ts', 'const z = 1;', '```'].join('\n');
     const r = parseModelReply(reply);
     assert.equal(r.blocks[0]?.filePath, null);
+    assert.equal(r.blocks[0]?.pathSource, 'none');
     assert.equal(r.hasUnresolved, true);
+  });
+
+  it('(c) 弱线索会给出"务必核对"的提示', () => {
+    const reply = ['请把 `src/c.ts` 改成：', '```ts', 'export const c = 3;', '```'].join('\n');
+    const r = parseModelReply(reply);
+    assert.equal(r.blocks[0]?.pathSource, 'unique-mention');
+    assert.ok(r.notes.some((n) => n.includes('务必核对')));
+  });
+
+  it('正文里提到多个路径时不自动匹配（防止误写到示例路径）', () => {
+    const reply = [
+      '这次改动涉及 `src/main/index.ts` 与 `src/shared/contract.ts`：',
+      '```ts',
+      'export const x = 1;',
+      '```',
+    ].join('\n');
+    const r = parseModelReply(reply);
+    assert.equal(r.mentionedPaths.length, 2);
+    assert.equal(r.blocks[0]?.filePath, null, JSON.stringify(r.mentionedPaths));
+  });
+
+  it('正文只有一个示例路径时会采用，但必须给出"务必核对"提示', () => {
+    const reply = [
+      '例如写成 `### 文件：src/main/index.ts` 这样。下面是代码：',
+      '```ts',
+      'export const x = 1;',
+      '```',
+    ].join('\n');
+    const r = parseModelReply(reply);
+    assert.equal(r.blocks[0]?.filePath, 'src/main/index.ts');
+    assert.equal(r.blocks[0]?.pathSource, 'unique-mention');
+    assert.ok(r.notes.some((n) => n.includes('务必核对')));
   });
 
   it('多围栏各自就近匹配自己的标题', () => {

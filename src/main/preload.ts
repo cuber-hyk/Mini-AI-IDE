@@ -27,6 +27,8 @@ const CH = {
   writeFile: 'fs:write-file',
   setSplit: 'ui:set-split',
   copyFormatSpec: 'ui:copy-format-spec',
+  copyPrompt: 'ui:copy-prompt',
+  getContext: 'ui:get-context',
   rootChanged: 'fs:root-changed',
   rootStale: 'fs:root-stale',
 } as const;
@@ -41,6 +43,8 @@ const bridge = {
   writeFile: (relPath: string, text: string) => ipcRenderer.invoke(CH.writeFile, relPath, text),
   setSplit: (editorWidth: number) => ipcRenderer.invoke(CH.setSplit, editorWidth),
   copyFormatSpec: () => ipcRenderer.invoke(CH.copyFormatSpec, 'short'),
+  getContext: () => ipcRenderer.invoke(CH.getContext),
+  copyPrompt: (requirement: string, targetFiles: string[]) => ipcRenderer.invoke(CH.copyPrompt, requirement, targetFiles),
   onRootChanged: (listener: (info: unknown) => void) => {
     ipcRenderer.on(CH.rootChanged, (_e, info) => listener(info));
   },

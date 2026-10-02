@@ -81,7 +81,74 @@ body {
 
 .layout {
   display: flex;
-  height: calc(100% - 36px);
+  height: calc(100% - 36px - 132px);
+}
+
+/* 需求输入区：应用内写需求 → 复制 prompt → 自己粘贴到右侧网页 */
+.prompt-bar {
+  height: 132px;
+  border-top: 1px solid var(--border);
+  background: #191c22;
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.prompt-row {
+  display: flex;
+  gap: 6px;
+}
+
+.prompt-row:first-child {
+  flex: 0 0 auto;
+}
+
+.prompt-row:last-child {
+  flex: 1;
+  min-height: 0;
+}
+
+.target-files {
+  width: 100%;
+  background: #14161b;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font: inherit;
+}
+
+.requirement {
+  flex: 1;
+  min-height: 0;
+  resize: none;
+  background: #14161b;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font: inherit;
+  line-height: 1.5;
+}
+
+.target-files:focus,
+.requirement:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.prompt-bar button.primary {
+  align-self: stretch;
+  min-width: 104px;
+  background: #2c5cc5;
+  border-color: #3f6fd8;
+  color: #fff;
+  font-weight: 600;
+}
+
+.prompt-bar button.primary:hover:not(:disabled) {
+  background: #3768d8;
 }
 
 .sidebar {

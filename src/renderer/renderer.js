@@ -26,6 +26,9 @@
     btnFormat: document.getElementById('btn-format'),
     monacoHost: document.getElementById('monaco'),
     resizer: document.getElementById('resizer'),
+    requirement: document.getElementById('requirement'),
+    targetFiles: document.getElementById('target-files'),
+    btnCopyPrompt: document.getElementById('btn-copy-prompt'),
   };
 
   const state = {
@@ -242,6 +245,37 @@
 
   el.btnSave.addEventListener('click', function () {
     void save();
+  });
+
+  /**
+   * 「复制 prompt」：把你在应用内写的需求 + 工作环境 + 目录树 + 格式要求
+   * 组装成完整 prompt 写入**系统剪贴板**，再由你自己 Ctrl+V 到右侧输入框。
+   * 程序**不会**写入网页 —— 这是零注入边界（见 ADR-0003）。
+   */
+  el.btnCopyPrompt.addEventListener('click', async function () {
+    const requirement = el.requirement.value.trim();
+    if (requirement.length === 0) {
+      setInfo('请先在上方输入框里写下你的需求，再点「复制 prompt」', true);
+      el.requirement.focus();
+      return;
+    }
+    const files = el.targetFiles.value
+      .split(/[,，;；\s]+/)
+      .map(function (s) { return s.trim(); })
+      .filter(function (s) { return s.length > 0; });
+
+    const result = await bridge.copyPrompt(requirement, files);
+    if (!result.ok) {
+      setInfo('复制 prompt 失败：' + (result.error ?? '未知错误'), true);
+      return;
+    }
+    setInfo(
+      '已复制完整 prompt（' + result.length + ' 字符，含需求/工作环境/目录结构/格式要求）—— 请到右侧输入框 Ctrl+V 粘贴，然后自己按发送'
+    );
+    el.btnCopyPrompt.textContent = '已复制 ✓';
+    setTimeout(function () {
+      el.btnCopyPrompt.textContent = '复制 prompt';
+    }, 1800);
   });
 
   // 复制"输出格式要求"到剪贴板：程序**只写剪贴板**，由用户自己粘贴到提示词（零注入边界）

@@ -16,11 +16,12 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { CHANNELS } from '../shared/contract';
-import { getFormatSpec } from '../shared/formatSpec';
+import { buildPrompt, getFormatSpec } from '../shared/formatSpec';
 import { computeApply, parseModelReply } from '../shared/returnPath';
 import { createFixtures, type FixturePaths } from './fixtures';
 import type { FileService } from './fileService';
 import { SettingsStore, isUsableRoot } from './settings';
+import { buildContextSummary } from './contextSummary';
 
 interface BootInfo {
   sessionPartition: string;
@@ -294,7 +295,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     'print("hi")',
     '```',
   ].join('\n');
-  const parsed = parseModelReply(sampleReply, { currentFile: 'src/current.ts' });
+  const parsed = parseModelReply(sampleReply);
   add('F1', '回程解析：标题式与注释式路径线索均被识别', parsed.blocks.length === 2 && parsed.blocks[0]?.filePath === 'src/demo.ts' && parsed.blocks[1]?.filePath === 'other.py', {
     sources: parsed.blocks.map((b) => `${b.filePath ?? '<null>'}:${b.pathSource}`),
   });
@@ -313,6 +314,32 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     replaced: appliedWhole.replaced,
     mode: appliedWhole.mode,
   });
+
+  /* ---- I) prompt 组装（需求 + 环境 + 目录树 + 格式要求）---- */
+  const ctx = buildContextSummary(fixtures.root);
+  const assembled = buildPrompt({
+    requirement: '把 greeting 改成 hello',
+    context: { root: ctx.root, environment: ctx.environment, tree: ctx.tree },
+    formatSpec: getFormatSpec('short'),
+    targetFiles: ['hello.ts'],
+  });
+  add(
+    'I1',
+    'prompt 组装包含需求/工作环境/目录结构/格式要求四段',
+    /## 用户需求/.test(assembled) && /## 工作环境/.test(assembled) && /## 目录结构/.test(assembled) && /【输出格式要求】/.test(assembled),
+    assembled.slice(0, 120)
+  );
+  add('I2', '工作环境摘要含真实运行环境与工作目录', ctx.environment.length > 0 && ctx.root === fixtures.root, {
+    environment: ctx.environment,
+    root: ctx.root,
+  });
+  add('I3', '目录树摘要含样例文件且为相对路径', Boolean(ctx.tree && ctx.tree.includes('hello.ts') && !ctx.tree.includes(fixtures.root)), (ctx.tree ?? '').split('\n').slice(0, 6));
+  add(
+    'I4',
+    '上下文**不含"当前打开的文件"**（用户明确要求排除，避免误导模型）',
+    !/当前打开的文件|current file|currentFile/i.test(assembled),
+    '未出现"当前打开的文件"字样'
+  );
 
   /* ---- H) 目录记忆：真实"重启后恢复"验证 ----
    * 期望值由主进程在**启动那一刻**捕获（startupRoot），因为自检自身会把
