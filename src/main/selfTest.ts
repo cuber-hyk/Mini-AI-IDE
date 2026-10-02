@@ -378,6 +378,50 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       { ...collectChain, strategies: COLLECT_STRATEGIES.map((s) => s.id) }
     );
 
+    /*
+     * L7：**未声明变量扫描**。
+     *
+     * 为什么必须做：`lastPreview = preview`（用了没声明的变量）是纯运行时错误，
+     * 静态比对与 tsc（看不到 renderer.js）都抓不到，而它会**中断脚本**、
+     * 让整个功能静默失效 —— 实测中「采集回复」就是这样"点了没反应"。
+     *
+     * 为什么不用"沙箱里跑一遍"：那种冒烟执行到不了**事件处理函数内部**
+     * （本 bug 的赋值就在点击处理里），实测证明它抓不到，因此改为静态扫描：
+     * 取出所有"裸标识符赋值"，逐个核对是否在同文件中有声明、是否函数参数、
+     * 是否是注入的浏览器全局。注意不能用 `let x = (x = 1)` 自赋值，那会掩盖错误。
+     */
+    const smokeAssigns = new Set([...js.matchAll(/^\s*(\w+)\s*=(?!=)/gm)].map((m) => m[1] as string));
+    const smokeDeclared = new Set(
+      [...js.matchAll(/(?:^|[\s;{(,])(?:let|const|var)\s+(\w+)/g)].map((m) => m[1] as string)
+    );
+    for (const m of js.matchAll(/function\s*\w*\s*\(([^)]*)\)/g)) {
+      for (const p of (m[1] ?? '').split(',')) {
+        const name = p.trim().split(/[=:]/)[0]?.trim();
+        if (name) smokeDeclared.add(name);
+      }
+    }
+    for (const m of js.matchAll(/\(([^)]*)\)\s*=>/g)) {
+      for (const p of (m[1] ?? '').split(',')) {
+        const name = p.trim().split(/[=:]/)[0]?.trim();
+        if (name) smokeDeclared.add(name);
+      }
+    }
+    const smokeGlobals = new Set([
+      'window', 'document', 'console', 'setTimeout', 'clearTimeout', 'setInterval',
+      'clearInterval', 'requestAnimationFrame', 'cancelAnimationFrame', 'CSS',
+      'module', 'exports', 'require', 'globalThis', 'self', 'undefined',
+    ]);
+    const smokeUndeclared = [...smokeAssigns].filter(
+      (n) => !smokeDeclared.has(n) && !smokeGlobals.has(n)
+    );
+
+    add(
+      'L7',
+      '渲染进程无「赋值给未声明变量」（静态扫描裸标识符赋值，防 ReferenceError 中断脚本）',
+      smokeUndeclared.length === 0,
+      { undeclared: smokeUndeclared, scannedAssignments: smokeAssigns.size, declaredNames: smokeDeclared.size }
+    );
+
     // renderer.js 不经 tsc，这里至少保证可被解析（语法错误会在此暴露）
     const vm = await import('node:vm');
     let parseError: string | null = null;
