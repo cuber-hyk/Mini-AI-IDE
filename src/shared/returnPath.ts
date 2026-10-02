@@ -29,11 +29,21 @@ export interface ParsedCodeBlock {
   filePath: string | null;
   /** 路径线索来源 */
   pathSource: 'fence-comment' | 'preceding-heading' | 'unique-mention' | 'none';
+  /**
+   * 片段替换的行区间（1 起、闭区间）；null 表示"整文件替换"。
+   * 来源是围栏上方的 `### 范围：80-92` 指令（也接受 `### 行：80-92`）。
+   */
+  range: LineRange | null;
+  /** 被剥离的路径注释行原文（用于回溯） */
+  strippedPathLine: string | null;
   /** 在原文中的起止偏移（含围栏），便于回显 */
   start: number;
   end: number;
-  /** 被剥离的路径注释行原文（用于回溯） */
-  strippedPathLine: string | null;
+}
+
+export interface LineRange {
+  start: number;
+  end: number;
 }
 
 export interface ParseOptions {
@@ -217,8 +227,88 @@ function looksLikeHeadingLine(line: string): boolean {
   );
 }
 
-function findPrecedingHeadingPath(text: string, fenceStart: number): string | null {
+/* ------------------------------------------------------------------ *
+ * 行区间指令：### 范围：80-92
+ *
+ * 为什么需要它：片段替换比"整文件替换"省 token，但**行号必须可靠**。
+ * 因此约定：
+ *  - 用户复制片段时带上**文件真实行号**（见 formatNumberedSnippet）；
+ *  - 模型回显 `### 范围：N-M`；
+ *  - 应用前由 FileService 做**三向校验**（区间有效 / 原内容匹配 / 上下文匹配），
+ *    任何一项不符即拒绝，绝不按可能已失效的行号写入（见 computeApply 的说明）。
+ * ------------------------------------------------------------------ */
+
+/** 匹配 `### 范围：80-92`、`### 行：80-92`、`### lines: 80-92`、`### 位置：替换第 80-92 行` 等形态 */
+const RANGE_DIRECTIVE_RE =
+  /^\s*(?:#{1,6}\s*)?(?:范围|行|行号|位置|lines?|range|position)\s*[:：]\s*(?:替换第\s*)?(\d{1,7})\s*(?:[-–—~至到]\s*(\d{1,7}))?\s*行?\s*$/i;
+
+/** 从一行文本解析行区间；单数字（`### 范围：80`）视为 80-80 */
+export function matchRangeDirective(line: string): LineRange | null {
+  const m = RANGE_DIRECTIVE_RE.exec(line);
+  if (!m || !m[1]) return null;
+  const start = Number.parseInt(m[1], 10);
+  const end = m[2] ? Number.parseInt(m[2], 10) : start;
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 1 || end < 1) return null;
+  return start <= end ? { start, end } : { start: end, end: start };
+}
+
+/** 在围栏上方的标题区里找行区间指令（与路径线索同一段文本） */
+function findPrecedingRange(text: string, fenceStart: number): LineRange | null {
   const before = text.slice(0, fenceStart);
+  const lines = before.split(/\r\n|\r|\n/);
+  let i = lines.length - 1;
+  while (i >= 0 && (lines[i] ?? '').trim().length === 0) i -= 1;
+
+  const block: string[] = [];
+  while (i >= 0) {
+    const line = (lines[i] ?? '').trim();
+    if (line.length === 0) break;
+    block.unshift(line);
+    i -= 1;
+  }
+  // 从近到远找第一条可解析的区间指令
+  for (let k = block.length - 1; k >= 0; k -= 1) {
+    const r = matchRangeDirective(block[k] as string);
+    if (r) return r;
+  }
+  return null;
+}
+
+/* ------------------------------------------------------------------ *
+ * 带行号的片段格式化（"复制选中片段"用）
+ * ------------------------------------------------------------------ */
+
+/**
+ * 把一段文本格式化为"带文件真实行号"的片段，供用户粘贴进提示词。
+ * 行号格式为 `  80| ` （右对齐、竖线分隔），便于模型原样回显。
+ */
+export function formatNumberedSnippet(text: string, startLine: number): string {
+  const lines = text.length === 0 ? [] : text.split(/\r\n|\r|\n/);
+  const width = Math.max(3, String(startLine + lines.length - 1).length);
+  return lines
+    .map((line, idx) => `${String(startLine + idx).padStart(width, ' ')}| ${line}`)
+    .join('\n');
+}
+
+/** 从"带行号片段"里还原纯文本（去掉 `NNN| ` 前缀），用于生成提示词里的干净片段 */
+export function stripNumberedPrefix(numbered: string): { text: string; startLine: number | null } {
+  const lines = numbered.split(/\r\n|\r|\n/);
+  let startLine: number | null = null;
+  const out: string[] = [];
+  for (const line of lines) {
+    const m = /^\s*(\d{1,7})\|\s?(.*)$/.exec(line);
+    if (m && m[1]) {
+      const n = Number.parseInt(m[1], 10);
+      if (startLine === null) startLine = n;
+      out.push(m[2] ?? '');
+    } else {
+      out.push(line);
+    }
+  }
+  return { text: out.join('\n'), startLine };
+}
+
+function findPrecedingHeadingPath(text: string, fenceStart: number): string | null {  const before = text.slice(0, fenceStart);
   const lines = before.split(/\r\n|\r|\n/);
 
   // 关键：**只有当紧邻围栏的上方是一个"连续的非空行块"时**，才把它当作标题区。
@@ -307,6 +397,15 @@ export function parseModelReply(replyText: string, options: ParseOptions = {}): 
       pathSource = 'unique-mention';
     }
 
+    // 行区间指令：存在即表示"这是片段替换"，否则视为"整文件替换"
+    const range = findPrecedingRange(text, f.start);
+
+    // 若片段里行号被原样带进来（` 80| code`），剥掉前缀让代码保持干净
+    if (range) {
+      const stripped = stripNumberedPrefix(code);
+      if (stripped.startLine !== null) code = stripped.text;
+    }
+
     // 注意：不再用"当前打开的文件"兜底 —— 编辑器里打开的文件与待改文件未必相关，
     // 猜错会把代码写进错误的文件。宁可 null（交预览让用户指定）。
 
@@ -315,9 +414,10 @@ export function parseModelReply(replyText: string, options: ParseOptions = {}): 
       language: normalizeLanguage(f.info),
       filePath,
       pathSource,
+      range,
+      strippedPathLine,
       start: f.start,
       end: f.end,
-      strippedPathLine,
     };
   });
 
@@ -329,6 +429,12 @@ export function parseModelReply(replyText: string, options: ParseOptions = {}): 
   if (weak.length > 0) {
     notes.push(
       `${weak.length} 个代码块的目标文件来自"全文唯一候选"推断（可靠性最低）—— 请务必核对：回复正文里出现的示例路径可能导致误匹配`
+    );
+  }
+  const snippets = blocks.filter((b) => b.range !== null);
+  if (snippets.length > 0) {
+    notes.push(
+      `${snippets.length} 个代码块是**片段替换**（带行区间）：应用前会做三向校验（区间有效 / 原内容匹配 / 上下文匹配），不一致即拒绝`
     );
   }
 
@@ -349,7 +455,24 @@ function normalizeLanguage(info: string): string {
 export type ApplyMode =
   | { kind: 'insert-at-cursor'; cursorOffset: number }
   | { kind: 'replace-fence-region'; start: number; end: number }
-  | { kind: 'replace-whole-file' };
+  | { kind: 'replace-whole-file' }
+  /**
+   * 片段替换（按文件真实行号）。
+   * **必须带 expectedOriginal**：这是"三向校验"里的第二项 —— 只有当前 1-based
+   * 闭区间 [start,end] 的内容与 expectedOriginal 完全一致时才允许替换。
+   * 缺了它，行号一旦漂移就会静默改错地方，因此本模式拒绝无校验的应用。
+   *
+   * `contextPrev` / `contextNext`（可选）：复制片段时记录的区间前后各一行，
+   * 用于第三项"上下文校验"。不提供则跳过该项。
+   */
+  | {
+      kind: 'replace-lines';
+      start: number;
+      end: number;
+      expectedOriginal: string;
+      contextPrev?: string | null;
+      contextNext?: string | null;
+    };
 
 export interface ApplyResult {
   /** 应用后的文件内容 */
@@ -360,22 +483,37 @@ export interface ApplyResult {
   replaced: string;
 }
 
+export type ApplyOutcome =
+  | ({ ok: true } & ApplyResult)
+  | { ok: false; reason: 'range-invalid' | 'content-mismatch' | 'context-mismatch'; detail: string };
+
+/** 按 1-based 闭区间取行（用于片段校验） */
+export function getLineRange(text: string, start: number, end: number): string[] {
+  const lines = text.split(/\r\n|\r|\n/);
+  if (start < 1 || end < start) return [];
+  return lines.slice(start - 1, end);
+}
+
 /**
  * 计算"把某个代码块应用到某文件后"的文本。
  *
- * 注意：本函数**不改动任何文件**，只做纯计算，写入由 FileService 在执行阶段完成，
- * 并且必须先经用户确认（ADR-0004 方案 A）。
+ * ⚠️ 重要：本函数**不改动任何文件**，只做纯计算。落盘由 FileService 在用户确认后执行
+ * （ADR-0004 方案 A）。
  *
- * 插入规则（确定性，便于测试与解释）：
- *  在光标位置插入代码块；若光标左侧**不是行首或换行**，则先补一个换行，
- *  使插入的代码从新的一行开始；若光标右侧还有内容且不是换行，则在代码块后补一个换行。
- *  实际效果会在 diff 预览中原样呈现，用户确认前不会落盘。
+ * 片段替换（`replace-lines`）做**三向校验**：
+ *   ① 区间有效：1 ≤ start ≤ end ≤ 文件总行数；
+ *   ② 原内容匹配：当前 [start,end] 行必须等于 `expectedOriginal`（用户复制片段时的原文）；
+ *   ③ 上下文匹配：区间外紧邻的上一行/下一行（若存在）必须仍然存在且相同。
+ * 任一项不符即返回 `ok: false`，**绝不按可能已失效的行号写入**。
+ *
+ * 插入规则（`insert-at-cursor`，确定性、便于测试）：
+ *   在光标位置插入；若左侧不是行首/换行则补前导换行，右侧有内容且非换行则补尾随换行。
  */
 export function computeApply(
   originalText: string,
   block: ParsedCodeBlock,
   mode: ApplyMode
-): ApplyResult {
+): ApplyOutcome {
   switch (mode.kind) {
     case 'insert-at-cursor': {
       const at = Math.max(0, Math.min(mode.cursorOffset, originalText.length));
@@ -384,16 +522,70 @@ export function computeApply(
       const needsLeading = before.length > 0 && !before.endsWith('\n');
       const needsTrailing = after.length > 0 && !after.startsWith('\n');
       const inserted = `${needsLeading ? '\n' : ''}${block.code}${needsTrailing ? '\n' : ''}`;
-      return { text: `${before}${inserted}${after}`, mode: mode.kind, replaced: '' };
+      return { ok: true, text: `${before}${inserted}${after}`, mode: mode.kind, replaced: '' };
     }
     case 'replace-fence-region': {
       const start = Math.max(0, Math.min(mode.start, originalText.length));
       const end = Math.max(start, Math.min(mode.end, originalText.length));
       const replaced = originalText.slice(start, end);
-      return { text: `${originalText.slice(0, start)}${block.code}${originalText.slice(end)}`, mode: mode.kind, replaced };
+      return {
+        ok: true,
+        text: `${originalText.slice(0, start)}${block.code}${originalText.slice(end)}`,
+        mode: mode.kind,
+        replaced,
+      };
     }
     case 'replace-whole-file': {
-      return { text: block.code, mode: mode.kind, replaced: originalText };
+      return { ok: true, text: block.code, mode: mode.kind, replaced: originalText };
+    }
+    case 'replace-lines': {
+      const allLines = originalText.split(/\r\n|\r|\n/);
+      const total = allLines.length;
+      if (mode.start < 1 || mode.end < mode.start || mode.end > total) {
+        return {
+          ok: false,
+          reason: 'range-invalid',
+          detail: `行区间 ${mode.start}-${mode.end} 超出文件范围（文件共 ${total} 行）`,
+        };
+      }
+
+      const currentSlice = allLines.slice(mode.start - 1, mode.end).join('\n');
+      const expected = mode.expectedOriginal.replace(/\s+$/, '');
+      if (currentSlice.replace(/\s+$/, '') !== expected) {
+        return {
+          ok: false,
+          reason: 'content-mismatch',
+          detail: `第 ${mode.start}-${mode.end} 行的当前内容与复制时的原文不一致（文件可能已被改动），已拒绝写入`,
+        };
+      }
+
+      // 上下文校验：前后各取一行（若存在）
+      const prevIdx = mode.start - 2;
+      const nextIdx = mode.end;
+      const currentPrev = prevIdx >= 0 ? allLines[prevIdx] : null;
+      const currentNext = nextIdx < total ? allLines[nextIdx] : null;
+      if (mode.contextPrev !== undefined && mode.contextPrev !== null && currentPrev !== mode.contextPrev) {
+        return {
+          ok: false,
+          reason: 'context-mismatch',
+          detail: `第 ${mode.start - 1} 行（区间上一行）与复制时不一致，行号可能已漂移，已拒绝写入`,
+        };
+      }
+      if (mode.contextNext !== undefined && mode.contextNext !== null && currentNext !== mode.contextNext) {
+        return {
+          ok: false,
+          reason: 'context-mismatch',
+          detail: `第 ${mode.end + 1} 行（区间下一行）与复制时不一致，行号可能已漂移，已拒绝写入`,
+        };
+      }
+
+      const replaced = currentSlice;
+      const newLines = [
+        ...allLines.slice(0, mode.start - 1),
+        ...block.code.split(/\r\n|\r|\n/),
+        ...allLines.slice(mode.end),
+      ];
+      return { ok: true, text: newLines.join('\n'), mode: mode.kind, replaced };
     }
     default: {
       const exhaustive: never = mode;

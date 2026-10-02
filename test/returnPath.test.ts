@@ -10,11 +10,14 @@ import { describe, it } from 'node:test';
 import {
   computeApply,
   extractPathMentions,
+  formatNumberedSnippet,
   matchHeadingLine,
   matchPathCommentLine,
+  matchRangeDirective,
   normalizeRelPath,
   parseModelReply,
   splitFences,
+  stripNumberedPrefix,
 } from '../src/shared/returnPath';
 
 describe('splitFences', () => {
@@ -230,6 +233,7 @@ describe('computeApply', () => {
     language: 'ts',
     filePath: 'src/a.ts',
     pathSource: 'fence-comment' as const,
+    range: null,
     start: 0,
     end: 0,
     strippedPathLine: null,
@@ -237,34 +241,170 @@ describe('computeApply', () => {
 
   it('插入光标处时按需补换行', () => {
     const r = computeApply('line1\nline2', block, { kind: 'insert-at-cursor', cursorOffset: 6 });
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
     assert.equal(r.mode, 'insert-at-cursor');
     assert.equal(r.text, 'line1\nNEW\nline2');
   });
 
   it('光标在行尾（非行首）时先补换行，使代码从新行开始', () => {
     const r = computeApply('abc', block, { kind: 'insert-at-cursor', cursorOffset: 3 });
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
     assert.equal(r.text, 'abc\nNEW');
   });
 
   it('光标紧跟在换行之后时不补前导换行', () => {
     const r = computeApply('abc\n', block, { kind: 'insert-at-cursor', cursorOffset: 4 });
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
     assert.equal(r.text, 'abc\nNEW');
   });
 
-  it('替换围栏区间并返回被替换内容（供撤销）', () => {
+  it('替换字节区间并返回被替换内容（供撤销）', () => {
     const r = computeApply('AAA BBB CCC', block, { kind: 'replace-fence-region', start: 4, end: 7 });
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
     assert.equal(r.text, 'AAA NEW CCC');
     assert.equal(r.replaced, 'BBB');
   });
 
   it('整文件替换时 replaced 为原文', () => {
     const r = computeApply('old content', block, { kind: 'replace-whole-file' });
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
     assert.equal(r.text, 'NEW');
     assert.equal(r.replaced, 'old content');
   });
 
   it('越界的光标与区间被安全收敛', () => {
-    assert.equal(computeApply('abc', block, { kind: 'insert-at-cursor', cursorOffset: 999 }).text, 'abc\nNEW');
-    assert.equal(computeApply('abc', block, { kind: 'replace-fence-region', start: 99, end: 200 }).text, 'abcNEW');
+    const a = computeApply('abc', block, { kind: 'insert-at-cursor', cursorOffset: 999 });
+    assert.equal(a.ok && a.text, 'abc\nNEW');
+    const b = computeApply('abc', block, { kind: 'replace-fence-region', start: 99, end: 200 });
+    assert.equal(b.ok && b.text, 'abcNEW');
+  });
+});
+
+describe('行区间指令与片段替换（三向校验）', () => {
+  const fileText = ['l1', 'l2', 'l3', 'l4', 'l5'].join('\n');
+  const mkBlock = (code: string) => ({
+    code,
+    language: 'ts',
+    filePath: 'src/a.ts',
+    pathSource: 'preceding-heading' as const,
+    range: { start: 2, end: 3 },
+    start: 0,
+    end: 0,
+    strippedPathLine: null,
+  });
+
+  it('matchRangeDirective 识别多种写法', () => {
+    assert.deepEqual(matchRangeDirective('### 范围：80-92'), { start: 80, end: 92 });
+    assert.deepEqual(matchRangeDirective('### 行：7-9'), { start: 7, end: 9 });
+    assert.deepEqual(matchRangeDirective('### lines: 7-9'), { start: 7, end: 9 });
+    assert.deepEqual(matchRangeDirective('### 位置：替换第 12-14 行'), { start: 12, end: 14 });
+    assert.deepEqual(matchRangeDirective('### 范围：80'), { start: 80, end: 80 });
+    assert.deepEqual(matchRangeDirective('### 范围：92-80'), { start: 80, end: 92 });
+    assert.equal(matchRangeDirective('### 文件：src/a.ts'), null);
+    assert.equal(matchRangeDirective('这是一句普通说明'), null);
+  });
+
+  it('解析器从围栏上方的「范围」指令得到行区间', () => {
+    const r = parseModelReply(['### 文件：src/a.ts', '### 范围：2-3', '```ts', 'NEW', '```'].join('\n'));
+    assert.deepEqual(r.blocks[0]?.range, { start: 2, end: 3 });
+    assert.ok(r.notes.some((n) => n.includes('三向校验')));
+  });
+
+  it('片段里若带行号前缀会被剥离', () => {
+    const r = parseModelReply(['### 文件：src/a.ts', '### 范围：1-2', '```py', '  1| import os', '  2| import sys', '```'].join('\n'));
+    assert.equal(r.blocks[0]?.code, 'import os\nimport sys');
+  });
+
+  it('三向校验全部通过时按行替换', () => {
+    const r = computeApply(fileText, mkBlock('X2\nX3'), {
+      kind: 'replace-lines',
+      start: 2,
+      end: 3,
+      expectedOriginal: 'l2\nl3',
+      contextPrev: 'l1',
+      contextNext: 'l4',
+    });
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
+    assert.equal(r.text, ['l1', 'X2', 'X3', 'l4', 'l5'].join('\n'));
+    assert.equal(r.replaced, 'l2\nl3');
+  });
+
+  it('原内容不匹配 → 拒绝（防行号漂移）', () => {
+    const r = computeApply(fileText, mkBlock('X'), {
+      kind: 'replace-lines',
+      start: 2,
+      end: 3,
+      expectedOriginal: 'DIFFERENT',
+    });
+    assert.equal(r.ok, false);
+    if (r.ok) return;
+    assert.equal(r.reason, 'content-mismatch');
+    assert.match(r.detail, /不一致/);
+  });
+
+  it('区间越界 → 拒绝', () => {
+    const r = computeApply(fileText, mkBlock('X'), { kind: 'replace-lines', start: 4, end: 99, expectedOriginal: 'l4\nl5' });
+    assert.equal(r.ok, false);
+    if (r.ok) return;
+    assert.equal(r.reason, 'range-invalid');
+  });
+
+  it('上下文（区间上一行）不匹配 → 拒绝', () => {
+    const r = computeApply(fileText, mkBlock('X'), {
+      kind: 'replace-lines',
+      start: 2,
+      end: 3,
+      expectedOriginal: 'l2\nl3',
+      contextPrev: 'WRONG',
+    });
+    assert.equal(r.ok, false);
+    if (r.ok) return;
+    assert.equal(r.reason, 'context-mismatch');
+  });
+
+  it('替换整文件末尾若干行时不产生多余换行', () => {
+    const r = computeApply(fileText, mkBlock('Z4\nZ5'), {
+      kind: 'replace-lines',
+      start: 4,
+      end: 5,
+      expectedOriginal: 'l4\nl5',
+      contextPrev: 'l3',
+      contextNext: null,
+    });
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
+    assert.equal(r.text, ['l1', 'l2', 'l3', 'Z4', 'Z5'].join('\n'));
+  });
+});
+
+describe('带行号片段的格式化与还原', () => {
+  it('formatNumberedSnippet 使用文件真实行号并右对齐', () => {
+    assert.equal(formatNumberedSnippet('a\nb', 8), '  8| a\n  9| b');
+    assert.equal(formatNumberedSnippet('a', 1234), '1234| a');
+  });
+
+  it('stripNumberedPrefix 还原纯文本与起始行号', () => {
+    const s = stripNumberedPrefix('  8| a\n  9| b');
+    assert.equal(s.text, 'a\nb');
+    assert.equal(s.startLine, 8);
+  });
+
+  it('无行号前缀时原样返回，startLine 为 null', () => {
+    const s = stripNumberedPrefix('a\nb');
+    assert.equal(s.text, 'a\nb');
+    assert.equal(s.startLine, null);
+  });
+
+  it('往返一致（格式化后还原）', () => {
+    const original = 'def train():\n    pass';
+    const round = stripNumberedPrefix(formatNumberedSnippet(original, 80));
+    assert.equal(round.text, original);
+    assert.equal(round.startLine, 80);
   });
 });

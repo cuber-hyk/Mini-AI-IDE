@@ -24,6 +24,7 @@
     btnOpen: document.getElementById('btn-open'),
     btnSave: document.getElementById('btn-save'),
     btnFormat: document.getElementById('btn-format'),
+    btnSnippet: document.getElementById('btn-snippet'),
     monacoHost: document.getElementById('monaco'),
     resizer: document.getElementById('resizer'),
     requirement: document.getElementById('requirement'),
@@ -241,6 +242,61 @@
       renderRoot();
       await loadTree('');
     }
+  });
+
+  /**
+   * 「复制选中片段」：把当前选中的代码格式化为**带文件真实行号**的片段，
+   * 头部自动附 `### 文件：` 与 `### 范围：N-M`，写入剪贴板。
+   *
+   * 用途：局部修改。模型回显同一行区间后，应用前会做三向校验
+   * （区间有效 / 原内容匹配 / 上下文匹配），不一致即拒绝，不会因行号漂移改错地方。
+   */
+  el.btnSnippet.addEventListener('click', async function () {
+    if (!state.currentPath) {
+      setInfo('请先打开一个文件，再选中要交给模型修改的代码', true);
+      return;
+    }
+    const editor = state.editor;
+    let text = '';
+    let startLine = 1;
+
+    if (editor) {
+      const model = editor.getModel();
+      const selection = editor.getSelection();
+      const hasSelection = selection && !selection.isEmpty();
+      if (hasSelection) {
+        text = model.getValueInRange(selection);
+        startLine = selection.startLineNumber;
+      } else {
+        text = model.getValue();
+        startLine = 1;
+      }
+    } else {
+      setInfo('编辑器尚未就绪，无法取选区', true);
+      return;
+    }
+
+    if (text.trim().length === 0) {
+      setInfo('选中内容为空，没有可复制的片段', true);
+      return;
+    }
+
+    const result = await bridge.copyNumberedSnippet({
+      relPath: state.currentPath,
+      text: text,
+      startLine: startLine,
+    });
+    if (!result.ok) {
+      setInfo('复制片段失败：' + (result.error ?? '未知错误'), true);
+      return;
+    }
+    setInfo(
+      '已复制片段（' + result.startLine + '-' + result.endLine + ' 行，' + result.length + ' 字符，含 ### 文件： 与 ### 范围： 头）—— 到右侧粘贴给模型，它会按同一行区间回显'
+    );
+    el.btnSnippet.textContent = '已复制 ✓';
+    setTimeout(function () {
+      el.btnSnippet.textContent = '复制选中片段';
+    }, 1800);
   });
 
   el.btnSave.addEventListener('click', function () {

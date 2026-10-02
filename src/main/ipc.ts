@@ -73,5 +73,6 @@ export function registerFileIpc(getEditorWindow: () => BrowserWindow | null, ser
     CHANNELS.copyFormatSpec,
     CHANNELS.getContext,
     CHANNELS.copyPrompt,
+    CHANNELS.copyNumberedSnippet,
   ];
 }

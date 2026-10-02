@@ -29,6 +29,8 @@ export const CHANNELS = {
   copyPrompt: 'ui:copy-prompt',
   /** 取"工作环境摘要"（绝对路径 + 目录树 + 运行环境），供界面预览 */
   getContext: 'ui:get-context',
+  /** 把编辑器里的选中内容格式化为"带文件真实行号"的片段并写入剪贴板 */
+  copyNumberedSnippet: 'ui:copy-numbered-snippet',
   /** 主进程 → 渲染进程：记忆的根目录已失效 */
   rootStale: 'fs:root-stale',
   /** 主进程 → 渲染进程：根目录已变更 */
@@ -119,6 +121,25 @@ export interface CopyPromptResult {
   error?: string;
 }
 
+export interface NumberedSnippetInput {
+  /** 相对根目录的文件路径 */
+  relPath: string;
+  /** 片段内容（不含行号） */
+  text: string;
+  /** 片段第一行在文件中的真实行号（1 起） */
+  startLine: number;
+}
+
+export interface CopySnippetResult {
+  ok: boolean;
+  /** 写入剪贴板的内容（含 `### 文件：` 与 `### 范围：` 头） */
+  snippet: string;
+  length: number;
+  startLine?: number;
+  endLine?: number;
+  error?: string;
+}
+
 /** preload 通过 contextBridge 暴露给渲染进程的唯一接口面 */
 export interface EditorBridge {
   chooseRoot(): Promise<RootInfo>;
@@ -141,6 +162,11 @@ export interface EditorBridge {
    * 仍**只写剪贴板**：由用户自己 Ctrl+V 到网页输入框（零注入边界）。
    */
   copyPrompt(requirement: string, targetFiles: string[]): Promise<CopyPromptResult>;
+  /**
+   * 把选中内容格式化为"带文件真实行号"的片段（附 `### 文件：` 与 `### 范围：` 头）写入剪贴板。
+   * 用于**局部修改**：模型据此回显行区间，应用前会做三向校验。
+   */
+  copyNumberedSnippet(input: NumberedSnippetInput): Promise<CopySnippetResult>;
   onRootChanged(listener: (info: RootInfo) => void): void;
   /** 记忆的根目录已失效（被删除/移动）时的通知 */
   onRootStale(listener: (info: RootInfo) => void): void;

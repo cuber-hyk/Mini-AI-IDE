@@ -16,6 +16,7 @@ import * as path from 'node:path';
 
 import { CHANNELS, type RootInfo } from '../shared/contract';
 import { buildPrompt, getFormatSpec } from '../shared/formatSpec';
+import { formatNumberedSnippet } from '../shared/returnPath';
 import { checkUaConsistency, stripSelfDeclarations } from '../shared/userAgent';
 import { FileService } from './fileService';
 import { registerFileIpc } from './ipc';
@@ -196,7 +197,34 @@ async function bootstrap(): Promise<void> {
   ipcMain.handle(CHANNELS.getContext, () => buildContextSummary(fileService.getRoot()));
 
   /**
-   * 组装完整 prompt 并写入剪贴板。
+   * 把编辑器里的选中内容格式化为"带文件真实行号"的片段并写入剪贴板。
+   *
+   * 用于**局部修改**：片段头部带上 `### 文件：` 与 `### 范围：N-M`，
+   * 模型回显行区间后，应用前会做三向校验（区间有效 / 原内容匹配 / 上下文匹配）。
+   * 仍然**只写剪贴板**，由用户自己粘贴（ADR-0003）。
+   */
+  ipcMain.handle(CHANNELS.copyNumberedSnippet, (_e, input: unknown) => {
+    const raw = (input ?? {}) as { relPath?: unknown; text?: unknown; startLine?: unknown };
+    const relPath = typeof raw.relPath === 'string' ? raw.relPath : '';
+    const text = typeof raw.text === 'string' ? raw.text : '';
+    const startLine = typeof raw.startLine === 'number' && Number.isFinite(raw.startLine) ? Math.max(1, Math.round(raw.startLine)) : 1;
+
+    if (relPath.length === 0) return { ok: false, snippet: '', length: 0, error: '未指定文件路径（请先打开一个文件）' };
+    if (text.length === 0) return { ok: false, snippet: '', length: 0, error: '没有可复制的内容（请先选中代码或打开文件）' };
+
+    const lineCount = text.split(/\r\n|\r|\n/).length;
+    const endLine = startLine + lineCount - 1;
+    const snippet = [`### 文件：${relPath}`, `### 范围：${startLine}-${endLine}`, '```', formatNumberedSnippet(text, startLine), '```'].join('\n');
+    try {
+      clipboard.writeText(snippet);
+      return { ok: true, snippet, length: snippet.length, startLine, endLine };
+    } catch (err) {
+      return { ok: false, snippet, length: snippet.length, error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+  /**
+   * 组装完整 prompt（需求 + 工作环境 + 目录结构 + 格式要求）并写入剪贴板。
    *
    * 边界（ADR-0003 零注入）：**只写剪贴板**。用户在应用内输入框写需求 →
    * 点「复制 prompt」→ 自己 Ctrl+V 到网页 → 自己回车。

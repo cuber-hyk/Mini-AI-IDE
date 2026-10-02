@@ -29,6 +29,7 @@ const CH = {
   copyFormatSpec: 'ui:copy-format-spec',
   copyPrompt: 'ui:copy-prompt',
   getContext: 'ui:get-context',
+  copyNumberedSnippet: 'ui:copy-numbered-snippet',
   rootChanged: 'fs:root-changed',
   rootStale: 'fs:root-stale',
 } as const;
@@ -45,6 +46,7 @@ const bridge = {
   copyFormatSpec: () => ipcRenderer.invoke(CH.copyFormatSpec, 'short'),
   getContext: () => ipcRenderer.invoke(CH.getContext),
   copyPrompt: (requirement: string, targetFiles: string[]) => ipcRenderer.invoke(CH.copyPrompt, requirement, targetFiles),
+  copyNumberedSnippet: (input: unknown) => ipcRenderer.invoke(CH.copyNumberedSnippet, input),
   onRootChanged: (listener: (info: unknown) => void) => {
     ipcRenderer.on(CH.rootChanged, (_e, info) => listener(info));
   },

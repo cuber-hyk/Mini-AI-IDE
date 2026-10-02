@@ -17,7 +17,7 @@ import * as path from 'node:path';
 
 import { CHANNELS } from '../shared/contract';
 import { buildPrompt, getFormatSpec } from '../shared/formatSpec';
-import { computeApply, parseModelReply } from '../shared/returnPath';
+import { computeApply, formatNumberedSnippet, parseModelReply, stripNumberedPrefix } from '../shared/returnPath';
 import { createFixtures, type FixturePaths } from './fixtures';
 import type { FileService } from './fileService';
 import { SettingsStore, isUsableRoot } from './settings';
@@ -309,11 +309,63 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   });
 
   const appliedWhole = computeApply('old body', parsed.blocks[0]!, { kind: 'replace-whole-file' });
-  add('F4', '应用计算：整文件替换返回新文本与被替换内容（供撤销）', appliedWhole.text === 'export const demo = 1;' && appliedWhole.replaced === 'old body', {
-    text: appliedWhole.text,
-    replaced: appliedWhole.replaced,
-    mode: appliedWhole.mode,
+  add(
+    'F4',
+    '应用计算：整文件替换返回新文本与被替换内容（供撤销）',
+    appliedWhole.ok && appliedWhole.text === 'export const demo = 1;' && appliedWhole.replaced === 'old body',
+    appliedWhole.ok ? { text: appliedWhole.text, replaced: appliedWhole.replaced, mode: appliedWhole.mode } : appliedWhole
+  );
+
+  /* ---- J) 片段替换（带行号）与三向校验 ---- */
+  const original = ['line1', 'line2', 'line3', 'line4', 'line5'].join('\n');
+  const snippetBlock = parseModelReply(
+    ['### 文件：src/a.ts', '### 范围：2-3', '```ts', 'NEW2', 'NEW3', '```'].join('\n')
+  ).blocks[0]!;
+  add('J1', '解析出片段替换的行区间', snippetBlock.range?.start === 2 && snippetBlock.range?.end === 3, snippetBlock.range);
+
+  const okApply = computeApply(original, snippetBlock, {
+    kind: 'replace-lines',
+    start: 2,
+    end: 3,
+    expectedOriginal: 'line2\nline3',
+    contextPrev: 'line1',
+    contextNext: 'line4',
   });
+  add('J2', '三向校验通过时按行替换', okApply.ok && okApply.text === ['line1', 'NEW2', 'NEW3', 'line4', 'line5'].join('\n'), okApply);
+
+  const mismatch = computeApply(original, snippetBlock, {
+    kind: 'replace-lines',
+    start: 2,
+    end: 3,
+    expectedOriginal: 'OLD-DIFFERENT\nWHATEVER',
+  });
+  add('J3', '原内容不匹配时拒绝写入（防行号漂移改错地方）', !mismatch.ok && mismatch.reason === 'content-mismatch', mismatch);
+
+  const outOfRange = computeApply(original, snippetBlock, {
+    kind: 'replace-lines',
+    start: 4,
+    end: 99,
+    expectedOriginal: 'line4\nline5',
+  });
+  add('J4', '区间越界时拒绝写入', !outOfRange.ok && outOfRange.reason === 'range-invalid', outOfRange);
+
+  const ctxBad = computeApply(original, snippetBlock, {
+    kind: 'replace-lines',
+    start: 2,
+    end: 3,
+    expectedOriginal: 'line2\nline3',
+    contextPrev: 'NOT-LINE1',
+  });
+  add('J5', '上下文不匹配时拒绝写入', !ctxBad.ok && ctxBad.reason === 'context-mismatch', ctxBad);
+
+  const numbered = formatNumberedSnippet('alpha\nbeta\ngamma', 80);
+  add('J6', '带行号片段格式化使用文件真实行号', numbered === ' 80| alpha\n 81| beta\n 82| gamma', numbered);
+  add(
+    'J7',
+    '带行号片段可被剥离回纯文本（供写入前还原）',
+    stripNumberedPrefix(numbered).text === 'alpha\nbeta\ngamma' && stripNumberedPrefix(numbered).startLine === 80,
+    stripNumberedPrefix(numbered)
+  );
 
   /* ---- I) prompt 组装（需求 + 环境 + 目录树 + 格式要求）---- */
   const ctx = buildContextSummary(fixtures.root);
