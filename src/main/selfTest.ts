@@ -336,6 +336,48 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     const elIdsMissing = elKeys.filter((k) => !htmlIds.has(k.id)).map((k) => `${k.key}->${k.id}`);
     add('L1c', 'el 结构体里每个元素 id 都存在于 index.html', elIdsMissing.length === 0, { missing: elIdsMissing });
 
+    /*
+     * L1d：**界面上的每个按钮都必须真的绑定了事件处理器**。
+     *
+     * 为什么需要：按钮存在于 HTML、也进了 el 结构体，但如果漏了 `addEventListener`，
+     * 它就是"看着有、点了没反应"，而 tsc 与其它检查都看不到（P2-15 同类）。
+     * 本项目的按钮 id 与 el 键名有稳定对应（btn-copy-prompt → btnCopyPrompt），据此逐一对齐。
+     */
+    const htmlButtonIds = [...html.matchAll(/<button\s+id="([^"]+)"/g)].map((m) => m[1] as string);
+    const toCamel = (s: string): string => s.replace(/-([a-z])/g, (_m, c: string) => c.toUpperCase());
+    const unboundButtons = htmlButtonIds.filter((id) => {
+      const key = toCamel(id);
+      const declared = elKeys.some((k) => k.key === key);
+      const bound = new RegExp(`\\bel\\.${key}\\.addEventListener\\(`).test(js);
+      return !declared || !bound;
+    });
+    add('L1d', '界面上每个按钮都已绑定事件处理器（防“看着有、点了没反应”）', unboundButtons.length === 0, {
+      buttonCount: htmlButtonIds.length,
+      unbound: unboundButtons,
+    });
+
+    // L6：采集回复这条链路必须首尾相连（按钮 → bridge → IPC 通道 → preload → 主进程处理器）
+    // 注意：preload.js 里带 TS 类型注解残留（如 `collectReply: () =>` 或 `(x: string) =>`），
+    // 因此匹配必须容忍参数列表，不能写死 `()`。
+    const preloadJs = fs.readFileSync(path.join(__dirname, 'preload.js'), 'utf8');
+    const collectChain = {
+      buttonInHtml: /id="btn-collect"/.test(html),
+      inElStruct: elKeys.some((k) => k.key === 'btnCollect'),
+      bound: /el\.btnCollect\.addEventListener\(/.test(js),
+      callsBridge: /bridge\.collectReply\(/.test(js),
+      channelInContract: Object.values(CHANNELS).includes('return:collect'),
+      // 编译后渲染进程模块被重命名为 electron_1，因此用 [\w.]* 容忍别名前缀
+      inPreload: /collectReply:\s*\([^)]*\)\s*=>\s*[\w.]*ipcRenderer\.invoke\(\s*CH\.collectReply\s*\)/.test(preloadJs),
+      handlerInMain: fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8').includes('CHANNELS.collectReply'),
+    };
+    const chainOk = Object.values(collectChain).every(Boolean);
+    add(
+      'L6',
+      '「采集回复」链路首尾相连（按钮→bridge→通道→preload→主进程）+ 4 套采集策略已就绪',
+      chainOk && COLLECT_STRATEGIES.length >= 4,
+      { ...collectChain, strategies: COLLECT_STRATEGIES.map((s) => s.id) }
+    );
+
     // renderer.js 不经 tsc，这里至少保证可被解析（语法错误会在此暴露）
     const vm = await import('node:vm');
     let parseError: string | null = null;
