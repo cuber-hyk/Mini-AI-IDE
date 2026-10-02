@@ -14,9 +14,9 @@
 import { app, BaseWindow, clipboard, ipcMain, Menu, session, WebContentsView } from 'electron';
 import * as path from 'node:path';
 
-import { CHANNELS, type RootInfo } from '../shared/contract';
+import { CHANNELS, type ApplyChangeInput, type ReturnPreview, type RootInfo } from '../shared/contract';
 import { buildPrompt, getFormatSpec } from '../shared/formatSpec';
-import { formatNumberedSnippet } from '../shared/returnPath';
+import { formatNumberedSnippet, parseModelReply, type ParsedCodeBlock } from '../shared/returnPath';
 import { checkUaConsistency, stripSelfDeclarations } from '../shared/userAgent';
 import { FileService } from './fileService';
 import { registerFileIpc } from './ipc';
@@ -25,6 +25,8 @@ import { runSelfTest } from './selfTest';
 import { runDiagnose } from './diagnose';
 import { SettingsStore, isUsableRoot } from './settings';
 import { buildContextSummary } from './contextSummary';
+import { collectReply } from './replyCollector';
+import { ReturnPathService } from './returnPathService';
 
 /* ------------------------------------------------------------------ *
  * 常量
@@ -195,6 +197,218 @@ async function bootstrap(): Promise<void> {
 
   /** 取工作环境摘要（只读；不含"当前打开的文件"，见 contextSummary 注释） */
   ipcMain.handle(CHANNELS.getContext, () => buildContextSummary(fileService.getRoot()));
+
+  /* ---------------- 回程：采集 → 解析 → 预览 / 应用 / 撤销 ---------------- */
+  const returnPath = new ReturnPathService(fileService);
+
+  /**
+   * 采集结果缓存：`collectionId` → 解析出的代码块（**含代码本体**）。
+   *
+   * 为什么放主进程而不是回传渲染进程：
+   *  1. 渲染进程不需要（也不应该）经手大块代码文本；
+   *  2. **片段替换的三向校验需要"复制那一刻的原文"** —— 只有主进程在读文件的同一时刻
+   *     抓取当前行内容，才能得到真正可用的校验基线。让渲染进程转手就做不到可信。
+   * 只保留最近若干批，避免长期驻留。
+   */
+  const collections = new Map<string, { blocks: ParsedCodeBlock[]; at: string; replyLength: number }>();
+  const MAX_COLLECTIONS = 5;
+  let collectionSeq = 0;
+
+  /**
+   * 从网页视图**只读**采集最新回复并解析为待预览变更。
+   * 不落盘、不修改页面（ADR-0003/0004）。
+   */
+  ipcMain.handle(CHANNELS.collectReply, async (): Promise<ReturnPreview> => {
+    const emptyId = `c${(collectionSeq += 1)}`;
+    if (webView.webContents.isDestroyed()) {
+      return {
+        ok: false,
+        collectionId: emptyId,
+        strategyId: null,
+        strategyDescription: null,
+        attempts: [],
+        replyText: '',
+        notes: [],
+        blocks: [],
+        error: '网页视图不可用',
+      };
+    }
+
+    const collected = await collectReply({
+      evaluate: (script) => webView.webContents.executeJavaScript(script, true) as Promise<unknown>,
+      currentUrl: () => webView.webContents.getURL(),
+    });
+
+    if (collected.strategyId === null || collected.replyText.length === 0) {
+      const diagLines: string[] = [];
+      if (collected.diagnostic) {
+        const d = collected.diagnostic;
+        diagLines.push(`页面标题：${d.title || '<空>'}`);
+        diagLines.push(`页面可见文本长度：${d.bodyTextLength}`);
+        diagLines.push(`页面里是否存在 \`\`\` 围栏：${d.bodyHasFence ? '是' : '否'}`);
+        diagLines.push(
+          '候选选择器命中数：' +
+            Object.entries(d.counts)
+              .map(([k, v]) => `${k}=${v}`)
+              .join('，')
+        );
+        if (d.counts['pre'] === 0 && !d.bodyHasFence) {
+          diagLines.push('判断：页面里没有代码块——可能模型尚未输出，或当前不在对话页');
+        } else if (d.counts['pre'] === 0 && d.bodyHasFence) {
+          diagLines.push('判断：围栏在文本里存在但不在 <pre> 中——采集选择器需要按实际结构补充策略');
+        }
+      }
+      return {
+        ok: false,
+        collectionId: emptyId,
+        strategyId: null,
+        strategyDescription: null,
+        attempts: collected.attempts,
+        replyText: '',
+        notes: ['未采集到任何回复文本；可能是页面尚未输出、结构已变化，或当前不在对话页', ...diagLines],
+        blocks: [],
+        ...(collected.diagnostic ? { diagnostic: collected.diagnostic } : {}),
+        error: '未采集到回复',
+      };
+    }
+
+    const parsed = parseModelReply(collected.replyText);
+    const collectionId = emptyId;
+    collections.set(collectionId, { blocks: parsed.blocks, at: collected.collectedAt, replyLength: collected.replyText.length });
+    while (collections.size > MAX_COLLECTIONS) {
+      const oldest = collections.keys().next();
+      if (oldest.done) break;
+      collections.delete(oldest.value);
+    }
+
+    const blocks: ReturnPreview['blocks'] = [];
+
+    for (let i = 0; i < parsed.blocks.length; i += 1) {
+      const b = parsed.blocks[i] as ParsedCodeBlock;
+      const hints: string[] = [];
+      if (b.pathSource === 'unique-mention') {
+        hints.push('目标文件来自"全文唯一候选"推断（可靠性最低），请务必核对');
+      }
+      if (b.pathSource === 'none' || !b.filePath) {
+        hints.push('未能确定目标文件，请手动填写路径');
+      }
+
+      let fileExists = false;
+      let fileLines: number | null = null;
+      let applicable = false;
+      let blockedReason: string | undefined;
+
+      if (b.filePath) {
+        const read = await fileService.readRawText(b.filePath);
+        if (read.ok) {
+          fileExists = true;
+          fileLines = read.text.split(/\r\n|\r|\n/).length;
+        } else {
+          blockedReason = read.error;
+        }
+      } else {
+        blockedReason = '未确定目标文件';
+      }
+
+      if (b.range) {
+        if (!fileExists) {
+          applicable = false;
+          blockedReason = blockedReason ?? '目标文件不存在，无法做片段替换';
+        } else if (fileLines !== null && (b.range.end > fileLines || b.range.start < 1)) {
+          applicable = false;
+          blockedReason = `行区间 ${b.range.start}-${b.range.end} 超出文件范围（共 ${fileLines} 行）`;
+        } else {
+          // 片段替换还需要"复制时的原文"做三向校验；此处只有区间，故标记为"需人工确认"
+          applicable = true;
+          hints.push('片段替换：应用时会用当前行内容做三向校验，不一致将被拒绝');
+        }
+      } else {
+        applicable = fileExists;
+        if (!fileExists) hints.push('目标文件不存在，应用将创建新文件（需你确认）');
+      }
+
+      blocks.push({
+        index: i,
+        filePath: b.filePath,
+        pathSource: b.pathSource,
+        range: b.range,
+        codeLines: b.code.length === 0 ? 0 : b.code.split(/\r\n|\r|\n/).length,
+        codeChars: b.code.length,
+        fileExists,
+        fileLines,
+        applicable,
+        ...(blockedReason ? { blockedReason } : {}),
+        hints,
+      });
+    }
+
+    return {
+      ok: true,
+      collectionId,
+      strategyId: collected.strategyId,
+      strategyDescription: collected.strategyDescription,
+      attempts: collected.attempts,
+      replyText: collected.replyText,
+      notes: parsed.notes,
+      blocks,
+    };
+  });
+
+  /**
+   * 应用一个变更。
+   *
+   * 由 `collectionId` + `index` 引用主进程缓存里的代码块（渲染进程不转手代码文本）。
+   * 若是片段替换，主进程在**读文件的同一时刻**抓取该区间当前内容作为"复制时的原文"——
+   * 这样三向校验才有可信基线；此后文件若被改动，校验必然失败并拒绝写入。
+   */
+  ipcMain.handle(CHANNELS.applyChange, async (_e, input: unknown) => {
+    const raw = (input ?? {}) as Partial<ApplyChangeInput>;
+    if (typeof raw.collectionId !== 'string' || typeof raw.index !== 'number' || typeof raw.filePath !== 'string') {
+      return { ok: false, error: '参数不合法：需要 collectionId / index / filePath' };
+    }
+
+    const cached = collections.get(raw.collectionId);
+    if (!cached) {
+      return { ok: false, error: '采集结果已过期（只保留最近几批），请重新点「采集回复」' };
+    }
+    const block = cached.blocks[raw.index];
+    if (!block) {
+      return { ok: false, error: `代码块序号 ${raw.index} 不存在于该批次中` };
+    }
+
+    const filePath = raw.filePath.trim();
+    if (filePath.length === 0) return { ok: false, error: '目标文件路径为空' };
+
+    let expectedOriginal: string | undefined;
+    let contextPrev: string | null = null;
+    let contextNext: string | null = null;
+
+    if (block.range) {
+      const read = await fileService.readRawText(filePath);
+      if (!read.ok) return { ok: false, error: read.error };
+      const lines = read.text.split(/\r\n|\r|\n/);
+      if (block.range.start < 1 || block.range.end > lines.length) {
+        return {
+          ok: false,
+          reason: 'range-invalid',
+          error: `行区间 ${block.range.start}-${block.range.end} 超出文件范围（文件共 ${lines.length} 行），已拒绝写入`,
+        };
+      }
+      expectedOriginal = lines.slice(block.range.start - 1, block.range.end).join('\n');
+      contextPrev = block.range.start - 2 >= 0 ? (lines[block.range.start - 2] ?? null) : null;
+      contextNext = block.range.end < lines.length ? (lines[block.range.end] ?? null) : null;
+    }
+
+    return returnPath.applyChange({
+      filePath,
+      block,
+      ...(expectedOriginal !== undefined ? { expectedOriginal } : {}),
+      contextPrev,
+      contextNext,
+    });
+  });
+
+  ipcMain.handle(CHANNELS.undoSave, () => returnPath.undoLast());
 
   /**
    * 把编辑器里的选中内容格式化为"带文件真实行号"的片段并写入剪贴板。

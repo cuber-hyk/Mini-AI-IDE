@@ -30,6 +30,9 @@ const CH = {
   copyPrompt: 'ui:copy-prompt',
   getContext: 'ui:get-context',
   copyNumberedSnippet: 'ui:copy-numbered-snippet',
+  collectReply: 'return:collect',
+  applyChange: 'return:apply',
+  undoSave: 'return:undo',
   rootChanged: 'fs:root-changed',
   rootStale: 'fs:root-stale',
 } as const;
@@ -47,6 +50,9 @@ const bridge = {
   getContext: () => ipcRenderer.invoke(CH.getContext),
   copyPrompt: (requirement: string, targetFiles: string[]) => ipcRenderer.invoke(CH.copyPrompt, requirement, targetFiles),
   copyNumberedSnippet: (input: unknown) => ipcRenderer.invoke(CH.copyNumberedSnippet, input),
+  collectReply: () => ipcRenderer.invoke(CH.collectReply),
+  applyChange: (input: unknown) => ipcRenderer.invoke(CH.applyChange, input),
+  undoSave: () => ipcRenderer.invoke(CH.undoSave),
   onRootChanged: (listener: (info: unknown) => void) => {
     ipcRenderer.on(CH.rootChanged, (_e, info) => listener(info));
   },

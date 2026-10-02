@@ -348,6 +348,144 @@
     }, 1800);
   });
 
+  /* ---------------- 回程预览 ----------------
+   * 流程：只读采集右侧最新回复 → 解析 → 逐条预览 → 你点"应用"才落盘（可撤销）。
+   * 程序不修改网页、不自动落盘（ADR-0003/0004）。
+   */
+  function renderPreview(preview) {
+    lastPreview = preview;
+    el.preview.hidden = false;
+    el.previewList.textContent = '';
+
+    if (!preview.ok) {
+      el.previewMeta.textContent = '采集失败';
+      const attemptLines = (preview.attempts || [])
+        .map(function (a) { return '· ' + a.strategyId + (a.ok ? '（命中 ' + a.length + ' 字符）' : '（未命中）') + (a.error ? ' 错误：' + a.error : ''); })
+        .join('\n');
+      const notes = (preview.notes || []).join('\n');
+      el.previewNotes.textContent = (preview.error || '未采集到回复') + (notes ? '\n' + notes : '') + (attemptLines ? '\n各策略尝试记录：\n' + attemptLines : '');
+      return;
+    }
+
+    el.previewMeta.textContent =
+      '批次 ' + preview.collectionId + ' · 策略 ' + preview.strategyId + ' · 解析出 ' + preview.blocks.length +
+      ' 个代码块 · 原文 ' + preview.replyText.length + ' 字符';
+    el.previewNotes.textContent = (preview.notes || []).join('\n');
+
+    preview.blocks.forEach(function (block) {
+      const li = document.createElement('li');
+      li.className = 'preview-item' + (block.applicable ? '' : ' blocked');
+
+      const head = document.createElement('div');
+      head.className = 'preview-item-head';
+
+      const pathInput = document.createElement('input');
+      pathInput.className = 'preview-path';
+      pathInput.type = 'text';
+      pathInput.placeholder = '目标文件相对路径（未确定时请填写）';
+      pathInput.value = block.filePath || '';
+      head.appendChild(pathInput);
+
+      const tagSource = document.createElement('span');
+      tagSource.className = 'preview-tag' + (block.pathSource === 'unique-mention' || block.pathSource === 'none' ? ' weak' : '');
+      tagSource.textContent = block.pathSource;
+      head.appendChild(tagSource);
+
+      const tagRange = document.createElement('span');
+      tagRange.className = 'preview-tag';
+      tagRange.textContent = block.range ? '替换 ' + block.range.start + '-' + block.range.end + ' 行' : '整文件替换';
+      head.appendChild(tagRange);
+
+      const tagSize = document.createElement('span');
+      tagSize.className = 'preview-tag';
+      tagSize.textContent = block.codeLines + ' 行 / ' + block.codeChars + ' 字符' + (block.fileLines !== null ? ' → 文件 ' + block.fileLines + ' 行' : '');
+      head.appendChild(tagSize);
+
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.textContent = '应用';
+      btn.addEventListener('click', function () {
+        void applyBlock(block, pathInput.value.trim(), btn);
+      });
+      head.appendChild(btn);
+
+      li.appendChild(head);
+
+      const hints = (block.hints || []).concat(block.blockedReason ? ['阻塞：' + block.blockedReason] : []);
+      if (hints.length > 0) {
+        const hint = document.createElement('div');
+        hint.className = 'preview-hint';
+        hint.textContent = hints.join('；');
+        li.appendChild(hint);
+      }
+      el.previewList.appendChild(li);
+    });
+  }
+
+  async function applyBlock(block, filePath, btn) {
+    if (!lastPreview || !lastPreview.collectionId) {
+      setInfo('采集结果不可用，请重新点「采集回复」', true);
+      return;
+    }
+    if (!filePath) {
+      setInfo('请先填写目标文件路径再应用', true);
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = '应用中…';
+    const result = await bridge.applyChange({
+      collectionId: lastPreview.collectionId,
+      index: block.index,
+      filePath: filePath,
+    });
+    btn.disabled = false;
+    btn.textContent = result.ok ? '已应用 ✓' : '应用';
+    if (!result.ok) {
+      setInfo('应用失败：' + (result.error || '未知错误'), true);
+      el.previewNotes.textContent =
+        '应用失败：' + (result.error || '') +
+        '\n（片段替换会在读文件时抓取该区间当前内容作为校验基线；若文件已被改动，或模型给的行区间与文件不符，会被拒绝——这是刻意的安全限制）';
+      return;
+    }
+    setInfo('已应用 ' + result.filePath + '（模式 ' + result.mode + '；可点「撤销」回退）');
+    if (state.currentPath === result.filePath) {
+      await openFile(state.currentPath, null);
+    }
+  }
+
+  el.btnCollect.addEventListener('click', async function () {
+    el.btnCollect.disabled = true;
+    el.btnCollect.textContent = '采集中…';
+    try {
+      const preview = await bridge.collectReply();
+      renderPreview(preview);
+    } finally {
+      el.btnCollect.disabled = false;
+      el.btnCollect.textContent = '采集回复';
+    }
+  });
+
+  el.btnClosePreview.addEventListener('click', function () {
+    el.preview.hidden = true;
+  });
+
+  el.btnUndo.addEventListener('click', async function () {
+    const result = await bridge.undoSave();
+    if (!result.ok) {
+      setInfo('撤销失败：' + (result.error || '未知错误'), true);
+      return;
+    }
+    setInfo('已撤销对 ' + result.filePath + ' 的上一次应用');
+    if (state.currentPath === result.filePath) {
+      await openFile(state.currentPath, null);
+    }
+  });
+
+  el.btnApplyAll.addEventListener('click', function () {
+    setInfo('「应用全部」需要逐条确认路径，请逐个点击「应用」—— 默认不批量落盘（ADR-0004 方案 A）', true);
+  });
+
   /* ---------------- 分隔条拖动 ----------------
    * 本渲染进程只占左侧面板，因此拖动时用 window.screenX 推算窗口左边界的屏幕坐标，
    * 再算出"编辑器期望宽度 = 鼠标屏幕坐标 - 窗口左边界"，交给主进程做最小宽度约束后执行。

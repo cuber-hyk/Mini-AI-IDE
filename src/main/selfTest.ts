@@ -22,6 +22,8 @@ import { createFixtures, type FixturePaths } from './fixtures';
 import type { FileService } from './fileService';
 import { SettingsStore, isUsableRoot } from './settings';
 import { buildContextSummary } from './contextSummary';
+import { COLLECT_STRATEGIES, collectReply } from './replyCollector';
+import { ReturnPathService } from './returnPathService';
 
 interface BootInfo {
   sessionPartition: string;
@@ -270,7 +272,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   try {
     const preloadPath = path.join(__dirname, 'preload.js');
     const src = fs.readFileSync(preloadPath, 'utf8');
-    const literals = [...src.matchAll(/'((?:fs|ui):[a-z-]+)'/g)].map((m) => m[1] as string);
+    const literals = [...src.matchAll(/'((?:fs|ui|return):[a-z-]+)'/g)].map((m) => m[1] as string);
     const contractSet = new Set<string>(Object.values(CHANNELS));
     const unknown = literals.filter((c) => !contractSet.has(c));
     const missing = requiredChannels.filter((c) => !literals.includes(c));
@@ -366,6 +368,57 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     stripNumberedPrefix(numbered).text === 'alpha\nbeta\ngamma' && stripNumberedPrefix(numbered).startLine === 80,
     stripNumberedPrefix(numbered)
   );
+
+  /* ---- K) 回程闭环：采集 → 解析 → 应用 → 撤销 ---- */
+  // 用一个假的页面运行器验证采集器本身（不依赖真实站点）
+  const fakeRunner = {
+    evaluate: async (script: string): Promise<unknown> => {
+      if (script.includes('markdown')) return ['### 文件：src/greeting.ts\n```ts\nexport const hi = 1;\n```'];
+      return [];
+    },
+    currentUrl: () => 'https://chat.deepseek.com/a/chat/s/abc?x=1',
+  };
+  const collected = await collectReply(fakeRunner);
+  add('K1', '采集器按策略取到回复且 URL 已去除 query', collected.strategyId === 'markdown-body' && collected.url === 'https://chat.deepseek.com/a/chat/s/abc', {
+    strategyId: collected.strategyId,
+    url: collected.url,
+    length: collected.replyText.length,
+  });
+
+  const noneRunner = { evaluate: async (): Promise<unknown> => [], currentUrl: () => 'https://chat.deepseek.com/' };
+  const noneCollected = await collectReply(noneRunner);
+  add('K2', '全部策略未命中时如实报告失败（不伪造结果）', noneCollected.strategyId === null && noneCollected.replyText === '' && noneCollected.attempts.length === COLLECT_STRATEGIES.length, {
+    attempts: noneCollected.attempts.map((a) => a.strategyId),
+  });
+
+  // 真实文件上的"应用 → 撤销"闭环（用样例目录里已有的 hello.ts）
+  const rp = new ReturnPathService(input.fileService);
+  const beforeAll = await input.fileService.readRawText('hello.ts');
+  const originalText = beforeAll.ok ? beforeAll.text : '';
+  add('K3a', '读取样例文件成功（闭环前置条件）', beforeAll.ok && originalText.length > 0, beforeAll.ok ? { chars: originalText.length } : beforeAll);
+
+  const wholeBlock = parseModelReply(['### 文件：hello.ts', '```ts', 'export const hi = 2;', '```'].join('\n')).blocks[0]!;
+  const applied = await rp.applyChange({ filePath: 'hello.ts', block: wholeBlock });
+  add('K3', '整文件替换可应用并返回新文本', applied.ok && applied.after === 'export const hi = 2;', applied.ok ? { mode: applied.mode } : applied);
+
+  const undone = await rp.undoLast();
+  add('K4', '撤销按快照恢复原文', undone.ok && undone.filePath === 'hello.ts', undone);
+
+  const afterUndo = await input.fileService.readRawText('hello.ts');
+  add('K5', '撤销后文件内容确实回到应用前（逐字相同）', afterUndo.ok && afterUndo.text === originalText, afterUndo.ok ? { same: afterUndo.text === originalText } : afterUndo);
+
+  // 片段替换：基线取自"读文件那一刻"，之后被改动则拒绝
+  const firstLine = originalText.split(/\r\n|\r|\n/)[0] ?? '';
+  const greetingSnippetBlock = parseModelReply(['### 文件：hello.ts', '### 范围：1-1', '```ts', 'export const hi = 99;', '```'].join('\n')).blocks[0]!;
+  const snippetApplied = await rp.applyChange({ filePath: 'hello.ts', block: greetingSnippetBlock, expectedOriginal: firstLine });
+  add('K6', '片段替换在基线一致时成功', snippetApplied.ok && snippetApplied.mode === 'replace-lines', snippetApplied.ok ? { mode: snippetApplied.mode } : snippetApplied);
+  await rp.undoLast();
+
+  const staleApplied = await rp.applyChange({ filePath: 'hello.ts', block: greetingSnippetBlock, expectedOriginal: '这行内容并不存在' });
+  add('K7', '片段替换在基线不一致时拒绝写入（防行号漂移）', !staleApplied.ok && staleApplied.reason === 'content-mismatch', staleApplied);
+
+  const afterReject = await input.fileService.readRawText('hello.ts');
+  add('K8', '被拒绝的片段替换没有改动文件（拒绝即无副作用）', afterReject.ok && afterReject.text === originalText, afterReject.ok ? { same: afterReject.text === originalText } : afterReject);
 
   /* ---- I) prompt 组装（需求 + 环境 + 目录树 + 格式要求）---- */
   const ctx = buildContextSummary(fixtures.root);

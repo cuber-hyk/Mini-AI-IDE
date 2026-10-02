@@ -31,6 +31,12 @@ export const CHANNELS = {
   getContext: 'ui:get-context',
   /** 把编辑器里的选中内容格式化为"带文件真实行号"的片段并写入剪贴板 */
   copyNumberedSnippet: 'ui:copy-numbered-snippet',
+  /** 从网页视图**只读**采集最新回复并解析为待应用变更（返回预览，不落盘） */
+  collectReply: 'return:collect',
+  /** 应用一个已选定的变更（先做三向校验；落盘前保留撤销快照） */
+  applyChange: 'return:apply',
+  /** 撤销一次应用（按快照恢复） */
+  undoSave: 'return:undo',
   /** 主进程 → 渲染进程：记忆的根目录已失效 */
   rootStale: 'fs:root-stale',
   /** 主进程 → 渲染进程：根目录已变更 */
@@ -140,6 +146,88 @@ export interface CopySnippetResult {
   error?: string;
 }
 
+/* ------------------------------------------------------------------ *
+ * 回程：采集 → 解析 → 预览 → 应用
+ * ------------------------------------------------------------------ */
+
+/** 预览里的一个变更块（由解析结果 + 文件读取结果组成，不含文件内容） */
+export interface ReturnPreviewBlock {
+  /** 在本次采集结果中的序号 */
+  index: number;
+  /** 目标文件（相对根目录）；null 表示未确定，需要用户指定 */
+  filePath: string | null;
+  /** 路径线索来源 */
+  pathSource: 'fence-comment' | 'preceding-heading' | 'unique-mention' | 'none';
+  /** 片段行区间；null 表示整文件替换 */
+  range: { start: number; end: number } | null;
+  /** 代码块行数 */
+  codeLines: number;
+  /** 代码块字符数 */
+  codeChars: number;
+  /** 目标文件是否存在 */
+  fileExists: boolean;
+  /** 目标文件当前行数（不存在时为 null） */
+  fileLines: number | null;
+  /** 该变更能否自动应用（false 时附 reason） */
+  applicable: boolean;
+  /** 不能应用的原因 */
+  blockedReason?: string;
+  /** 提示（例如"路径来自弱线索，请核对"） */
+  hints: string[];
+}
+
+export interface ReturnPreview {
+  ok: boolean;
+  /** 本次采集的批次号：`applyChange` 用它引用主进程缓存的代码，避免渲染进程转手大块文本 */
+  collectionId: string;
+  /** 采集用的策略 id（诊断用） */
+  strategyId: string | null;
+  strategyDescription: string | null;
+  /** 采集到的候选条数（策略返回了几段文本） */
+  attempts: Array<{ strategyId: string; description: string; ok: boolean; length: number; error?: string }>;
+  /** 采集到的回复原文（完整保留，便于人工兜底） */
+  replyText: string;
+  /** 解析备注 */
+  notes: string[];
+  blocks: ReturnPreviewBlock[];
+  /** 采集失败时的页面结构诊断（只读探测结果，便于判断是选择器过期还是页面没输出） */
+  diagnostic?: {
+    url: string;
+    title: string;
+    counts: Record<string, number>;
+    bodyTextLength: number;
+    bodyHasFence: boolean;
+  };
+  error?: string;
+}
+
+export interface ApplyChangeInput {
+  /** 采集批次号 */
+  collectionId: string;
+  /** 代码块序号 */
+  index: number;
+  /** 用户在预览里确认/修改后的目标文件路径（相对根目录） */
+  filePath: string;
+}
+
+export interface ApplyChangeResult {
+  ok: boolean;
+  filePath?: string;
+  mode?: string;
+  /** 变更前的完整原文（撤销用；已存快照） */
+  before?: string;
+  after?: string;
+  error?: string | undefined;
+  /** 校验失败原因（与 computeApply 的 reason 一致） */
+  reason?: string;
+}
+
+export interface UndoResult {
+  ok: boolean;
+  filePath?: string;
+  error?: string;
+}
+
 /** preload 通过 contextBridge 暴露给渲染进程的唯一接口面 */
 export interface EditorBridge {
   chooseRoot(): Promise<RootInfo>;
@@ -167,6 +255,18 @@ export interface EditorBridge {
    * 用于**局部修改**：模型据此回显行区间，应用前会做三向校验。
    */
   copyNumberedSnippet(input: NumberedSnippetInput): Promise<CopySnippetResult>;
+  /**
+   * 从网页视图**只读**采集最新回复并解析为待应用变更。
+   * 不落盘、不修改页面；只回传预览数据。
+   */
+  collectReply(): Promise<ReturnPreview>;
+  /**
+   * 应用一个变更。主进程会先做三向校验，并**保留撤销快照**；
+   * 默认路径下不可能静默覆盖（校验失败即拒绝）。
+   */
+  applyChange(input: ApplyChangeInput): Promise<ApplyChangeResult>;
+  /** 撤销上一次应用（按快照恢复原文） */
+  undoSave(): Promise<UndoResult>;
   onRootChanged(listener: (info: RootInfo) => void): void;
   /** 记忆的根目录已失效（被删除/移动）时的通知 */
   onRootStale(listener: (info: RootInfo) => void): void;

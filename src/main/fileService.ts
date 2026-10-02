@@ -111,11 +111,40 @@ export class FileService {
   }
 
   /**
+   * 读取文件**原文**（不做"超限只返回元信息"的降级）。
+   * 用途：回程应用前的 diff 预览与撤销快照 —— 必须拿到完整原文才能正确计算差异；
+   * 若超限则返回错误，由调用方提示用户（避免在超大文件上生成不可读的 diff）。
+   */
+  async readRawText(relPath: string): Promise<{ ok: true; text: string; relPath: string } | { ok: false; error: string }> {
+    const r = this.requireRoot();
+    if (!r.ok) return { ok: false, error: r.error };
+
+    const verdict = resolveWithinRoot(r.root, relPath);
+    if (!verdict.ok) return { ok: false, error: verdict.detail };
+
+    let buf: Buffer;
+    try {
+      buf = await fs.readFile(verdict.absolute);
+    } catch (err) {
+      return { ok: false, error: `无法读取文件：${err instanceof Error ? err.message : String(err)}` };
+    }
+    const decoded = decodeTextFile(new Uint8Array(buf));
+    if (!decoded.ok) return { ok: false, error: decoded.detail };
+    if (decoded.text.length > this.charLimit) {
+      return {
+        ok: false,
+        error: `文件过大（${decoded.text.length} 字符 > 上限 ${this.charLimit}），暂不支持在预览中应用`,
+      };
+    }
+    return { ok: true, text: decoded.text, relPath: verdict.relative };
+  }
+
+  /**
    * 写回文件。
    *
    * 边界说明（ADR-0004）：这是**用户在编辑器里明确编辑后保存**的通道，不是"程序自动落盘"。
    * 因此：只接受字符串内容；路径仍过白名单；大小上限与读取一致。
-   * 回程解析的"预览后应用"将复用此写入通道，并在调用前先展示 diff。
+   * 回程解析的"预览后应用"复用此写入通道，并在调用前先做三向校验。
    */
   async writeFile(relPath: string, text: string): Promise<WriteFileResult> {
     const r = this.requireRoot();

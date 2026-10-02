@@ -84,6 +84,138 @@ body {
   height: calc(100% - 36px - 132px);
 }
 
+/* 回程预览面板 */
+.preview {
+  border-top: 1px solid var(--border);
+  background: #12141a;
+  max-height: 44%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.preview[hidden] {
+  display: none;
+}
+
+.preview-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: #1b1f27;
+  border-bottom: 1px solid var(--border);
+}
+
+.preview-title {
+  font-weight: 600;
+  color: #cfd6e4;
+}
+
+.preview-meta {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.preview-head button {
+  background: #262a33;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 9px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.preview-head button:hover {
+  border-color: var(--accent);
+}
+
+.preview-notes {
+  padding: 6px 10px;
+  color: var(--warn);
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+  white-space: pre-wrap;
+}
+
+.preview-notes:empty {
+  display: none;
+}
+
+.preview-list {
+  list-style: none;
+  margin: 0;
+  padding: 6px 8px 10px;
+  overflow: auto;
+}
+
+.preview-item {
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 6px 8px;
+  margin-bottom: 6px;
+  background: #171a21;
+}
+
+.preview-item.blocked {
+  border-color: #5a3a3a;
+}
+
+.preview-item-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.preview-path {
+  flex: 1;
+  min-width: 160px;
+  background: #14161b;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 6px;
+  font: inherit;
+}
+
+.preview-tag {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: #262a33;
+  color: var(--text-dim);
+}
+
+.preview-tag.weak {
+  background: #4a3a20;
+  color: #e8c07a;
+}
+
+.preview-item button {
+  background: #2c5cc5;
+  border: 1px solid #3f6fd8;
+  color: #fff;
+  border-radius: 4px;
+  padding: 3px 9px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.preview-item button:disabled {
+  background: #2a2d34;
+  border-color: var(--border);
+  color: var(--text-dim);
+  cursor: default;
+}
+
+.preview-hint {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--warn);
+}
+
 /* 需求输入区：应用内写需求 → 复制 prompt → 自己粘贴到右侧网页 */
 .prompt-bar {
   height: 132px;
