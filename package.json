@@ -11,6 +11,7 @@
     "start": "npm run build && electron .",
     "self-test": "npm run build && electron . --self-test",
     "diagnose": "npm run build && electron . --diagnose",
+    "ui-probe": "npm run build && electron . --ui-probe",
     "setup:electron": "node scripts/install-electron.mjs"
   },
   "devDependencies": {

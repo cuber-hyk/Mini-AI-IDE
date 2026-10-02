@@ -51,6 +51,7 @@
 | 单元测试 | `npm test` |
 | 启动自检（不联网，28 项） | `npm run self-test` |
 | 会话/网络诊断（需先关闭应用） | `npm run diagnose` |
+| 界面运行时探针（读回 Monaco 实际选项） | `npm run ui-probe` |
 | 启动应用 | `npm start`（**需在普通 PowerShell，勿在 AI 沙箱内**） |
 | 会话是否仍需登录 | `pwsh -File tools\run-p0b-reachability.ps1 -ProbeOnly` |
 

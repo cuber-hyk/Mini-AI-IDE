@@ -44,6 +44,8 @@ const EDITOR_MIN_WIDTH = 360;
 const WEB_MIN_WIDTH = 420;
 
 const SELF_TEST = process.argv.includes('--self-test');
+/** 界面运行时探针：不联网，加载编辑器后读回 Monaco 实际选项并试改文本，然后退出 */
+const UI_PROBE = process.argv.includes('--ui-probe');
 /** 会话与网络诊断模式：加载目标站点并输出登录态与网络失败明细，然后退出 */
 const DIAGNOSE = process.argv.includes('--diagnose');
 
@@ -614,6 +616,39 @@ async function bootstrap(): Promise<void> {
     });
     process.stdout.write(`\n===== 自检结果 =====\n${JSON.stringify(report, null, 2)}\n`);
     app.exit(report.verdict === 'PASS' ? 0 : 1);
+    return;
+  }
+
+  if (UI_PROBE) {
+    // 等待 Monaco 完成 AMD 加载（create 发生在 require 回调里），再读回**实际生效**的选项
+    const deadline = Date.now() + 25000;
+    let probe: unknown = null;
+    for (;;) {
+      try {
+        probe = await editorView.webContents.executeJavaScript(
+          'typeof window.__uiProbe === "function" ? window.__uiProbe() : null',
+          true
+        );
+      } catch (err) {
+        probe = { ready: false, reason: err instanceof Error ? err.message : String(err) };
+      }
+      const p = probe as { ready?: boolean; reason?: string } | null;
+      if (p && p.ready === true) break;
+      if (p && typeof p.reason === 'string' && p.reason !== '编辑器尚未创建') break;
+      if (Date.now() > deadline) break;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+
+    process.stdout.write(`\n===== 界面探针结果 =====\n${JSON.stringify(probe, null, 2)}\n`);
+    const p = probe as
+      | { ready?: boolean; readOnly?: unknown; wordWrap?: unknown; editTest?: { changed?: boolean } }
+      | null;
+    const editable = Boolean(p && p.ready && p.readOnly === false && p.editTest && p.editTest.changed === true);
+    const wraps = Boolean(p && (p.wordWrap === 'on' || p.wordWrap === 1));
+    process.stdout.write(
+      `[ui-probe] 可编辑：${editable ? '是' : '否'}；readOnly=${String(p?.readOnly)}；wordWrap=${String(p?.wordWrap)}（判定换行：${wraps ? '开' : '关'}）\n`
+    );
+    app.exit(editable && wraps ? 0 : 1);
     return;
   }
 

@@ -31,7 +31,39 @@
     requirement: document.getElementById('requirement'),
     targetFiles: document.getElementById('target-files'),
     btnCopyPrompt: document.getElementById('btn-copy-prompt'),
+    // 回程预览面板（此前遗漏，导致下面绑定时 TypeError 并中断整个脚本）
+    btnCollect: document.getElementById('btn-collect'),
+    preview: document.getElementById('preview'),
+    previewMeta: document.getElementById('preview-meta'),
+    previewNotes: document.getElementById('preview-notes'),
+    previewList: document.getElementById('preview-list'),
+    btnApplyAll: document.getElementById('btn-apply-all'),
+    btnUndo: document.getElementById('btn-undo'),
+    btnClosePreview: document.getElementById('btn-close-preview'),
   };
+
+  /**
+   * 启动自检：**每个引用的元素都必须存在**。
+   *
+   * 为什么必须有这道检查：`getElementById` 取不到只返回 `null`，直到后面 `null.addEventListener`
+   * 才抛异常，而那时脚本已中断 —— 表现是"界面看着正常但编辑器/按钮全都不工作"，极难定位。
+   * 与其等运行时炸，不如在脚本开头一次性报出所有缺失项。
+   */
+  (function assertElements() {
+    const missing = Object.keys(el).filter(function (k) {
+      return !el[k];
+    });
+    if (missing.length > 0) {
+      const msg = '[renderer] 缺少 DOM 元素：' + missing.join(', ') + '（index.html 与 renderer.js 不一致）';
+      console.error(msg);
+      const host = document.getElementById('info');
+      if (host) {
+        host.textContent = msg;
+        host.classList.add('warn');
+      }
+      throw new Error(msg);
+    }
+  })();
 
   const state = {
     root: null,
@@ -39,6 +71,52 @@
     currentText: '',
     savedText: '',
     editor: null,
+  };
+
+  /**
+   * 暴露给主进程的**只读诊断入口**（`--ui-probe` 使用）。
+   *
+   * 为什么需要：界面问题（能否编辑、是否换行）在源码层面看不出来 —— 只有读回 Monaco 的
+   * **实际生效选项**并真的尝试改文本，才能判断。这个对象不写文件、不发网络请求，
+   * 只回答"编辑器当前处于什么状态"。
+   */
+  window.__uiProbe = function () {
+    const ed = state.editor;
+    if (!ed) return { ready: false, reason: '编辑器尚未创建' };
+    const opts = ed.getOptions();
+    const model = ed.getModel();
+
+    // 真的试一次修改：若能写入，说明编辑器可编辑（不受 readOnly 限制）
+    let editTest = { attempted: false, changed: false, error: null };
+    if (model) {
+      const original = model.getValue();
+      const probeText = original + '\n__probe__';
+      try {
+        ed.executeEdits('ui-probe', [
+          { range: model.getFullModelRange(), text: probeText, forceMoveMarkers: true },
+        ]);
+        const after = model.getValue();
+        editTest = { attempted: true, changed: after !== original, error: null };
+        // 复原，避免污染
+        ed.executeEdits('ui-probe', [{ range: model.getFullModelRange(), text: original, forceMoveMarkers: true }]);
+      } catch (err) {
+        editTest = { attempted: true, changed: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    }
+
+    return {
+      ready: true,
+      readOnly: ed.getOption(window.monaco.editor.EditorOption.readOnly),
+      wordWrap: ed.getOption(window.monaco.editor.EditorOption.wordWrap),
+      fontFamily: opts.get(window.monaco.editor.EditorOption.fontFamily),
+      fontSize: opts.get(window.monaco.editor.EditorOption.fontSize),
+      lineHeight: opts.get(window.monaco.editor.EditorOption.lineHeight),
+      lineNumbers: ed.getOption(window.monaco.editor.EditorOption.lineNumbers),
+      editTest,
+      currentPath: state.currentPath,
+      textLength: model ? model.getValueLength() : 0,
+      hasFocus: ed.hasTextFocus(),
+    };
   };
 
   /* ---------------- Monaco 初始化 ----------------

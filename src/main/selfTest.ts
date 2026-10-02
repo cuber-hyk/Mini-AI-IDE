@@ -305,6 +305,36 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       missing: missingIds,
     });
 
+    /*
+     * L1b：`el` 对象必须**逐个**列出渲染进程用到的元素。
+     *
+     * 为什么单独加这一项：只比对"JS 里出现过的 id ⊆ HTML 的 id"是不够的 ——
+     * 曾经出现过"`el` 结构体漏了 btnCollect/preview 等字段，但 `getElementById('btn-collect')`
+     * 只在绑定处间接出现、没进结构体"的情形，运行时才在 `undefined.addEventListener`
+     * 抛异常并**中断整个渲染脚本**（表现是编辑器与所有按钮全都不工作）。
+     * 这里改为：把 `el = { ... }` 里的键与 `getElementById` 调用集合对齐检查。
+     */
+    const elBlockMatch = /const el = \{([\s\S]*?)\n  \};/.exec(js);
+    const elKeys = elBlockMatch
+      ? [...(elBlockMatch[1] ?? '').matchAll(/(\w+):\s*document\.getElementById\('([^']+)'\)/g)].map((m) => ({
+          key: m[1] as string,
+          id: m[2] as string,
+        }))
+      : [];
+    // 渲染进程里以 `el.xxx` 形式被真正用到、但没在结构体里声明的键
+    const usedElProps = new Set([...js.matchAll(/\bel\.(\w+)\b/g)].map((m) => m[1] as string));
+    const declaredKeys = new Set(elKeys.map((k) => k.key));
+    const undeclaredElProps = [...usedElProps].filter((p) => !declaredKeys.has(p));
+    add('L1b', 'el 结构体已声明渲染进程用到的全部元素（防 undefined.addEventListener 中断脚本）', undeclaredElProps.length === 0, {
+      declaredCount: elKeys.length,
+      usedCount: usedElProps.size,
+      undeclared: undeclaredElProps,
+    });
+
+    // L1c：每个 el.<key> 绑定的 id 必须真的存在于 HTML
+    const elIdsMissing = elKeys.filter((k) => !htmlIds.has(k.id)).map((k) => `${k.key}->${k.id}`);
+    add('L1c', 'el 结构体里每个元素 id 都存在于 index.html', elIdsMissing.length === 0, { missing: elIdsMissing });
+
     // renderer.js 不经 tsc，这里至少保证可被解析（语法错误会在此暴露）
     const vm = await import('node:vm');
     let parseError: string | null = null;

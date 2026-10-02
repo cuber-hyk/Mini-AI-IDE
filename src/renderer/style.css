@@ -42,6 +42,10 @@ body {
   padding: 4px 10px;
   font: inherit;
   cursor: pointer;
+  /* 关键：按钮文本不换行、不被压缩。否则窄窗口下按钮文字会折成两行（实测问题）。 */
+  white-space: nowrap;
+  flex: 0 0 auto;
+  line-height: 1.4;
 }
 
 .toolbar button:hover:not(:disabled) {
@@ -311,6 +315,8 @@ body {
   border-color: #3f6fd8;
   color: #fff;
   font-weight: 600;
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
 
 .prompt-bar button.primary:hover:not(:disabled) {
