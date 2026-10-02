@@ -78,5 +78,6 @@ export function registerFileIpc(getEditorWindow: () => BrowserWindow | null, ser
     CHANNELS.collectReply,
     CHANNELS.applyChange,
     CHANNELS.undoSave,
+    CHANNELS.setPreviewPanel,
   ];
 }

@@ -33,8 +33,75 @@ export interface CollectStrategy {
  */
 export const COLLECT_STRATEGIES: CollectStrategy[] = [
   {
+    id: 'code-blocks-with-page-path',
+    description: '页面里的路径标题（### 文件：…）+ markdown 容器内的 <pre> 代码块',
+    script: `(() => {
+      const build = (pres) => pres
+        .map((p) => {
+          const codeEl = p.querySelector('code');
+          const src = ((p.innerText || '').trim() || (p.textContent || '').trim());
+          if (!src) return '';
+          let lang = '';
+          try {
+            const holder = codeEl || p;
+            const m = /language-([\\w+#-]+)/.exec((holder.className || '').toString());
+            if (m && m[1]) lang = m[1];
+          } catch (e) { /* 忽略 */ }
+          return '\`\`\`' + lang + '\\n' + src + '\\n\`\`\`';
+        })
+        .filter((t) => t.length > 0)
+        .join('\\n\\n');
+
+      // 1) 页面级路径：按“### 文件：xxx”扫描**整页文本节点**，取最后一条（最新回复）
+      //    这样处理是刻意的：目标站点把标题与代码块渲染成**兄弟节点**，
+      //    路径并不在代码块所在容器内部，只抓 <pre> 会丢掉它。
+      let pathHint = '';
+      try {
+        const all = Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,h6,p,div,span,strong'));
+        for (let i = all.length - 1; i >= 0; i -= 1) {
+          const el = all[i];
+          // 只取“自身文本很短”的节点，避免命中整页容器
+          const own = (el.textContent || '').trim();
+          if (own.length === 0 || own.length > 120) continue;
+          const m = /(?:文件|文件名|路径|file|filename|path)\\s*[:：]\\s*([^\\s\`]+\\.[A-Za-z0-9]+)/.exec(own);
+          if (m && m[1]) { pathHint = m[1]; break; }
+        }
+      } catch (e) { /* 忽略 */ }
+
+      // 2) 代码块：选含 <pre> 最多的 markdown 容器
+      const preOf = (root) => Array.from(root.querySelectorAll('pre'));
+      let node = null;
+      let bestCount = 0;
+      for (const el of document.querySelectorAll('[class*="markdown"]')) {
+        const n = preOf(el).length;
+        if (n > bestCount) { bestCount = n; node = el; }
+      }
+      let code = node ? build(preOf(node)) : '';
+      if (!code) {
+        const groups = new Map();
+        for (const p of document.querySelectorAll('pre')) {
+          const holder = p.closest('[class*="markdown"]') || p.parentElement;
+          if (!holder) continue;
+          const arr = groups.get(holder) || [];
+          arr.push(p);
+          groups.set(holder, arr);
+        }
+        let chosen = null;
+        let max = 0;
+        for (const [holder, pres] of groups) {
+          if (pres.length > max) { max = pres.length; chosen = holder; }
+        }
+        if (chosen) code = build(groups.get(chosen) || []);
+      }
+
+      if (!code) return [];
+      // 把路径作为首行“### 文件：”带上，交给解析器的既有线索处理
+      return [pathHint ? '### 文件：' + pathHint + '\\n\\n' + code : code];
+    })()`,
+  },
+  {
     id: 'code-blocks-in-markdown',
-    description: 'markdown 容器内的 <pre> 代码块（只取代码，剔除语言标签与"复制/下载"等 UI 文本）',
+    description: '仅 markdown 容器内的 <pre> 代码块（不含路径；无页面级路径时的次选）',
     script: `(() => {
       const preOf = (root) => Array.from(root.querySelectorAll('pre'));
       const build = (pres) => pres
@@ -53,7 +120,6 @@ export const COLLECT_STRATEGIES: CollectStrategy[] = [
         .filter((t) => t.length > 0)
         .join('\\n\\n');
 
-      // 选择含代码块最多的 markdown 容器
       let node = null;
       let bestCount = 0;
       for (const el of document.querySelectorAll('[class*="markdown"]')) {
@@ -64,7 +130,6 @@ export const COLLECT_STRATEGIES: CollectStrategy[] = [
         const text = build(preOf(node));
         if (text) return [text];
       }
-      // 退化：按容器分组，取代码块最多的那一组
       const groups = new Map();
       for (const p of document.querySelectorAll('pre')) {
         const holder = p.closest('[class*="markdown"]') || p.parentElement;

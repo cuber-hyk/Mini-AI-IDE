@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'none'; img-src 'self' data:"
+    />
+    <title>回程预览</title>
+    <link rel="stylesheet" href="./preview.css" />
+  </head>
+  <body>
+    <header class="pv-head">
+      <span class="pv-title">回程预览</span>
+      <span id="pv-meta" class="pv-meta">尚未采集</span>
+      <span class="spacer"></span>
+      <button id="pv-collapse" type="button" title="收起预览面板（把高度还给网页）">收起</button>
+      <button id="pv-undo" type="button">撤销</button>
+    </header>
+
+    <div id="pv-notes" class="pv-notes"></div>
+
+    <ul id="pv-list" class="pv-list">
+      <li class="pv-empty">点工具栏「采集回复」把右侧最新回复解析成待应用变更。</li>
+    </ul>
+
+    <script src="./preview.js"></script>
+  </body>
+</html>

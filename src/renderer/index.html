@@ -14,7 +14,7 @@
       <button id="btn-open" type="button">打开目录…</button>
       <span id="root-label" class="root-label">未打开目录</span>
       <span class="spacer"></span>
-      <button id="btn-collect" type="button" title="只读采集右侧最新回复并解析为待应用变更（不修改页面、不落盘）">
+      <button id="btn-collect" type="button" title="只读采集右侧最新回复并解析为待应用变更（不修改页面、不落盘），结果显示在右下角预览面板">
         采集回复
       </button>
       <button id="btn-whole-file" type="button" title="把当前打开的整个文件（含路径声明与代码围栏）复制到剪贴板，作为上下文交给模型">
@@ -45,24 +45,8 @@
       <div id="resizer" class="resizer" title="拖动调整左右宽度"></div>
     </main>
 
-    <!-- 回程预览：采集右侧回复 → 解析 → 逐个预览/应用。默认不落盘（ADR-0004 方案 A） -->
-    <section id="preview" class="preview" hidden>
-      <div class="preview-head">
-        <span class="preview-title">回程预览</span>
-        <span id="preview-meta" class="preview-meta"></span>
-        <span class="spacer"></span>
-        <button id="btn-apply-all" type="button">应用全部可用项</button>
-        <button id="btn-undo" type="button">撤销</button>
-        <button id="btn-close-preview" type="button">关闭</button>
-      </div>
-      <div id="preview-notes" class="preview-notes"></div>
-      <ul id="preview-list" class="preview-list"></ul>
-    </section>
-
-    <!-- 需求输入区：你在这里写需求，点「复制 prompt」后到右侧粘贴。
-         程序只写剪贴板，**绝不写入网页输入框**（零注入边界）。
-         注：这里**不设"要改的文件"输入框** —— 路径随代码内容一起给出（用工具栏的
-         「复制整个文件」或「复制选中片段」，都会自动带上文件路径与代码围栏）。 -->
+    <!-- 回程预览已移到**右下角独立面板**（见 src/renderer/preview.html）：
+         原先挤在编辑器下方，既压低了编辑器高度，diff 也只有一百多像素高没法看。 -->
     <footer class="prompt-bar">
       <div class="prompt-row">
         <textarea

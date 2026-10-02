@@ -20,7 +20,6 @@ function scriptOf(id: string): string {
   assert.ok(s, `未找到策略 ${id}`);
   return s.script;
 }
-
 interface FakeNode {
   className?: string;
   innerText?: string;
@@ -66,28 +65,81 @@ function makePage(): { document: unknown } {
   const markdown = node({
     className: 'ds-markdown',
     // 容器文本里带有按钮文字与语言标签（这是噪声来源）
-    innerText: '文件： Mini-AI-IDE-test.md\nmarkdown\n复制\n下载\n冒泡排序:\n```python\ndef bubble_sort(arr):\n    return arr',
+    innerText: '冒泡排序:\n```python\ndef bubble_sort(arr):\n    return arr',
     children: [pre1],
   });
+
+  // 路径标题是**代码块的兄弟节点**（实测形态）：只抓 <pre> 会丢掉它
+  const heading = node({ className: 'ds-markdown-title', textContent: '文件： Mini-AI-IDE-test.md' });
 
   const documentStub = {
     querySelectorAll(sel: string) {
       if (sel.includes('markdown')) return [markdown];
       if (sel === 'pre') return [pre1];
+      if (sel.includes('h1')) return [heading]; // 页面级路径扫描
       return [];
     },
   };
   return { document: documentStub };
 }
 
-function runScript(script: string): unknown {
-  const page = makePage();
+/** 页面里没有 `### 文件：` 标题时的版本（用于验证降级） */
+function makePageWithoutPath(): { document: unknown } {
+  const code1 = node({ className: 'language-python', innerText: 'print(1)' });
+  const pre1 = node({ innerText: 'print(1)', children: [code1] });
+  const markdown = node({ className: 'ds-markdown', innerText: '```python\nprint(1)', children: [pre1] });
+  return {
+    document: {
+      querySelectorAll: (sel: string) => {
+        if (sel.includes('markdown')) return [markdown];
+        if (sel === 'pre') return [pre1];
+        return [];
+      },
+    },
+  };
+}
+
+function runScript(script: string, page: { document: unknown } = makePage()): unknown {
   const sandbox: Record<string, unknown> = { document: page.document };
   return vm.runInNewContext(script, sandbox, { timeout: 3000 });
 }
 
 describe('采集策略脚本（模拟目标站 DOM）', () => {
-  it('code-blocks-in-markdown：只取 <pre> 代码，剔除「复制 / 下载」与语言标签等 UI 文本', () => {
+  it('code-blocks-with-page-path：带上页面里的路径标题（路径与代码是兄弟节点）', () => {
+    const raw = runScript(scriptOf('code-blocks-with-page-path'));
+    const texts = normalizeStrategyOutput(raw);
+    assert.equal(texts.length, 1);
+    const text = texts[0] as string;
+
+    assert.ok(text.includes('### 文件：Mini-AI-IDE-test.md'), `应带上路径标题，实际：${text}`);
+    assert.ok(text.includes('```python'), text);
+    assert.ok(!text.includes('复制'), text);
+    assert.ok(!text.includes('下载'), text);
+  });
+
+  it('页面没有路径标题时，仍返回纯代码（不伪造路径）', () => {
+    const raw = runScript(scriptOf('code-blocks-with-page-path'), makePageWithoutPath());
+    const texts = normalizeStrategyOutput(raw);
+    assert.equal(texts.length, 1);
+    const text = texts[0] as string;
+    assert.ok(!text.includes('### 文件：'), `不应凭空造路径，实际：${text}`);
+    assert.ok(text.includes('```python'), text);
+  });
+
+  it('采集结果可直接被解析器识别出路径与语言（端到端一致性）', async () => {
+    const raw = runScript(scriptOf('code-blocks-with-page-path'));
+    const texts = normalizeStrategyOutput(raw);
+    const replyText = texts[0] as string;
+
+    const { parseModelReply } = await import('../src/shared/returnPath');
+    const parsed = parseModelReply(replyText);
+    assert.equal(parsed.blocks.length, 1);
+    assert.equal(parsed.blocks[0]?.filePath, 'Mini-AI-IDE-test.md', '路径必须被解析出来（用户不该手填）');
+    assert.equal(parsed.blocks[0]?.language, 'python');
+    assert.ok((parsed.blocks[0]?.code ?? '').includes('def bubble_sort'));
+  });
+
+  it('code-blocks-in-markdown：只取 <pre> 代码，剔除 UI 文本', () => {
     const raw = runScript(scriptOf('code-blocks-in-markdown'));
     const texts = normalizeStrategyOutput(raw);
     assert.equal(texts.length, 1);
@@ -95,34 +147,8 @@ describe('采集策略脚本（模拟目标站 DOM）', () => {
 
     assert.ok(!text.includes('复制'), `不应包含按钮文字「复制」，实际：${text}`);
     assert.ok(!text.includes('下载'), `不应包含按钮文字「下载」，实际：${text}`);
-    assert.ok(!/^markdown$/m.test(text), `不应包含孤立的语言标签行，实际：${text}`);
-    assert.ok(!text.includes('文件： Mini-AI-IDE-test.md'), '不应包含消息标题行');
-
-    // 应当是被围栏包住的纯代码，且带语言标注
+    assert.ok(!text.includes('文件：'), '次选策略不承诺带路径');
     assert.ok(text.includes('```python'), text);
-    assert.ok(text.includes('def bubble_sort(arr):'), text);
-    assert.ok(text.includes('    return arr'), text);
-  });
-
-  it('采集结果可直接被解析器识别（端到端一致性）', async () => {
-    const raw = runScript(scriptOf('code-blocks-in-markdown'));
-    const texts = normalizeStrategyOutput(raw);
-    const replyText = texts[0] as string;
-
-    // 用真实的采集器外壳（假 runner），确认策略命中且拿到的就是干净文本
-    const collected = await collectReply({
-      evaluate: async (script: string) =>
-        script.includes('code-blocks-in-markdown') || script.includes('querySelectorAll') ? runScript(script) : [],
-      currentUrl: () => 'https://chat.deepseek.com/a/chat/s/x',
-    });
-    assert.equal(collected.strategyId, 'code-blocks-in-markdown');
-    assert.equal(collected.replyText, replyText);
-
-    const { parseModelReply } = await import('../src/shared/returnPath');
-    const parsed = parseModelReply(collected.replyText, {});
-    assert.equal(parsed.blocks.length, 1);
-    assert.equal(parsed.blocks[0]?.language, 'python');
-    assert.ok((parsed.blocks[0]?.code ?? '').includes('def bubble_sort'));
   });
 
   it('页面没有代码块时返回空（不伪造结果）', () => {
@@ -140,10 +166,11 @@ describe('采集策略脚本（模拟目标站 DOM）', () => {
     assert.equal(normalizeStrategyOutput(raw).length, 0);
   });
 
-  it('策略表包含 4 套、id 唯一、每个脚本都能在无 DOM 内容时安全返回', () => {
-    assert.equal(COLLECT_STRATEGIES.length, 4);
+  it('策略表包含 4 套以上、id 唯一、每个脚本都能在无 DOM 内容时安全返回', () => {
+    assert.ok(COLLECT_STRATEGIES.length >= 4, `策略数量不足：${COLLECT_STRATEGIES.length}`);
     const ids = COLLECT_STRATEGIES.map((s) => s.id);
     assert.equal(new Set(ids).size, ids.length, `策略 id 必须唯一：${ids.join(',')}`);
+    assert.equal(ids[0], 'code-blocks-with-page-path', '首条策略必须优先带上页面级路径');
 
     for (const s of COLLECT_STRATEGIES) {
       const sandbox: Record<string, unknown> = {

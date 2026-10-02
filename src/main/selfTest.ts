@@ -259,9 +259,13 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   add('D9', '左右分栏布局已计算且满足最小宽度', layoutOk, input.layout);
 
   /* ---- E) 通道名一致性（preload 在沙箱下无法 require shared，故用源码比对兜底）---- */
-  // rootChanged / rootStale 是主进程 → 渲染进程的单向通道（不需要 ipcMain.handle），其余都应有处理器
+  // rootChanged / rootStale / previewData 是主进程 → 渲染进程的单向通道（不需要 ipcMain.handle）
   const requiredChannels = Object.values(CHANNELS).filter(
-    (c) => c !== CHANNELS.setRootInternal && c !== CHANNELS.rootChanged && c !== CHANNELS.rootStale
+    (c) =>
+      c !== CHANNELS.setRootInternal &&
+      c !== CHANNELS.rootChanged &&
+      c !== CHANNELS.rootStale &&
+      c !== CHANNELS.previewData
   );
   const missingHandlers = requiredChannels.filter((c) => !registeredChannels.includes(c));
   add('E1', '所有约定通道均已注册 ipcMain 处理器', missingHandlers.length === 0, {
@@ -422,8 +426,50 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       { undeclared: smokeUndeclared, scannedAssignments: smokeAssigns.size, declaredNames: smokeDeclared.size }
     );
 
-    // renderer.js 不经 tsc，这里至少保证可被解析（语法错误会在此暴露）
+    /* ---- L8) 右下角回程预览面板（独立渲染进程）的界面契约 ---- */
     const vm = await import('node:vm');
+    try {
+      const pvHtml = fs.readFileSync(path.join(rendererDir, 'preview.html'), 'utf8');
+      const pvJs = fs.readFileSync(path.join(rendererDir, 'preview.js'), 'utf8');
+      const pvCss = fs.readFileSync(path.join(rendererDir, 'preview.css'), 'utf8');
+
+      const pvIds = new Set([...pvHtml.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1] as string));
+      const pvUsed = [...new Set([...pvJs.matchAll(/getElementById\('([^']+)'\)/g)].map((m) => m[1] as string))];
+      const pvMissing = pvUsed.filter((id) => !pvIds.has(id));
+      add('L8', '预览面板：renderer 引用的元素 id 都存在于 preview.html', pvMissing.length === 0, {
+        htmlIdCount: pvIds.size,
+        usedIdCount: pvUsed.length,
+        missing: pvMissing,
+      });
+
+      let pvParseError: string | null = null;
+      try {
+        new vm.Script(pvJs, { filename: 'preview.js' });
+      } catch (err) {
+        pvParseError = err instanceof Error ? err.message : String(err);
+      }
+      add('L9', '预览面板：preview.js 语法可解析', pvParseError === null, pvParseError ?? 'OK');
+
+      // 面板必须能渲染逐行 diff，且样式里定义了三类行（context/add/del）
+      const hasDiffRender = /pv-line/.test(pvJs) && /kind === 'add'/.test(pvJs) && /kind === 'del'/.test(pvJs);
+      const hasDiffCss = /\.pv-line\.add/.test(pvCss) && /\.pv-line\.del/.test(pvCss);
+      add('L10', '预览面板：具备逐行 diff 渲染与增删样式', hasDiffRender && hasDiffCss, { hasDiffRender, hasDiffCss });
+
+      // 面板通过独立 preload 暴露桥接口，且通道名与主进程一致
+      const pvPreload = fs.readFileSync(path.join(__dirname, 'previewPreload.js'), 'utf8');
+      const pvBridgeOk =
+        /exposeInMainWorld\('previewBridge'/.test(pvPreload) &&
+        pvPreload.includes("'return:apply'") &&
+        pvPreload.includes("'preview:data'") &&
+        pvPreload.includes("'ui:set-preview-panel'");
+      add('L11', '预览面板：独立 preload 暴露 narrow bridge 且通道名正确', pvBridgeOk, {
+        exposeInMainWorld: /exposeInMainWorld\('previewBridge'/.test(pvPreload),
+      });
+    } catch (err) {
+      add('L8', '预览面板界面契约检查', false, `读取失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    // renderer.js 不经 tsc，这里至少保证可被解析（语法错误会在此暴露）
     let parseError: string | null = null;
     try {
       new vm.Script(js, { filename: 'renderer.js' });

@@ -39,6 +39,10 @@ export const CHANNELS = {
   applyChange: 'return:apply',
   /** 撤销一次应用（按快照恢复） */
   undoSave: 'return:undo',
+  /** 显示/隐藏右下角回程预览面板并设置高度 */
+  setPreviewPanel: 'ui:set-preview-panel',
+  /** 主进程 → 右下角预览面板：推送待预览数据 */
+  previewData: 'preview:data',
   /** 主进程 → 渲染进程：记忆的根目录已失效 */
   rootStale: 'fs:root-stale',
   /** 主进程 → 渲染进程：根目录已变更 */
@@ -185,6 +189,30 @@ export interface ReturnPreviewBlock {
   firstLines: Array<{ lineNo: number; text: string }>;
   /** 是否还有未展示的行 */
   moreLines: number;
+  /**
+   * 逐行差异（与主流编辑器一致的 hunk 形式）。
+   * 由主进程用 `computeApply` 算出"应用后的完整文本"再与原文对比得到；
+   * **三向校验不通过时为 null**，且该块会被标为阻塞（不给用户"可以应用"的错觉）。
+   */
+  diff: {
+    hunks: Array<{
+      oldStart: number;
+      newStart: number;
+      added: number;
+      removed: number;
+      lines: Array<{
+        kind: 'context' | 'add' | 'del';
+        oldLine: number | null;
+        newLine: number | null;
+        text: string;
+      }>;
+    }>;
+    added: number;
+    removed: number;
+    oldLineCount: number;
+    newLineCount: number;
+    identical: boolean;
+  } | null;
   /** 目标文件是否存在 */
   fileExists: boolean;
   /** 目标文件当前行数（不存在时为 null） */
@@ -281,6 +309,8 @@ export interface EditorBridge {
    * 用途：把整个文件作为**上下文**交给模型；仍由用户自己粘贴（零注入边界）。
    */
   copyWholeFile(relPath: string): Promise<CopyWholeFileResult>;
+  /** 显示/隐藏右下角回程预览面板（height <= 0 表示隐藏） */
+  setPreviewPanel(height: number): Promise<{ height: number; visible: boolean }>;
   /**
    * 从网页视图**只读**采集最新回复并解析为待应用变更。
    * 不落盘、不修改页面；只回传预览数据。

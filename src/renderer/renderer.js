@@ -31,15 +31,8 @@
     resizer: document.getElementById('resizer'),
     requirement: document.getElementById('requirement'),
     btnCopyPrompt: document.getElementById('btn-copy-prompt'),
-    // 回程预览面板（此前遗漏，导致下面绑定时 TypeError 并中断整个脚本）
+    // 回程预览已移到**右下角独立面板**（preview.html / preview.js），此处只保留触发按钮
     btnCollect: document.getElementById('btn-collect'),
-    preview: document.getElementById('preview'),
-    previewMeta: document.getElementById('preview-meta'),
-    previewNotes: document.getElementById('preview-notes'),
-    previewList: document.getElementById('preview-list'),
-    btnApplyAll: document.getElementById('btn-apply-all'),
-    btnUndo: document.getElementById('btn-undo'),
-    btnClosePreview: document.getElementById('btn-close-preview'),
   };
 
   /**
@@ -72,13 +65,6 @@
     savedText: '',
     editor: null,
   };
-
-  /**
-   * 最近一次「采集回复」的解析结果（供"应用"时引用主进程缓存的代码块）。
-   * **必须在此声明** —— 曾经只在下面赋值而忘了声明，导致
-   * `lastPreview = preview` 抛 `ReferenceError`，整个采集功能失效。
-   */
-  let lastPreview = null;
 
   /**
    * 暴露给主进程的**只读诊断入口**（`--ui-probe` 使用）。
@@ -136,57 +122,32 @@
    */
   window.__uiGeometryProbe = function () {
     const viewportH = window.innerHeight;
-
-    // 造一个真实条目（含应用按钮），确保面板有内容、可测量
-    const list = el.previewList;
-    list.textContent = '';
-    const li = document.createElement('li');
-    li.className = 'preview-item';
-    const head = document.createElement('div');
-    head.className = 'preview-item-head';
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.textContent = '应用';
-    head.appendChild(btn);
-    li.appendChild(head);
-    list.appendChild(li);
-
-    el.preview.hidden = false;
-    // 关键：**用很长的备注来测**。曾经用空备注测，掩盖了"备注挤爆面板、
-    // 把应用按钮挤出视口"的真实场景（实测踩过）。
-    el.previewNotes.textContent =
-      '采集：策略 code-blocks-in-markdown · 362 字符 / 22 行 · 围栏标记 1 处\n' +
-      '首行：文件： Mini-AI-IDE-test.md\n' +
-      '这是一段刻意很长的备注，用于验证备注变长时列表与应用按钮不会被挤出视口。'.repeat(3);
-    void el.preview.offsetHeight; // 强制布局
-
     const rectOf = function (node) {
       const r = node.getBoundingClientRect();
       return { top: Math.round(r.top), bottom: Math.round(r.bottom), height: Math.round(r.height), width: Math.round(r.width) };
     };
 
-    const previewRect = rectOf(el.preview);
-    const layoutRect = rectOf(el.monacoHost);
-    const applyRect = rectOf(btn);
+    /*
+     * 编辑器区必须占满"工具栏与需求输入区之间"的高度，且底部输入区要在视口内。
+     * 回程预览已移到右下角独立面板，因此这里不再测量预览面板。
+     */
+    const editorRect = rectOf(el.monacoHost);
     const promptRect = rectOf(el.btnCopyPrompt);
+    const toolbarRect = rectOf(document.getElementById('btn-open'));
 
-    const applyVisible = applyRect.height > 0 && applyRect.bottom <= viewportH && applyRect.top >= 0;
     const promptVisible = promptRect.height > 0 && promptRect.bottom <= viewportH;
-
-    // 复原：把探针造的内容清掉并重新隐藏面板
-    list.textContent = '';
-    el.previewNotes.textContent = '';
-    el.preview.hidden = true;
+    const editorFills = editorRect.height > 200;
+    const noOverlap = promptRect.top >= editorRect.top;
 
     return {
       viewportH,
-      preview: previewRect,
-      editorArea: layoutRect,
-      applyButton: applyRect,
+      editorArea: editorRect,
+      toolbar: toolbarRect,
       copyPromptButton: promptRect,
-      applyVisible,
       promptVisible,
-      ok: applyVisible && promptVisible && previewRect.height > 0,
+      editorFills,
+      noOverlap,
+      ok: promptVisible && editorFills && noOverlap,
     };
   };
 
@@ -614,171 +575,6 @@
     }, 1800);
   });
 
-  /* ---------------- 回程预览 ----------------
-   * 流程：只读采集右侧最新回复 → 解析 → 逐条预览 → 你点"应用"才落盘（可撤销）。
-   * 程序不修改网页、不自动落盘（ADR-0003/0004）。
-   */
-  function renderPreview(preview) {
-    lastPreview = preview;
-    el.preview.hidden = false;
-    el.previewList.textContent = '';
-
-    if (!preview.ok) {
-      el.previewMeta.textContent = '采集失败';
-      const attemptLines = (preview.attempts || [])
-        .map(function (a) { return '· ' + a.strategyId + (a.ok ? '（命中 ' + a.length + ' 字符）' : '（未命中）') + (a.error ? ' 错误：' + a.error : ''); })
-        .join('\n');
-      const notes = (preview.notes || []).join('\n');
-      el.previewNotes.textContent = (preview.error || '未采集到回复') + (notes ? '\n' + notes : '') + (attemptLines ? '\n各策略尝试记录：\n' + attemptLines : '');
-      return;
-    }
-
-    el.previewMeta.textContent =
-      '批次 ' + preview.collectionId + ' · 策略 ' + preview.strategyId + ' · 解析出 ' + preview.blocks.length +
-      ' 个代码块 · 原文 ' + preview.replyText.length + ' 字符';
-    el.previewNotes.textContent = (preview.notes || []).join('\n');
-
-    preview.blocks.forEach(function (block) {
-      const li = document.createElement('li');
-      li.className = 'preview-item' + (block.applicable ? '' : ' blocked');
-
-      const head = document.createElement('div');
-      head.className = 'preview-item-head';
-
-      const pathInput = document.createElement('input');
-      pathInput.className = 'preview-path';
-      pathInput.type = 'text';
-      pathInput.placeholder = '目标文件相对路径（未确定时请填写）';
-      pathInput.value = block.filePath || '';
-      head.appendChild(pathInput);
-
-      const tagSource = document.createElement('span');
-      tagSource.className = 'preview-tag' + (block.pathSource === 'unique-mention' || block.pathSource === 'none' ? ' weak' : '');
-      tagSource.textContent = block.pathSource;
-      head.appendChild(tagSource);
-
-      const tagRange = document.createElement('span');
-      tagRange.className = 'preview-tag';
-      tagRange.textContent = block.range ? '替换 ' + block.range.start + '-' + block.range.end + ' 行' : '整文件替换';
-      head.appendChild(tagRange);
-
-      const tagSize = document.createElement('span');
-      tagSize.className = 'preview-tag';
-      tagSize.textContent = block.codeLines + ' 行 / ' + block.codeChars + ' 字符' + (block.fileLines !== null ? ' → 文件 ' + block.fileLines + ' 行' : '');
-      head.appendChild(tagSize);
-
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.textContent = '应用';
-      btn.addEventListener('click', function () {
-        void applyBlock(block, pathInput.value.trim(), btn);
-      });
-      head.appendChild(btn);
-
-      li.appendChild(head);
-
-      const hints = (block.hints || []).concat(block.blockedReason ? ['阻塞：' + block.blockedReason] : []);
-      if (hints.length > 0) {
-        const hint = document.createElement('div');
-        hint.className = 'preview-hint';
-        hint.textContent = hints.join('；');
-        li.appendChild(hint);
-      }
-
-      // 行号预览：显示代码块前几行，行号是应用后会落在文件里的真实行号
-      if (block.firstLines && block.firstLines.length > 0) {
-        const pre = document.createElement('pre');
-        pre.className = 'preview-code';
-        const width = String(block.firstLines[block.firstLines.length - 1].lineNo).length;
-        block.firstLines.forEach(function (l) {
-          const row = document.createElement('div');
-          const no = document.createElement('span');
-          no.className = 'preview-code-no';
-          no.textContent = String(l.lineNo).padStart(width, ' ');
-          const tx = document.createElement('span');
-          tx.className = 'preview-code-text';
-          tx.textContent = l.text.length > 0 ? l.text : ' ';
-          row.appendChild(no);
-          row.appendChild(tx);
-          pre.appendChild(row);
-        });
-        if (block.moreLines > 0) {
-          const more = document.createElement('div');
-          more.className = 'preview-code-more';
-          more.textContent = '… 其余 ' + block.moreLines + ' 行';
-          pre.appendChild(more);
-        }
-        li.appendChild(pre);
-      }
-
-      el.previewList.appendChild(li);
-    });
-  }
-
-  async function applyBlock(block, filePath, btn) {
-    if (!lastPreview || !lastPreview.collectionId) {
-      setInfo('采集结果不可用，请重新点「采集回复」', true);
-      return;
-    }
-    if (!filePath) {
-      setInfo('请先填写目标文件路径再应用', true);
-      return;
-    }
-
-    btn.disabled = true;
-    btn.textContent = '应用中…';
-    const result = await bridge.applyChange({
-      collectionId: lastPreview.collectionId,
-      index: block.index,
-      filePath: filePath,
-    });
-    btn.disabled = false;
-    btn.textContent = result.ok ? '已应用 ✓' : '应用';
-    if (!result.ok) {
-      setInfo('应用失败：' + (result.error || '未知错误'), true);
-      el.previewNotes.textContent =
-        '应用失败：' + (result.error || '') +
-        '\n（片段替换会在读文件时抓取该区间当前内容作为校验基线；若文件已被改动，或模型给的行区间与文件不符，会被拒绝——这是刻意的安全限制）';
-      return;
-    }
-    setInfo('已应用 ' + result.filePath + '（模式 ' + result.mode + '；可点「撤销」回退）');
-    if (state.currentPath === result.filePath) {
-      await openFile(state.currentPath, null);
-    }
-  }
-
-  el.btnCollect.addEventListener('click', async function () {
-    el.btnCollect.disabled = true;
-    el.btnCollect.textContent = '采集中…';
-    try {
-      const preview = await bridge.collectReply();
-      renderPreview(preview);
-    } finally {
-      el.btnCollect.disabled = false;
-      el.btnCollect.textContent = '采集回复';
-    }
-  });
-
-  el.btnClosePreview.addEventListener('click', function () {
-    el.preview.hidden = true;
-  });
-
-  el.btnUndo.addEventListener('click', async function () {
-    const result = await bridge.undoSave();
-    if (!result.ok) {
-      setInfo('撤销失败：' + (result.error || '未知错误'), true);
-      return;
-    }
-    setInfo('已撤销对 ' + result.filePath + ' 的上一次应用');
-    if (state.currentPath === result.filePath) {
-      await openFile(state.currentPath, null);
-    }
-  });
-
-  el.btnApplyAll.addEventListener('click', function () {
-    setInfo('「应用全部」需要逐条确认路径，请逐个点击「应用」—— 默认不批量落盘（ADR-0004 方案 A）', true);
-  });
-
   /* ---------------- 分隔条拖动 ----------------
    * 本渲染进程只占左侧面板，因此拖动时用 window.screenX 推算窗口左边界的屏幕坐标，
    * 再算出"编辑器期望宽度 = 鼠标屏幕坐标 - 窗口左边界"，交给主进程做最小宽度约束后执行。
@@ -819,6 +615,26 @@
   }
   el.resizer.addEventListener('pointerup', endDrag);
   el.resizer.addEventListener('pointercancel', endDrag);
+
+  /**
+   * 「采集回复」：只读采集右侧最新回复并解析，结果显示在**右下角预览面板**。
+   * 本视图不渲染预览（面板是独立渲染进程），只负责触发与提示。
+   */
+  el.btnCollect.addEventListener('click', async function () {
+    el.btnCollect.disabled = true;
+    el.btnCollect.textContent = '采集中…';
+    try {
+      const preview = await bridge.collectReply();
+      if (preview && preview.ok) {
+        setInfo('已采集并解析：' + ((preview.blocks && preview.blocks.length) || 0) + ' 个待应用变更 —— 见右下角预览面板（含逐行 diff）');
+      } else {
+        setInfo('采集失败：' + ((preview && preview.error) || '未采集到回复') + ' —— 详见右下角面板的诊断信息', true);
+      }
+    } finally {
+      el.btnCollect.disabled = false;
+      el.btnCollect.textContent = '采集回复';
+    }
+  });
 
   // 双击分隔条：回到 45% 默认比例
   el.resizer.addEventListener('dblclick', function () {

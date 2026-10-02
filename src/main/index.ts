@@ -16,8 +16,9 @@ import * as path from 'node:path';
 
 import { CHANNELS, type ApplyChangeInput, type ReturnPreview, type RootInfo } from '../shared/contract';
 import { buildPrompt, getFormatSpec } from '../shared/formatSpec';
-import { parseModelReply, type ParsedCodeBlock } from '../shared/returnPath';
+import { parseModelReply, computeApply, type ParsedCodeBlock } from '../shared/returnPath';
 import { buildSnippetText, buildWholeFileText } from '../shared/snippet';
+import { diffTexts } from '../shared/diff';
 import { checkUaConsistency, stripSelfDeclarations } from '../shared/userAgent';
 import { FileService } from './fileService';
 import { registerFileIpc } from './ipc';
@@ -43,6 +44,10 @@ const SESSION_PARTITION = 'persist:postcheck';
 const TARGET_URL = process.env['MINI_AI_IDE_TARGET_URL'] ?? 'https://chat.deepseek.com/';
 const EDITOR_MIN_WIDTH = 360;
 const WEB_MIN_WIDTH = 420;
+/** 回程预览面板（右下角）的最小高度；低于这个值 diff 没法看 */
+const PREVIEW_MIN_HEIGHT = 160;
+/** 网页区（右上角）的最小高度，保证聊天界面可用 */
+const WEB_MIN_HEIGHT = 220;
 
 const SELF_TEST = process.argv.includes('--self-test');
 /** 界面运行时探针：不联网，加载编辑器后读回 Monaco 实际选项并试改文本，然后退出 */
@@ -53,15 +58,40 @@ const DIAGNOSE = process.argv.includes('--diagnose');
 interface Layout {
   editorBounds: { x: number; y: number; width: number; height: number };
   webBounds: { x: number; y: number; width: number; height: number };
+  previewBounds: { x: number; y: number; width: number; height: number };
   dividerX: number;
+  /** 右侧上下分割线（y 坐标）；预览隐藏时等于总高度，即网页占满右列 */
+  splitY: number;
 }
 
-function computeLayout(width: number, height: number, editorWidth: number): Layout {
+/**
+ * 三区布局：左侧编辑器 | 右上网页 | **右下回程预览**
+ *
+ * 为什么把预览放右下角（用户建议）：原先预览挤在编辑器下方，把编辑器高度压得很低，
+ * 而且 diff 只有一百多像素高，根本没法看。放到右列下半区后，编辑器高度不受影响，
+ * 预览也能拿到足够高度展示逐行差异。
+ */
+function computeLayout(
+  width: number,
+  height: number,
+  editorWidth: number,
+  previewHeight = 0
+): Layout {
   const w = Math.max(editorWidth, EDITOR_MIN_WIDTH);
+  const rightX = w;
+  const rightW = Math.max(0, width - w);
+  const wanted = previewHeight > 0 ? previewHeight : 0;
+  const maxPreview = Math.max(PREVIEW_MIN_HEIGHT, height - WEB_MIN_HEIGHT);
+  const ph = Math.min(Math.max(wanted, PREVIEW_MIN_HEIGHT), maxPreview);
+  const showPreview = previewHeight > 0;
+  const webH = showPreview ? Math.max(WEB_MIN_HEIGHT, height - ph) : height;
+  const finalPh = showPreview ? height - webH : 0;
   return {
     editorBounds: { x: 0, y: 0, width: w, height },
-    webBounds: { x: w, y: 0, width: Math.max(0, width - w), height },
+    webBounds: { x: rightX, y: 0, width: rightW, height: webH },
+    previewBounds: { x: rightX, y: webH, width: rightW, height: finalPh },
     dividerX: w,
+    splitY: showPreview ? webH : height,
   };
 }
 
@@ -78,6 +108,9 @@ interface BootInfo {
 /* ------------------------------------------------------------------ *
  * 应用主流程
  * ------------------------------------------------------------------ */
+/** 预览面板是否可见 + 其高度（随窗口持久化在内存里；0 表示隐藏） */
+let previewHeight = 0;
+
 async function bootstrap(): Promise<void> {
   // Electron 的应用名会影响 userData 目录；显式设定以保证分区落盘位置可预期。
   app.setName('mini-ai-ide');
@@ -123,7 +156,7 @@ async function bootstrap(): Promise<void> {
     Math.max(saved.editorWidth ?? Math.round(winW * 0.45), EDITOR_MIN_WIDTH),
     Math.max(EDITOR_MIN_WIDTH, winW - WEB_MIN_WIDTH)
   );
-  let layout = computeLayout(winW, winH, editorWidth);
+  let layout = computeLayout(winW, winH, editorWidth, previewHeight);
 
   const editorView = new WebContentsView({
     webPreferences: {
@@ -149,20 +182,46 @@ async function bootstrap(): Promise<void> {
   // 因此对视图的 webContents 再显式设置一次，并在自检中验证生效。
   webView.webContents.setUserAgent(uaPlan.effective);
 
+  // 回程预览：**独立的右下角视图**（不再挤在编辑器下方，见 computeLayout 注释）
+  const previewView = new WebContentsView({
+    webPreferences: {
+      preload: path.join(__dirname, 'previewPreload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      // 预览面板不需要任何网络能力
+      partition: 'persist:editor-ui',
+    },
+  });
+  // 预览视图与编辑器视图使用同一分区，便于复用同一份 preload 缓存策略
+
   win.contentView.addChildView(editorView);
   win.contentView.addChildView(webView);
+  win.contentView.addChildView(previewView);
   editorView.setBounds(layout.editorBounds);
   webView.setBounds(layout.webBounds);
+  previewView.setBounds(layout.previewBounds);
+  previewView.setVisible(false);
 
-  win.on('resize', () => {
+  /** 按当前 previewHeight 重算三区并应用 */
+  function relayout(): void {
     const s = win.getContentSize();
     const w = s[0] ?? 1440;
     const h = s[1] ?? 900;
     editorWidth = Math.min(Math.max(editorWidth, EDITOR_MIN_WIDTH), Math.max(EDITOR_MIN_WIDTH, w - WEB_MIN_WIDTH));
-    layout = computeLayout(w, h, editorWidth);
+    layout = computeLayout(w, h, editorWidth, previewHeight);
     editorView.setBounds(layout.editorBounds);
     webView.setBounds(layout.webBounds);
-  });
+    previewView.setBounds(layout.previewBounds);
+    previewView.setVisible(previewHeight > 0);
+  }
+
+  win.on('resize', relayout);
+
+  /* ---------------- 加载三个视图 ---------------- */
+  // 预览面板：加载本地页面（与编辑器同源，便于复用样式约定）
+  await previewView.webContents.loadFile(path.join(__dirname, '..', 'renderer', 'preview.html'));
 
   /* ---------------- IPC ---------------- */
   const getEditorWindow = () => null; // 目录选择不需要父窗口句柄；保留签名以便后续接入
@@ -175,12 +234,31 @@ async function bootstrap(): Promise<void> {
     const height = s[1] ?? 900;
     const requested = typeof desiredWidth === 'number' && Number.isFinite(desiredWidth) ? desiredWidth : editorWidth;
     editorWidth = Math.min(Math.max(Math.round(requested), EDITOR_MIN_WIDTH), Math.max(EDITOR_MIN_WIDTH, total - WEB_MIN_WIDTH));
-    layout = computeLayout(total, height, editorWidth);
+    layout = computeLayout(total, height, editorWidth, previewHeight);
     editorView.setBounds(layout.editorBounds);
     webView.setBounds(layout.webBounds);
+    previewView.setBounds(layout.previewBounds);
     settings.update({ editorWidth: layout.editorBounds.width });
     return { editorWidth: layout.editorBounds.width };
   });
+
+  /**
+   * 显示/隐藏右下角回程预览面板，并设置其高度。
+   * 高度会被约束在 [PREVIEW_MIN_HEIGHT, 窗口高 - WEB_MIN_HEIGHT]，保证网页区仍可用。
+   */
+  ipcMain.handle(CHANNELS.setPreviewPanel, (_e, height: unknown) => {
+    const h = typeof height === 'number' && Number.isFinite(height) ? Math.round(height) : 0;
+    previewHeight = h > 0 ? Math.max(PREVIEW_MIN_HEIGHT, h) : 0;
+    relayout();
+    return { height: layout.previewBounds.height, visible: previewHeight > 0 };
+  });
+
+  /** 把预览数据推给右下角面板 */
+  function pushPreviewToPanel(preview: unknown): void {
+    if (!previewView.webContents.isDestroyed()) {
+      previewView.webContents.send(CHANNELS.previewData, preview);
+    }
+  }
 
   /**
    * 把"输出格式要求"模板写入系统剪贴板。
@@ -353,6 +431,51 @@ async function bootstrap(): Promise<void> {
       const PREVIEW_LINES = 6;
       const firstLines = allCodeLines.slice(0, PREVIEW_LINES).map((text, k) => ({ lineNo: previewStart + k, text }));
 
+      /*
+       * 逐行 diff —— 顺带完成"三向校验"。
+       *
+       * 这里复用 computeApply 得到"应用后的完整文本"，再与原文对比：
+       *  - 校验通过 → 给出 diff，用户在落盘前就能看到具体增删了哪些行；
+       *  - 校验失败（区间越界 / 原内容不匹配 / 上下文不匹配）→ 不给 diff，
+       *    直接把该块标成阻塞并说明原因。**绝不让用户以为可以应用**。
+       */
+      let diff: ReturnPreview['blocks'][number]['diff'] = null;
+      if (b.filePath && fileExists) {
+        const readForDiff = await fileService.readRawText(b.filePath);
+        if (readForDiff.ok) {
+          let mode: Parameters<typeof computeApply>[2];
+          if (b.range) {
+            const lines = readForDiff.text.split(/\r\n|\r|\n/);
+            const sliceOk = b.range.start >= 1 && b.range.end <= lines.length;
+            if (sliceOk) {
+              mode = {
+                kind: 'replace-lines',
+                start: b.range.start,
+                end: b.range.end,
+                expectedOriginal: lines.slice(b.range.start - 1, b.range.end).join('\n'),
+                contextPrev: b.range.start - 2 >= 0 ? (lines[b.range.start - 2] ?? null) : null,
+                contextNext: b.range.end < lines.length ? (lines[b.range.end] ?? null) : null,
+              };
+            } else {
+              mode = { kind: 'replace-lines', start: b.range.start, end: b.range.end, expectedOriginal: '' };
+            }
+          } else {
+            mode = { kind: 'replace-whole-file' };
+          }
+
+          const computed = computeApply(readForDiff.text, b, mode);
+          if (computed.ok) {
+            diff = diffTexts(readForDiff.text, computed.text);
+            if (diff.identical) {
+              hints.push('应用后内容与当前文件完全相同，无需改动');
+            }
+          } else {
+            applicable = false;
+            blockedReason = computed.detail;
+          }
+        }
+      }
+
       blocks.push({
         index: i,
         filePath: b.filePath,
@@ -362,6 +485,7 @@ async function bootstrap(): Promise<void> {
         codeChars: b.code.length,
         firstLines,
         moreLines: Math.max(0, allCodeLines.length - firstLines.length),
+        diff,
         fileExists,
         fileLines,
         applicable,
@@ -370,7 +494,7 @@ async function bootstrap(): Promise<void> {
       });
     }
 
-    return {
+    const previewResult: ReturnPreview = {
       ok: true,
       collectionId,
       strategyId: collected.strategyId,
@@ -380,8 +504,14 @@ async function bootstrap(): Promise<void> {
       notes: parseNotes,
       blocks,
     };
+    // 推到右下角预览面板，并把面板显示出来（用户建议的位置：不压编辑器高度）
+    if (previewHeight <= 0) {
+      previewHeight = Math.max(PREVIEW_MIN_HEIGHT, Math.round((win.getContentSize()[1] ?? 900) * 0.4));
+      relayout();
+    }
+    pushPreviewToPanel(previewResult);
+    return previewResult;
   });
-
   /**
    * 应用一个变更。
    *
@@ -706,12 +836,13 @@ async function bootstrap(): Promise<void> {
       geometry = { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
     process.stdout.write(`\n===== 界面几何 =====\n${JSON.stringify(geometry, null, 2)}\n`);
-    const g = geometry as { ok?: boolean; applyVisible?: boolean } | null;
-    const layoutOk = Boolean(g && g.ok && g.applyVisible === true);
+    const g = geometry as { ok?: boolean; editorFills?: boolean; promptVisible?: boolean } | null;
+    const layoutOk = Boolean(g && g.ok && g.editorFills === true && g.promptVisible === true);
     process.stdout.write(
-      `[ui-probe] 预览面板显示时「应用」按钮可见：${g?.applyVisible ? '是' : '否'}；布局自洽：${layoutOk ? '是' : '否'}\n`
+      `[ui-probe] 编辑器占满可用高度：${g?.editorFills ? '是' : '否'}；需求输入区在视口内：${g?.promptVisible ? '是' : '否'}；布局自洽：${layoutOk ? '是' : '否'}\n`
     );
 
+    // 预览面板已移到右下角独立视图，其界面契约由自检 L8–L11 覆盖
     app.exit(editable && wraps && layoutOk ? 0 : 1);
     return;
   }
