@@ -285,6 +285,61 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   }
   add('E2', 'preload 内联通道名与 shared/contract 完全一致（无漂移）', preloadSrcCheck.ok, preloadSrcCheck.detail);
 
+  /* ---- L) 渲染进程界面契约：HTML 里的 id 与 renderer 的引用必须一致 ----
+   * 为什么需要：`document.getElementById('x')` 取不到时返回 null，随后在事件里炸掉或静默失效，
+   * 而 TypeScript 看不到 HTML —— 这类"改了 HTML 忘了改 JS"只能靠可执行检查兜住。
+   * 同时检查 renderer.js 语法（Node 可解析），因为渲染进程脚本不经 tsc。
+   */
+  const rendererDir = path.join(__dirname, '..', 'renderer');
+  const htmlPath = path.join(rendererDir, 'index.html');
+  const jsPath = path.join(rendererDir, 'renderer.js');
+  try {
+    const html = fs.readFileSync(htmlPath, 'utf8');
+    const js = fs.readFileSync(jsPath, 'utf8');
+    const htmlIds = new Set([...html.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1] as string));
+    const usedIds = [...js.matchAll(/getElementById\('([^']+)'\)/g)].map((m) => m[1] as string);
+    const missingIds = [...new Set(usedIds)].filter((id) => !htmlIds.has(id));
+    add('L1', 'renderer 引用的所有元素 id 都存在于 index.html', missingIds.length === 0, {
+      htmlIdCount: htmlIds.size,
+      usedIdCount: new Set(usedIds).size,
+      missing: missingIds,
+    });
+
+    // renderer.js 不经 tsc，这里至少保证可被解析（语法错误会在此暴露）
+    const vm = await import('node:vm');
+    let parseError: string | null = null;
+    try {
+      new vm.Script(js, { filename: 'renderer.js' });
+    } catch (err) {
+      parseError = err instanceof Error ? err.message : String(err);
+    }
+    add('L2', 'renderer.js 语法可被解析（渲染进程脚本不走 tsc）', parseError === null, parseError ?? 'OK');
+
+    // 编辑器关键选项：换行 / 字体 / 行高 / 不设只读
+    const hasWordWrap = /wordWrap:\s*'on'/.test(js);
+    const hasFont = /fontFamily:/.test(js);
+    const hasLineHeight = /lineHeight:/.test(js);
+    const hasReadOnly = /readOnly:\s*true/.test(js);
+    add(
+      'L3',
+      '编辑器默认：开启自动换行 + 设置字体与行高，且**不设只读**',
+      hasWordWrap && hasFont && hasLineHeight && !hasReadOnly,
+      { hasWordWrap, hasFont, hasLineHeight, hasReadOnly }
+    );
+
+    // 目录树必须是"可展开"结构（原地展开），而不是"进入式"
+    const hasTreeChildren = /tree-children/.test(js);
+    const hasExpandedState = /const expanded = new Set\(\)/.test(js);
+    add('L4', '目录树为可展开结构且保持展开状态', hasTreeChildren && hasExpandedState, { hasTreeChildren, hasExpandedState });
+
+    // 未保存标记：文件头白点存在且默认隐藏
+    const dotInHtml = /id="file-dot"/.test(html);
+    const dotHidden = /class="file-dot"[^>]*hidden/.test(html) || /id="file-dot"[^>]*hidden/.test(html);
+    add('L5', '未保存标记（文件头白点）存在且默认隐藏', dotInHtml && dotHidden, { dotInHtml, dotHidden });
+  } catch (err) {
+    add('L1', '渲染进程界面契约检查', false, `读取失败：${err instanceof Error ? err.message : String(err)}`);
+  }
+
   /* ---- F) P3 纯逻辑：回程解析与格式模板 ---- */
   const sampleReply = [
     '### src/demo.ts',

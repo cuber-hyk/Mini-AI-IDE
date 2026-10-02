@@ -327,13 +327,22 @@ async function bootstrap(): Promise<void> {
         if (!fileExists) hints.push('目标文件不存在，应用将创建新文件（需你确认）');
       }
 
+      // 行号预览：整文件替换从第 1 行起算；片段替换用"范围起始行"，
+      // 这样用户看到的就是**应用后会落在文件里的真实行号**。
+      const previewStart = b.range ? b.range.start : 1;
+      const allCodeLines = b.code.length === 0 ? [] : b.code.split(/\r\n|\r|\n/);
+      const PREVIEW_LINES = 6;
+      const firstLines = allCodeLines.slice(0, PREVIEW_LINES).map((text, k) => ({ lineNo: previewStart + k, text }));
+
       blocks.push({
         index: i,
         filePath: b.filePath,
         pathSource: b.pathSource,
         range: b.range,
-        codeLines: b.code.length === 0 ? 0 : b.code.split(/\r\n|\r|\n/).length,
+        codeLines: allCodeLines.length,
         codeChars: b.code.length,
+        firstLines,
+        moreLines: Math.max(0, allCodeLines.length - firstLines.length),
         fileExists,
         fileLines,
         applicable,
@@ -499,7 +508,7 @@ async function bootstrap(): Promise<void> {
           },
         },
         {
-          label: '复制输出格式要求（供你粘贴到提示词）',
+          label: '只复制输出格式要求（不含上下文）',
           click: () => {
             const text = getFormatSpec('short');
             clipboard.writeText(text);

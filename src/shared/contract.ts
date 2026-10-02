@@ -164,6 +164,13 @@ export interface ReturnPreviewBlock {
   codeLines: number;
   /** 代码块字符数 */
   codeChars: number;
+  /**
+   * 行号预览：代码块前若干行，行号是**应用后会落在文件里的真实行号**。
+   * 用途：让用户在落盘前核对"这段代码是不是我复制的那段、行号对不对"。
+   */
+  firstLines: Array<{ lineNo: number; text: string }>;
+  /** 是否还有未展示的行 */
+  moreLines: number;
   /** 目标文件是否存在 */
   fileExists: boolean;
   /** 目标文件当前行数（不存在时为 null） */

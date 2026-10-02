@@ -14,9 +14,6 @@
       <button id="btn-open" type="button">打开目录…</button>
       <span id="root-label" class="root-label">未打开目录</span>
       <span class="spacer"></span>
-      <button id="btn-format" type="button" title="把「输出格式要求」复制到剪贴板，再由你自己粘贴到 DeepSeek 的提示词里（程序不会替你写入网页）">
-        复制格式要求
-      </button>
       <button id="btn-collect" type="button" title="只读采集右侧最新回复并解析为待应用变更（不修改页面、不落盘）">
         采集回复
       </button>
@@ -24,7 +21,7 @@
         复制选中片段
       </button>
       <button id="btn-save" type="button" disabled>保存 (Ctrl+S)</button>
-      <span id="dirty-flag" class="dirty">已保存</span>
+      <span id="dirty-flag" class="dirty"></span>
     </header>
 
     <main class="layout">
@@ -34,6 +31,10 @@
         <div id="tree-note" class="tree-note">使用「打开目录…」或菜单 File → 打开目录（Ctrl+O）</div>
       </aside>
       <section class="editor-wrap">
+        <div class="editor-head">
+          <span id="file-name" class="file-name">未打开文件</span>
+          <span id="file-dot" class="file-dot" title="有未保存的修改" hidden></span>
+        </div>
         <div id="monaco" class="monaco"></div>
         <div id="info" class="info">未打开文件</div>
       </section>

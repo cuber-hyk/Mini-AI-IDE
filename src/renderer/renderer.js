@@ -21,9 +21,10 @@
     rootLabel: document.getElementById('root-label'),
     info: document.getElementById('info'),
     dirty: document.getElementById('dirty-flag'),
+    fileName: document.getElementById('file-name'),
+    fileDot: document.getElementById('file-dot'),
     btnOpen: document.getElementById('btn-open'),
     btnSave: document.getElementById('btn-save'),
-    btnFormat: document.getElementById('btn-format'),
     btnSnippet: document.getElementById('btn-snippet'),
     monacoHost: document.getElementById('monaco'),
     resizer: document.getElementById('resizer'),
@@ -38,7 +39,40 @@
     currentText: '',
     savedText: '',
     editor: null,
-    readOnly: true,
+  };
+
+  /* ---------------- Monaco 初始化 ----------------
+   * 可读性选项集中在此，便于对照主流编辑器调整。
+   * 注意：**不设 readOnly** —— 默认即可编辑；保存走 Ctrl+S，未保存由状态点提示。
+   */
+  const EDITOR_OPTIONS = {
+    language: 'plaintext',
+    theme: 'vs-dark',
+    automaticLayout: true,
+    // 字体：优先 Cascadia Code（Win11 自带），依次回退；中文回退到等宽字体
+    fontFamily:
+      "'Cascadia Code', 'Cascadia Mono', Consolas, 'JetBrains Mono', 'Sarasa Mono SC', 'Microsoft YaHei Mono', 'Courier New', monospace",
+    fontSize: 14,
+    lineHeight: 22,
+    letterSpacing: 0.2,
+    // 长行换行（用户明确要求）：默认 off，导致必须横向滚动
+    wordWrap: 'on',
+    wrappingIndent: 'same',
+    // 观感：缩进参考线 / 括号配色 / 当前行 / 行号宽度
+    guides: { indentation: true, bracketPairs: true, highlightActiveIndentation: true },
+    bracketPairColorization: { enabled: true },
+    renderLineHighlight: 'all',
+    renderWhitespace: 'selection',
+    lineNumbersMinChars: 4,
+    minimap: { enabled: false },
+    scrollBeyondLastLine: false,
+    smoothScrolling: true,
+    cursorBlinking: 'smooth',
+    cursorSmoothCaretAnimation: 'on',
+    tabSize: 2,
+    padding: { top: 8, bottom: 8 },
+    scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10, useShadows: false },
+    stickyScroll: { enabled: false },
   };
 
   /* ---------------- Monaco 初始化 ---------------- */
@@ -66,18 +100,7 @@
 
     window.require.config({ paths: { vs: './vendor/monaco/vs' } });
     window.require(['vs/editor/editor.main'], function () {
-      state.editor = window.monaco.editor.create(el.monacoHost, {
-        value: '',
-        language: 'plaintext',
-        theme: 'vs-dark',
-        readOnly: true,
-        automaticLayout: true,
-        fontSize: 13,
-        minimap: { enabled: false },
-        scrollBeyondLastLine: false,
-        renderWhitespace: 'selection',
-        tabSize: 2,
-      });
+      state.editor = window.monaco.editor.create(el.monacoHost, { value: '', ...EDITOR_OPTIONS });
       state.editor.onDidChangeModelContent(function () {
         const text = state.editor.getValue();
         if (text !== state.currentText) {
@@ -89,12 +112,7 @@
       state.editor.addCommand(window.monaco.KeyMod.CtrlCmd | window.monaco.KeyCode.KeyS, function () {
         void save();
       });
-      applyReadOnly();
     });
-  }
-
-  function applyReadOnly() {
-    if (state.editor) state.editor.updateOptions({ readOnly: state.readOnly });
   }
 
   /* ---------------- 界面渲染 ---------------- */
@@ -104,11 +122,15 @@
     el.treeNote.style.display = state.root ? 'none' : 'block';
   }
 
+  /** 未保存状态：与主流编辑器一致——有改动才显示标记（文件头右侧白点 + 工具栏提示） */
   function renderDirty() {
     const dirty = state.currentText !== state.savedText;
-    el.dirty.textContent = dirty ? '未保存' : '已保存';
+    el.dirty.textContent = dirty ? '● 未保存' : '';
     el.dirty.classList.toggle('is-dirty', dirty);
     el.btnSave.disabled = !dirty || !state.currentPath;
+    el.fileDot.hidden = !dirty;
+    el.fileName.textContent = state.currentPath ?? '未打开文件';
+    el.fileName.title = state.currentPath ?? '';
   }
 
   function setInfo(text, warn) {
@@ -116,35 +138,117 @@
     el.info.classList.toggle('warn', Boolean(warn));
   }
 
+  /* ---------------- 目录树（可展开，展开状态保持） ----------------
+   * 与主流编辑器一致：点击文件夹=原地展开/收起，点击文件=打开。
+   * 展开状态按根目录分别记忆（Map: relPath -> isOpen），切换根目录时重置。
+   */
+  const expanded = new Set();
+
   function renderTree(entries) {
     el.tree.textContent = '';
     for (const entry of entries) {
-      const li = document.createElement('li');
-      li.textContent = (entry.isDirectory ? '▸ ' : '  ') + entry.name;
-      li.className = entry.isDirectory ? 'dir' : entry.textLike === false ? 'nontext' : 'text';
-      li.title = entry.isDirectory ? '目录' : entry.textLike === false ? '可能不是文本文件' : '文本文件';
-      li.addEventListener('click', function () {
-        if (entry.isDirectory) {
-          void loadTree(entry.relPath);
-        } else {
-          void openFile(entry.relPath, li);
-        }
+      el.tree.appendChild(buildTreeItem(entry));
+    }
+  }
+
+  function buildTreeItem(entry) {
+    const li = document.createElement('li');
+    li.className = entry.isDirectory ? 'tree-dir' : entry.textLike === false ? 'tree-nontext' : 'tree-file';
+    li.dataset['relPath'] = entry.relPath;
+
+    const row = document.createElement('div');
+    row.className = 'tree-row';
+    row.title = entry.isDirectory ? '目录（点击展开/收起）' : entry.textLike === false ? '可能不是文本文件' : '文本文件';
+
+    const twisty = document.createElement('span');
+    twisty.className = 'tree-twisty';
+    twisty.textContent = entry.isDirectory ? '▸' : '';
+    row.appendChild(twisty);
+
+    const label = document.createElement('span');
+    label.className = 'tree-label';
+    label.textContent = entry.name;
+    row.appendChild(label);
+
+    li.appendChild(row);
+
+    if (!entry.isDirectory) {
+      row.addEventListener('click', function () {
+        void openFile(entry.relPath, row);
       });
-      el.tree.appendChild(li);
+      return li;
+    }
+
+    // 目录：子容器懒加载，展开状态保持
+    const children = document.createElement('ul');
+    children.className = 'tree-children';
+    li.appendChild(children);
+
+    const setOpen = function (open, load) {
+      if (open) {
+        expanded.add(entry.relPath);
+        li.classList.add('open');
+        twisty.textContent = '▾';
+        children.hidden = false;
+        if (load && children.childElementCount === 0) {
+          void loadChildren(entry.relPath, children);
+        }
+      } else {
+        expanded.delete(entry.relPath);
+        li.classList.remove('open');
+        twisty.textContent = '▸';
+        children.hidden = true;
+      }
+    };
+
+    row.addEventListener('click', function () {
+      setOpen(!li.classList.contains('open'), true);
+    });
+
+    // 初次渲染时按记忆恢复展开态（并懒加载其子项）
+    if (expanded.has(entry.relPath)) setOpen(true, true);
+
+    return li;
+  }
+
+  async function loadChildren(relPath, container) {
+    const result = await bridge.listDir(relPath);
+    if (!result.ok) {
+      setInfo('展开目录失败：' + (result.error ?? '未知错误'), true);
+      return;
+    }
+    container.textContent = '';
+    for (const child of result.entries) {
+      container.appendChild(buildTreeItem(child));
+    }
+    if (result.entries.length === 0) {
+      const empty = document.createElement('li');
+      empty.className = 'tree-empty';
+      empty.textContent = '（空目录）';
+      container.appendChild(empty);
+    }
+  }
+
+  /** 定位并高亮某个路径（便于打开文件后把树滚到它那里） */
+  function highlightTreeItem(relPath) {
+    document.querySelectorAll('#tree .tree-row.active').forEach((n) => n.classList.remove('active'));
+    const node = document.querySelector('#tree li[data-rel-path="' + CSS.escape(relPath) + '"] > .tree-row');
+    if (node) {
+      node.classList.add('active');
+      node.scrollIntoView({ block: 'nearest' });
     }
   }
 
   /* ---------------- 数据操作（全部经 bridge） ---------------- */
-  async function loadTree(relPath) {
-    const result = await bridge.listDir(relPath);
+  /** 展开根目录第一层 */
+  async function loadTree() {
+    const result = await bridge.listDir('');
     if (!result.ok) {
       setInfo('列目录失败：' + (result.error ?? '未知错误'), true);
       return;
     }
     renderTree(result.entries);
-    setInfo(
-      '目录：' + (relPath || '.') + ' · ' + result.entries.length + ' 项' + (result.truncated ? '（已截断）' : '')
-    );
+    setInfo('目录：. · ' + result.entries.length + ' 项' + (result.truncated ? '（已截断）' : ''));
   }
 
   async function openFile(relPath, li) {
@@ -170,18 +274,18 @@
       const model = state.editor.getModel();
       window.monaco.editor.setModelLanguage(model, languageFor(relPath));
       state.editor.setValue(state.savedText);
+      state.editor.focus();
     } else {
       el.monacoHost.textContent = state.savedText.slice(0, 4000);
     }
 
-    document.querySelectorAll('#tree li.active').forEach((n) => n.classList.remove('active'));
-    if (li) li.classList.add('active');
+    highlightTreeItem(relPath);
 
     renderDirty();
     const meta = result.meta;
     const enc = result.encoding + (result.fellBack ? '（UTF-8 校验失败，已回退）' : '');
     setInfo(
-      relPath + ' · ' + enc + ' · ' + (meta ? meta.charCount + ' 字符 / ' + meta.lineCount + ' 行' : '') + ' · 只读（输入即进入编辑）'
+      relPath + ' · ' + enc + ' · ' + (meta ? meta.charCount + ' 字符 / ' + meta.lineCount + ' 行' : '') + ' · 可直接编辑，Ctrl+S 保存'
     );
   }
 
@@ -240,7 +344,7 @@
     if (info.root) {
       state.root = info.root;
       renderRoot();
-      await loadTree('');
+      await loadTree();
     }
   });
 
@@ -334,20 +438,6 @@
     }, 1800);
   });
 
-  // 复制"输出格式要求"到剪贴板：程序**只写剪贴板**，由用户自己粘贴到提示词（零注入边界）
-  el.btnFormat.addEventListener('click', async function () {
-    const result = await bridge.copyFormatSpec();
-    if (!result.ok) {
-      setInfo('复制格式要求失败：' + (result.error ?? '未知错误'), true);
-      return;
-    }
-    setInfo('已复制格式要求（' + result.length + ' 字符）—— 请你在 DeepSeek 的提示词里自行粘贴，程序不会替你写入');
-    el.btnFormat.textContent = '已复制 ✓';
-    setTimeout(function () {
-      el.btnFormat.textContent = '复制格式要求';
-    }, 1800);
-  });
-
   /* ---------------- 回程预览 ----------------
    * 流程：只读采集右侧最新回复 → 解析 → 逐条预览 → 你点"应用"才落盘（可撤销）。
    * 程序不修改网页、不自动落盘（ADR-0003/0004）。
@@ -418,6 +508,33 @@
         hint.textContent = hints.join('；');
         li.appendChild(hint);
       }
+
+      // 行号预览：显示代码块前几行，行号是应用后会落在文件里的真实行号
+      if (block.firstLines && block.firstLines.length > 0) {
+        const pre = document.createElement('pre');
+        pre.className = 'preview-code';
+        const width = String(block.firstLines[block.firstLines.length - 1].lineNo).length;
+        block.firstLines.forEach(function (l) {
+          const row = document.createElement('div');
+          const no = document.createElement('span');
+          no.className = 'preview-code-no';
+          no.textContent = String(l.lineNo).padStart(width, ' ');
+          const tx = document.createElement('span');
+          tx.className = 'preview-code-text';
+          tx.textContent = l.text.length > 0 ? l.text : ' ';
+          row.appendChild(no);
+          row.appendChild(tx);
+          pre.appendChild(row);
+        });
+        if (block.moreLines > 0) {
+          const more = document.createElement('div');
+          more.className = 'preview-code-more';
+          more.textContent = '… 其余 ' + block.moreLines + ' 行';
+          pre.appendChild(more);
+        }
+        li.appendChild(pre);
+      }
+
       el.previewList.appendChild(li);
     });
   }
@@ -532,23 +649,17 @@
     void bridge.setSplit(Math.round(window.outerWidth * 0.45));
   });
 
-  // 输入即进入编辑（自动解除只读），避免多一个"编辑"开关
-  document.addEventListener('keydown', function (e) {
-    if (state.readOnly && state.editor && !e.ctrlKey && !e.metaKey && e.key.length === 1) {
-      state.readOnly = false;
-      applyReadOnly();
-    }
-  });
-
   bridge.onRootChanged(function (info) {
     state.root = info.root;
+    expanded.clear();
     renderRoot();
-    void loadTree('');
+    void loadTree();
   });
 
   bridge.onRootStale(function () {
     state.root = null;
     state.currentPath = null;
+    expanded.clear();
     renderRoot();
     renderTree([]);
     setInfo('上次打开的目录已不存在，已清除记忆 —— 请重新选择目录', true);
@@ -563,7 +674,7 @@
     if (info.root) {
       state.root = info.root;
       renderRoot();
-      await loadTree('');
+      await loadTree();
     }
   }
 

@@ -216,6 +216,40 @@ body {
   color: var(--warn);
 }
 
+/* 行号预览：等宽，行号右对齐，便于与左侧编辑器逐行核对 */
+.preview-code {
+  margin: 5px 0 0;
+  padding: 5px 6px;
+  background: #10131a;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: 'Cascadia Code', 'Cascadia Mono', Consolas, 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-x: auto;
+  max-height: 132px;
+  overflow-y: auto;
+}
+
+.preview-code-no {
+  display: inline-block;
+  width: 4ch;
+  margin-right: 8px;
+  color: #5d6779;
+  text-align: right;
+  user-select: none;
+}
+
+.preview-code-text {
+  white-space: pre;
+  color: #cfd6e4;
+}
+
+.preview-code-more {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
 /* 需求输入区：应用内写需求 → 复制 prompt → 自己粘贴到右侧网页 */
 .prompt-bar {
   height: 132px;
@@ -309,33 +343,6 @@ body {
   flex: 1;
 }
 
-.tree li {
-  padding: 3px 8px;
-  border-radius: 4px;
-  cursor: pointer;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--text);
-}
-
-.tree li.dir {
-  color: #a9b6cf;
-}
-
-.tree li.nontext {
-  color: var(--text-dim);
-}
-
-.tree li:hover {
-  background: #232732;
-}
-
-.tree li.active {
-  background: #2c3648;
-  color: #fff;
-}
-
 .tree-note {
   padding: 8px 10px;
   color: var(--text-dim);
@@ -372,6 +379,114 @@ body {
   color: var(--warn);
 }
 
+/* ---------------- 左侧：目录树 ---------------- */
+
+.tree {
+  list-style: none;
+  margin: 0;
+  padding: 4px 0 12px;
+  overflow: auto;
+  flex: 1;
+  font-size: 13px;
+  user-select: none;
+}
+
+.tree-children {
+  list-style: none;
+  margin: 0;
+  padding-left: 12px;
+}
+
+.tree-children[hidden] {
+  display: none;
+}
+
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px 2px 4px;
+  border-radius: 3px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tree-row:hover {
+  background: #23272f;
+}
+
+.tree-row.active {
+  background: #2b3444;
+  color: #fff;
+}
+
+.tree-twisty {
+  display: inline-block;
+  width: 14px;
+  flex: 0 0 14px;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 10px;
+}
+
+.tree-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tree-file > .tree-row .tree-label::before {
+  content: '· ';
+  color: var(--text-dim);
+}
+
+.tree-nontext > .tree-row .tree-label {
+  color: var(--text-dim);
+}
+
+.tree-empty {
+  padding: 2px 8px 2px 18px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+/* ---------------- 编辑器区 ---------------- */
+
+.editor-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 10px;
+  background: #1b1f27;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+
+.file-name {
+  color: #cfd6e4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 未保存标记：文件头右侧白点（有改动才显示） */
+.file-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e8eaed;
+  flex: 0 0 auto;
+}
+
+.file-dot[hidden] {
+  display: none;
+}
+
+.dirty.is-dirty {
+  color: #e8c07a;
+}
 /* 分隔条：位于编辑器视图最右侧，拖动可调整左右分栏（宽度变化由主进程执行） */
 .resizer {
   width: 5px;

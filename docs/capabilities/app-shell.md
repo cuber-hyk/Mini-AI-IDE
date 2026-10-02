@@ -77,6 +77,23 @@ source_of_truth:
 | Monaco 的 `window.require` 看似 Node 泄漏 | 误判渲染进程有 Node 能力 | 用 AMD 的 `require.config` 与 Node 的 `require.resolve` 区分；自检 D4/D10 覆盖 |
 | `fs.cpSync` 在本项目执行环境报 EIO | 静态复制失败 | 用显式 `mkdirSync` + `writeFileSync` 递归复制 |
 | Monaco worker 在 `file://` 下被 CSP 阻止 | 控制台报错并回退主线程 | 已知取舍：语法高亮可用，语言服务不可用；后续若需要，需改为本地 HTTP 或打包 worker |
+| 在 `document` 上监听 `keydown` 想拦截编辑器输入 | **永不触发**（Monaco 获得焦点后吞掉键盘事件），"输入即进入编辑"这类逻辑静默失效，编辑器实际不可编辑 | 不要指望在 document 层拦截编辑器按键；需要时用 Monaco 的命令/事件 API。**并且默认不要设 `readOnly`** |
+| 用 `document.getElementById` 取 HTML 元素 | 取不到返回 `null`，随后静默失效；**tsc 看不到 HTML** | 自检 L1 静态比对"JS 引用的 id ⊆ HTML 定义的 id" |
+| `renderer.js` 不经 `tsc` | 语法错误只在运行时暴露 | 自检 L2 用 `node:vm` 解析该文件 |
+
+## 左侧编辑器与目录树的当前行为
+
+| 项 | 取值 |
+|---|---|
+| 可编辑性 | **默认可编辑**（不设 `readOnly`）；Ctrl+S 或工具栏保存 |
+| 未保存标记 | 文件头右侧**白点**（有改动才显示）+ 工具栏 `● 未保存` |
+| 自动换行 | `wordWrap: 'on'`（长行不再横向滚动） |
+| 字体 / 行高 | Cascadia Code → Consolas → 等宽回退；字号 14 / 行高 22 |
+| 可读性辅助 | 缩进参考线、括号配色、当前行高亮、行号宽度自适应、统一深色滚动条 |
+| 目录树交互 | 点击文件夹**原地展开/收起**（**不是**"进入该目录"）；展开状态按根目录记忆；点击文件打开并高亮 |
+
+> 目录树早期实现是"每次列一层、整表替换"，没有返回上级的途径，已被判定为交互缺陷
+> （见审计 P2-13）。改为可展开结构后与主流编辑器一致。
 
 ## 代码入口
 
