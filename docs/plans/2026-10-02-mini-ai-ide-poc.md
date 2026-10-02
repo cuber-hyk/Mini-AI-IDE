@@ -61,7 +61,7 @@ source_of_truth:
 | ID | 状态 | 步骤 | 验证方式 |
 |---|---|---|---|
 | P0a | done | **自动化特征核验**（不接触 DeepSeek，零平台暴露）：在默认 Electron 构建的内嵌 `WebContentsView` 中逐项核验 A 级判据（`navigator.webdriver`、CDP 端口、Playwright/Puppeteer 痕迹、无头特征、伪装脚本、UA 自洽性），并与真 Chrome 做**知情性**对照记录 | ✅ 已完成：**A 级 8/8 通过、C 级 0 失败**，两次运行结论一致。证据：`docs/audits/2026-10-02-p0a-trace-verification-audit.md` 与同名 `-raw.json`；工具 `tools/trace-verifier/` |
-| P0b | todo | **真实可达性与登录实测**：用 `WebContentsView` + 独立 `persist:` 分区加载 `chat.deepseek.com`，验证能否登录、会话是否保持、是否弹人机验证；并**完全按人工方式**（自己复制粘贴、自己发送）完成一轮对话 | 能正常登录并完成一轮对话；记录是否出现验证码/风控提示；截图与网络日志留档；**结论直接判定方案是否成立**（本步是唯一的存亡关口） |
+| P0b | todo | **真实可达性与登录实测**：用 `WebContentsView` + 独立 `persist:` 分区加载 `chat.deepseek.com`，验证能否登录、会话是否保持、是否弹人机验证；并**完全按人工方式**（自己复制粘贴、自己发送）完成一轮对话。工具：`tools/reachability-probe/`（只读采集） | 工具已就绪且自检通过（`pwsh -File tools\run-p0b-reachability.ps1 -SelfTest`）。**待你实操**：能正常登录并完成一轮对话；记录是否出现验证码/风控提示；报告落 `docs/audits/`；**结论直接判定方案是否成立**（唯一的存亡关口） |
 | P1 | todo | 执行 **Gate**：确认 A 级自动化特征为零、且 P0b 未出现平台针对性拦截 | A 级逐项为零、C 级零出现；若 P0b 出现针对性拦截，则评估切换"本机 Chrome 直启"战略备选或调整方案后重测 |
 | P2 | todo | 建 Electron 外壳：三进程骨架（main / editor / webview）、Monaco、固定 `persist:` 分区、主进程 IPC 文件读取（编码探测 + 大小上限 + 路径白名单） | 抓包证明编辑器与主进程均无业务网络请求；打开 GBK 源码文件不出现乱码；超限文件返回元信息而非全文；编辑器渲染进程无 `fs` 能力（代码审查 + 运行时断言） |
 | P3 | todo | **回程解析与应用**（本项目核心）：回复只读采集、围栏切分、路径行解析、diff 预览、一键应用与撤销（默认方案 A：预览后落盘）。程序不注入任何内容、不代写提示词 | 多围栏 / 无路径行 / 无法解析三类样例均能降级为"预览 + 保留原文"，无静默丢弃；网页视图无写本地能力（代码审查 + 运行时断言）；默认路径下**无任何静默覆盖**，且每次写入可撤销 |
@@ -123,7 +123,7 @@ source_of_truth:
 - 审计：P0a 已产出 `docs/audits/2026-10-02-p0a-trace-verification-audit.md`（发现项 P0A-1 ~ P0A-5）；P0b 将产出 `docs/audits/2026-10-XX-reachability-audit.md`
 - 覆盖的发现项：P0A-1、P0A-2、P0A-3、P0A-4（均已 `verified`）
 - 延迟的发现项：**P0A-5（Medium, `open`）**——平台是否针对 Electron 客户端，由 P0b 关闭
-- 核验工具：`tools/trace-verifier/`（P0a 交付物；后续可演进为应用启动自检）
+- 核验工具：`tools/trace-verifier/`（P0a）与 `tools/reachability-probe/`（P0b）；两者共享 `tools/` workspace 中的一份 Electron 二进制，安装见 `tools/install-electron.ps1`；P0b 提供 `-SelfTest` 自检模式（不联网）
 - 能力文档：`docs/capabilities/app-shell.md`、`human-machine-boundary.md`、`local-file-access.md`、`return-path-and-format-contract.md`、`session-persistence.md`（脚手架阶段写成初版，实现后更新为当前事实）
 - CHANGELOG：需要（新增用户可见能力时按 Keep a Changelog 记入 `## [Unreleased]`）
 - Distill：需要（P1 Gate 结论属长期知识，且需更新 context-map）

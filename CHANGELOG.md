@@ -19,3 +19,4 @@
 - **零注入（第二轮，结构性简化）**：确认出程连"搬运代码"都不需要程序代劳（用户已选中代码，自行复制粘贴更快），**出程整体移除**。ADR-0003 重写并更名为 `2026-10-02-zero-injection-and-automation-trace-baseline.md`；`text-injection` 能力文档替换为 `human-machine-boundary.md`；计划删除注入步骤（原 P3）并把 P3R 收为 P3、风险表改为只列封号风险；AGENTS.md 与 CONTEXT.md 同步改写。
 - **风险结论**：封号风险收敛为**唯一一条未知**——平台是否对"Electron 客户端访问网页"整体持负面态度（由 P0b 实测判定）；页面改版、模型不守格式等移入"非封号项"。
 - **P0a 完成**：新增自动化特征核验台 `tools/trace-verifier/`（Electron 44.5.1 + 本地 HTTP 探针，全程 `127.0.0.1`，零平台暴露、不使用 CDP、不写入页面）。核验结果：**A 级自动化特征 8/8 通过、C 级内部矛盾 0 项**，两次运行结论一致。证据与发现项见 `docs/audits/2026-10-02-p0a-trace-verification-audit.md`；计划步骤 P0a 标记为 `done`。新增 `.gitignore`（并明确保留 Dev Flow 路径被跟踪）。
+- **P0b 工具就绪**：新增 `tools/reachability-probe/`（只读采集：导航/加载失败/渲染崩溃事件、验证与风控关键词命中、HTTP 4xx-5xx、第三方域、会话事实；URL 去 query、Cookie 只记名与长度），配套 `tools/run-p0b-reachability.ps1`（含 `-SelfTest` 不联网自检）与操作手册。`tools/` 提升为 pnpm workspace，两个工具共享一份 Electron 二进制；新增 `tools/install-electron.ps1` 处理镜像源与 `ELECTRON_RUN_AS_NODE` 陷阱。真实施测待用户手动执行。

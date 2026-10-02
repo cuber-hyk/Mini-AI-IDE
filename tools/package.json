@@ -1,0 +1,9 @@
+{
+  "name": "mini-ai-ide-tools",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Mini-AI-IDE 的核验工具集（共享一份 Electron 二进制）",
+  "devDependencies": {
+    "electron": "44.5.1"
+  }
+}

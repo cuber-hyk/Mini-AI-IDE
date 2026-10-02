@@ -1,0 +1,5 @@
+# tools/ 是独立的 pnpm workspace：让多个核验工具共享同一份 Electron 二进制（约 246MB），
+# 避免每个工具各自下载一遍。各工具的 package.json 只声明 electron 版本作为约束。
+packages:
+  - 'trace-verifier'
+  - 'reachability-probe'
