@@ -33,6 +33,42 @@ const OUT_PATH =
 const PARTITION = 'persist:neutral-profile';
 // 自检模式：在**本进程内**起一个 mock 服务器，用于验证采集链路本身（不访问任何外部站点）
 const SELF_TEST = process.argv.includes('--self-test');
+// 分区后缀：让不同实验互不污染登录态（例如 --profile b）
+const PROFILE = process.argv.find((a) => a.startsWith('--profile='))?.slice('--profile='.length) || '';
+const EFFECTIVE_PARTITION = PROFILE ? `${PARTITION}-${PROFILE}` : PARTITION;
+
+/* ------------------------------------------------------------------ *
+ * 受控实验：UA 变体（--variant=noident）
+ *
+ * 规则：**一次只改这一个变量**。除 UA 中移除两个识别标记外，不做任何其他改动：
+ *  - 不改 window.chrome（本项目禁止任何 JS 注入）；
+ *  - 不改 sec-ch-ua / navigator.userAgentData（由内核生成，动不了，正好留作对照）；
+ *  - 不改语言、不伪造任何指纹。
+ *
+ * 移除：`Electron/<ver>`（内核构建的自我披露）与 `<appName>/<ver>`（应用名）。
+ * 保留：Chrome/<真实内核版本>、平台信息、WebKit/Safari —— 全部如实。
+ * ------------------------------------------------------------------ */
+const VARIANT = process.argv.find((a) => a.startsWith('--variant='))?.slice('--variant='.length) || '';
+
+function applyVariant(ses) {
+  const original = ses.getUserAgent();
+  if (VARIANT === 'noident') {
+    const cleaned = original
+      .replace(/\s*Electron\/[\d.]+/i, '')
+      .replace(/\s*reachability-probe\/[\d.]+/i, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+    ses.setUserAgent(cleaned);
+    return {
+      applied: true,
+      variant: 'noident',
+      original,
+      effective: cleaned,
+      note: '仅移除 Electron/<ver> 与 <appName>/<ver>；其余一律未改，未做任何 JS 注入',
+    };
+  }
+  return { applied: false, variant: 'baseline', original, effective: original };
+}
 
 /* ------------------------------------------------------------------ *
  * 自检用 mock 服务器（仅 --self-test 时启动；进程内，故不受子进程网络限制影响）
@@ -92,7 +128,8 @@ function buildReport() {
     startedAt: state.startedAt,
     endedAt: state.endedAt,
     target: state.targetUrl || TARGET_URL,
-    partition: PARTITION,
+    partition: EFFECTIVE_PARTITION,
+    variant: state.variantInfo || null,
     environment: {
       electron: process.versions.electron,
       chromium: process.versions.chrome,
@@ -261,7 +298,16 @@ async function run() {
   }
   state.targetUrl = targetUrl;
 
-  const ses = session.fromPartition(PARTITION);
+  const ses = session.fromPartition(EFFECTIVE_PARTITION);
+  const variantInfo = applyVariant(ses);
+  state.variantInfo = variantInfo;
+  process.stdout.write(`[variant] ` + JSON.stringify(variantInfo) + `\n`);
+  if (VARIANT === 'noident') {
+    process.stdout.write(`[variant] 预期 : noident（移除 Electron 与应用名标记）\n`);
+    process.stdout.write(`[variant] 实际 : ${variantInfo.effective}\n`);
+    const ok = !/Electron\//i.test(variantInfo.effective) && /Chrome\/\d/.test(variantInfo.effective);
+    process.stdout.write(`[variant] 断言 : ${ok ? 'OK' : '失败 —— 请检查 --variant 处理逻辑'}\n`);
+  }
 
   const win = new BaseWindow({
     width: 1280,
@@ -304,7 +350,8 @@ async function run() {
 
   record('target', {
     url: targetUrl,
-    partition: PARTITION,
+    partition: EFFECTIVE_PARTITION,
+    variant: variantInfo,
     note: '请手动登录并手动完成对话；本工具只记录，不代答任何验证',
     reportPath: OUT_PATH,
   });
@@ -389,4 +436,5 @@ app.whenReady().then(() =>
     app.exit(2);
   })
 );
+
 
