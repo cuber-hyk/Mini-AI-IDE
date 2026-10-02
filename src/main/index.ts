@@ -276,6 +276,18 @@ async function bootstrap(): Promise<void> {
     }
 
     const parsed = parseModelReply(collected.replyText);
+
+    // 采集到的开头几行必须可见：否则"解析出 0 个代码块"时无法判断是采集错了位置、
+    // 还是解析规则不匹配（实测踩过：抓到的是**不带结尾围栏**的渲染文本）。
+    const collectedLines = collected.replyText.split(/\r\n|\r|\n/);
+    const fenceMarkCount = (collected.replyText.match(/^[ \t]*(?:`{3,}|~{3,})/gm) ?? []).length;
+    const parseNotes = [
+      ...parsed.notes,
+      `采集方式：策略 ${collected.strategyId}（${collected.strategyDescription ?? ''}）`,
+      `采集正文：${collected.replyText.length} 字符 / ${collectedLines.length} 行；整行围栏标记 ${fenceMarkCount} 处`,
+      `采集到的开头：\n${collectedLines.slice(0, 8).join('\n')}`,
+    ];
+
     const collectionId = emptyId;
     collections.set(collectionId, { blocks: parsed.blocks, at: collected.collectedAt, replyLength: collected.replyText.length });
     while (collections.size > MAX_COLLECTIONS) {
@@ -361,7 +373,7 @@ async function bootstrap(): Promise<void> {
       strategyDescription: collected.strategyDescription,
       attempts: collected.attempts,
       replyText: collected.replyText,
-      notes: parsed.notes,
+      notes: parseNotes,
       blocks,
     };
   });

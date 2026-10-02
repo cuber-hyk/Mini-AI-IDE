@@ -130,21 +130,47 @@ interface RawFence {
   bodyStart: number;
 }
 
-/** 找出所有 ``` 围栏（支持 ~~~ ；不支持嵌套围栏，与 Markdown 一致） */
+/**
+ * 找出所有代码围栏（支持 ~~~ ；不支持嵌套围栏，与 Markdown 一致）。
+ *
+ * **容忍未闭合围栏**（实测必需）：目标站点把开头的 ``` 渲染成文本，但结尾围栏是
+ * 装饰元素、不出现在 `innerText` 里。若坚持"围栏必须成对"，采到的整段回复会被判定为
+ * "没有围栏"，表现为**采集成功但解析出 0 个代码块**（用户实测反馈）。
+ * 因此未闭合的围栏视为**延续到文本结尾**。
+ */
 export function splitFences(text: string): RawFence[] {
-  const fences: RawFence[] = [];
-  const re = /^([ \t]*)(`{3,}|~{3,})([^\n]*)\n([\s\S]*?)^[ \t]*\2[ \t]*$/gm;
-  for (const m of text.matchAll(re)) {
+  const found: RawFence[] = [];
+
+  // 1) 成对围栏
+  const closed = /^[ \t]*(`{3,}|~{3,})([^\n]*)\n([\s\S]*?)^[ \t]*\1[ \t]*$/gm;
+  for (const m of text.matchAll(closed)) {
     const start = m.index ?? 0;
     const full = m[0];
-    const info = (m[3] ?? '').trim();
-    const body = m[4] ?? '';
-    // body 起始位置 = 围栏起始 + 首行长度
     const firstLineEnd = full.indexOf('\n');
     const bodyStart = start + (firstLineEnd >= 0 ? firstLineEnd + 1 : full.length);
-    fences.push({ start, end: start + full.length, info, body, bodyStart });
+    found.push({
+      start,
+      end: start + full.length,
+      info: (m[2] ?? '').trim(),
+      body: m[3] ?? '',
+      bodyStart,
+    });
   }
-  return fences;
+
+  // 2) 未闭合围栏：从某个 ``` 行起一直到文本结尾（排除落在已闭合块内的）
+  for (const m of text.matchAll(/^[ \t]*(`{3,})[^\n]*(?:\n|$)/gm)) {
+    const start = m.index ?? 0;
+    if (found.some((f) => start >= f.start && start < f.end)) continue;
+    const full = m[0];
+    const newlineIdx = full.indexOf('\n');
+    const openingLine = newlineIdx >= 0 ? full.slice(0, newlineIdx) : full;
+    const info = openingLine.replace(/^[ \t]*`+/, '').replace(/`+[ \t]*$/, '').trim();
+    const bodyStart = newlineIdx >= 0 ? start + newlineIdx + 1 : text.length;
+    found.push({ start, end: text.length, info, body: text.slice(bodyStart), bodyStart });
+  }
+
+  found.sort((a, b) => a.start - b.start);
+  return found;
 }
 
 /* ------------------------------------------------------------------ *

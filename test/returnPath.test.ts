@@ -45,8 +45,42 @@ describe('splitFences', () => {
     assert.deepEqual(splitFences('只有文字，没有代码块'), []);
   });
 
-  it('未闭合的围栏不被当作代码块', () => {
-    assert.deepEqual(splitFences('```ts\nconst a = 1;'), []);
+  it('未闭合围栏被视为「延续到文本结尾」（目标站点只渲染开头围栏）', () => {
+    // 实测形态：DeepSeek 把开头 ``` 渲染成文本，结尾围栏是装饰元素、不在 innerText 里。
+    // 若坚持"围栏必须成对"，整段回复会被判定为"没有围栏" → 解析出 0 个代码块。
+    const collected = ['冒泡排序:', '```python', 'def bubble_sort(arr):', '    return arr'].join('\n');
+    const fences = splitFences(collected);
+    assert.equal(fences.length, 1);
+    assert.equal(fences[0]?.info, 'python');
+    assert.equal(fences[0]?.body, 'def bubble_sort(arr):\n    return arr');
+  });
+
+  it('未闭合围栏经完整解析可得到路径与代码', () => {
+    const collected = [
+      '文件： Mini-AI-IDE-test.md',
+      '冒泡排序:',
+      '```python',
+      'def bubble_sort(arr):',
+      '    return arr',
+    ].join('\n');
+    const r = parseModelReply(collected);
+    assert.equal(r.blocks.length, 1);
+    assert.equal(r.blocks[0]?.filePath, 'Mini-AI-IDE-test.md');
+    assert.equal(r.blocks[0]?.language, 'python');
+    assert.equal(r.blocks[0]?.code, 'def bubble_sort(arr):\n    return arr');
+  });
+
+  it('成对围栏与未闭合围栏混在一段文本里都能识别', () => {
+    const text = ['```ts', 'const a = 1;', '```', '', '```py', 'print(1)'].join('\n');
+    const fences = splitFences(text);
+    assert.equal(fences.length, 2);
+    assert.equal(fences[0]?.body, 'const a = 1;\n');
+    assert.equal(fences[1]?.info, 'py');
+    assert.equal(fences[1]?.body, 'print(1)');
+  });
+
+  it('未闭合围栏不重复计入已闭合块内部', () => {
+    assert.equal(splitFences(['```ts', 'const a = 1;', '```'].join('\n')).length, 1);
   });
 });
 
