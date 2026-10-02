@@ -1,0 +1,20 @@
+# Changelog
+
+本文件记录面向人与运维的可见变化。格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
+版本号策略：脚手架阶段不做发布，首次可用版本再定版本号。
+
+## [Unreleased]
+
+### Added
+
+- 建立 Dev Flow 仓储记忆骨架：`AGENTS.md`、`CONTEXT.md`、`CHANGELOG.md`、`docs/ai/context-map.md`、`docs/{plans,audits,adr,capabilities}/`。
+- 新增 Mini-AI-IDE PoC 计划 `docs/plans/2026-10-02-mini-ai-ide-poc.md`，以及四份架构决策记录（ADR-0001 ~ ADR-0004）。
+- 新增回程通道能力契约 `docs/capabilities/return-path-and-format-contract.md`：定义输出格式契约、只读回程采集、diff 预览与一键应用规则；计划新增步骤 P3R。
+- 新增 ADR-0004（回程契约与信任边界）：确认默认动作为 **diff 预览后应用**，网页层永不获得写本地能力，不做自动回注循环。
+- 计划 P0 拆分为 **P0a（离线 JS 表面 diff）** 与 **P0b（真实可达性与登录实测）**，并调整为先测量差异、再决定 patch 范围。
+- 网页嵌入方式定选 **`WebContentsView`**（弃用 `<iframe>` 与 `<webview>` 标签），写入 ADR-0002 与 `app-shell` 能力文档。
+- ADR-0001 补充推论：**UA 保持诚实即可、不追求最新版**（待 P0 验证），rebase 从"必须紧跟"降为"择机跟进"；并把"本机 Chrome 直启"记为战略备选。
+- **方向修正**：目标从"模拟真实 Chrome"改为"如实 Electron 身份 + 只消除自动化特征"。ADR-0001 重写并更名为 `2026-10-02-honest-electron-identity.md`；ADR-0003 验收判据从"与 Chrome 一致"改为"无自动化特征"三级清单；计划目标/决策/风险/验收标准同步更新；AGENTS.md 允许禁止清单重写并补边界判定。
+- **职责收敛（第一轮）**：程序定位为纯搬运工，提示词与发送归用户。删除指令头／格式约定注入、剪贴板通道与其降级策略；术语"文本载荷"改为"注入内容"。
+- **零注入（第二轮，结构性简化）**：确认出程连"搬运代码"都不需要程序代劳（用户已选中代码，自行复制粘贴更快），**出程整体移除**。ADR-0003 重写并更名为 `2026-10-02-zero-injection-and-automation-trace-baseline.md`；`text-injection` 能力文档替换为 `human-machine-boundary.md`；计划删除注入步骤（原 P3）并把 P3R 收为 P3、风险表改为只列封号风险；AGENTS.md 与 CONTEXT.md 同步改写。
+- **风险结论**：封号风险收敛为**唯一一条未知**——平台是否对"Electron 客户端访问网页"整体持负面态度（由 P0b 实测判定）；页面改版、模型不守格式等移入"非封号项"。
