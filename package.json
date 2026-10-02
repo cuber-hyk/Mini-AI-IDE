@@ -1,0 +1,22 @@
+{
+  "name": "mini-ai-ide",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Windows 桌面工具：左侧 Monaco 编辑本地文件，右侧只读加载 DeepSeek 网页版并解析回复（零注入）",
+  "main": "dist/main/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-static.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test \"test/**/*.test.ts\"",
+    "start": "npm run build && electron .",
+    "self-test": "npm run build && electron . --self-test",
+    "setup:electron": "node scripts/install-electron.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.2",
+    "electron": "44.5.1",
+    "monaco-editor": "0.57.0",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3"
+  }
+}

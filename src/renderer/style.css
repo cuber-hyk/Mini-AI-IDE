@@ -1,0 +1,174 @@
+/* 编辑器渲染进程样式 —— 保持朴素、暗色，与右侧网页的视觉重量相当 */
+
+:root {
+  --bg: #16181d;
+  --bg-elevated: #1e2128;
+  --border: #2b2f38;
+  --text: #d8dbe2;
+  --text-dim: #8b93a1;
+  --accent: #5b8def;
+  --warn: #e0a458;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.5 "Segoe UI", system-ui, -apple-system, "Microsoft YaHei", sans-serif;
+  overflow: hidden;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 10px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+}
+
+.toolbar button {
+  background: #262a33;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 10px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.toolbar button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.toolbar button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.root-label {
+  color: var(--text-dim);
+  font-size: 12px;
+  max-width: 46%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.dirty {
+  font-size: 12px;
+  color: var(--text-dim);
+  min-width: 48px;
+  text-align: right;
+}
+
+.dirty.is-dirty {
+  color: var(--warn);
+}
+
+.layout {
+  display: flex;
+  height: calc(100% - 36px);
+}
+
+.sidebar {
+  width: 230px;
+  min-width: 160px;
+  border-right: 1px solid var(--border);
+  background: #191c22;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sidebar-head {
+  padding: 8px 10px 4px;
+  color: var(--text-dim);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.tree {
+  list-style: none;
+  margin: 0;
+  padding: 0 4px 8px;
+  overflow: auto;
+  flex: 1;
+}
+
+.tree li {
+  padding: 3px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+}
+
+.tree li.dir {
+  color: #a9b6cf;
+}
+
+.tree li.nontext {
+  color: var(--text-dim);
+}
+
+.tree li:hover {
+  background: #232732;
+}
+
+.tree li.active {
+  background: #2c3648;
+  color: #fff;
+}
+
+.tree-note {
+  padding: 8px 10px;
+  color: var(--text-dim);
+  font-size: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.editor-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.monaco {
+  flex: 1;
+  min-height: 0;
+}
+
+.info {
+  height: 26px;
+  line-height: 26px;
+  padding: 0 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-elevated);
+  color: var(--text-dim);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.info.warn {
+  color: var(--warn);
+}

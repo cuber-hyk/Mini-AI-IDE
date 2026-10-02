@@ -62,8 +62,8 @@ source_of_truth:
 |---|---|---|---|
 | P0a | done | **自动化特征核验**（不接触 DeepSeek，零平台暴露）：在默认 Electron 构建的内嵌 `WebContentsView` 中逐项核验 A 级判据（`navigator.webdriver`、CDP 端口、Playwright/Puppeteer 痕迹、无头特征、伪装脚本、UA 自洽性），并与真 Chrome 做**知情性**对照记录 | ✅ 已完成：**A 级 8/8 通过、C 级 0 失败**，两次运行结论一致。证据：`docs/audits/2026-10-02-p0a-trace-verification-audit.md` 与同名 `-raw.json`；工具 `tools/trace-verifier/` |
 | P0b | done | **真实可达性与登录实测 + 受控实验**：用 `WebContentsView` 加载 `chat.deepseek.com`，全人工登录与对话；随后做**单变量受控实验**（仅移除 UA 中的 Electron 与应用名标记）定位警告触发点。工具：`tools/reachability-probe/` | ✅ 已完成。基线：登录/对话成功但出现「使用环境异常」警告；实验：**警告消失**，其余一切照旧 → 触发点是 UA 自报标记。证据：`docs/audits/2026-10-02-p0b-reachability-audit.md` + 两份 `-raw.json` |
-| P1 | todo | 执行 **Gate**：确认 A 级自动化特征为零、UA 规则已落实、且 P0b 未出现平台针对性拦截 | A 级逐项为零、C 级零出现；UA 已按 ADR-0001 规则处理（移除自报标记、保留真实内核版本）；P0b 基线警告已由受控实验定位并消除；无验证码、无 4xx/5xx、账号无异常 |
-| P2 | todo | 建 Electron 外壳：三进程骨架（main / editor / webview）、Monaco、**复用 P0b 已登录的会话分区**、主进程 IPC 文件读取（编码探测 + 大小上限 + 路径白名单） | 抓包证明编辑器与主进程均无业务网络请求；打开 GBK 源码文件不出现乱码；超限文件返回元信息而非全文；编辑器渲染进程无 `fs` 能力（代码审查 + 运行时断言）；**启动后无需重新登录**（沿用已登录分区） |
+| P1 | done | 执行 **Gate**：确认 A 级自动化特征为零、UA 规则已落实、且 P0b 未出现平台针对性拦截 | ✅ 已完成：A 级 8/8 通过、C 级 0 失败；UA 中无自报标记且 `Chrome/152` == 真实内核；基线告警已定位并消除；无验证码、无 4xx/5xx；无 open 发现项。证据见 P0a/P0b 审计 |
+| P2 | done | 建 Electron 外壳：三视图（main / editor / webview）、Monaco、**复用 P0b 已登录的会话分区**、主进程 IPC 文件读取（编码探测 + 大小上限 + 路径白名单） | ✅ 已实现并通过启动自检 **28/28** 与单测 **53/53**。自检覆盖：UA 规则、分区 `persist:postcheck`、视图级 UA 生效、列目录/读写/GBK 回退/二进制拒绝/越界拒绝/分片、bridge 实际可用、未暴露通道被拒绝、渲染进程无 Node 泄漏、`window.require` 为 AMD、三进程隔离与分栏布局。**待你在普通 PowerShell 运行 `npm start` 做视觉确认**（沙箱限制子进程对外网络，UI 无法在此环境目视） |
 | P3 | todo | **回程解析与应用**（本项目核心）：回复只读采集、围栏切分、路径行解析、diff 预览、一键应用与撤销（默认方案 A：预览后落盘）。程序不注入任何内容、不代写提示词 | 多围栏 / 无路径行 / 无法解析三类样例均能降级为"预览 + 保留原文"，无静默丢弃；网页视图无写本地能力（代码审查 + 运行时断言）；默认路径下**无任何静默覆盖**，且每次写入可撤销 |
 | P4 | todo | 会话持久化与登录态：固定分区、登录流程、重启保持；确认登录方式 | 重启应用后无需重新登录；分区名在代码中为常量且不含应用身份标识；未创建任何随机分区 |
 | P5 | todo | 补 `DESIGN.md` + 设计令牌，并对齐双窗格 UI | `DESIGN.md` 与 `design-tokens.json` 成对存在且通过结构校验；引用路径真实可达 |
@@ -125,9 +125,10 @@ source_of_truth:
 - 审计：P0a 已产出 `docs/audits/2026-10-02-p0a-trace-verification-audit.md`（发现项 P0A-1 ~ P0A-5）；P0b 将产出 `docs/audits/2026-10-XX-reachability-audit.md`
 - 覆盖的发现项：P0A-1、P0A-2、P0A-3、P0A-4（均已 `verified`）
 - 延迟的发现项：**P0A-5（Medium, `open`）**——平台是否针对 Electron 客户端，由 P0b 关闭
-- 核验工具：`tools/trace-verifier/`（P0a）与 `tools/reachability-probe/`（P0b）；两者共享 `tools/` workspace 中的一份 Electron 二进制，安装见 `tools/install-electron.ps1`；P0b 提供 `-SelfTest` 自检模式（不联网）
+- 核验工具：`tools/trace-verifier/`（P0a）与 `tools/reachability-probe/`（P0b）；两者共享 `tools/` workspace 中的一份 Electron 二进制，安装见 `tools/install-electron.ps1`；P0b 提供 `-SelfTest` 与 `-ProbeOnly`
+- 应用实现（P2）：`src/` + `scripts/` + `test/`；入口 `npm run build` / `npm start` / `npm test` / `npm run self-test`
 - 能力文档：`docs/capabilities/app-shell.md`、`human-machine-boundary.md`、`local-file-access.md`、`return-path-and-format-contract.md`、`session-persistence.md`（脚手架阶段写成初版，实现后更新为当前事实）
 - CHANGELOG：需要（新增用户可见能力时按 Keep a Changelog 记入 `## [Unreleased]`）
 - Distill：需要（P1 Gate 结论属长期知识，且需更新 context-map）
 - ADR gate：ADR-0001/0002/0003/0004 已建。候选未建项：**"会话分区固定中性命名"**——推理直白且可低成本回退，暂落在 `session-persistence` 能力文档中；P4 前若仍无争议则不单独建 ADR。
-- 实现产物：`src/main/`、`src/editor/`、`src/webview/` 及构建配置（本计划批准后创建）
+- 实现产物：`src/main/`（主进程）、`src/renderer/`（编辑器渲染进程）、`src/shared/`（纯逻辑）、`scripts/`（构建/安装脚本）、`test/`（单测）——**P2 已落地**

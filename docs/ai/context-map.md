@@ -15,10 +15,11 @@
 | 任务类型 | 读这些 | 不要读 |
 |---|---|---|
 | 外壳 / 进程架构 / IPC | `docs/capabilities/app-shell.md`、`docs/adr/` 下架构类决策 | 历史计划、审计归档 |
+| 构建 / 运行 / 自检 | `docs/capabilities/app-shell.md` 的「已知实现陷阱」「依赖安装注意」、`package.json` 的 scripts | 历史计划 |
 | 本地文件读取 / 编码 / 大小控制 | `docs/capabilities/local-file-access.md` | 无关能力文档 |
 | 人机边界 / 出程（什么由人做） | `docs/capabilities/human-machine-boundary.md`、`docs/adr/2026-10-02-zero-injection-and-automation-trace-baseline.md`（ADR-0003） | 回程解析细节 |
 | 回程解析 / 一键应用 / 输出格式 | `docs/capabilities/return-path-and-format-contract.md`、`docs/adr/2026-10-02-return-path-contract-and-trust-boundary.md` | 指纹与网络层细节 |
-| 指纹与环境特征 | `docs/adr/2026-10-02-honest-electron-identity.md`（ADR-0001）、`docs/adr/2026-10-02-zero-injection-and-automation-trace-baseline.md`（ADR-0003） | 实现细节代码（尚未存在） |
+| 指纹与环境特征 | `docs/adr/2026-10-02-honest-electron-identity.md`（ADR-0001）、`docs/adr/2026-10-02-zero-injection-and-automation-trace-baseline.md`（ADR-0003） | 实现细节代码（`src/shared/userAgent.ts` 为落地实现） |
 | 会话 / 登录持久化 | `docs/capabilities/session-persistence.md`（会话分区命名 ADR 为**候选未建项**，暂由该能力文档承载） | 计划文档 |
 | UI / 设计规则 | `DESIGN.md` + `design-tokens.json`（**尚未创建**，由计划步骤 P5 产出） | — |
 
@@ -36,11 +37,25 @@
 | 活跃计划 | `docs/plans/2026-10-02-mini-ai-ide-poc.md` |
 | 决策记录 | `docs/adr/` |
 | 回程机制（一键同步） | `docs/capabilities/return-path-and-format-contract.md` |
-| 实现代码 | `src/`（尚未创建） |
+| 应用实现（P2 已落地） | `src/main/`、`src/renderer/`、`src/shared/`；脚本 `scripts/`；测试 `test/` |
+| 自动化特征核验工具 | `tools/trace-verifier/` |
+| 可达性与会话实测工具 | `tools/reachability-probe/` |
+
+## 常用命令
+
+| 目的 | 命令 |
+|---|---|
+| 安装 | `pnpm install` + `node scripts/install-electron.mjs` |
+| 构建 | `npm run build` |
+| 类型检查 | `npm run typecheck` |
+| 单元测试 | `npm test` |
+| 启动自检（不联网，28 项） | `npm run self-test` |
+| 启动应用 | `npm start`（**需在普通 PowerShell，勿在 AI 沙箱内**） |
+| 会话是否仍需登录 | `pwsh -File tools\run-p0b-reachability.ps1 -ProbeOnly` |
 
 ## 维护规则
 
 - 新增能力、ADR 或关键入口后必须更新本文件。
 - 本文件**不得**把默认上下文指向 `docs/plans/`、`docs/audits/` 或任何 `archived/` 目录。
 - 引用的路径必须真实存在。
-- 脚手架阶段的例外：能力文档的 `source_of_truth` 目前**同时列出活跃计划**，因为尚无实现代码，当前契约由计划承载。**实现落地后必须移除计划项**，改以代码/测试为事实来源（该清理由 `/dev-distill` 在 P1 Gate 后执行）。
+- 脚手架阶段的例外：能力文档的 `source_of_truth` 曾同时列出活跃计划（因当时尚无实现代码）。**P2 落地后已改为以代码为主**；后续实现完成时，能力文档的 `source_of_truth` 应指向代码与测试，计划仅作为过程证据（清理由 `/dev-distill` 执行）。

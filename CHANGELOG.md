@@ -29,3 +29,9 @@
 - **P0b 受控实验完成（结论：触发点已定位）**：单变量生效后，登录页「使用环境异常」告警**消失**，而 `window.chrome` 缺失、`userAgentData` 无 `Google Chrome`、TLS 差异**全部照旧存在**却未触发告警。据此 ADR-0001 的原则修正为 **"不伪造、不自报、内部自洽"**，并把 UA 规则（移除自报标记、保留真实内核版本、必须经 `webPreferences.userAgent` 生效）写成实现约束。发现项 P0B-3/6/7 全部 `verified`。
 - **登录次数最小化**：会话分区确定为正式常量 **`persist:postcheck`**（P0b 登录产生的会话已迁移并生效），新增 `--probe-only` 只探测模式（加载后自动退出并报告 `session.loggedIn`），用于验证登录态而**无需重复登录**。实测：分区重命名后仍 `loggedIn = true`、挑战命中 0 条、无验证码。
 - **实现陷阱修复**：`session.setUserAgent()` 不会改变 `WebContentsView` 的 UA，必须在 `webPreferences.userAgent` 显式传入；否则实验会记录"变体已应用"而运行时 UA 未变，导致完全错误的结论。
+- **P1 Gate 通过**：A 级自动化特征 8/8、C 级 0 失败；UA 规则落实（无自报标记、`Chrome/152` == 真实内核）；基线告警已定位消除；无验证码/4xx/5xx；无 open 发现项。
+- **P2 外壳实现完成**：新增应用骨架 —— 主进程（分栏窗口 / IPC / 文件服务 / 启动自检）、沙箱编辑器渲染进程（Monaco 0.57 + 文件树 + 编辑保存）、右侧 `WebContentsView` 复用 `persist:postcheck`（免登录）。纯逻辑拆到 `src/shared/`（编码探测、路径白名单、大小上限、UA 规则）。
+  - 验证：启动自检 **28/28 PASS**、单元测试 **53/53 PASS**、`tsc --noEmit` 通过。
+  - 新增脚本：`scripts/install-electron.mjs`（处理 pnpm 拦截 postinstall 与镜像）、`scripts/copy-static.mjs`（静态资源 + Monaco，显式递归复制，规避 `fs.cpSync` 的 EIO）。
+  - 已修复三个"报告成功但实际未生效"的陷阱：沙箱 preload 不能 require 相对模块、会话级 UA 设置对视图无效、contextBridge 不暴露 ownKeys。均固化为自检项（详见 `docs/audits/2026-10-02-p2-shell-audit.md`）。
+  - 已知取舍：Monaco worker 在 `file://` 下被 CSP 阻止并回退主线程，语法高亮与编辑可用，语言服务不可用。
