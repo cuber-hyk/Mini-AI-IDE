@@ -1,0 +1,194 @@
+{
+  "reportType": "automation-trace-verification",
+  "phase": "P0a",
+  "collectedAt": "2026-10-02T08:40:09.389Z",
+  "toolVersion": "0.1.0",
+  "environment": {
+    "electron": "44.5.1",
+    "chromium": "152.0.7977.130",
+    "node": "24.21.0",
+    "v8": "15.2.124.28-electron.0",
+    "platform": "win32 x64",
+    "osRelease": "10.0.26200",
+    "isPackaged": false,
+    "execPath": "C:\\Users\\胡运宽\\Desktop\\Mini-AI-IDE\\tools\\trace-verifier\\node_modules\\electron\\dist\\electron.exe",
+    "userDataDir": "C:\\Users\\胡运宽\\AppData\\Roaming\\trace-verifier",
+    "devToolsActivePortFileExists": false,
+    "devToolsActivePortContent": null,
+    "automationRelatedSwitches": [],
+    "argvAutomationFlags": [],
+    "localServerPort": 24288
+  },
+  "aLevel": [
+    {
+      "id": "A1",
+      "name": "navigator.webdriver 非真值",
+      "pass": true,
+      "observed": false
+    },
+    {
+      "id": "A2",
+      "name": "无 playright/puppeteer/selenium 等自动化痕迹",
+      "pass": true,
+      "observed": []
+    },
+    {
+      "id": "A3",
+      "name": "无 cdc_* 类 CDP 注入痕迹",
+      "pass": true,
+      "observed": []
+    },
+    {
+      "id": "A4",
+      "name": "无无头模式特征",
+      "pass": true,
+      "observed": []
+    },
+    {
+      "id": "A5",
+      "name": "渲染进程无 Electron/Node 全局泄漏",
+      "pass": true,
+      "observed": []
+    },
+    {
+      "id": "A6",
+      "name": "无注入式身份伪装痕迹（未覆写原生属性）",
+      "pass": true,
+      "observed": []
+    },
+    {
+      "id": "A7",
+      "name": "未开启 CDP 远程调试（无调试端口）",
+      "pass": true,
+      "observed": {
+        "devToolsActivePortFileExists": false,
+        "switches": [],
+        "argvFlags": []
+      }
+    },
+    {
+      "id": "A8",
+      "name": "UA 声称的内核主版本 == 实际内核主版本（无版本错乱）",
+      "pass": true,
+      "observed": {
+        "uaMajor": "152",
+        "kernelMajor": "152",
+        "chromiumFull": "152.0.7977.130",
+        "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) trace-verifier/0.1.0 Chrome/152.0.7977.130 Electron/44.5.1 Safari/537.36"
+      }
+    }
+  ],
+  "bLevel": {
+    "note": "B 级为如实记录项：与真 Chrome 的差异在此留档，不作为修补目标（见 ADR-0003）",
+    "browserSurface": {
+      "chromeExists": true,
+      "chromeKeys": [],
+      "chromeApp": false,
+      "chromeRuntime": false,
+      "chromeCsi": "undefined",
+      "chromeLoadTimes": "undefined",
+      "pluginsLength": 5,
+      "mimeTypesLength": 2,
+      "languages": [
+        "zh-CN",
+        "zh-Hans-CN"
+      ],
+      "hardwareConcurrency": 16,
+      "deviceMemory": 16,
+      "platform": "Win32",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) trace-verifier/0.1.0 Chrome/152.0.7977.130 Electron/44.5.1 Safari/537.36",
+      "userAgentDataBrands": [
+        {
+          "brand": "Not?A_Brand",
+          "version": "24"
+        },
+        {
+          "brand": "Chromium",
+          "version": "152"
+        }
+      ],
+      "userAgentDataMobile": false,
+      "userAgentDataPlatform": "Windows",
+      "webdriver": false,
+      "pdfViewerEnabled": true,
+      "productSub": "20030107",
+      "vendor": "Google Inc.",
+      "maxTouchPoints": 0,
+      "screen": {
+        "width": 1707,
+        "height": 960,
+        "availWidth": 1707,
+        "availHeight": 960,
+        "colorDepth": 24,
+        "pixelDepth": 24
+      }
+    },
+    "cdpProbe": {
+      "traces": [],
+      "headlessSignals": []
+    },
+    "chromiumVersion": "152.0.7977.130",
+    "electronVersion": "44.5.1",
+    "v8Version": "15.2.124.28-electron.0",
+    "electronDisclosure": {
+      "uaContainsElectronToken": true,
+      "uaContainsChromeToken": true,
+      "note": "按 ADR-0001，如实披露 Electron 身份是决策本身；删除该标记属于伪装，被禁止"
+    },
+    "pageLevel": {
+      "consoleDebug": {
+        "ok": true,
+        "source": "function debug() { [native code] }"
+      },
+      "permissions": {
+        "notifications": "granted",
+        "geolocation": "granted",
+        "clipboard-read": "granted"
+      },
+      "notificationPermission": "granted",
+      "isSecureContext": true,
+      "origin": "http://127.0.0.1:24288",
+      "hasServiceWorkerApi": true,
+      "serviceWorkerContainers": false
+    },
+    "requestHeaders": {
+      "url": "http://127.0.0.1:24288/probe.html",
+      "method": "GET",
+      "headers": {
+        "Upgrade-Insecure-Requests": "1",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) trace-verifier/0.1.0 Chrome/152.0.7977.130 Electron/44.5.1 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Sec-Fetch-Site": "none",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-User": "?1",
+        "Sec-Fetch-Dest": "document",
+        "Accept-Encoding": "gzip, deflate, br, zstd",
+        "Accept-Language": "zh-CN"
+      }
+    }
+  },
+  "cLevel": [
+    {
+      "id": "C1",
+      "name": "UA 声明的 Chrome 主版本与声明的内核版本自洽（无版本错乱）",
+      "pass": true,
+      "observed": {
+        "uaChromeMajor": "152",
+        "kernelFromUa": "152",
+        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) trace-verifier/0.1.0 Chrome/152.0.7977.130 Electron/44.5.1 Safari/537.36"
+      }
+    },
+    {
+      "id": "C2",
+      "name": "UA 未声称 Chrome 却缺失 Chrome 能力（反向伪造矛盾）",
+      "pass": true,
+      "observed": null
+    }
+  ],
+  "summary": {
+    "aTotal": 8,
+    "aFailures": [],
+    "cFailures": [],
+    "verdict": "PASS"
+  }
+}

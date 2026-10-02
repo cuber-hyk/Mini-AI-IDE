@@ -1,0 +1,24 @@
+# 依赖与构建产物
+node_modules/
+dist/
+out/
+build/
+release/
+
+# 日志与临时文件
+*.log
+npm-debug.log*
+pnpm-debug.log*
+.pnpm-store/
+
+# 编辑器与系统
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+
+# 核验报告与本地产物（报告需人工判断后再入库；避免误提交含环境路径的输出）
+tools/**/out/
+
+# 注意：Dev Flow 仓储记忆路径（AGENTS.md、CONTEXT.md、docs/ 全部子目录）
+# 必须保持被跟踪，禁止在此忽略。详见 docs/ai/context-map.md 的维护规则。
