@@ -23,6 +23,7 @@
     dirty: document.getElementById('dirty-flag'),
     btnOpen: document.getElementById('btn-open'),
     btnSave: document.getElementById('btn-save'),
+    btnFormat: document.getElementById('btn-format'),
     monacoHost: document.getElementById('monaco'),
     resizer: document.getElementById('resizer'),
   };
@@ -243,6 +244,20 @@
     void save();
   });
 
+  // 复制"输出格式要求"到剪贴板：程序**只写剪贴板**，由用户自己粘贴到提示词（零注入边界）
+  el.btnFormat.addEventListener('click', async function () {
+    const result = await bridge.copyFormatSpec();
+    if (!result.ok) {
+      setInfo('复制格式要求失败：' + (result.error ?? '未知错误'), true);
+      return;
+    }
+    setInfo('已复制格式要求（' + result.length + ' 字符）—— 请你在 DeepSeek 的提示词里自行粘贴，程序不会替你写入');
+    el.btnFormat.textContent = '已复制 ✓';
+    setTimeout(function () {
+      el.btnFormat.textContent = '复制格式要求';
+    }, 1800);
+  });
+
   /* ---------------- 分隔条拖动 ----------------
    * 本渲染进程只占左侧面板，因此拖动时用 window.screenX 推算窗口左边界的屏幕坐标，
    * 再算出"编辑器期望宽度 = 鼠标屏幕坐标 - 窗口左边界"，交给主进程做最小宽度约束后执行。
@@ -301,6 +316,14 @@
     state.root = info.root;
     renderRoot();
     void loadTree('');
+  });
+
+  bridge.onRootStale(function () {
+    state.root = null;
+    state.currentPath = null;
+    renderRoot();
+    renderTree([]);
+    setInfo('上次打开的目录已不存在，已清除记忆 —— 请重新选择目录', true);
   });
 
   /* ---------------- 启动 ---------------- */

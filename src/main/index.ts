@@ -11,16 +11,18 @@
  *  - UA：移除 `Electron/<ver>` 与应用名标记，保留真实内核版本（ADR-0001）；
  *  - 会话分区：固定 `persist:postcheck`，复用 P0b 已登录会话（见 session-persistence 能力文档）。
  */
-import { app, BaseWindow, ipcMain, Menu, session, WebContentsView } from 'electron';
+import { app, BaseWindow, clipboard, ipcMain, Menu, session, WebContentsView } from 'electron';
 import * as path from 'node:path';
 
 import { CHANNELS, type RootInfo } from '../shared/contract';
+import { getFormatSpec } from '../shared/formatSpec';
 import { checkUaConsistency, stripSelfDeclarations } from '../shared/userAgent';
 import { FileService } from './fileService';
 import { registerFileIpc } from './ipc';
 import { createFixtures } from './fixtures';
 import { runSelfTest } from './selfTest';
 import { runDiagnose } from './diagnose';
+import { SettingsStore, isUsableRoot } from './settings';
 
 /* ------------------------------------------------------------------ *
  * 常量
@@ -76,6 +78,8 @@ async function bootstrap(): Promise<void> {
   await app.whenReady();
 
   const fileService = new FileService();
+  const settings = new SettingsStore();
+  const saved = settings.get();
   const targetSession = session.fromPartition(SESSION_PARTITION);
 
   // UA 处理：移除自我声明标记，保留真实内核版本（ADR-0001）
@@ -108,7 +112,10 @@ async function bootstrap(): Promise<void> {
   const size = win.getContentSize();
   const winW = size[0] ?? 1440;
   const winH = size[1] ?? 900;
-  let editorWidth = Math.round(winW * 0.45);
+  let editorWidth = Math.min(
+    Math.max(saved.editorWidth ?? Math.round(winW * 0.45), EDITOR_MIN_WIDTH),
+    Math.max(EDITOR_MIN_WIDTH, winW - WEB_MIN_WIDTH)
+  );
   let layout = computeLayout(winW, winH, editorWidth);
 
   const editorView = new WebContentsView({
@@ -164,13 +171,38 @@ async function bootstrap(): Promise<void> {
     layout = computeLayout(total, height, editorWidth);
     editorView.setBounds(layout.editorBounds);
     webView.setBounds(layout.webBounds);
+    settings.update({ editorWidth: layout.editorBounds.width });
     return { editorWidth: layout.editorBounds.width };
+  });
+
+  /**
+   * 把"输出格式要求"模板写入系统剪贴板。
+   *
+   * 边界（ADR-0003 零注入）：**只写剪贴板，不写网页**。
+   * 用户随后自己把它粘贴到提示词里——发出去的动作仍然是人的。
+   */
+  ipcMain.handle(CHANNELS.copyFormatSpec, (_e, variant: unknown) => {
+    const text = getFormatSpec(variant === 'full' ? 'full' : 'short');
+    try {
+      clipboard.writeText(text);
+      return { ok: true, length: text.length };
+    } catch (err) {
+      return { ok: false, length: 0, error: err instanceof Error ? err.message : String(err) };
+    }
   });
 
   function notifyRootChanged(info: RootInfo): void {
     if (!editorView.webContents.isDestroyed()) {
       editorView.webContents.send(CHANNELS.rootChanged, info);
     }
+  }
+
+  function setRootAndNotify(absPath: string): string {
+    const root = fileService.setRoot(absPath);
+    settings.update({ lastRoot: root });
+    notifyRootChanged({ root });
+    process.stdout.write(`[fs] 已打开目录：${root}\n`);
+    return root;
   }
 
   /* ---------------- 菜单（提供"打开目录"入口） ---------------- */
@@ -186,11 +218,17 @@ async function bootstrap(): Promise<void> {
               const { dialog } = await import('electron');
               const picked = await dialog.showOpenDialog(win, { properties: ['openDirectory'] });
               if (!picked.canceled && picked.filePaths[0]) {
-                const root = fileService.setRoot(picked.filePaths[0]);
-                notifyRootChanged({ root });
-                process.stdout.write(`[fs] 已打开目录：${root}\n`);
+                setRootAndNotify(picked.filePaths[0]);
               }
             })();
+          },
+        },
+        {
+          label: '复制输出格式要求（供你粘贴到提示词）',
+          click: () => {
+            const text = getFormatSpec('short');
+            clipboard.writeText(text);
+            process.stdout.write(`[format] 已复制格式要求（${text.length} 字符）到剪贴板\n`);
           },
         },
         { type: 'separator' },
@@ -236,15 +274,33 @@ async function bootstrap(): Promise<void> {
   // 命令行指定目录（含自检场景）；正常启动时也可用 --root 指定
   const rootArg = process.argv.find((a) => a.startsWith('--root='))?.slice('--root='.length);
   if (rootArg) {
-    const root = fileService.setRoot(rootArg);
-    notifyRootChanged({ root });
-    process.stdout.write(`[fs] 命令行指定根目录：${root}\n`);
+    process.stdout.write(`[fs] 命令行指定根目录：${fileService.setRoot(rootArg)}\n`);
+  } else if (isUsableRoot(saved.lastRoot)) {
+    // 恢复上次打开的目录（与其他编辑器的习惯一致）；渲染进程启动时会主动 getRoot() 取到它
+    fileService.setRoot(saved.lastRoot);
+    process.stdout.write(`[fs] 已恢复上次打开的目录：${saved.lastRoot}\n`);
+  } else if (saved.lastRoot) {
+    // 记忆失效：清掉并告知渲染进程（避免"看似有目录打开、实际读不了"）
+    process.stdout.write(`[fs] 上次打开的目录已不存在，已清除记忆：${saved.lastRoot}\n`);
+    settings.update({ lastRoot: null });
+    if (!editorView.webContents.isDestroyed()) {
+      editorView.webContents.send(CHANNELS.rootStale, { root: null, stale: true } satisfies RootInfo);
+    }
   }
 
   if (SELF_TEST) {
     const fixtures = createFixtures();
     process.stdout.write(`[self-test] 样例目录：${fixtures.root}\n`);
-    const report = await runSelfTest({ editorView, webView, fileService, fixtures, boot, layout, registeredChannels });
+    const report = await runSelfTest({
+      editorView,
+      webView,
+      fileService,
+      fixtures,
+      boot,
+      layout,
+      registeredChannels,
+      settings,
+    });
     process.stdout.write(`\n===== 自检结果 =====\n${JSON.stringify(report, null, 2)}\n`);
     app.exit(report.verdict === 'PASS' ? 0 : 1);
     return;

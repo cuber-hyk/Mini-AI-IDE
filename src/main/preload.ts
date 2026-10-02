@@ -26,7 +26,9 @@ const CH = {
   sliceFile: 'fs:slice-file',
   writeFile: 'fs:write-file',
   setSplit: 'ui:set-split',
+  copyFormatSpec: 'ui:copy-format-spec',
   rootChanged: 'fs:root-changed',
+  rootStale: 'fs:root-stale',
 } as const;
 
 const bridge = {
@@ -38,8 +40,12 @@ const bridge = {
     ipcRenderer.invoke(CH.sliceFile, relPath, startLine, endLine),
   writeFile: (relPath: string, text: string) => ipcRenderer.invoke(CH.writeFile, relPath, text),
   setSplit: (editorWidth: number) => ipcRenderer.invoke(CH.setSplit, editorWidth),
+  copyFormatSpec: () => ipcRenderer.invoke(CH.copyFormatSpec, 'short'),
   onRootChanged: (listener: (info: unknown) => void) => {
     ipcRenderer.on(CH.rootChanged, (_e, info) => listener(info));
+  },
+  onRootStale: (listener: (info: unknown) => void) => {
+    ipcRenderer.on(CH.rootStale, (_e, info) => listener(info));
   },
 };
 

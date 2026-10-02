@@ -16,8 +16,11 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { CHANNELS } from '../shared/contract';
+import { getFormatSpec } from '../shared/formatSpec';
+import { computeApply, parseModelReply } from '../shared/returnPath';
 import { createFixtures, type FixturePaths } from './fixtures';
 import type { FileService } from './fileService';
+import { SettingsStore } from './settings';
 
 interface BootInfo {
   sessionPartition: string;
@@ -48,6 +51,8 @@ export interface SelfTestInput {
   layout: Layout;
   /** 主进程实际注册的 IPC 通道名（由 registerFileIpc 返回） */
   registeredChannels: readonly string[];
+  /** 设置存储（可选；用于验证"上次打开的目录"持久化） */
+  settings?: SettingsStore;
 }
 
 export async function runSelfTest(input: SelfTestInput): Promise<{
@@ -245,9 +250,9 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   add('D9', '左右分栏布局已计算且满足最小宽度', layoutOk, input.layout);
 
   /* ---- E) 通道名一致性（preload 在沙箱下无法 require shared，故用源码比对兜底）---- */
-  // rootChanged 是主进程 → 渲染进程的单向通道（不需要 ipcMain.handle），其余都应有处理器
+  // rootChanged / rootStale 是主进程 → 渲染进程的单向通道（不需要 ipcMain.handle），其余都应有处理器
   const requiredChannels = Object.values(CHANNELS).filter(
-    (c) => c !== CHANNELS.setRootInternal && c !== CHANNELS.rootChanged
+    (c) => c !== CHANNELS.setRootInternal && c !== CHANNELS.rootChanged && c !== CHANNELS.rootStale
   );
   const missingHandlers = requiredChannels.filter((c) => !registeredChannels.includes(c));
   add('E1', '所有约定通道均已注册 ipcMain 处理器', missingHandlers.length === 0, {
@@ -271,6 +276,51 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     preloadSrcCheck = { ok: false, detail: `读取失败：${err instanceof Error ? err.message : String(err)}` };
   }
   add('E2', 'preload 内联通道名与 shared/contract 完全一致（无漂移）', preloadSrcCheck.ok, preloadSrcCheck.detail);
+
+  /* ---- F) P3 纯逻辑：回程解析与格式模板 ---- */
+  const sampleReply = [
+    '### src/demo.ts',
+    '```ts',
+    'export const demo = 1;',
+    '```',
+    '',
+    '```py',
+    '# other.py',
+    'print("hi")',
+    '```',
+  ].join('\n');
+  const parsed = parseModelReply(sampleReply, { currentFile: 'src/current.ts' });
+  add('F1', '回程解析：标题式与注释式路径线索均被识别', parsed.blocks.length === 2 && parsed.blocks[0]?.filePath === 'src/demo.ts' && parsed.blocks[1]?.filePath === 'other.py', {
+    sources: parsed.blocks.map((b) => `${b.filePath ?? '<null>'}:${b.pathSource}`),
+  });
+  add('F2', '回程解析：路径注释行已从代码中剥离', parsed.blocks[1]?.code === 'print("hi")', parsed.blocks[1]?.code);
+
+  const spec = getFormatSpec('short');
+  const specParsed = parseModelReply(['### 文件：src/x.ts', '```ts', 'const x = 1;', '```'].join('\n'));
+  add('F3', '格式模板示例写法可被解析器识别（模板与解析器一致）', /### 文件：/.test(spec) && specParsed.blocks[0]?.filePath === 'src/x.ts', {
+    specHead: spec.split('\n')[1],
+    parsedPath: specParsed.blocks[0]?.filePath,
+  });
+
+  const appliedWhole = computeApply('old body', parsed.blocks[0]!, { kind: 'replace-whole-file' });
+  add('F4', '应用计算：整文件替换返回新文本与被替换内容（供撤销）', appliedWhole.text === 'export const demo = 1;' && appliedWhole.replaced === 'old body', {
+    text: appliedWhole.text,
+    replaced: appliedWhole.replaced,
+    mode: appliedWhole.mode,
+  });
+
+  /* ---- G) 设置持久化（上次打开的目录）---- */
+  if (input.settings) {
+    const before = input.settings.get();
+    const written = input.settings.update({ lastRoot: fixtures.root });
+    add('G1', '设置可写入并读回（上次打开的目录）', written.lastRoot === fixtures.root, written);
+    const reread = new SettingsStore();
+    add('G2', '设置可从磁盘重新加载（等价于重启后恢复）', reread.get().lastRoot === fixtures.root, reread.get());
+    // 复原，避免自检污染用户设置
+    input.settings.update({ lastRoot: before.lastRoot, editorWidth: before.editorWidth });
+    const after = input.settings.get();
+    add('G3', '自检结束后已复原原设置', after.lastRoot === before.lastRoot && after.editorWidth === before.editorWidth, after);
+  }
 
   const failures = checks.filter((c) => !c.pass).map((c) => c.id);
   return {

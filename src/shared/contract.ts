@@ -23,6 +23,10 @@ export const CHANNELS = {
   writeFile: 'fs:write-file',
   /** 调整左右分栏比例（拖动分隔条时由编辑器渲染进程上报） */
   setSplit: 'ui:set-split',
+  /** 把"输出格式要求"模板写入系统剪贴板（**由用户自己粘贴到提示词**，程序绝不注入） */
+  copyFormatSpec: 'ui:copy-format-spec',
+  /** 主进程 → 渲染进程：记忆的根目录已失效 */
+  rootStale: 'fs:root-stale',
   /** 主进程 → 渲染进程：根目录已变更 */
   rootChanged: 'fs:root-changed',
 } as const;
@@ -76,11 +80,22 @@ export interface WriteFileResult {
 export interface RootInfo {
   /** 用户可见的根目录绝对路径（仅用于界面显示） */
   root: string | null;
+  /** 是否来自"上次打开"的记忆（用于界面提示与失效告知） */
+  restored?: boolean;
+  /** 记忆的目录已不存在（已被删除/移动） */
+  stale?: boolean;
 }
 
 export interface SplitResult {
   /** 主进程实际采用的编辑器宽度（已被最小宽度约束收敛） */
   editorWidth: number;
+}
+
+export interface CopyFormatResult {
+  ok: boolean;
+  /** 写入剪贴板的字符数 */
+  length: number;
+  error?: string;
 }
 
 /** preload 通过 contextBridge 暴露给渲染进程的唯一接口面 */
@@ -93,7 +108,14 @@ export interface EditorBridge {
   writeFile(relPath: string, text: string): Promise<WriteFileResult>;
   /** 上报期望的编辑器宽度（像素）；主进程会做最小宽度约束并回传实际值 */
   setSplit(editorWidth: number): Promise<SplitResult>;
+  /**
+   * 请求把"输出格式要求"模板写入系统剪贴板。
+   * **程序不会把它送进输入框**——需要用户自己粘贴到提示词里（零注入边界，见 ADR-0003）。
+   */
+  copyFormatSpec(): Promise<CopyFormatResult>;
   onRootChanged(listener: (info: RootInfo) => void): void;
+  /** 记忆的根目录已失效（被删除/移动）时的通知 */
+  onRootStale(listener: (info: RootInfo) => void): void;
 }
 
 declare global {
