@@ -24,6 +24,7 @@
     btnOpen: document.getElementById('btn-open'),
     btnSave: document.getElementById('btn-save'),
     monacoHost: document.getElementById('monaco'),
+    resizer: document.getElementById('resizer'),
   };
 
   const state = {
@@ -240,6 +241,52 @@
 
   el.btnSave.addEventListener('click', function () {
     void save();
+  });
+
+  /* ---------------- 分隔条拖动 ----------------
+   * 本渲染进程只占左侧面板，因此拖动时用 window.screenX 推算窗口左边界的屏幕坐标，
+   * 再算出"编辑器期望宽度 = 鼠标屏幕坐标 - 窗口左边界"，交给主进程做最小宽度约束后执行。
+   * 主进程回传实际宽度，据此校准偏移，避免累计误差。
+   */
+  let dragging = false;
+  let dragOffset = 0;
+
+  function onDragMove(e) {
+    if (!dragging) return;
+    const windowLeft = window.screenX;
+    const desired = e.screenX - windowLeft + dragOffset;
+    void bridge.setSplit(desired).then(function (result) {
+      dragOffset = result.editorWidth - (e.screenX - windowLeft);
+    });
+  }
+
+  el.resizer.addEventListener('pointerdown', function (e) {
+    dragging = true;
+    dragOffset = 0;
+    el.resizer.classList.add('dragging');
+    el.resizer.setPointerCapture(e.pointerId);
+    // 拖动期间提升指针事件频率
+    e.preventDefault();
+  });
+
+  el.resizer.addEventListener('pointermove', onDragMove);
+
+  function endDrag(e) {
+    if (!dragging) return;
+    dragging = false;
+    el.resizer.classList.remove('dragging');
+    try {
+      el.resizer.releasePointerCapture(e.pointerId);
+    } catch (err) {
+      /* 指针可能已释放 */
+    }
+  }
+  el.resizer.addEventListener('pointerup', endDrag);
+  el.resizer.addEventListener('pointercancel', endDrag);
+
+  // 双击分隔条：回到 45% 默认比例
+  el.resizer.addEventListener('dblclick', function () {
+    void bridge.setSplit(Math.round(window.outerWidth * 0.45));
   });
 
   // 输入即进入编辑（自动解除只读），避免多一个"编辑"开关

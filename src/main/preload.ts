@@ -25,6 +25,7 @@ const CH = {
   readFile: 'fs:read-file',
   sliceFile: 'fs:slice-file',
   writeFile: 'fs:write-file',
+  setSplit: 'ui:set-split',
   rootChanged: 'fs:root-changed',
 } as const;
 
@@ -36,6 +37,7 @@ const bridge = {
   sliceFile: (relPath: string, startLine: number, endLine: number) =>
     ipcRenderer.invoke(CH.sliceFile, relPath, startLine, endLine),
   writeFile: (relPath: string, text: string) => ipcRenderer.invoke(CH.writeFile, relPath, text),
+  setSplit: (editorWidth: number) => ipcRenderer.invoke(CH.setSplit, editorWidth),
   onRootChanged: (listener: (info: unknown) => void) => {
     ipcRenderer.on(CH.rootChanged, (_e, info) => listener(info));
   },

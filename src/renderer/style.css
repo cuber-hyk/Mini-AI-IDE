@@ -172,3 +172,17 @@ body {
 .info.warn {
   color: var(--warn);
 }
+
+/* 分隔条：位于编辑器视图最右侧，拖动可调整左右分栏（宽度变化由主进程执行） */
+.resizer {
+  width: 5px;
+  cursor: col-resize;
+  background: var(--border);
+  flex: 0 0 auto;
+  user-select: none;
+}
+
+.resizer:hover,
+.resizer.dragging {
+  background: var(--accent);
+}

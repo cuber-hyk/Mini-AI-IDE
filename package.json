@@ -10,6 +10,7 @@
     "test": "tsx --test \"test/**/*.test.ts\"",
     "start": "npm run build && electron .",
     "self-test": "npm run build && electron . --self-test",
+    "diagnose": "npm run build && electron . --diagnose",
     "setup:electron": "node scripts/install-electron.mjs"
   },
   "devDependencies": {
@@ -20,3 +21,4 @@
     "typescript": "5.9.3"
   }
 }
+

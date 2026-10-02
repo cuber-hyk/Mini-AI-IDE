@@ -245,6 +245,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   add('D9', '左右分栏布局已计算且满足最小宽度', layoutOk, input.layout);
 
   /* ---- E) 通道名一致性（preload 在沙箱下无法 require shared，故用源码比对兜底）---- */
+  // rootChanged 是主进程 → 渲染进程的单向通道（不需要 ipcMain.handle），其余都应有处理器
   const requiredChannels = Object.values(CHANNELS).filter(
     (c) => c !== CHANNELS.setRootInternal && c !== CHANNELS.rootChanged
   );
@@ -254,12 +255,11 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     registered: registeredChannels,
     missing: missingHandlers,
   });
-
   let preloadSrcCheck: { ok: boolean; detail: string } = { ok: false, detail: '未读取到 preload.js' };
   try {
     const preloadPath = path.join(__dirname, 'preload.js');
     const src = fs.readFileSync(preloadPath, 'utf8');
-    const literals = [...src.matchAll(/'(fs:[a-z-]+)'/g)].map((m) => m[1] as string);
+    const literals = [...src.matchAll(/'((?:fs|ui):[a-z-]+)'/g)].map((m) => m[1] as string);
     const contractSet = new Set<string>(Object.values(CHANNELS));
     const unknown = literals.filter((c) => !contractSet.has(c));
     const missing = requiredChannels.filter((c) => !literals.includes(c));

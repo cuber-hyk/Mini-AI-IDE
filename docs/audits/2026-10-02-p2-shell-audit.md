@@ -58,15 +58,23 @@ source_of_truth:
 | P2-4 | Medium | verified | Monaco 会定义 `window.require`，若按"存在即 Node 泄漏"判定会产生**假阳性**；实际是 AMD loader | 自检 D4 曾报 `nodeGlobals: ["require"]` | docs/plans/2026-10-02-mini-ai-ide-poc.md（P2） | — | 新增 D10：以 `require.config`（AMD）与 `require.resolve`（Node）区分，观测 `requireKind: "amd"`；D4 改为只检查非 require 的 Node 全局 | 已修复；已写入陷阱表 |
 | P2-5 | Low | verified | Monaco 的 web worker 在 `file://` + CSP 下被阻止，回退主线程执行；控制台报错但**不影响语法高亮与编辑** | 渲染进程控制台：`Creating a worker from 'blob:file:///...' violates ... script-src`；随后 `Could not create web worker(s). Falling back to loading web worker code in main thread` | docs/plans/2026-10-02-mini-ai-ide-poc.md（P2，后续增强） | — | 编辑与高亮可用；自检 D1/D2 PASS | 接受为已知取舍。若后续需要语言服务（补全/诊断），需改为本地 HTTP 承载渲染进程或打包 worker |
 | P2-6 | Low | verified | 构建脚本不能用 `fs.cpSync`：在本项目执行环境报 `EIO` | `copy-static.mjs` 首次运行失败，`errno: 5, code: 'EIO', syscall: 'cp'` | docs/plans/2026-10-02-mini-ai-ide-poc.md（P2） | — | 改为显式 `mkdirSync` + `writeFileSync` 递归复制，154 个文件复制成功 | 已修复 |
-| P2-7 | Medium | **open** | **UI 目视与右侧网页加载未验证**：执行沙箱限制子进程对外网络，Electron 内的对外请求会挂起，因此无法在此环境确认"启动后是否直接进入已登录状态"与界面观感 | 沙箱内首次运行 `loadURL` 无 `did-finish-load`（与 P0b 同一现象） | docs/plans/2026-10-02-mini-ai-ide-poc.md（P2） | — | 待用户在普通 PowerShell 运行 `npm start`：① 是否免登录直接进入聊天页；② 左侧编辑器与右侧网页是否并排；③ 打开目录/读文件/保存是否正常；④ 是否出现「使用环境异常」告警 | 由用户实操后关闭 |
+| P2-7 | Medium | **open** | **UI 目视与右侧网页加载未验证**：执行沙箱限制子进程对外网络，Electron 内的对外请求会挂起，因此无法在此环境确认界面观感 | 沙箱内 `loadURL` 无 `did-finish-load`（与 P0b 同一现象） | docs/plans/2026-10-02-mini-ai-ide-poc.md（P2） | — | 用户实测（截图）：左右并排 ✅、打开目录/文件树/编辑 ✅、无「使用环境异常」告警 ✅；**分隔条不可拖动 ❌**、**未登录 ❌** | 部分关闭：UI 与告警已确认；分隔条缺陷与登录态问题分别转 P2-8 / P2-9 |
+| P2-8 | Medium | verified | **分隔条不可拖动**：原实现用一个独立 `WebContentsView` 覆盖在边界上（4px），它不接收拖动事件，视觉上像分隔条但完全无响应；且跨渲染进程无法在右侧网页上方取得鼠标事件 | 用户实测报告"中间分隔条不可拖动"；代码审查：`dividerView` 只设置了 bounds 与 hover 样式，无任何拖动逻辑 | docs/plans/2026-10-02-mini-ai-ide-poc.md（P2） | — | 改为**编辑器页面自身 DOM** 上的分隔条：`pointerdown` + `setPointerCapture` → `ui:set-split` → 主进程约束最小宽度后设界并回传实际值；双击复位 45%。自检 E1/E2 覆盖新通道；**待用户复验拖动** | 已修复并纳入自检；复验由用户完成 |
+| P2-9 | **High** | **open** | **本应用分区内登录态丢失**：`ds_session_id` 不在 cookie 中，启动即落 `/sign_in`。**根因是跨应用迁移 profile 目录**——把 P0b 工具（`reachability-probe`）的整个 profile 复制/移动到 `mini-ai-ide` 名下，Chromium 视为不同 profile 并丢弃会话级 cookie（只剩设备指纹 cookie） | `npm run diagnose` 输出：`cookieCount: 2`（`smidV2`、`.thumbcache_*`）、`hasSessionCookie: false`、`landingUrl: .../sign_in`、`verdict: SESSION_MISSING` | docs/plans/2026-10-02-mini-ai-ide-poc.md（P2） | — | 待用户**在本应用内重新登录一次**；随后用 `npm run diagnose` 复验应得 `SESSION_OK` | 待复验关闭。**教训：`persist:` 分区可跨重启复用，但不可跨应用（userData 目录）迁移** |
+| P2-10 | Low | verified | 用户看到的 SSL 报错**不是**登录失败原因：`localhost.weixin.qq.com:13013-13015/14013-14015` 的 `ERR_CONNECTION_CLOSED` 是微信扫码 SDK 探测本机微信客户端；`support.weixin.qq.com` 的 `ERR_BLOCKED_BY_ORB` 是 Chromium 对图片响应的正常拦截 | `npm run diagnose` 的 `webRequestFailures`：12 条全部属于上述两类，无一条指向 DeepSeek 接口 | docs/plans/2026-10-02-mini-ai-ide-poc.md（P2） | — | 诊断结论与落点一致（LOGIN 页而非网络错误页）；DeepSeek 主文档加载成功 | 已澄清，无需处置。为避免以后误判，新增 `npm run diagnose` 把网络失败与登录态分开报告 |
 
 ## 结论
 
 1. **P2 的实现契约全部可执行验证**：28 项自检 + 53 项单测全通过，类型检查通过。
 2. **本轮发现的三个 High/Medium 陷阱都属于"报告说成功、实际没生效"这一类**（P2-1/2/3），
    即最容易导致后续基于错误前提继续开发的问题。它们已被固化为自检项，不再依赖人工记忆。
-3. **唯一未决项是 P2-7（Medium, open）**：UI 与真实网页加载需用户在非沙箱环境确认。
-   这不影响代码正确性，但影响"用户是否真的能开始用"。
+3. **用户实测确认**：左右并排布局、打开目录/文件树/编辑正常、**未出现「使用环境异常」告警**。
+4. **两个未决项**：
+   - **P2-8（分隔条不可拖动）**：已修复（改为编辑器 DOM 上的分隔条），**待用户复验**。
+   - **P2-9（High, open：本应用分区登录态丢失）**：根因为跨应用迁移 profile 目录，
+     **待用户在本应用内重新登录一次**并用 `npm run diagnose` 复验。
+5. P2-10 澄清了一次误判风险：用户看到的 SSL 报错来自微信扫码 SDK 的本机探测，
+   与登录失败无关；此后由 `npm run diagnose` 将"网络失败"与"登录态"分开报告。
 
-> **后续步骤**：P3（回程解析与应用）尚未开始。P2-7 关闭前不建议进入 P3 的 UI 部分；
-> 但 P3 的纯解析逻辑（围栏切分 / 路径行 / diff 计算）可独立开发与单测。
+> **后续步骤**：P3（回程解析与应用）尚未开始。P2-9 关闭前不建议进入 P3 —— 因为 P3 的
+> 端到端验收依赖"右侧确实处于已登录会话"。

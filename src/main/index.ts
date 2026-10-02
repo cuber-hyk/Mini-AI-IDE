@@ -11,7 +11,7 @@
  *  - UA：移除 `Electron/<ver>` 与应用名标记，保留真实内核版本（ADR-0001）；
  *  - 会话分区：固定 `persist:postcheck`，复用 P0b 已登录会话（见 session-persistence 能力文档）。
  */
-import { app, BaseWindow, Menu, session, WebContentsView } from 'electron';
+import { app, BaseWindow, ipcMain, Menu, session, WebContentsView } from 'electron';
 import * as path from 'node:path';
 
 import { CHANNELS, type RootInfo } from '../shared/contract';
@@ -20,6 +20,7 @@ import { FileService } from './fileService';
 import { registerFileIpc } from './ipc';
 import { createFixtures } from './fixtures';
 import { runSelfTest } from './selfTest';
+import { runDiagnose } from './diagnose';
 
 /* ------------------------------------------------------------------ *
  * 常量
@@ -37,6 +38,8 @@ const EDITOR_MIN_WIDTH = 360;
 const WEB_MIN_WIDTH = 420;
 
 const SELF_TEST = process.argv.includes('--self-test');
+/** 会话与网络诊断模式：加载目标站点并输出登录态与网络失败明细，然后退出 */
+const DIAGNOSE = process.argv.includes('--diagnose');
 
 interface Layout {
   editorBounds: { x: number; y: number; width: number; height: number };
@@ -151,6 +154,19 @@ async function bootstrap(): Promise<void> {
   const getEditorWindow = () => null; // 目录选择不需要父窗口句柄；保留签名以便后续接入
   const registeredChannels = registerFileIpc(getEditorWindow, fileService);
 
+  // 分栏比例（由编辑器渲染进程在拖动分隔条时上报）
+  ipcMain.handle(CHANNELS.setSplit, (_e, desiredWidth: unknown): { editorWidth: number } => {
+    const s = win.getContentSize();
+    const total = s[0] ?? 1440;
+    const height = s[1] ?? 900;
+    const requested = typeof desiredWidth === 'number' && Number.isFinite(desiredWidth) ? desiredWidth : editorWidth;
+    editorWidth = Math.min(Math.max(Math.round(requested), EDITOR_MIN_WIDTH), Math.max(EDITOR_MIN_WIDTH, total - WEB_MIN_WIDTH));
+    layout = computeLayout(total, height, editorWidth);
+    editorView.setBounds(layout.editorBounds);
+    webView.setBounds(layout.webBounds);
+    return { editorWidth: layout.editorBounds.width };
+  });
+
   function notifyRootChanged(info: RootInfo): void {
     if (!editorView.webContents.isDestroyed()) {
       editorView.webContents.send(CHANNELS.rootChanged, info);
@@ -234,6 +250,22 @@ async function bootstrap(): Promise<void> {
     return;
   }
 
+  if (DIAGNOSE) {
+    process.stdout.write('[diagnose] 开始会话与网络诊断…\n');
+    const report = await runDiagnose({
+      webView,
+      partition: SESSION_PARTITION,
+      targetUrl: TARGET_URL,
+      userAgent: uaPlan.effective,
+      waitMs: 15000,
+    });
+    process.stdout.write(`\n===== 诊断结果 =====\n${JSON.stringify(report, null, 2)}\n`);
+    process.stdout.write(`[diagnose] 结论：${report.verdict}\n`);
+    for (const n of report.notes) process.stdout.write(`[diagnose] ${n}\n`);
+    app.exit(report.verdict === 'SESSION_OK' ? 0 : 1);
+    return;
+  }
+
   // 正常启动：右侧加载目标平台（**只读**，程序不向页面写入任何内容）
   webView.webContents.on('did-finish-load', () => {
     process.stdout.write(`[web] 已加载：${webView.webContents.getURL()}\n`);
@@ -247,27 +279,13 @@ async function bootstrap(): Promise<void> {
     process.stderr.write(`[web] loadURL 抛错：${err instanceof Error ? err.message : String(err)}\n`);
   }
 
-  // 分栏分隔条：仅拖动，不承载任何页面内容
-  const dividerView = new WebContentsView({
-    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, partition: 'persist:editor-ui' },
-  });
-  win.contentView.addChildView(dividerView);
-  dividerView.setBounds({ x: layout.dividerX - 2, y: 0, width: 4, height: winH });
-  dividerView.webContents.loadURL('data:text/html,' + encodeURIComponent(dividerHtml())).catch(() => {});
+  // 分隔条由**编辑器渲染进程自身**的 DOM 承载（见 src/renderer 的 #resizer）。
+  // 早期实现用一个独立 WebContentsView 覆盖在边界上，但它不接收拖动事件，
+  // 导致"分隔条看着能拖、实际不能"——已移除。
 
   win.on('closed', () => {
     app.quit();
   });
-}
-
-function dividerHtml(): string {
-  return `<!doctype html><meta charset="utf-8">
-<style>
-  html,body{margin:0;height:100%;overflow:hidden;background:transparent}
-  body{cursor:col-resize}
-  body:hover{background:rgba(120,170,255,.35)}
-</style>
-<body></body>`;
 }
 
 /* ------------------------------------------------------------------ *

@@ -68,5 +68,7 @@ export function registerFileIpc(getEditorWindow: () => BrowserWindow | null, ser
     CHANNELS.readFile,
     CHANNELS.sliceFile,
     CHANNELS.writeFile,
+    // 分栏比例由 index.ts 注册（需要访问窗口与视图），此处一并声明以便自检核对
+    CHANNELS.setSplit,
   ];
 }

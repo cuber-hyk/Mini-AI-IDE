@@ -21,6 +21,8 @@ export const CHANNELS = {
   sliceFile: 'fs:slice-file',
   /** 写回文件（编辑后保存） */
   writeFile: 'fs:write-file',
+  /** 调整左右分栏比例（拖动分隔条时由编辑器渲染进程上报） */
+  setSplit: 'ui:set-split',
   /** 主进程 → 渲染进程：根目录已变更 */
   rootChanged: 'fs:root-changed',
 } as const;
@@ -76,6 +78,11 @@ export interface RootInfo {
   root: string | null;
 }
 
+export interface SplitResult {
+  /** 主进程实际采用的编辑器宽度（已被最小宽度约束收敛） */
+  editorWidth: number;
+}
+
 /** preload 通过 contextBridge 暴露给渲染进程的唯一接口面 */
 export interface EditorBridge {
   chooseRoot(): Promise<RootInfo>;
@@ -84,6 +91,8 @@ export interface EditorBridge {
   readFile(relPath: string): Promise<ReadFileResult>;
   sliceFile(relPath: string, startLine: number, endLine: number): Promise<SliceFileResult>;
   writeFile(relPath: string, text: string): Promise<WriteFileResult>;
+  /** 上报期望的编辑器宽度（像素）；主进程会做最小宽度约束并回传实际值 */
+  setSplit(editorWidth: number): Promise<SplitResult>;
   onRootChanged(listener: (info: RootInfo) => void): void;
 }
 
