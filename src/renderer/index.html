@@ -17,6 +17,9 @@
       <button id="btn-collect" type="button" title="只读采集右侧最新回复并解析为待应用变更（不修改页面、不落盘）">
         采集回复
       </button>
+      <button id="btn-whole-file" type="button" title="把当前打开的整个文件（含路径声明与代码围栏）复制到剪贴板，作为上下文交给模型">
+        复制整个文件
+      </button>
       <button id="btn-snippet" type="button" title="把当前选中内容格式化为带文件真实行号的片段（含 ### 文件： 与 ### 范围： 头）复制到剪贴板，供你粘贴给模型做局部修改">
         复制选中片段
       </button>
@@ -57,22 +60,15 @@
     </section>
 
     <!-- 需求输入区：你在这里写需求，点「复制 prompt」后到右侧粘贴。
-         程序只写剪贴板，**绝不写入网页输入框**（零注入边界）。 -->
+         程序只写剪贴板，**绝不写入网页输入框**（零注入边界）。
+         注：这里**不设"要改的文件"输入框** —— 路径随代码内容一起给出（用工具栏的
+         「复制整个文件」或「复制选中片段」，都会自动带上文件路径与代码围栏）。 -->
     <footer class="prompt-bar">
-      <div class="prompt-row">
-        <input
-          id="target-files"
-          class="target-files"
-          type="text"
-          placeholder="要改的文件（可留空，多个用逗号分隔，如 src/a.ts, src/b.ts）"
-          spellcheck="false"
-        />
-      </div>
       <div class="prompt-row">
         <textarea
           id="requirement"
           class="requirement"
-          rows="2"
+          rows="3"
           placeholder="在这里写你的需求（只有这段是你写的），点右侧「复制 prompt」→ 到右边 DeepSeek 输入框 Ctrl+V 粘贴 → 自己按发送"
           spellcheck="false"
         ></textarea>

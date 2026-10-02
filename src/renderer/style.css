@@ -268,25 +268,8 @@ body {
 .prompt-row {
   display: flex;
   gap: 6px;
-}
-
-.prompt-row:first-child {
-  flex: 0 0 auto;
-}
-
-.prompt-row:last-child {
   flex: 1;
   min-height: 0;
-}
-
-.target-files {
-  width: 100%;
-  background: #14161b;
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 4px 8px;
-  font: inherit;
 }
 
 .requirement {

@@ -31,6 +31,8 @@ export const CHANNELS = {
   getContext: 'ui:get-context',
   /** 把编辑器里的选中内容格式化为"带文件真实行号"的片段并写入剪贴板 */
   copyNumberedSnippet: 'ui:copy-numbered-snippet',
+  /** 把当前打开的**整个文件**（含路径声明与代码围栏）写入剪贴板，作为上下文交给模型 */
+  copyWholeFile: 'ui:copy-whole-file',
   /** 从网页视图**只读**采集最新回复并解析为待应用变更（返回预览，不落盘） */
   collectReply: 'return:collect',
   /** 应用一个已选定的变更（先做三向校验；落盘前保留撤销快照） */
@@ -143,6 +145,18 @@ export interface CopySnippetResult {
   length: number;
   startLine?: number;
   endLine?: number;
+  error?: string;
+}
+
+export interface CopyWholeFileResult {
+  ok: boolean;
+  /** 写入剪贴板的内容（`这个文件是 <路径>` + 代码围栏 + 全文） */
+  snippet: string;
+  length: number;
+  relPath?: string;
+  lineCount?: number;
+  /** 使用的围栏（内容含反引号时会自动加长） */
+  fence?: string;
   error?: string;
 }
 
@@ -262,6 +276,11 @@ export interface EditorBridge {
    * 用于**局部修改**：模型据此回显行区间，应用前会做三向校验。
    */
   copyNumberedSnippet(input: NumberedSnippetInput): Promise<CopySnippetResult>;
+  /**
+   * 把当前打开的**整个文件**（`这个文件是 <路径>` + 代码围栏 + 全文）写入剪贴板。
+   * 用途：把整个文件作为**上下文**交给模型；仍由用户自己粘贴（零注入边界）。
+   */
+  copyWholeFile(relPath: string): Promise<CopyWholeFileResult>;
   /**
    * 从网页视图**只读**采集最新回复并解析为待应用变更。
    * 不落盘、不修改页面；只回传预览数据。

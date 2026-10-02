@@ -18,6 +18,7 @@ import * as path from 'node:path';
 import { CHANNELS } from '../shared/contract';
 import { buildPrompt, getFormatSpec } from '../shared/formatSpec';
 import { computeApply, formatNumberedSnippet, parseModelReply, stripNumberedPrefix } from '../shared/returnPath';
+import { buildSnippetText, buildWholeFileText, fenceFor } from '../shared/snippet';
 import { createFixtures, type FixturePaths } from './fixtures';
 import type { FileService } from './fileService';
 import { SettingsStore, isUsableRoot } from './settings';
@@ -453,6 +454,40 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     stripNumberedPrefix(numbered).text === 'alpha\nbeta\ngamma' && stripNumberedPrefix(numbered).startLine === 80,
     stripNumberedPrefix(numbered)
   );
+
+  /* ---- M) 提示词片段组装：围栏自适应（防内容里的 ``` 提前闭合） ---- */
+  const plainSnippet = buildSnippetText({ relPath: 'src/a.py', text: 'def f():\n    pass', startLine: 80 });
+  add(
+    'M1',
+    '局部片段含路径行/行区间/语言标注/带行号内容',
+    plainSnippet.text ===
+      ['### 文件：src/a.py', '### 范围：80-81', '```python', ' 80| def f():', ' 81|     pass', '```'].join('\n'),
+    plainSnippet.text
+  );
+
+  const nestedContent = '冒泡排序：\n```python\ndef bubble_sort(arr):\n    pass\n```';
+  const nestedSnippet = buildSnippetText({ relPath: 'notes.md', text: nestedContent, startLine: 1 });
+  add('M2', '内容含 ``` 时外层围栏自动加长为 ````（不提前闭合）', nestedSnippet.fence === '````' && nestedSnippet.text.includes('```python') && nestedSnippet.text.endsWith('\n````'), {
+    fence: nestedSnippet.fence,
+  });
+
+  const whole = buildWholeFileText('src/a.ts', 'export const a = 1;');
+  add(
+    'M3',
+    '整文件片段用「这个文件是」声明 + 围栏，且**不含 `### ` 标题行**（避免被回程解析器当作待应用代码块）',
+    whole.text === ['这个文件是 src/a.ts', '', '```typescript', 'export const a = 1;', '```'].join('\n') && !/^### /m.test(whole.text),
+    whole.text
+  );
+
+  const wholeNested = buildWholeFileText('notes.md', '# 标题\n\n```python\nprint(1)\n```');
+  add('M4', '整文件片段同样按内容加长围栏', wholeNested.fence === '````' && wholeNested.text.includes('````markdown'), {
+    fence: wholeNested.fence,
+  });
+
+  add('M5', '围栏长度取内容中最长反引号串 + 1（最少 3）', fenceFor('```\n`````\n```') === '``````' && fenceFor('用 `x` 调用') === '```', {
+    longest: fenceFor('```\n`````\n```'),
+    inline: fenceFor('用 `x` 调用'),
+  });
 
   /* ---- K) 回程闭环：采集 → 解析 → 应用 → 撤销 ---- */
   // 用一个假的页面运行器验证采集器本身（不依赖真实站点）

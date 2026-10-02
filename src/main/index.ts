@@ -16,7 +16,8 @@ import * as path from 'node:path';
 
 import { CHANNELS, type ApplyChangeInput, type ReturnPreview, type RootInfo } from '../shared/contract';
 import { buildPrompt, getFormatSpec } from '../shared/formatSpec';
-import { formatNumberedSnippet, parseModelReply, type ParsedCodeBlock } from '../shared/returnPath';
+import { parseModelReply, type ParsedCodeBlock } from '../shared/returnPath';
+import { buildSnippetText, buildWholeFileText } from '../shared/snippet';
 import { checkUaConsistency, stripSelfDeclarations } from '../shared/userAgent';
 import { FileService } from './fileService';
 import { registerFileIpc } from './ipc';
@@ -424,27 +425,56 @@ async function bootstrap(): Promise<void> {
   /**
    * 把编辑器里的选中内容格式化为"带文件真实行号"的片段并写入剪贴板。
    *
-   * 用于**局部修改**：片段头部带上 `### 文件：` 与 `### 范围：N-M`，
-   * 模型回显行区间后，应用前会做三向校验（区间有效 / 原内容匹配 / 上下文匹配）。
-   * 仍然**只写剪贴板**，由用户自己粘贴（ADR-0003）。
+   * 用于**局部修改**：片段头部带 `### 文件：` 与 `### 范围：N-M`，正文带行号前缀。
+   * 围栏长度按内容自适应（内容含 ``` 时自动加长，避免提前闭合）。
+   * 仍**只写剪贴板**，由用户自己粘贴（ADR-0003）。
    */
   ipcMain.handle(CHANNELS.copyNumberedSnippet, (_e, input: unknown) => {
     const raw = (input ?? {}) as { relPath?: unknown; text?: unknown; startLine?: unknown };
     const relPath = typeof raw.relPath === 'string' ? raw.relPath : '';
     const text = typeof raw.text === 'string' ? raw.text : '';
-    const startLine = typeof raw.startLine === 'number' && Number.isFinite(raw.startLine) ? Math.max(1, Math.round(raw.startLine)) : 1;
+    const startLine =
+      typeof raw.startLine === 'number' && Number.isFinite(raw.startLine) ? Math.max(1, Math.round(raw.startLine)) : 1;
 
     if (relPath.length === 0) return { ok: false, snippet: '', length: 0, error: '未指定文件路径（请先打开一个文件）' };
     if (text.length === 0) return { ok: false, snippet: '', length: 0, error: '没有可复制的内容（请先选中代码或打开文件）' };
 
-    const lineCount = text.split(/\r\n|\r|\n/).length;
-    const endLine = startLine + lineCount - 1;
-    const snippet = [`### 文件：${relPath}`, `### 范围：${startLine}-${endLine}`, '```', formatNumberedSnippet(text, startLine), '```'].join('\n');
+    const parts = buildSnippetText({ relPath, text, startLine });
     try {
-      clipboard.writeText(snippet);
-      return { ok: true, snippet, length: snippet.length, startLine, endLine };
+      clipboard.writeText(parts.text);
+      return { ok: true, snippet: parts.text, length: parts.text.length, startLine: parts.startLine, endLine: parts.endLine };
     } catch (err) {
-      return { ok: false, snippet, length: snippet.length, error: err instanceof Error ? err.message : String(err) };
+      return { ok: false, snippet: parts.text, length: parts.text.length, error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+  /**
+   * 把当前打开的**整个文件**写入剪贴板，作为**上下文**交给模型。
+   *
+   * 格式：`这个文件是 <相对路径>` + 代码围栏 + 全文。
+   * 刻意**不使用 `### ` 标题行** —— 那是"待应用变更"的标记，而这里给的是上下文，
+   * 不该被回程解析器当成一个待写入的代码块。
+   */
+  ipcMain.handle(CHANNELS.copyWholeFile, async (_e, relPath: unknown) => {
+    const rel = typeof relPath === 'string' ? relPath.trim() : '';
+    if (rel.length === 0) return { ok: false, snippet: '', length: 0, error: '未指定文件路径（请先打开一个文件）' };
+
+    const read = await fileService.readRawText(rel);
+    if (!read.ok) return { ok: false, snippet: '', length: 0, error: read.error };
+
+    const parts = buildWholeFileText(read.relPath, read.text);
+    try {
+      clipboard.writeText(parts.text);
+      return {
+        ok: true,
+        snippet: parts.text,
+        length: parts.text.length,
+        relPath: parts.relPath,
+        lineCount: parts.lineCount,
+        fence: parts.fence,
+      };
+    } catch (err) {
+      return { ok: false, snippet: parts.text, length: parts.text.length, error: err instanceof Error ? err.message : String(err) };
     }
   });
 

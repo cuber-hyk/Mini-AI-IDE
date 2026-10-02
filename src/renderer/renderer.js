@@ -26,10 +26,10 @@
     btnOpen: document.getElementById('btn-open'),
     btnSave: document.getElementById('btn-save'),
     btnSnippet: document.getElementById('btn-snippet'),
+    btnWholeFile: document.getElementById('btn-whole-file'),
     monacoHost: document.getElementById('monaco'),
     resizer: document.getElementById('resizer'),
     requirement: document.getElementById('requirement'),
-    targetFiles: document.getElementById('target-files'),
     btnCopyPrompt: document.getElementById('btn-copy-prompt'),
     // 回程预览面板（此前遗漏，导致下面绑定时 TypeError 并中断整个脚本）
     btnCollect: document.getElementById('btn-collect'),
@@ -427,6 +427,34 @@
   });
 
   /**
+   * 「复制整个文件」：把当前打开的整个文件（`这个文件是 <路径>` + 围栏 + 全文）
+   * 写入剪贴板，作为**上下文**交给模型。
+   *
+   * 与「复制选中片段」的分工：
+   *   - 整个文件 → 上下文/大改（不带行号，不带行区间）
+   *   - 选中片段 → 局部修改（带真实行号 + 行区间，应用前三向校验）
+   */
+  el.btnWholeFile.addEventListener('click', async function () {
+    if (!state.currentPath) {
+      setInfo('请先打开一个文件，再复制', true);
+      return;
+    }
+    const result = await bridge.copyWholeFile(state.currentPath);
+    if (!result.ok) {
+      setInfo('复制整个文件失败：' + (result.error ?? '未知错误'), true);
+      return;
+    }
+    setInfo(
+      '已复制整个文件（' + state.currentPath + ' · ' + (result.lineCount ?? 0) + ' 行 · ' + result.length +
+        ' 字符 · 围栏 ' + (result.fence ?? '```') + '）—— 到右侧粘贴即可'
+    );
+    el.btnWholeFile.textContent = '已复制 ✓';
+    setTimeout(function () {
+      el.btnWholeFile.textContent = '复制整个文件';
+    }, 1800);
+  });
+
+  /**
    * 「复制选中片段」：把当前选中的代码格式化为**带文件真实行号**的片段，
    * 头部自动附 `### 文件：` 与 `### 范围：N-M`，写入剪贴板。
    *
@@ -489,20 +517,19 @@
    * 「复制 prompt」：把你在应用内写的需求 + 工作环境 + 目录树 + 格式要求
    * 组装成完整 prompt 写入**系统剪贴板**，再由你自己 Ctrl+V 到右侧输入框。
    * 程序**不会**写入网页 —— 这是零注入边界（见 ADR-0003）。
+   *
+   * 注意这里**不再传"要改的文件"**：路径与代码内容一起给出（参见「复制整个文件」/
+   * 「复制选中片段」）。单独给一个路径、不给内容，模型无法据此改文件。
    */
   el.btnCopyPrompt.addEventListener('click', async function () {
     const requirement = el.requirement.value.trim();
     if (requirement.length === 0) {
-      setInfo('请先在上方输入框里写下你的需求，再点「复制 prompt」', true);
+      setInfo('请先写下你的需求，再点「复制 prompt」', true);
       el.requirement.focus();
       return;
     }
-    const files = el.targetFiles.value
-      .split(/[,，;；\s]+/)
-      .map(function (s) { return s.trim(); })
-      .filter(function (s) { return s.length > 0; });
 
-    const result = await bridge.copyPrompt(requirement, files);
+    const result = await bridge.copyPrompt(requirement, []);
     if (!result.ok) {
       setInfo('复制 prompt 失败：' + (result.error ?? '未知错误'), true);
       return;

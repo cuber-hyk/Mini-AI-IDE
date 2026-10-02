@@ -74,6 +74,7 @@ export function registerFileIpc(getEditorWindow: () => BrowserWindow | null, ser
     CHANNELS.getContext,
     CHANNELS.copyPrompt,
     CHANNELS.copyNumberedSnippet,
+    CHANNELS.copyWholeFile,
     CHANNELS.collectReply,
     CHANNELS.applyChange,
     CHANNELS.undoSave,
