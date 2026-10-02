@@ -15,6 +15,8 @@
 import { session, type WebContentsView } from 'electron';
 import * as path from 'node:path';
 
+import { STORAGE_PROBE_SCRIPT, summarizeInspection, type StorageInspection } from './storageProbe';
+
 export interface DiagnoseInput {
   webView: WebContentsView;
   partition: string;
@@ -51,6 +53,8 @@ export interface DiagnoseReport {
   cookies: CookieFact[];
   hasSessionCookie: boolean;
   sessionCookieValid: boolean;
+  /** 页面侧存储事实（只读）：用于判断登录态究竟存在哪里 */
+  storage: StorageInspection | null;
   landingUrl: string;
   landedOnSignIn: boolean;
   webRequestFailures: WebRequestFailure[];
@@ -125,19 +129,59 @@ export async function runDiagnose(input: DiagnoseInput): Promise<DiagnoseReport>
   const landingUrl = input.webView.webContents.isDestroyed() ? '<已销毁>' : input.webView.webContents.getURL();
   const landedOnSignIn = /\/sign_in/.test(landingUrl);
 
+  /* ---- 页面侧存储事实（只读注入读取，不修改页面）---- */
+  let storage: StorageInspection | null = null;
+  try {
+    const raw = await input.webView.webContents.executeJavaScript(STORAGE_PROBE_SCRIPT, true);
+    storage = summarizeInspection(raw);
+    notes.push(
+      `页面存储：localStorage ${storage.localStorage.length} 项 / sessionStorage ${storage.sessionStorage.length} 项 / IndexedDB ${storage.indexedDB.length} 个库`
+    );
+    if (storage.tokenKeys.length > 0) {
+      notes.push(`疑似会话载体键名：${storage.tokenKeys.join(', ')}`);
+    }
+  } catch (err) {
+    notes.push(`页面存储读取失败：${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  /* ------------------------------------------------------------------ *
+   * 登录态判定（教训：不能只看 cookie）
+   *
+   * 实测发现：**DeepSeek 的会话存放在 localStorage**（`userToken`、`settingsJwt`、
+   * `__appKit_userInfo` 等），cookie 里只有设备指纹（`smidV2`、`.thumbcache_*`）。
+   * 早期版本只查 cookie，因此把"已登录"误报为 `SESSION_MISSING`。
+   *
+   * 现行判据（任一命中即视为有会话）：
+   *   a) cookie 中存在有效会话 cookie（其他站点可能是这种形态）；
+   *   b) localStorage / sessionStorage 中存在**会话特征键**（键名含 token/session/auth/...）
+   *      且其值**非空**。
+   * 另外记录"是否落在登录页"作为独立信号，与存储判据分开报告。
+   * ------------------------------------------------------------------ */
+  const storageSessionFacts = storage
+    ? [...storage.localStorage, ...storage.sessionStorage].filter((f) => f.sessionLike && f.valueLength > 0)
+    : [];
+  const storageHasSession = storageSessionFacts.length > 0;
+  const sessionPresent = sessionCookieValid || storageHasSession;
+
   const sslFailures = webRequestFailures.filter((f) => /SSL|CONNECTION|TIMED_OUT|PROXY/i.test(f.error));
   let verdict: DiagnoseReport['verdict'];
   if (webRequestFailures.length > 0 && sslFailures.length === webRequestFailures.length) {
     verdict = 'NETWORK_BLOCKED';
-  } else if (!sessionCookieValid) {
+  } else if (!sessionPresent) {
     verdict = 'SESSION_MISSING';
   } else {
     verdict = 'SESSION_OK';
   }
 
   notes.push(`网络失败数：${webRequestFailures.length}（其中疑似 TLS/连接类：${sslFailures.length}）`);
-  if (landedOnSignIn && sessionCookieValid) {
-    notes.push('存在有效会话 cookie，但落点是登录页 —— 可能是接口层被拒或 cookie 未被服务端接受');
+  notes.push(
+    `会话载体：cookie=${sessionCookieValid ? '有' : '无'}，页面存储=${storageHasSession ? `有（${storageSessionFacts.map((f) => f.key).join(', ')}）` : '无'}`
+  );
+  if (landedOnSignIn && sessionPresent) {
+    notes.push('检测到会话载体，但落点是登录页 —— 可能是接口层被拒或会话未被服务端接受');
+  }
+  if (!landedOnSignIn && !sessionPresent) {
+    notes.push('未落在登录页但也未发现会话载体 —— 可能页面尚未完成初始化，建议加长等待时间后复测');
   }
 
   return {
@@ -149,6 +193,7 @@ export async function runDiagnose(input: DiagnoseInput): Promise<DiagnoseReport>
     cookies,
     hasSessionCookie,
     sessionCookieValid,
+    storage,
     landingUrl: sanitize(landingUrl),
     landedOnSignIn,
     webRequestFailures: webRequestFailures.slice(0, 40),

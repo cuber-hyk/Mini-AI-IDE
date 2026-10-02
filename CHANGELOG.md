@@ -35,3 +35,9 @@
   - 新增脚本：`scripts/install-electron.mjs`（处理 pnpm 拦截 postinstall 与镜像）、`scripts/copy-static.mjs`（静态资源 + Monaco，显式递归复制，规避 `fs.cpSync` 的 EIO）。
   - 已修复三个"报告成功但实际未生效"的陷阱：沙箱 preload 不能 require 相对模块、会话级 UA 设置对视图无效、contextBridge 不暴露 ownKeys。均固化为自检项（详见 `docs/audits/2026-10-02-p2-shell-audit.md`）。
   - 已知取舍：Monaco worker 在 `file://` 下被 CSP 阻止并回退主线程，语法高亮与编辑可用，语言服务不可用。
+- **P2 实测反馈修复**：
+  - **分隔条改为可拖动**（原实现是覆盖在边界的独立视图，不接收拖动事件；现为编辑器页面自身 DOM + `ui:set-split` IPC + 最小宽度约束，双击复位 45%）。
+  - **新增 `npm run diagnose`**：只读报告分区路径、cookie（名字+长度+过期）、**页面存储事实**（键名+长度+是否 JSON+是否含会话关键词，不输出值）、落点 URL、网络失败明细，结论 `SESSION_OK` / `SESSION_MISSING` / `NETWORK_BLOCKED`。
+  - **登录态判据更正**：实测发现 DeepSeek 的会话存放在 **`localStorage`**（`userToken`、`settingsJwt`、`__appKit_userInfo` 等约 34 项），cookie 里只有设备指纹 `smidV2` 与 `.thumbcache_*`。早期诊断只查 cookie，把"已登录"误报为 `SESSION_MISSING`；现改为"cookie 或页面存储任一命中"，并把"是否落在登录页"作为独立信号。
+  - 澄清两处噪音：微信扫码 SDK 探测本机微信导致的 `ERR_CONNECTION_CLOSED`、`support.weixin.qq.com` 的 `ERR_BLOCKED_BY_ORB`，均与登录失败无关。
+  - 用户实测确认：左右并排、打开目录/编辑正常、**无「使用环境异常」告警**、**登录态跨重启保持**。

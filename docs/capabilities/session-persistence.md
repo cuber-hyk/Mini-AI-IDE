@@ -47,6 +47,24 @@ P2 期间把 P0b 工具（`reachability-probe`）的 profile 目录整体迁移�
 
 因此：**每个需要登录态的应用各自登录一次**；P0b 工具的登录不会帮助本应用。
 
+## 登录态的载体（实测：**不在 cookie 里**）
+
+实测发现：DeepSeek 的登录态存放在 **`localStorage`**，cookie 里只有设备指纹与缓存标记。
+
+| 载体 | 内容 | 说明 |
+|---|---|---|
+| `localStorage`（**真正的会话载体**） | `userToken`、`settingsJwt`、`__appKit_userInfo`、`__appKit_@deepseek/chat_lastSessionValue`、`__tea_session_id`、`__tea_cache_tokens` 等，共约 34 项 | 会话令牌在这里 |
+| `sessionStorage` | `__tea_session_id_20006317` | 单次会话级 |
+| cookie（**不含会话**） | `smidV2`（设备指纹）、`.thumbcache_*` | 仅有设备指纹与缓存标记 |
+| IndexedDB | 0 个库 | 本平台未使用 |
+
+**判据教训**：早期诊断只检查 cookie 中是否存在 `ds_session_id`，因此把**已登录**误报为
+`SESSION_MISSING`。现行判据为"cookie 或页面存储任一命中即视为有会话"，且把
+"是否落在登录页"作为独立信号分开报告。
+
+> 注意：`localStorage` 按 **origin** 隔离，且同样落在分区目录内。
+> 因此分区不变 + 同源访问，登录态即可跨重启保持。
+
 ## 登录次数最小化（重要）
 
 **反复登录本身可能被判定为异常。** 因此：
@@ -56,9 +74,11 @@ P2 期间把 P0b 工具（`reachability-probe`）的 profile 目录整体迁移�
   ```powershell
   npm run diagnose
   ```
-  它加载目标站点并报告：分区磁盘路径、全部 cookie（名字 + 长度 + 过期时间，**不输出值**）、
-  落点 URL、网络失败明细，以及结论 `SESSION_OK` / `SESSION_MISSING` / `NETWORK_BLOCKED`。
-- P0b 工具侧的等价命令（检查工具自己的 profile）：
+  它加载目标站点并只读报告：分区磁盘路径、全部 cookie（名字 + 长度 + 过期时间）、
+  页面存储事实（键名 + 长度 + 是否 JSON + 是否含会话关键词；**不输出值**）、落点 URL、
+  网络失败明细，以及结论 `SESSION_OK` / `SESSION_MISSING` / `NETWORK_BLOCKED`。
+- **运行诊断前请先关闭应用**：两者使用同一个分区目录，Chromium 会对 profile 加锁。
+- P0b 工具侧的等价命令（检查工具自己的 profile，不适用于本应用）：
   ```powershell
   pwsh -File tools\run-p0b-reachability.ps1 -ProbeOnly
   ```
@@ -67,7 +87,8 @@ P2 期间把 P0b 工具（`reachability-probe`）的 profile 目录整体迁移�
 
 | 项 | 结果 |
 |---|---|
-| 会话跨进程持久化（同一应用） | **是**。P0b 工具侧：分区目录重命名后重跑仍 `loggedIn: true` |
+| 会话跨进程持久化（同一应用） | **是**。`npm run diagnose` → `SESSION_OK`，落点 `chat.deepseek.com`（未跳登录页） |
+| 会话载体 | **`localStorage`**（`userToken` 等），cookie 中无会话 |
 | 跨应用迁移 profile | **否**。会话 cookie 被丢弃（见上「跨应用迁移禁忌」） |
 | 是否出现告警 | **无**（挑战命中 0 条） |
 | 是否出现验证码 | **无** |
