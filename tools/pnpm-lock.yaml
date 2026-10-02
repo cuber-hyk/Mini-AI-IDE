@@ -12,6 +12,14 @@ importers:
         specifier: 44.5.1
         version: 44.5.1
 
+  reachability-probe: {}
+
+  trace-verifier:
+    devDependencies:
+      electron:
+        specifier: 44.5.1
+        version: 44.5.1
+
 packages:
 
   '@electron-internal/extract-zip@1.0.5':

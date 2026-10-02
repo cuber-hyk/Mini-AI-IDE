@@ -1,0 +1,10 @@
+{
+  "name": "reachability-probe",
+  "version": "0.1.0",
+  "private": true,
+  "description": "P0b 可达性与登录实测工具：只读采集目标平台页面，记录是否出现针对性拦截",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  }
+}
