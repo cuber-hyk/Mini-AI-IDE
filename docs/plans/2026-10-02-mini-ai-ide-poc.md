@@ -60,7 +60,7 @@ source_of_truth:
 
 | ID | 状态 | 步骤 | 验证方式 |
 |---|---|---|---|
-| P0a | todo | **自动化特征核验**（不接触 DeepSeek，零平台暴露）：在默认 Electron 构建的内嵌 `WebContentsView` 中逐项核验 A 级判据（`navigator.webdriver`、CDP 端口、Playwright/Puppeteer 痕迹、无头特征、伪装脚本、UA 自洽性），并与真 Chrome 做**知情性**对照记录 | 同一台机器重复核验两次结论一致；报告含 Electron/Chrome 版本、工具版本、采集时间；**A 级逐项为零**；B 级差异如实列清单（仅留档，不列为任务） |
+| P0a | done | **自动化特征核验**（不接触 DeepSeek，零平台暴露）：在默认 Electron 构建的内嵌 `WebContentsView` 中逐项核验 A 级判据（`navigator.webdriver`、CDP 端口、Playwright/Puppeteer 痕迹、无头特征、伪装脚本、UA 自洽性），并与真 Chrome 做**知情性**对照记录 | ✅ 已完成：**A 级 8/8 通过、C 级 0 失败**，两次运行结论一致。证据：`docs/audits/2026-10-02-p0a-trace-verification-audit.md` 与同名 `-raw.json`；工具 `tools/trace-verifier/` |
 | P0b | todo | **真实可达性与登录实测**：用 `WebContentsView` + 独立 `persist:` 分区加载 `chat.deepseek.com`，验证能否登录、会话是否保持、是否弹人机验证；并**完全按人工方式**（自己复制粘贴、自己发送）完成一轮对话 | 能正常登录并完成一轮对话；记录是否出现验证码/风控提示；截图与网络日志留档；**结论直接判定方案是否成立**（本步是唯一的存亡关口） |
 | P1 | todo | 执行 **Gate**：确认 A 级自动化特征为零、且 P0b 未出现平台针对性拦截 | A 级逐项为零、C 级零出现；若 P0b 出现针对性拦截，则评估切换"本机 Chrome 直启"战略备选或调整方案后重测 |
 | P2 | todo | 建 Electron 外壳：三进程骨架（main / editor / webview）、Monaco、固定 `persist:` 分区、主进程 IPC 文件读取（编码探测 + 大小上限 + 路径白名单） | 抓包证明编辑器与主进程均无业务网络请求；打开 GBK 源码文件不出现乱码；超限文件返回元信息而非全文；编辑器渲染进程无 `fs` 能力（代码审查 + 运行时断言） |
@@ -120,9 +120,10 @@ source_of_truth:
 ## 交付物路由
 
 - 计划：`docs/plans/2026-10-02-mini-ai-ide-poc.md`（本文件）
-- 审计：P0a/P0b 产出 `docs/audits/2026-10-XX-automation-trace-verification-audit.md`（含稳定 finding ID、Severity、Status、Owner Plan）
-- 覆盖的发现项：无（本计划不由既有审计驱动）
-- 延迟的发现项：无
+- 审计：P0a 已产出 `docs/audits/2026-10-02-p0a-trace-verification-audit.md`（发现项 P0A-1 ~ P0A-5）；P0b 将产出 `docs/audits/2026-10-XX-reachability-audit.md`
+- 覆盖的发现项：P0A-1、P0A-2、P0A-3、P0A-4（均已 `verified`）
+- 延迟的发现项：**P0A-5（Medium, `open`）**——平台是否针对 Electron 客户端，由 P0b 关闭
+- 核验工具：`tools/trace-verifier/`（P0a 交付物；后续可演进为应用启动自检）
 - 能力文档：`docs/capabilities/app-shell.md`、`human-machine-boundary.md`、`local-file-access.md`、`return-path-and-format-contract.md`、`session-persistence.md`（脚手架阶段写成初版，实现后更新为当前事实）
 - CHANGELOG：需要（新增用户可见能力时按 Keep a Changelog 记入 `## [Unreleased]`）
 - Distill：需要（P1 Gate 结论属长期知识，且需更新 context-map）

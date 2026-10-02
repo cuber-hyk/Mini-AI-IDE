@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>P0a 自动化特征核验台</title>
+    <style>
+      body {
+        font: 13px/1.6 "Segoe UI", system-ui, sans-serif;
+        margin: 0;
+        padding: 20px;
+        background: #1a1a1a;
+        color: #e6e6e6;
+      }
+      h1 { font-size: 15px; margin: 0 0 12px; font-weight: 600; }
+      p { margin: 6px 0; color: #a0a0a0; }
+      pre {
+        background: #0d0d0d;
+        border: 1px solid #2a2a2a;
+        padding: 12px;
+        overflow: auto;
+        max-height: 60vh;
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+      .ok { color: #4ade80; }
+      .bad { color: #f87171; }
+    </style>
+  </head>
+  <body>
+    <h1>P0a 自动化特征核验台</h1>
+    <p>本页只做观察与采集：不修改属性、不伪装身份、不写入 DOM。</p>
+    <pre id="out">采集中…</pre>
+    <script src="./probe.js"></script>
+  </body>
+</html>

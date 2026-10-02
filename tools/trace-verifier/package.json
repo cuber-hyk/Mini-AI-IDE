@@ -1,0 +1,14 @@
+{
+  "name": "trace-verifier",
+  "version": "0.1.0",
+  "private": true,
+  "description": "P0a 自动化特征核验台：在默认 Electron 构建中逐项核验 A 级判据，并如实记录 B 级差异",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "probe": "electron . --probe"
+  },
+  "devDependencies": {
+    "electron": "44.5.1"
+  }
+}
