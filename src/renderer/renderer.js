@@ -152,7 +152,12 @@
     list.appendChild(li);
 
     el.preview.hidden = false;
-    el.previewNotes.textContent = '几何探针';
+    // 关键：**用很长的备注来测**。曾经用空备注测，掩盖了"备注挤爆面板、
+    // 把应用按钮挤出视口"的真实场景（实测踩过）。
+    el.previewNotes.textContent =
+      '采集：策略 code-blocks-in-markdown · 362 字符 / 22 行 · 围栏标记 1 处\n' +
+      '首行：文件： Mini-AI-IDE-test.md\n' +
+      '这是一段刻意很长的备注，用于验证备注变长时列表与应用按钮不会被挤出视口。'.repeat(3);
     void el.preview.offsetHeight; // 强制布局
 
     const rectOf = function (node) {

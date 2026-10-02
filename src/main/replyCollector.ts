@@ -33,12 +33,66 @@ export interface CollectStrategy {
  */
 export const COLLECT_STRATEGIES: CollectStrategy[] = [
   {
-    id: 'markdown-body',
-    description: '带 markdown 渲染容器的助手消息（取最新一条）',
+    id: 'code-blocks-in-markdown',
+    description: 'markdown 容器内的 <pre> 代码块（只取代码，剔除语言标签与"复制/下载"等 UI 文本）',
     script: `(() => {
-      const nodes = Array.from(document.querySelectorAll('[class*="markdown"], [class*="ds-markdown"]'));
-      const texts = nodes.map((n) => (n.innerText || '').trim()).filter((t) => t.length > 0 && t.includes('\`\`\`'));
-      return texts.length > 0 ? [texts[texts.length - 1]] : [];
+      const preOf = (root) => Array.from(root.querySelectorAll('pre'));
+      const build = (pres) => pres
+        .map((p) => {
+          const codeEl = p.querySelector('code');
+          const src = ((p.innerText || '').trim() || (p.textContent || '').trim());
+          if (!src) return '';
+          let lang = '';
+          try {
+            const holder = codeEl || p;
+            const m = /language-([\\w+#-]+)/.exec((holder.className || '').toString());
+            if (m && m[1]) lang = m[1];
+          } catch (e) { /* 忽略 */ }
+          return '\`\`\`' + lang + '\\n' + src + '\\n\`\`\`';
+        })
+        .filter((t) => t.length > 0)
+        .join('\\n\\n');
+
+      // 选择含代码块最多的 markdown 容器
+      let node = null;
+      let bestCount = 0;
+      for (const el of document.querySelectorAll('[class*="markdown"]')) {
+        const n = preOf(el).length;
+        if (n > bestCount) { bestCount = n; node = el; }
+      }
+      if (node) {
+        const text = build(preOf(node));
+        if (text) return [text];
+      }
+      // 退化：按容器分组，取代码块最多的那一组
+      const groups = new Map();
+      for (const p of document.querySelectorAll('pre')) {
+        const holder = p.closest('[class*="markdown"]') || p.parentElement;
+        if (!holder) continue;
+        const arr = groups.get(holder) || [];
+        arr.push(p);
+        groups.set(holder, arr);
+      }
+      let chosen = null;
+      let max = 0;
+      for (const [holder, pres] of groups) {
+        if (pres.length > max) { max = pres.length; chosen = holder; }
+      }
+      if (chosen) return [build(groups.get(chosen) || [])];
+      return [];
+    })()`,
+  },
+  {
+    id: 'last-message-text',
+    description: '含围栏的最长一段容器文本（次选；可能夹带少量 UI 文本）',
+    script: `(() => {
+      let bestText = '';
+      for (const el of document.querySelectorAll('[class*="markdown"]')) {
+        const t = (el.innerText || '').trim();
+        if (t.indexOf('\`\`\`') === -1) continue;
+        if (t.length > bestText.length) bestText = t;
+      }
+      return bestText ? [bestText] : [];
     })()`,
   },
   {
@@ -52,35 +106,19 @@ export const COLLECT_STRATEGIES: CollectStrategy[] = [
     })()`,
   },
   {
-    id: 'pre-blocks-last-group',
-    description: '页面里最后连续一组代码块（兜底：按 pre 元素聚合）',
-    script: `(() => {
-      const pres = Array.from(document.querySelectorAll('pre'));
-      if (pres.length === 0) return [];
-      // 从最后一个 pre 往上找共同父容器，把同一容器内的 pre 视为同一条回复
-      let container = pres[pres.length - 1].parentElement;
-      for (let depth = 0; depth < 6 && container; depth += 1) {
-        const inside = Array.from(container.querySelectorAll('pre'));
-        if (inside.length >= 1) {
-          const text = (container.innerText || '').trim();
-          if (text.includes('\`\`\`') || inside.length > 0) {
-            const joined = inside.map((p) => '\`\`\`\\n' + (p.innerText || '') + '\\n\`\`\`').join('\\n\\n');
-            return [joined];
-          }
-        }
-        container = container.parentElement;
-      }
-      return ['\`\`\`\\n' + (pres[pres.length - 1].innerText || '') + '\\n\`\`\`'];
-    })()`,
-  },
-  {
     id: 'whole-page-fences',
-    description: '整页扫描代码块（最后手段，可能在多轮对话里取错）',
+    description: '整页 <pre> 代码块（最后手段，多轮对话里可能取错）',
     script: `(() => {
       const pres = Array.from(document.querySelectorAll('pre'));
       if (pres.length === 0) return [];
-      const joined = pres.map((p) => '\`\`\`\\n' + (p.innerText || '') + '\\n\`\`\`').join('\\n\\n');
-      return [joined];
+      const joined = pres
+        .map((p) => {
+          const src = ((p.innerText || '').trim() || (p.textContent || '').trim());
+          return src ? '\`\`\`\\n' + src + '\\n\`\`\`' : '';
+        })
+        .filter((t) => t.length > 0)
+        .join('\\n\\n');
+      return joined ? [joined] : [];
     })()`,
   },
 ];

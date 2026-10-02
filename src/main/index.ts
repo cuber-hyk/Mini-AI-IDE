@@ -277,15 +277,19 @@ async function bootstrap(): Promise<void> {
 
     const parsed = parseModelReply(collected.replyText);
 
-    // 采集到的开头几行必须可见：否则"解析出 0 个代码块"时无法判断是采集错了位置、
-    // 还是解析规则不匹配（实测踩过：抓到的是**不带结尾围栏**的渲染文本）。
+    /*
+     * 诊断信息必须**紧凑**。
+     * 实测教训：早期把"采集到的开头 8 行"整段塞进备注，结果备注占满面板高度，
+     * 列表与其中的「应用」按钮被挤出视口 —— 诊断本身把界面搞坏了。
+     * 现在只给一行摘要：规模 + 首行（截断）。
+     */
     const collectedLines = collected.replyText.split(/\r\n|\r|\n/);
     const fenceMarkCount = (collected.replyText.match(/^[ \t]*(?:`{3,}|~{3,})/gm) ?? []).length;
+    const firstLine = (collectedLines[0] ?? '').slice(0, 60);
     const parseNotes = [
       ...parsed.notes,
-      `采集方式：策略 ${collected.strategyId}（${collected.strategyDescription ?? ''}）`,
-      `采集正文：${collected.replyText.length} 字符 / ${collectedLines.length} 行；整行围栏标记 ${fenceMarkCount} 处`,
-      `采集到的开头：\n${collectedLines.slice(0, 8).join('\n')}`,
+      `采集：策略 ${collected.strategyId} · ${collected.replyText.length} 字符 / ${collectedLines.length} 行 · 围栏标记 ${fenceMarkCount} 处`,
+      `首行：${firstLine}${(collectedLines[0] ?? '').length > 60 ? '…' : ''}`,
     ];
 
     const collectionId = emptyId;

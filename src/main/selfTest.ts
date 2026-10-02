@@ -576,17 +576,22 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   });
 
   /* ---- K) 回程闭环：采集 → 解析 → 应用 → 撤销 ---- */
-  // 用一个假的页面运行器验证采集器本身（不依赖真实站点）
+  // 用一个假的页面运行器验证采集器本身（不依赖真实站点）。
+  // 注意：断言用**第一条策略的 id**，不要硬编码字符串 —— 策略改名时不会误报。
+  const firstStrategyId = COLLECT_STRATEGIES[0]?.id ?? '';
   const fakeRunner = {
     evaluate: async (script: string): Promise<unknown> => {
-      if (script.includes('markdown')) return ['### 文件：src/greeting.ts\n```ts\nexport const hi = 1;\n```'];
+      if (script === COLLECT_STRATEGIES[0]?.script) {
+        return ['### 文件：src/greeting.ts\n```ts\nexport const hi = 1;\n```'];
+      }
       return [];
     },
     currentUrl: () => 'https://chat.deepseek.com/a/chat/s/abc?x=1',
   };
   const collected = await collectReply(fakeRunner);
-  add('K1', '采集器按策略取到回复且 URL 已去除 query', collected.strategyId === 'markdown-body' && collected.url === 'https://chat.deepseek.com/a/chat/s/abc', {
+  add('K1', '采集器按策略取到回复且 URL 已去除 query', collected.strategyId === firstStrategyId && collected.url === 'https://chat.deepseek.com/a/chat/s/abc', {
     strategyId: collected.strategyId,
+    expectedStrategy: firstStrategyId,
     url: collected.url,
     length: collected.replyText.length,
   });
