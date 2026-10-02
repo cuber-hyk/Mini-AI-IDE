@@ -1,0 +1,61 @@
+---
+artifact_type: adr
+status: accepted
+created: 2026-10-02
+updated: 2026-10-02
+owner: 胡运宽
+source_of_truth:
+  - https://www.electronjs.org/docs/latest/tutorial/web-embeds
+  - https://www.electronjs.org/docs/latest/api/web-contents-view
+---
+
+# ADR-0002：文件系统权限归主进程，渲染进程零磁盘访问
+
+## 状态
+
+已接受（accepted）。用户已确认采用推荐方案。
+
+## 背景
+
+需求文档第 4 节要求"编辑层完全在沙箱中运行，与外部网络严格隔离"，同时又要求左侧能编辑代码——而编辑代码必然要读磁盘。这两条在实现层面直接冲突，必须先定权限归属，否则后续所有 IPC 设计都在流沙上。
+
+若为省事在编辑器渲染进程打开 `nodeIntegration`，会同时带来三个后果：
+
+1. 文档的沙箱约束作废；
+2. 渲染进程一旦被恶意文件内容影响（如打开不受信任的仓库），即可读写任意路径；
+3. 需要"网页层不得暴露 Node 痕迹"的那套清洗工作，会在自家渲染进程上重新出现一批 Node 表面。
+
+## 决策
+
+**主进程独占文件系统访问权，渲染进程零磁盘能力。**
+
+1. 编辑器渲染进程固定 `nodeIntegration: false` + `contextIsolation: true` + `sandbox: true`。
+2. 文件读取、编码探测、大小校验、路径白名单**全部在主进程**完成；渲染进程通过 `contextBridge` 暴露的窄接口请求**纯文本结果**。
+3. IPC 接口只接受"路径 + 期望编码策略"这类声明式参数，不接受任意表达式；主进程负责解析真实路径（`path.resolve`）并校验其落在用户显式打开的根目录之内。
+4. 网页视图**完全不具备**任何文件 IPC 通道——即使它被页面脚本完全控制，也没有可调用的本地能力。
+5. 单次返回载荷设上限；超限时主进程只返回元信息（总字符数、行数）并告知超限，由用户显式确认后才分片读取。
+6. 网页视图的实现方式固定为 **`WebContentsView`**（主进程创建、`BaseWindow` + `contentView.addChildView`），不使用 `<iframe>`，也不使用 `<webview>` 标签。
+
+## 备选方案
+
+| 方案 | 为什么未采用 |
+|---|---|
+| 编辑器渲染进程直接用 `fs`（开 `nodeIntegration`） | 实现最快，但破坏文档沙箱约束，且扩大攻击面；与"清理 Node 表面"的项目方向相反。 |
+| 用现成的 `electron` 文件对话框能力 + `webUtils.getPathForFile` 懒加载 | 作为**取得路径**的手段仍会使用（拖拽/打开对话框），但**读取内容**仍必须回主进程，不能作为替代方案。 |
+| 第三方沙箱化文件服务进程（utilityProcess） | 隔离更彻底，但对 PoC 属过度设计；若后续要支持大仓库索引，可作为演进方向。 |
+| 网页视图用 `<webview>` 标签 | 跨进程 iframe（OOPIF），Obsidian Web viewer 即走此路，**可行性已被旁证**；但 Electron 官方明确不推荐（架构会剧变）且不保证 API 长期可用。 |
+| 网页视图用 `<iframe>` | 与父页面**同渲染进程**，共享环境特征、依赖目标站点 CSP 允许，与"独立进程"约束直接冲突。 |
+| 网页视图用 `BrowserView` | 已标记 Deprecated，迁移目标即 `WebContentsView`。 |
+
+## 后果
+
+**正面**：渲染进程可安全地打开不受信任的代码；权限模型单点可审计（只有一处 `fs` 调用面）；网页层能力面保持最小。
+
+**负面 / 代价**：每次读取都有一次 IPC 往返，大文件需要分片协议；编码探测逻辑只能写在主进程，测试要覆盖 IPC 层。
+
+**待明确**：IPC 通道命名与消息 schema 在实现阶段确定，并作为 `docs/capabilities/local-file-access.md` 的 `source_of_truth`。
+
+## 关联
+
+- 能力文档：`docs/capabilities/local-file-access.md`
+- 计划：`docs/plans/2026-10-02-mini-ai-ide-poc.md`（步骤 P2）
