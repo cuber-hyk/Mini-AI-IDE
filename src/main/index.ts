@@ -24,7 +24,7 @@ import { registerFileIpc } from './ipc';
 import { createFixtures } from './fixtures';
 import { runSelfTest } from './selfTest';
 import { runDiagnose } from './diagnose';
-import { SettingsStore, isUsableRoot } from './settings';
+import { SettingsStore, isUsableRoot, PRODUCTION_SETTINGS_FILE, SELF_TEST_SETTINGS_FILE } from './settings';
 import { buildContextSummary } from './contextSummary';
 import { collectReply } from './replyCollector';
 import { ReturnPathService } from './returnPathService';
@@ -85,7 +85,7 @@ async function bootstrap(): Promise<void> {
   await app.whenReady();
 
   const fileService = new FileService();
-  const settings = new SettingsStore();
+  const settings = new SettingsStore(SELF_TEST ? SELF_TEST_SETTINGS_FILE : PRODUCTION_SETTINGS_FILE);
   const saved = settings.get();
   const targetSession = session.fromPartition(SESSION_PARTITION);
 
@@ -690,7 +690,25 @@ async function bootstrap(): Promise<void> {
     process.stdout.write(
       `[ui-probe] 可编辑：${editable ? '是' : '否'}；readOnly=${String(p?.readOnly)}；wordWrap=${String(p?.wordWrap)}（判定换行：${wraps ? '开' : '关'}）\n`
     );
-    app.exit(editable && wraps ? 0 : 1);
+
+    // 几何测量：把预览面板显示出来，确认「应用」按钮真的在视口内
+    let geometry: unknown = null;
+    try {
+      geometry = await editorView.webContents.executeJavaScript(
+        'typeof window.__uiGeometryProbe === "function" ? window.__uiGeometryProbe() : null',
+        true
+      );
+    } catch (err) {
+      geometry = { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+    process.stdout.write(`\n===== 界面几何 =====\n${JSON.stringify(geometry, null, 2)}\n`);
+    const g = geometry as { ok?: boolean; applyVisible?: boolean } | null;
+    const layoutOk = Boolean(g && g.ok && g.applyVisible === true);
+    process.stdout.write(
+      `[ui-probe] 预览面板显示时「应用」按钮可见：${g?.applyVisible ? '是' : '否'}；布局自洽：${layoutOk ? '是' : '否'}\n`
+    );
+
+    app.exit(editable && wraps && layoutOk ? 0 : 1);
     return;
   }
 

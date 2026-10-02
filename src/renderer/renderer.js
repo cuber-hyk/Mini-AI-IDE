@@ -126,6 +126,65 @@
     };
   };
 
+  /**
+   * 界面几何探针（`--ui-probe` 使用）：**真的把预览面板显示出来**，测量各区块位置，
+   * 判断"应用按钮是否真的可见"。
+   *
+   * 为什么必须这样验：布局是否被裁掉只能靠测量，源码层面看不出来。
+   * 实测踩过：`.layout` 用 calc 硬编码高度，预览面板一出现就把底部挤出视口，
+   * 表现是"预览里看不到应用按钮"。
+   */
+  window.__uiGeometryProbe = function () {
+    const viewportH = window.innerHeight;
+
+    // 造一个真实条目（含应用按钮），确保面板有内容、可测量
+    const list = el.previewList;
+    list.textContent = '';
+    const li = document.createElement('li');
+    li.className = 'preview-item';
+    const head = document.createElement('div');
+    head.className = 'preview-item-head';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.textContent = '应用';
+    head.appendChild(btn);
+    li.appendChild(head);
+    list.appendChild(li);
+
+    el.preview.hidden = false;
+    el.previewNotes.textContent = '几何探针';
+    void el.preview.offsetHeight; // 强制布局
+
+    const rectOf = function (node) {
+      const r = node.getBoundingClientRect();
+      return { top: Math.round(r.top), bottom: Math.round(r.bottom), height: Math.round(r.height), width: Math.round(r.width) };
+    };
+
+    const previewRect = rectOf(el.preview);
+    const layoutRect = rectOf(el.monacoHost);
+    const applyRect = rectOf(btn);
+    const promptRect = rectOf(el.btnCopyPrompt);
+
+    const applyVisible = applyRect.height > 0 && applyRect.bottom <= viewportH && applyRect.top >= 0;
+    const promptVisible = promptRect.height > 0 && promptRect.bottom <= viewportH;
+
+    // 复原：把探针造的内容清掉并重新隐藏面板
+    list.textContent = '';
+    el.previewNotes.textContent = '';
+    el.preview.hidden = true;
+
+    return {
+      viewportH,
+      preview: previewRect,
+      editorArea: layoutRect,
+      applyButton: applyRect,
+      copyPromptButton: promptRect,
+      applyVisible,
+      promptVisible,
+      ok: applyVisible && promptVisible && previewRect.height > 0,
+    };
+  };
+
   /* ---------------- Monaco 初始化 ----------------
    * 可读性选项集中在此，便于对照主流编辑器调整。
    * 注意：**不设 readOnly** —— 默认即可编辑；保存走 Ctrl+S，未保存由状态点提示。

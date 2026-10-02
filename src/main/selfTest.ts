@@ -21,7 +21,7 @@ import { computeApply, formatNumberedSnippet, parseModelReply, stripNumberedPref
 import { buildSnippetText, buildWholeFileText, fenceFor } from '../shared/snippet';
 import { createFixtures, type FixturePaths } from './fixtures';
 import type { FileService } from './fileService';
-import { SettingsStore, isUsableRoot } from './settings';
+import { SettingsStore, isUsableRoot, SELF_TEST_SETTINGS_FILE } from './settings';
 import { buildContextSummary } from './contextSummary';
 import { COLLECT_STRATEGIES, collectReply } from './replyCollector';
 import { ReturnPathService } from './returnPathService';
@@ -675,12 +675,21 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     const before = input.settings.get();
     const written = input.settings.update({ lastRoot: fixtures.root });
     add('G1', '设置可写入并读回（上次打开的目录）', written.lastRoot === fixtures.root, written);
-    const reread = new SettingsStore();
+    const reread = new SettingsStore(SELF_TEST_SETTINGS_FILE);
     add('G2', '设置可从磁盘重新加载（等价于重启后恢复）', reread.get().lastRoot === fixtures.root, reread.get());
-    // 复原，避免自检污染用户设置
+    // 复原，避免自检污染设置
     input.settings.update({ lastRoot: before.lastRoot, editorWidth: before.editorWidth });
     const after = input.settings.get();
     add('G3', '自检结束后已复原原设置', after.lastRoot === before.lastRoot && after.editorWidth === before.editorWidth, after);
+
+    // G4：自检**必须**使用独立的设置文件，否则会覆盖用户真实的"上次打开的目录"
+    const settingsBase = path.basename(input.settings.filePath);
+    add(
+      'G4',
+      '自检使用独立的设置文件（不会覆盖用户真实的上次打开的目录）',
+      settingsBase === SELF_TEST_SETTINGS_FILE,
+      { settingsFile: settingsBase, expected: SELF_TEST_SETTINGS_FILE }
+    );
   }
 
   const failures = checks.filter((c) => !c.pass).map((c) => c.id);

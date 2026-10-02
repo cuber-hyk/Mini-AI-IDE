@@ -24,7 +24,19 @@ body {
   overflow: hidden;
 }
 
+/*
+ * 整体纵向 flex 分配高度（**不要用 calc 硬编码**）。
+ * 曾经 `.layout` 写成 `calc(100% - 36px - 132px)`，但回程预览面板出现后会再占一块，
+ * 总高超出视口 → 底部被裁掉，表现为"预览里看不到应用按钮"（用户实测）。
+ * 改成 flex 后，任何面板出现都由布局自动吸收。
+ */
+body {
+  display: flex;
+  flex-direction: column;
+}
+
 .toolbar {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -84,15 +96,19 @@ body {
 }
 
 .layout {
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
-  height: calc(100% - 36px - 132px);
 }
 
-/* 回程预览面板 */
+/* 回程预览面板：出现时从布局里自动分走空间（不再靠 calc 硬算，否则底部会被裁掉） */
 .preview {
+  flex: 0 0 auto;
+  height: 30vh;
+  min-height: 168px;
+  max-height: 46vh;
   border-top: 1px solid var(--border);
   background: #12141a;
-  max-height: 44%;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -256,10 +272,11 @@ body {
 
 /* 需求输入区：应用内写需求 → 复制 prompt → 自己粘贴到右侧网页 */
 .prompt-bar {
-  height: 132px;
+  flex: 0 0 auto;
+  height: 104px;
   border-top: 1px solid var(--border);
   background: #191c22;
-  padding: 6px 8px;
+  padding: 7px 10px 9px;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -285,7 +302,6 @@ body {
   line-height: 1.5;
 }
 
-.target-files:focus,
 .requirement:focus {
   outline: none;
   border-color: var(--accent);

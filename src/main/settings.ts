@@ -21,11 +21,22 @@ export interface Settings {
 
 const DEFAULTS: Settings = { lastRoot: null, editorWidth: null };
 
+/**
+ * 生产设置文件名。
+ *
+ * **自检/测试必须使用另一个文件名**（见 `SELF_TEST_SETTINGS_FILE`）：
+ * 早期两者共用同一个文件，导致**每跑一次自检就把用户"上次打开的目录"覆盖掉**
+ * （实测踩过：用户报告"每次都是打开 Mini-AI-IDE 而不是我上次的项目"，
+ * 真因不是恢复逻辑，而是**测试写坏了生产设置**）。
+ */
+export const PRODUCTION_SETTINGS_FILE = 'settings.json';
+export const SELF_TEST_SETTINGS_FILE = 'settings.selftest.json';
+
 export class SettingsStore {
   private readonly file: string;
   private cache: Settings;
 
-  constructor(fileName = 'settings.json') {
+  constructor(fileName = PRODUCTION_SETTINGS_FILE) {
     this.file = path.join(app.getPath('userData'), fileName);
     this.cache = this.load();
   }
