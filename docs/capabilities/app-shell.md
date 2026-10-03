@@ -11,8 +11,11 @@ source_of_truth:
 
 # 能力：应用外壳与进程架构
 
-> 状态说明：**P2 骨架已实现；自检 115 项、单测 153 项**。本节记录当前事实。
+> 状态说明：**P2 骨架已实现；自检 128 项、单测 153 项**。本节记录当前事实。
 > 自检命令：`npm run self-test`（构建 + `electron . --self-test`，不联网）。
+> 运行时探针：`npm run ui-probe`（编辑器状态 / 几何）、`npm run ui-probe:bubble`（选区浮层按钮是否真的出现）。
+> 断言条数以 `src/main/selfTest.ts` 中 `add(` 的调用数为准（一轮前 122，本轮 V 组 +6）。
+> `npm run build` 会顺带跑 `tools/check-renderer-scope.mjs`，对 `renderer.js` 做真实作用域分析。
 
 ## 当前技术栈（已落地）
 
@@ -122,7 +125,16 @@ source_of_truth:
 | **bash heredoc 会展开 `${...}`** | 用 `cat > x.cjs <<'EOF'` 写含模板字符串的验证脚本，`${o.kind}` 被 shell 展开成空值，比对结果恒为 `undefined@undefined`，排查时极易误判为算法错误 | 写含 `${}` 的脚本一律用编辑器工具落盘，不要走 heredoc。同类问题还有：`\s` 在 heredoc 里被吞、`node -e "..."` 里的正则也会被吃掉（改用 `String.includes` 做临时排查） |
 | **跨进程写盘后必须广播** | 主进程落盘后**不广播**，另一个渲染进程里的编辑器一直显示旧内容（用户实测："应用后仍是旧代码，关闭文件重开才对"） | 写盘成功后 `send(CHANNELS.fileChanged, filePath)`，渲染进程订阅后重新读盘。且**刷新入口要唯一** —— 别一处自己 `openFile`、另一处靠广播，会重复刷新甚至竞态 |
 | **`textarea` / `div` 在 Windows 上的原生滚动条** | 深色主题里出现一条**带上下箭头的白色原生滚动条**，视觉上极扎眼（用户截图指出） | 隐藏原生条 + 自绘细条：`::-webkit-scrollbar { width: 0 }` 配 `::-webkit-scrollbar-thumb` 定宽定色，hover 才加深。与项目内 Monaco 滚动条同一手法 |
-| **`position: absolute` 的浮层要先确认定位祖先** | 浮动按钮挂到某个容器下，若该容器没有 `position: relative`，会退到更外层祖先定位，位置完全错乱 | 浮层所在容器显式写 `position: relative`，并用自检断言该规则存在 |
+| **`position: absolute` 的浮层要先确认定位祖先** | 浮动按钮挂到某个容器下，若该容器没有 `position: relative`，会退到更外层祖先定位，位置完全错乱 | 浮层所在容器显式写 `position: relative`，并用自检断言该规则存在。（**2026-10-03 起本条对选区浮层不再适用** —— 已改用 `IContentWidget`，节点挂在 Monaco 自己的 overflow-guard 内，由 Monaco 自己 `setPosition("absolute"\|"fixed")`） |
+| **`IContentWidget` 的 DOM 节点由 Monaco 独占 `display` / `visibility`** | 我们同时在样式表写 `.selection-copy{display:none}` + `bubble.hidden=true` + `.visible{display:inline-block}`，与 Monaco 的三处**内联**样式写入抢同一属性（构造 `setDisplay("none")`+`setVisibility("hidden")`；`setPosition()` 条件写 `block`/`none`；`render()` 写 `inherit`/`hidden`）。内联样式优先于样式表 → **谁最后写谁赢**，表现为"时而出现时而不出现"，且与折行多少（`render()` 频次）弱相关，看起来像"只在 md 上坏"（用户三次反馈） | **我们一次都不碰 `display` / `visibility`**。显隐的唯一真源是 `getPosition()` 的返回值：`null` → Monaco 自己收起，合法锚点 → Monaco 自己摆出。锚点须带 `preference`（否则 `setPosition` 里 `preference.length > 0` 过不去、Monaco 主动 `setDisplay("none")`）与 `positionAffinity: Left`（折行行锚在该视觉行左缘） |
+| **`useDisplayNone: true` 会把 widget 钉死在 `display:none`** | 名字看着像"我自己管 display"，但在 `setPosition()` 里它被**取反**参与三元判断：`!this.useDisplayNone && 有锚点 && preference非空 ? setDisplay("block") : setDisplay("none")`。设成 `true` 条件恒假 → **永远走 else 被钉死**，想显示反而得自己写 `display`，正好退回"两方抢属性"的老问题 | 保持默认（`false`），把 `display`/`visibility` 完整交给 Monaco。改用 `getPosition()` 返回值控制显隐 |
+| **`editor.layoutContentWidget()` 必须传原始 widget 对象** | 公开层会执行 `w.getPosition()` 并把结果写进包装器的 `position` 字段再转交视图层；传错对象（传包装器 / `undefined`）→ 锚点直接丢失 → 按钮不出现，而代码看起来完全正常 | 传**带 `getPosition` 的那个原始对象**；自检 V3 断言调用形状与锚点字段 |
+| **Monaco 的 hover 面板是自绘 DOM，不是原生 `title`** | 查找框关闭按钮的提示反复闪烁（用户三次反馈）。真凶：`MenuEntryActionViewItem.updateLabel()` 经 `localize(1726,"{0} ({1})",...)` 生成 `"Close (Escape)"`，而它挂在 **AltKeyTracker** 上 —— `n!==this._wantsAltCommand && (..., this.updateLabel(), this.updateTooltip(), ...)`，**每次 alt/ctrl/shift/meta 状态变化**都重画；`updateTooltip()` 走 `setupManagedHover(...)`，Monaco 会给节点打 `custom-hover="true"` 渲染**自绘容器**，每次重画 dispose 旧容器再建新的 → 视觉上就是闪。**据此确认：第一轮怪 `getPositionAt` 的 NaN、第二轮把 `title` 改 `aria-label`，两轮都打偏了**（那个面板不来自 `title`） | 不 patch Monaco。`freezeFindWidgetHover()` 挂 `MutationObserver` 蹲查找框出现，查到带 `custom-hover` 标记的 action 项就**移除该标记**（自绘 hover 的开关）并把现有 `aria-label` 写进 `title` → 原生 title 由浏览器托管、不随重排销毁重建，不再闪，且悬停仍能看到 "Close (Esc)" |
+| **高频回调里重排 DOM 会连累旁边控件的自绘 hover** | 在 `onDidChangeCursorSelection` / `onDidScrollChange` 里做 DOM 重排，会让相邻控件的自绘 hover 反复重建 —— 这是"闪烁"的通用成因，不止查找框一处 | **高频回调里只做状态更新与 `layoutContentWidget()`，不 appendChild / 不写 style**。自检 V4 把这条写成规则 |
+| **否定式自检断言（`!re.test(...)`）会造假绿灯** | 正则一旦写错就恒为 `true`，表现为"永远 PASS"，比漏检更危险。本轮实测踩到：`.selection-copy{display:none}` 这个**被禁的写法就写在 CSS 注释的说明里**，正则命中了注释 → 误报（与 U1 的"注释里写着错误写法"是同一个坑） | 匹配前**先剥注释**（CSS 用 `/\/\*[\s\S]*?\*\//g`，JS 另加行注释）；并把每条规则的布尔中间量用独立脚本打印出来核对 —— `tools/verify-bubble-selfrules.mjs` / `-offline.mjs` |
+| **普通 JS（不走 `tsc`）里引用不存在的变量 → Monaco 回调静默吞掉异常** | `setupSelectionCopyBubble` 里写的是裸 `editor.getSelection()` / `editor.getModel()`，而**该函数并没有 `editor` 这个绑定**（同名的只是别的函数的局部变量，不构成闭包）。`getPosition()` 由 Monaco 在自己的渲染循环里回调，抛出的 `ReferenceError` **被内部吞掉、外部毫无报错**，表现只是"按钮永远不出现"。语法完全合法，L2 的 `node:vm` 语法解析查不出来 | 用 **TypeScript 编译器做真实作用域分析**：`tools/check-renderer-scope.mjs`（`allowJs` + `checkJs`，只看诊断 2304/2552），已接入 `npm run build`，报告供自检 V6 读取。实测对旧版精确报出 9 处 `Cannot find name 'editor'`、修复后 0 |
+| **`ContentWidget.getPosition()` 里的异常是"静默失败"** | 该回调在 Monaco 的渲染循环内执行，**任何异常都不会冒泡到我们的代码**，也不会有控制台报错可见（取决于版本），只会表现为"widget 不出现" | 别在这种回调里做可能失败的操作；`getPosition()` 只读状态、只返回 `null` 或锚点，不做 DOM 操作、不做网络/IO。构建期用作用域检查兜底 |
+
 | **依赖异步对象的初始化不能写成顶层 IIFE** | `setupSelectionCopyBubble` 写成顶层 IIFE 时同步执行，而 `state.editor` 要等 `window.require` 异步回调才赋值 → 守卫判断 `if (!state.editor) return` **静默 return**，按钮永远不出现，且代码就在文件里、看起来完全正常（用户实测：选中后没有浮动复制按钮） | 改成具名函数，在 `initMonaco` 的 `require` 回调里、`state.editor` 赋值之后调用；加幂等字段防回调重入。**自检必须断言"执行前提"，光断言"代码存在"完全无效** |
 | **`min-height` 与 `max-height` 写成同值会钉死高度** | 输入框 CSS 写 `min-height: 88px; max-height: 88px`，JS 的 auto-grow 设的是内联 `height`，而 **CSS 的 min/max-height 钳制优先级高于内联 `height`** → `grow()` 形同虚设，粘贴内容不撑开（用户实测） | 两端拉开：CSS 与 JS 各写一份上下限（`44px` / `220px`）并**用自检断言两者一致**；`min ≠ max` 也要单独断言 |
 | **auto-grow 归零时只清 `height` 不够** | `el.style.height = 'auto'` 后 `scrollHeight` 仍被 `min-height` 顶起，量到的不是真实内容高度 | 归零时连 `minHeight = '0px'`、`maxHeight = 'none'` 一起放开，量完再写回 |

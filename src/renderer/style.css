@@ -447,14 +447,21 @@ body {
 /*
  * 选区浮动复制按钮。
  *
- * 定位由 **Monaco 的 content widget** 负责（见 renderer.js 的 setupSelectionCopyBubble），
- * 样式里**不能再写 position / left / top** —— 那会与 Monaco 的内联定位打架。
- * 显隐用 `.visible` 类：Monaco 把 widget 的 DOM 挂进自己的 overflow-guard，
- * 用 `hidden` 属性会与它的生命周期打架。
+ * 定位与显隐**全部由 Monaco 的 content widget 负责**（见 renderer.js 的
+ * setupSelectionCopyBubble）。这里**绝对不能写 `display`**：
+ *
+ * Monaco 的 ContentWidget 包装器对这个节点做三件事，写的都是**内联样式**：
+ *   - 挂载时 `display:none` + `visibility:hidden`；
+ *   - 每次 `setPosition()` 按"有无锚点 + preference 非空"写 `display:block|none`；
+ *   - 每次 `render()` 按是否离屏写 `visibility:inherit|hidden`。
+ *
+ * 内联样式优先级高于样式表，所以以前这里写的
+ * `.selection-copy{display:none}` 与 `.selection-copy.visible{display:inline-block}`
+ * 会跟 Monaco 抢同一个属性，表现为"时而出现时而不出现"。
+ * 现在只保留**外观**属性，一个 `display` 都不写。
  */
 .selection-copy {
   z-index: 20;
-  display: none;
   padding: 2px 9px;
   border-radius: 5px;
   background: #2c5cc5;
@@ -466,10 +473,6 @@ body {
   cursor: pointer;
   user-select: none;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
-}
-
-.selection-copy.visible {
-  display: inline-block;
 }
 
 .selection-copy:hover {

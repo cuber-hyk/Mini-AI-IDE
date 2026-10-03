@@ -1266,6 +1266,27 @@ async function loadLocalView(
 
     // 预览面板已移到右下角独立视图，其界面契约由自检 L8–L11 覆盖
 
+    // 选区浮层复制按钮实测（仅在 `--test-bubble` 时做）：
+    // 真的设一个跨折行选区，读回按钮的 computed display/visibility 与几何矩形。
+    if (process.argv.includes('--test-bubble')) {
+      let bubbleProbe: unknown = null;
+      try {
+        bubbleProbe = await editorView.webContents.executeJavaScript(
+          'typeof window.__uiSelectionProbe === "function" ? window.__uiSelectionProbe() : null',
+          true
+        );
+      } catch (err) {
+        bubbleProbe = { ok: false, reason: err instanceof Error ? err.message : String(err) };
+      }
+      process.stdout.write(`\n===== 选区浮层探针 =====\n${JSON.stringify(bubbleProbe, null, 2)}\n`);
+      const b = bubbleProbe as { ok?: boolean; visible?: boolean; reason?: string } | null;
+      process.stdout.write(
+        `[ui-probe] 选区浮层按钮真的出现：${b?.visible ? '是' : '否'}${b?.reason ? '（' + b.reason + '）' : ''}\n`
+      );
+      app.exit(editable && wraps && layoutOk && b?.visible === true ? 0 : 1);
+      return;
+    }
+
     // 差异视图实测（仅在 `--test-diff` 时做）：确认 Monaco DiffEditor 真能创建并拿到两侧模型
     if (process.argv.includes('--test-diff')) {
       const sample = 'const a = 1;\nconst b = 2;\n';

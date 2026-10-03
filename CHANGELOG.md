@@ -57,6 +57,9 @@
 - **N 组自检（N1–N6）**：网页区工具条的界面契约（id 引用、语法、按钮绑定、preload 通道名、**右边缘把手形态**、**刚隐藏高亮提示**）。
 - **O 组自检（O1–O7）**：本轮改动的可执行断言（工具栏无带文字开关、目录树开关在编辑器顶部条且为图标、输入框有 JS 自适应、**「复制提示词」为药丸形（判圆角 ≥ 半高，不写死像素）**、采集后自动进编辑器 diff、**网页隐藏后工具条仍可见且把手几何有效**、**View 菜单兜底入口存在**）。
 - **R / S / T / U 组自检**：输入框 auto-grow 的完整前提（R1–R8：Monaco 就绪后才挂载、min≠max、CSS 与 JS 上下限一致、归零时同时放开 min/max、收缩链逐层给 `min-height: 0`、宽度守卫防自激、缩放即重算）；初始溢出的主进程根因（S1–S2：窗口显示后重算几何、状态行不参与压缩）；重复入口判定（T1：预览开关只有网页区右上角一处）；浮层定位与提示（U1–U5：不用 `getPositionAt` 误传、**不再自己算坐标**、不用原生 `title`、**定位交给 content widget 且不写 style**、删按钮不删快捷键）。
+- **V 组自检（V1–V6）**：把两个"修了多次仍存在"的缺陷按**根因**立规（不与 Monaco 抢 `display`、不设 `useDisplayNone`、锚点形状与 `layoutContentWidget` 调用契约、高频回调不重排 DOM、查找框 hover 抑制且不丢提示、**裸标识符必须能解析到绑定**）。这一组的特殊性在于：缺陷触发源既可能在 Monaco 内部（要遵守它的契约），也可能是"引用了不存在的变量"这类静默失败 —— 判据因此从"我们的代码里有没有某段字样"升级为"真实语义检查"。另配 `tools/verify-bubble-selfrules.mjs` / `-offline.mjs` 专门防"否定式断言的假绿灯"。
+- **`tools/check-renderer-scope.mjs`（构建时自动跑）**：用 TypeScript 编译器对 `renderer.js` 做**真实作用域分析**，找出"裸标识符找不到绑定"的位置，结果写入 `tools/renderer-scope-report.json` 供自检 V6 读取。**已接入 `npm run build`** —— 这类缺陷一旦落在 Monaco 回调里就会被内部吞掉、外部毫无报错，必须在构建期拦住。实测：对修复前的代码精确报出 9 处 `Cannot find name 'editor'`，修复后为 0。
+- **运行时探针 `--ui-probe --test-bubble`**（`npm run ui-probe:bubble`）：真的设一个跨折行选区并读回浮层按钮的 computed 样式与几何，用于在没有肉眼判断的情况下确认按钮是否真的出现。
 - **Q3 断言升级**：原断言只查 `selection-copy` 字符串存在 —— 而"顶层 IIFE 静默 return"那类缺陷里字符串确实在、只是永不执行，**存在性断言完全无效**。改为断言执行前提（`state.selectionBubbleReady` 幂等字段 + 在 `initMonaco` 回调内调用）。
 
 ### Fixed
@@ -75,6 +78,33 @@
   - 第一轮归因 `getPositionAt(offset: number)` 收的是字符偏移量、而 `getEndPosition()` 返回 Position 对象 → 转成 `NaN` → `style.top = NaN + 'px'` 是非法 CSS 值被丢弃。**`getTopForLineNumber` 返回 `number`、永不为 null**，原守卫 `if (top === null)` 是死代码，NaN 会一路写进 style。该修正本身正确（`Number.isFinite` 是对的判据），但**不是**本现象的根因。
   - 第二轮归因浮层自身的原生 `title`，改成 `aria-label`。方向对（见下条），同样不是根因。
   **教训**：同一现象**两次修不好**时，该怀疑的不是"哪一行写错了"，而是"这个思路对不对"——前两轮都在忠实地维护一套本来就建立在自己算坐标之上的实现。
+- **两个「修了多次仍在」的缺陷，第四轮改为先读 Monaco 打包产物定位真凶，都不在自家代码里**（用户反馈："目前存在如下修复了多次仍然存在的问题：1. 对于文本文件选中片段后所在的区域仍然没有浮层按钮出现在选区右端行的右上角 2. 仍然有闪烁"）。
+  这一轮的结论是：**前几轮之所以修不好，是因为一直在自己的代码里找原因，而这两处的触发源都在 Monaco 内部。** 方法上改为直接反编译 `dist/renderer/vendor/monaco/vs/editor-BdtEMBbM.js`，把相关方法的原始实现读出来，再倒推"我们该遵守什么契约"。
+
+  - **缺陷一：选区浮层按钮在 md 等文本文件上仍不出现 —— 有两个叠加的根因，且都属"静默失败"。**
+    **根因 A（真正让它彻底不出现的）：`setupSelectionCopyBubble` 里引用了不存在的 `editor` 变量。**
+    该函数内写的是裸 `editor.getSelection()` / `editor.getModel()`，**本函数并没有 `editor` 这个绑定** —— 同名的 `editor` 只是别的函数的局部变量，不构成闭包。而 `getPosition()` 是**由 Monaco 在自己的渲染循环里回调**的：里面抛出的 `ReferenceError` 被 Monaco 内部吞掉，外部**看不到任何报错**，表现就只是"按钮永远不出现"。
+    这与之前踩过的"顶层 IIFE 静默 return"是同一类缺陷的两个变体 —— **都不是逻辑写错，而是这段代码压根没正常跑起来**。修法是在函数开头 `const editor = state.editor;`。用 TypeScript 编译器对旧版做语义检查，**精确报出 9 处 `Cannot find name 'editor'`**，修复后为 0。
+    ⚠️ **为什么前几轮查不出**：`renderer.js` 是普通 JS、不走 `tsc`，而自检 L2 只用 `node:vm` 做**语法**解析 —— 语法本身没问题，这类"引用了不存在的变量"完全察觉不到。新增 `tools/check-renderer-scope.mjs`（TS 编译器真实作用域分析）+ 自检 V6 补上这个缺口。
+    **根因 B（"时而出现时而不出现"）：三方抢同一个 `display`。**
+    读 Monaco 的 ContentWidget 包装器（`l4` 类）后真相清楚：**这个节点的 `display` 与 `visibility` 由 Monaco 独占**。
+    它对节点做三处**内联**样式写入：构造函数 `setDisplay("none")` + `setVisibility("hidden")`；`setPosition()` 按"有无锚点 + `preference` 非空"写 `setDisplay("block"|"none")`；`render()` 按是否离屏写 `setVisibility("inherit"|"hidden")`。
+    内联样式优先级高于样式表，而我们以前写的是 `.selection-copy{display:none}` + `bubble.hidden=true` + `.selection-copy.visible{display:inline-block}` —— **三方同时抢同一个属性，谁最后写谁赢**，且与折行多少（`render()` 频次）弱相关，所以看起来像"只在 md 上坏"。
+    **修法：我们一次都不碰 `display`。** 删掉 CSS 里的 `display` 与 `.visible` 类、删掉 `bubble.hidden` 赋值，显隐的**唯一真源改成 `getPosition()` 的返回值**：返回 `null` → Monaco 自己收起来；返回合法锚点 → Monaco 自己摆出来。锚点补齐 `positionAffinity: Left`（折行行的锚落在该视觉行左缘，不飘到下一行），前置条件凑齐三项（有模型 / 已打开文件 / 选区非空）缺一即返回 `null`。
+    ⚠️ **一个反直觉的坑必须记下：绝对不能设 `useDisplayNone: true`。** 名字看着像"我自己管 display"，但在 `setPosition()` 里它是被**取反**后参与三元判断的 ——
+    `!this.useDisplayNone && 有锚点 && preference非空 ? setDisplay("block") : setDisplay("none")`。
+    一旦设成 `true` 条件恒假，**永远走 else 被钉死在 `display:none`**，想显示反而得自己写 `display`，正好退回要修的老问题。保持默认（`false`）才是对的。
+    另修正一处旧断言：`.editor-wrap{position:relative}` 已不再需要（节点挂在 Monaco 自己的 overflow-guard 里，Monaco 自己 `setPosition("absolute"|"fixed")`）。
+  - **缺陷二：查找框关闭按钮的 hover 面板闪烁 —— 根因是 Monaco 的 AltKeyTracker 在重画标签，而且那不是原生 `title`。**
+    读打包产物拿到证据：那个按钮是 `MenuEntryActionViewItem`，它的 `updateLabel()` 通过 `localize(1726,"{0} ({1})", label, keybindingLabel)` 生成 `"Close (Escape)"` 文本；这个 `updateLabel()` 挂在 **AltKeyTracker** 上 ——
+    `n !== this._wantsAltCommand && (this._wantsAltCommand = n, this.updateLabel(), this.updateTooltip(), ...)`，
+    即**每一次 alt/ctrl/shift/meta 键状态变化**都会重画一次标签并 `updateTooltip()`。而 `updateTooltip()` 走的是 `setupManagedHover(...)`，那是 Monaco **自绘的 hover DOM**（会给节点打 `custom-hover="true"`），**根本不是原生 `title`** —— 每次重画都 dispose 旧容器、重建新的，视觉上就是闪。
+    ⚠️ **据此确认前两轮归因都打偏了**：第一轮怀疑 `getPositionAt` 传参产生 `NaN`（那是另一个 bug 的真因，修得对但不是本现象）；第二轮把 `title` 换成 `aria-label`（方向对，但**那个面板不来自 `title`**，所以打不中）。
+    **修法：不 patch Monaco（改不了它的源码），改为把"自绘 hover"换成"原生 title"。** 新增 `freezeFindWidgetHover()`：编辑器创建后挂一个 `MutationObserver` 蹲查找框出现（它是 Ctrl+F 懒创建的），发现带 `custom-hover` 标记的 action 项就移除该标记（自绘 hover 的开关）并把现有 `aria-label` 写进 `title`。原生 title 由浏览器托管、**不随 DOM 重排销毁重建**，因此无论 Monaco 怎么重画标签都不会再闪，而鼠标悬停仍能看到 "Close (Esc)"，**能力不减**。
+    ⚠️ 顺带把这一条写成规则 V4：**高频回调（`onDidChangeCursorSelection` / `onDidScrollChange`）里禁止重排 DOM** —— 否则旁边控件的自绘 hover 会被反复重建，是同一类闪烁的通用成因。
+  - **新增 V 组自检（V1–V5）与两个验证脚本**。这一组的立意与前几组不同：Q3/Q5/U1–U4 都是在**自家代码里查字样**，而这两个 bug 的真凶**不在自家代码里**，只做存在性断言永远查不出来。V 组改为把"**不要去抢谁的属性**"写成可执行规则：V1 样式表不得声明该节点的 `display`、V2 不得设 `useDisplayNone` / 不得写 `hidden`、V3 锚点必须带 `preference` 与 `positionAffinity` 且 `layoutContentWidget` 传原始 widget、V4 高频回调不重排 DOM、V5 hover 抑制存在且不丢提示。
+    新增 `tools/verify-bubble-selfrules.mjs` 与 `--offline.mjs`：**否定式断言（`!re.test(...)`）一旦正则本身写错就会永远为真（假绿灯）**，因此把每条规则的布尔中间量单独打印出来核对 —— 本轮正是靠它抓出"正则命中了 CSS 注释里的示例文本"这个自身缺陷（与 U1 踩过的"注释里写着错误写法"是同一个坑，两处都已补"先剥注释再匹配"）。
+  - **新增运行时探针 `--ui-probe --test-bubble`**（`npm run ui-probe:bubble`）：真的在编辑器里设一个**跨折行**的选区，读回按钮的 `getComputedStyle().display/visibility`、几何矩形与 Monaco 的 `monaco-visible-content-widget` 标记，把"出现没有"从肉眼截图变成可读数字。没打开文件时如实报告"按设计不出现"，而不是伪装成"按钮坏了"。
 - **查找框关闭按钮的 hover 提示反复闪烁（用户三次反馈；减少写入次数治不了）**：现象是「搜索框中的关闭按钮 hover 效果有闪烁问题，一直处于 Close(上方) (escape)(下方) 面板闪烁」「仍然有闪烁」。
   **根因不是「写多了次」，而是「在高频事件里重排 DOM」**：原生 tooltip 在元素位置/样式**发生任何变化**时失效并重新计时。此前 `place()` 已加了"位置未变就直接 return"，闪烁依旧 —— 因为查找过程中 `onDidChangeCursorSelection` 本来就频繁触发（输入查找词、按 Tab 跳结果、Esc 关闭），**位置一直在变**，此时任何一次 `style` 写入都会让查找框自己的提示面板反复重建。
   **修复：断掉因果链，而不是减少次数。** 改用 `IContentWidget` 后**完全不写 style**，重排不再发生；浮层元素自身也从 `title` 改为 `aria-label`（不产生原生 tooltip），避免它成为下一个闪烁源。

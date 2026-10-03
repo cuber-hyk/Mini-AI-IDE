@@ -20,6 +20,9 @@ Desktop.ini
 # 核验报告与本地产物（报告需人工判断后再入库；避免误提交含环境路径的输出）
 tools/**/out/
 
+# 构建期生成的中间报告（每次 `npm run build` 由 tools/check-renderer-scope.mjs 重写）
+tools/renderer-scope-report.json
+
 # 注意：Dev Flow 仓储记忆路径（AGENTS.md、CONTEXT.md、docs/ 全部子目录）
 # 必须保持被跟踪，禁止在此忽略。详见 docs/ai/context-map.md 的维护规则。
 

@@ -91,6 +91,8 @@
      */
     diffDecorations: null,
     selectionBubbleReady: false, // 选区浮层复制按钮是否已挂载（幂等保护）
+    /** 蹲查找框出现的 MutationObserver（抑制自绘 hover 闪烁，见 freezeFindWidgetHover） */
+    findHoverObserver: null,
     /** 内联 diff 中"插入的新增行"用 view zone 画出（它们不是真实文本，见 renderInlineDiff） */
     diffZoneIds: [],
     /** 当前正在预览的变更（退出预览时清理） */
@@ -188,6 +190,100 @@
     };
   };
 
+  /**
+   * 选区浮层复制按钮**实测探针**（`--ui-probe --test-bubble` 使用）。
+   *
+   * 为什么需要：这个按钮前后修了三次都"看起来对、实际不出现"，靠肉眼截图判断
+   * 效率极低。这里**真的在编辑器里设一个跨折行的选区**，然后读回按钮的真实
+   * 计算样式与几何矩形 —— 把"出现没有"从主观判断变成可读的数字。
+   *
+   * 只读 + 临时：设选区是为了量位置，量完立刻恢复原选区。
+   * 不写文件、不发网络请求。
+   */
+  window.__uiSelectionProbe = function () {
+    const ed = state.editor;
+    if (!ed) return { ok: false, reason: '编辑器尚未创建' };
+    const model = ed.getModel();
+    if (!model) return { ok: false, reason: '编辑器没有模型（未打开文件）' };
+
+    if (!state.currentPath) {
+      // 没打开文件时，getPosition() 必然返回 null（这是设计如此），
+      // 探针要如实报告，而不是伪装成"按钮坏了"。
+      return {
+        ok: false,
+        reason: '当前未打开文件，state.currentPath 为空 —— 浮层按设计不出现',
+        currentPath: state.currentPath,
+      };
+    }
+
+    const savedSelection = ed.getSelection();
+    // 选一段**必然跨视觉行**的内容：优先挑最长的行，确保 wordWrap 真的折行，
+    // 这正是用户截图里"长段落 md 选 4 个视觉行"的情形。
+    let targetLine = 1;
+    let maxLen = -1;
+    for (let ln = 1; ln <= model.getLineCount(); ln += 1) {
+      const len = model.getLineLength(ln);
+      if (len > maxLen) {
+        maxLen = len;
+        targetLine = ln;
+      }
+    }
+    const lineMax = model.getLineMaxColumn(targetLine);
+    const endColumn = Math.max(2, Math.floor(lineMax / 2));
+
+    ed.setSelection({
+      startLineNumber: targetLine,
+      startColumn: 1,
+      endLineNumber: targetLine,
+      endColumn: endColumn,
+    });
+
+    const bubble = document.querySelector('.selection-copy');
+    if (!bubble) {
+      ed.setSelection(savedSelection);
+      return { ok: false, reason: '页面里找不到 .selection-copy 节点（未挂载？）' };
+    }
+
+    const cs = window.getComputedStyle(bubble);
+    const rect = bubble.getBoundingClientRect();
+    const node = ed.getDomNode();
+    const nodeRect = node ? node.getBoundingClientRect() : null;
+
+    // 是否落在编辑器可视区内
+    const inView = Boolean(
+      nodeRect &&
+        rect.width > 0 &&
+        rect.height > 0 &&
+        rect.bottom > nodeRect.top &&
+        rect.top < nodeRect.bottom &&
+        rect.right > nodeRect.left &&
+        rect.left < nodeRect.right
+    );
+
+    ed.setSelection(savedSelection);
+
+    const result = {
+      ok: true,
+      // 这几项是判断"到底为什么不出现"的关键
+      display: cs.display,
+      visibility: cs.visibility,
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+      top: Math.round(rect.top),
+      left: Math.round(rect.left),
+      // Monaco 是否给它打了"已显示"标记（render() 里 setAttribute 的那个）
+      hasVisibleMarker: bubble.hasAttribute('monaco-visible-content-widget'),
+      customHoverAttr: bubble.getAttribute('custom-hover'),
+      testLine: targetLine,
+      testLineLength: maxLen,
+      inView,
+    };
+    // 判定：display 不是 none、尺寸 > 0、且落在编辑器视口内，才算"真的出现了"
+    result.visible =
+      result.display !== 'none' && result.visibility !== 'hidden' && result.width > 0 && result.height > 0 && inView;
+    return result;
+  };
+
   /* ---------------- Monaco 初始化 ----------------
    * 可读性选项集中在此，便于对照主流编辑器调整。
    * 注意：**不设 readOnly** —— 默认即可编辑；保存走 Ctrl+S，未保存由状态点提示。
@@ -221,6 +317,75 @@
     scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10, useShadows: false },
     stickyScroll: { enabled: false },
   };
+
+  /* ---------------- 查找框 tooltip 闪烁的抑制 ----------------
+   *
+   * 【现象】在编辑器里按 Ctrl+F 打开查找框后，把鼠标移到关闭按钮上，
+   * 那个 "Close (Escape)" 提示面板会**反复闪烁**（用户截图里能看到多层叠加）。
+   *
+   * 【根因】排查了两轮都打偏，第三轮直接读 Monaco 打包产物才定住：
+   * 触发源**完全在 Monaco 自己的代码里**，与我们的浮层按钮无关。
+   *
+   * 1. 关闭按钮是一个 `MenuEntryActionViewItem`，它的 `updateLabel()` 会
+   *    通过 `localize(1726,"{0} ({1})", label, keybindingLabel)` 重新生成标题文本。
+   * 2. 这个 `updateLabel()` 挂在 **AltKeyTracker** 上：
+   *      `n !== this._wantsAltCommand && (this._wantsAltCommand = n, this.updateLabel(), this.updateTooltip(), ...)`
+   *    也就是说，**每一次 alt/ctrl/shift/meta 键状态变化**（按下或抬起任一个修饰键）
+   *    它都会重画一次标签，并 `updateTooltip()`。
+   * 3. `updateTooltip()` 走 `setupManagedHover(...)`，那是 Monaco **自绘的 hover DOM**
+   *    （会给自己打上 `custom-hover="true"` 属性），**不是原生 `title`**。
+   *    于是每次重画都 dispose 旧的、重建一个新的 hover 容器 → 视觉上就是闪。
+   *
+   * 【为什么前两轮的修法方向都不对】
+   * - 第一轮怀疑 `getPositionAt` 收到 Position 对象产生 NaN —— 那是另一个 bug 的真因。
+   * - 第二轮把浮层的 `title` 改成 `aria-label` —— 方向对（原生 title 确实会因重排失效），
+   *   但**打不中**：那个面板根本不来自 title，而是 Monaco 自绘的 hover。
+   *
+   * 【我们的修法】不 patch Monaco（改不了它的源码），改为**把自绘 hover 换成原生 title**：
+   * 原生 title 由浏览器托管，**不随 DOM 重排销毁重建**，因此无论 Monaco 怎么重画标签，
+   * 都不会再闪。做法是去掉节点上的 `custom-hover` 标记（那是自绘 hover 的开关），
+   * 并把当前标题写进 `title`。这样能力不减（鼠标悬停仍能看到 "Close (Esc)"），
+   * 只是从"自绘、会闪"换成"原生、稳定"。
+   *
+   * 注意：本函数**只在 Electron 内、对 Monaco 自己创建的 DOM** 做属性调整，
+   * 不涉及任何网页内容，与零注入原则（ADR-0003）无关也不冲突。
+   */
+  function freezeFindWidgetHover() {
+    if (!state.editor || !window.monaco) return;
+    const dom = state.editor.getDomNode();
+    if (!dom) return;
+
+    /**
+     * 把某个元素从"自绘 hover"切到"原生 title"。
+     * - 自绘 hover 的开关是 `custom-hover="true"`，去掉它 Monaco 就不再挂自绘容器；
+     * - 原生 title 取元素现有的 `aria-label`（Monaco 会给 action 项写 aria-label），
+     *   没有再退回 `aria-description`，都没有就跳过 —— **不凭空编造提示文本**。
+     */
+    const pinAsNativeTitle = function (node) {
+      if (node.hasAttribute('custom-hover')) node.removeAttribute('custom-hover');
+      if (node.getAttribute('title')) return; // 已有原生 title，不动
+      const label =
+        node.getAttribute('aria-label') ||
+        node.getAttribute('aria-description') ||
+        (node.textContent ? node.textContent.trim() : '');
+      if (label) node.setAttribute('title', label);
+    };
+
+    // 查找框是懒创建的：Ctrl+F 时才出现在 .overflow-guard 里。
+    // 用一个挂在编辑器根节点上的 MutationObserver 蹲它出现，出现即处理。
+    const scan = function () {
+      const nodes = dom.querySelectorAll('.monaco-editor .action-item, .monaco-editor [custom-hover="true"]');
+      for (let i = 0; i < nodes.length; i += 1) pinAsNativeTitle(nodes[i]);
+    };
+
+    scan();
+    const observer = new MutationObserver(function () {
+      scan();
+    });
+    observer.observe(dom, { childList: true, subtree: true });
+
+    state.findHoverObserver = observer;
+  }
 
   /* ---------------- Monaco 初始化 ---------------- */
   function initMonaco() {
@@ -261,6 +426,8 @@
       });
       // 选区浮层复制按钮必须等state.editor 就绪后才能建（见 setupSelectionCopyBubble 注释）
       setupSelectionCopyBubble();
+      // 抑制查找框关闭按钮的自绘 hover 反复重建（消除闪烁，见 freezeFindWidgetHover 注释）
+      freezeFindWidgetHover();
     });
   }
 
@@ -1127,13 +1294,40 @@
     if (state.selectionBubbleReady) return; // 幂等：require 回调万一重入不重复挂
     state.selectionBubbleReady = true;
 
+    /**
+     * 【必须在这里把编辑器实例**取到本地**再往下用】
+     *
+     * 上一版整段代码里写的是裸 `editor.getSelection()` / `editor.getModel()`，
+     * 但本函数**没有 `editor` 这个绑定** —— 同名的 `editor` 只是别的函数的局部变量，
+     * 不构成闭包。于是这些引用要么命中未定义全局、要么直接抛 ReferenceError。
+     *
+     * 而 `getPosition()` 是**由 Monaco 在它自己的渲染循环里回调**的：
+     * 里面抛出的异常被 Monaco 内部吞掉，外部看不到任何报错，
+     * 表现就只是"按钮永远不出现"—— 正是最难查的那种"静默失败"。
+     * 这与上面注释里记的"顶层 IIFE 静默 return"是同一类缺陷的两个变体：
+     * **都不是逻辑写错，而是这段代码压根没正常跑起来。**
+     */
+    const editor = state.editor;
+
     const bubble = document.createElement('div');
     bubble.className = 'selection-copy';
-    bubble.hidden = true;
     /**
-     * 【不要用 `title`】—— 原生 title 提示在**元素位置发生任何变化**时都会失效重建。
-     * 而浮层随选区/滚动不断重定位，tooltip 会反复重新计时，表现为 hover 时提示面板一闪一闪。
-     * 改用 `aria-label`：不产生任何原生 tooltip，语义与无障碍信息仍然保留。
+     * 【不要用 `hidden` 属性、也不要自己写 `display`】
+     *
+     * Monaco 的 ContentWidget 包装器（`l4` 类）**独占**这个节点的 `display` 与 `visibility`：
+     *   - 挂载时它自己 `setDisplay("none")` + `setVisibility("hidden")`；
+     *   - 每次 `setPosition()` 它按"有锚点 + preference 非空"决定 `setDisplay("block"|"none")`；
+     *   - 每次 `render()` 它按是否离屏决定 `setVisibility("inherit"|"hidden")`。
+     *
+     * 这三处写的都是**内联样式**，级别高于任何样式表规则。
+     * 所以以前 `.selection-copy{display:none}` + `hidden` 属性 + `.visible{display:inline-block}`
+     * 全都是在跟 Monaco 抢同一个属性 —— 谁最后写谁赢，表现就是"有时出现有时不出现"。
+     * 正解：**我们一次都不碰 `display`**，显隐完全由 `getPosition()` 的返回值表达：
+     * 返回 `null` → Monaco 判定无锚点 → 它自己收起来；返回合法锚点 → 它自己显示。
+     *
+     * 同理**不要用 `title`**：原生 title 提示在元素位置变化时失效重建，
+     * 浮层又随选区/滚动不断重定位，会表现为 hover 提示一闪一闪。
+     * 用 `aria-label`：不产生原生 tooltip，语义与无障碍信息仍保留。
      */
     bubble.setAttribute('aria-label', '复制这段（带真实行号）');
     bubble.textContent = '复制';
@@ -1152,9 +1346,10 @@
      * 3. 选区为空/未打开文件时静默 `hidden`，与"定位失败"表现一样，看不出区别。
      *
      * `IContentWidget` 由 Monaco 自己定位：滚动、折行、视口裁剪、被编辑内容遮挡
-     * （`preference` 里的 `EXACT`/`ABOVE`）全都自动处理，**不需要我们算任何坐标**。
+     * （`preference` 里的 `ABOVE`/`BELOW`）全都自动处理，**不需要我们算任何坐标**。
      */
     let hideTimer = 0;
+    let dismissed = false; // 用户点了"已复制"后短暂抑制，别让按钮立刻又冒出来
     const ContentWidgetPositionPreference = window.monaco.editor.ContentWidgetPositionPreference;
 
     const contentWidget = {
@@ -1164,56 +1359,88 @@
       getDomNode: function () {
         return bubble;
       },
+      /**
+       * 【这里是唯一的显隐真源】
+       *
+       * 返回 `null` = "现在没有可复制的选区" → Monaco 自己把节点 display:none / visibility:hidden。
+       * 返回合法锚点 = "显示在这里" → Monaco 自己把它摆出来。
+       *
+       * 三个前置条件缺一不可，缺任何一个都返回 null：
+       *   1. 编辑器有模型（没打开文件时 getModel() 为 null）；
+       *   2. 已打开某个文件（state.currentPath 非空）；
+       *   3. 选区非空。
+       */
       getPosition: function () {
+        if (!editor.getModel() || !state.currentPath || dismissed) return null;
         const selection = editor.getSelection();
-        if (!selection || selection.isEmpty() || !state.currentPath) return null;
+        if (!selection || selection.isEmpty()) return null;
+
         const end = selection.getEndPosition();
-        const lineMax = editor.getModel() ? editor.getModel().getLineMaxColumn(end.lineNumber) : 0;
+        const lineCount = editor.getModel().getLineCount();
+        // 选区末端行号越界（文件被外部改短等）：不猜位置，直接收起。
+        if (end.lineNumber < 1 || end.lineNumber > lineCount) return null;
+
+        // 锚在选区末端的**行尾**：按钮就落在"选区右端行的右上角"。
+        // 折行时该逻辑行会折成多个视觉行，Monaco 会把 anchor 解析到正确的视觉行；
+        // positionAffinity=Left 保证锚在行尾折行处取的是"该视觉行的左缘"，不会飘到下一行去。
+        const column = editor.getModel().getLineMaxColumn(end.lineNumber);
         return {
-          // 锚在选区末端的**行尾**：这样按钮自然落在"选区右端行的右上角"，
-          // 折行时也由 Monaco 负责把 anchor 修正到正确的视觉行。
-          position: { lineNumber: end.lineNumber, column: lineMax },
+          position: { lineNumber: end.lineNumber, column: column },
+          // ABOVE 优先：按钮浮在所选那行**上方**，不遮挡选区文字；空间不足时退到 BELOW。
           preference: [ContentWidgetPositionPreference.ABOVE, ContentWidgetPositionPreference.BELOW],
+          positionAffinity: window.monaco.editor.PositionAffinity
+            ? window.monaco.editor.PositionAffinity.Left
+            : undefined,
         };
       },
       // 关键：告诉 Monaco 在我身上拦截 mousedown。
       // 否则编辑器会立刻抢走焦点、选区消失，随后 getSelection() 拿到空值，
       // 复制到的就是整篇文件而不是选中的那段。
       suppressMouseDown: true,
+      // 注意：**不要设 useDisplayNone**。设成 true 会让 Monaco 的 setPosition()
+      // 永远走 else 分支、把节点钉死在 display:none（见 l4.setPosition 的三元表达式），
+      // 反而必须由我们自己去写 display —— 那就又回到"两方抢同一属性"的老问题。
+      // 保持默认（false），display 与 visibility 完整交给 Monaco。
     };
+
+    /**
+     * 让 Monaco 重算位置。
+     *
+     * 必须传**原始 widget 对象**（带 getPosition 的那个），不能传别的：
+     * 公开层 `editor.layoutContentWidget(w)` 会执行 `w.getPosition()`，
+     * 把结果写进它内部包装器的 `position` 字段，再转交视图层。
+     * 传错对象 → `w.getPosition()` 抛错或拿到 undefined → 锚点丢失。
+     */
+    function layoutWidget() {
+      if (!editor.getModel()) return;
+      editor.layoutContentWidget(contentWidget);
+    }
 
     editor.addContentWidget(contentWidget);
 
     function scheduleHide() {
       window.clearTimeout(hideTimer);
       hideTimer = window.setTimeout(function () {
-        // 隐藏走 widget 自身的显示状态，不要再动 style
-        bubble.classList.remove('visible');
+        dismissed = true; // 收起：getPosition 返回 null，Monaco 随即隐藏
         layoutWidget();
       }, 4000);
     }
 
-    /** 让 Monaco 重新计算 widget 位置 */
-    function layoutWidget() {
-      if (!editor.getModel()) return;
-      editor.layoutContentWidget(contentWidget);
-    }
-
     function updateVisibility() {
+      // 重新出现选区就把"已收起"状态解除
       const selection = editor.getSelection();
-      const shouldShow = Boolean(selection) && !selection.isEmpty() && Boolean(state.currentPath);
-      bubble.classList.toggle('visible', shouldShow);
-      // 无选区时把 position 置空 → Monaco 会把 widget 移出视口
-      if (shouldShow) layoutWidget();
+      if (selection && !selection.isEmpty()) dismissed = false;
+      // 只让 Monaco 重算，显隐由 getPosition() 的返回值决定
+      layoutWidget();
     }
 
     // 选区变化：Monaco 会自动重算 content widget 位置，**我们不写任何 style**
     editor.onDidChangeCursorSelection(function () {
       updateVisibility();
-      if (bubble.classList.contains('visible')) scheduleHide();
+      const selection = editor.getSelection();
+      if (selection && !selection.isEmpty() && !dismissed) scheduleHide();
     });
-    // 滚动 / 内容变化：同样只需让 Monaco 重新布局（编辑器自己是滚动容器，
-    // 我们挂在外面也照样跟得住，因为定位算在 Monaco 内部）
+    // 滚动 / 内容变化：同样只需让 Monaco 重新布局
     editor.onDidScrollChange(function () {
       layoutWidget();
     });

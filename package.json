@@ -5,13 +5,14 @@
   "description": "Windows 桌面工具：左侧 Monaco 编辑本地文件，右侧只读加载 DeepSeek 网页版并解析回复（零注入）",
   "main": "dist/main/index.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json && node scripts/copy-static.mjs",
+    "build": "tsc -p tsconfig.json && node scripts/copy-static.mjs && node tools/check-renderer-scope.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsx --test \"test/**/*.test.ts\"",
     "start": "npm run build && electron .",
     "self-test": "npm run build && electron . --self-test",
     "diagnose": "npm run build && electron . --diagnose",
     "ui-probe": "npm run build && electron . --ui-probe",
+    "ui-probe:bubble": "npm run build && electron . --ui-probe --test-bubble",
     "setup:electron": "node scripts/install-electron.mjs"
   },
   "devDependencies": {

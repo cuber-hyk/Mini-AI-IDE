@@ -783,11 +783,17 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     );
 
     // Q3：选区浮动复制按钮 —— 有选区才出现，无选区不显示；仍只写剪贴板不碰网页。
+    //
+    // 【2026-10-03 修正】旧断言查的是 `bubble.hidden = true`。但那正是 bug 的一部分：
+    // 我们自己写 display/visibility，等于和 Monaco 的 ContentWidget 包装器抢同一个属性。
+    // 现在显隐的唯一真源是 `getPosition()` 返回 null / 合法锚点，断言也随之改。
     const bubbleExists = /selection-copy/.test(js) && /selection-copy/.test(css);
-    const hidesWhenEmpty = /selection\.isEmpty\(\)/.test(js) && /bubble\.hidden = true/.test(js);
-    add('Q3', '选区右上角浮动复制按钮存在且无选区时隐藏', bubbleExists && hidesWhenEmpty, {
+    const hidesViaPosition = /getPosition:\s*function\s*\(\)\s*\{[\s\S]{0,400}?return null/.test(js);
+    const hidesWhenEmpty = /selection\.isEmpty\(\)/.test(js) && hidesViaPosition;
+    add('Q3', '选区右上角浮动复制按钮存在，且无选区时由 getPosition() 返回 null 收起', bubbleExists && hidesWhenEmpty, {
       bubbleExists,
       hidesWhenEmpty,
+      hidesViaPosition,
     });
 
     // Q4：输入框滚动条必须是自绘细条 —— Windows 原生条是带箭头的白色块，压在深色框里极扎眼
@@ -798,10 +804,18 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       hidesNative,
     });
 
-    // Q5：浮动按钮的定位上下文 —— .editor-wrap 必须有 position: relative，
-    // 否则 absolute 会跑到更外层容器，位置完全错掉。
-    const wrapIsRelative = /\.editor-wrap\s*\{[^}]*position:\s*relative/.test(css);
-    add('Q5', '编辑器容器是浮动按钮的定位上下文（position: relative）', wrapIsRelative, { wrapIsRelative });
+    // Q5：浮动按钮**不再依赖 `.editor-wrap` 的定位上下文**。
+    //
+    // 【2026-10-03 修正】旧断言要求 `.editor-wrap{position:relative}`，前提是"我们自己
+    // 用 absolute 相对 .editor-wrap 定位"。改用 IContentWidget 后，节点被挂进 Monaco
+    // 自己的 overflow-guard（由它 `setPosition("absolute"|"fixed")`），
+    // `.editor-wrap` 是不是 relative 已经无关紧要。
+    // 新断言：样式表（剥掉注释后）里**不得**再出现 `.selection-copy{...display...}`。
+    const cssCodeEarly = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    const bubbleNotOwnedByWrap = !/\.selection-copy\s*\{[^}]*\bdisplay\s*:/.test(cssCodeEarly);
+    add('Q5', '浮动按钮的 display 不自绘（改由 Monaco ContentWidget 独占管理）', bubbleNotOwnedByWrap, {
+      bubbleNotOwnedByWrap,
+    });
 
     // ---- R 组：修复「浮层按钮不出现」与「输入框不撑开/底部溢出」两个实测缺陷 ----
     //
@@ -1036,6 +1050,142 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       '保存按钮已移除，但 Ctrl+S 快捷键仍注册（能力不随入口一起丢）',
       saveButtonGone && ctrlSStillBound,
       { saveButtonGone, ctrlSStillBound },
+    );
+
+    // ---- V 组：两个"修了多次仍存在"的缺陷，按**根因**（而非症状）立规 ----
+    //
+    // 为什么单开一组：Q3/Q5/U1–U4 都只验证"我们自己的代码里有没有某些字样"，
+    // 而这两个 bug 的真凶恰好**不在我们的代码里** —— 一个在 Monaco 的
+    // ContentWidget 包装器里（它独占 DOM 的 display/visibility），
+    // 一个在 Monaco 的 ActionBar 里（每次 alt 键状态变化就重画标签）。
+    // 只对自家代码做存在性断言，永远查不出这类问题。这一组把"不要跟谁抢"写成规则。
+
+    // V1：**样式表不得再声明 `.selection-copy` 的 display**。
+    //
+    // 根因：Monaco 的 ContentWidget 包装器（`l4`）对这个节点做三处**内联**样式写入：
+    //   构造函数 `setDisplay("none")` + `setVisibility("hidden")`；
+    //   `setPosition()` 三元的 else 分支 `setDisplay("none")`；
+    //   `render()` 离屏 `setVisibility("hidden")` / 在屏 `setVisibility("inherit")`。
+    // 内联样式优先级高于样式表，所以我们以前写的
+    // `.selection-copy{display:none}` 与 `.selection-copy.visible{display:inline-block}`
+    // 是在跟 Monaco 抢同一个属性 —— 谁后写谁赢，表现为"时而出现时而不出现"。
+    // 修法：我们一次都不碰 display，显隐全部由 `getPosition()` 返回 null / 锚点表达。
+    //
+    // ⚠️ 必须先剥掉 CSS 注释再匹配：上面这段说明本身就写着被禁的写法，
+    // 直接对全文 grep 会把"解释它的注释"当成"违规的代码"（U1 踩过同一个坑）。
+    const cssCode = css.replace(/\/\*[\s\S]*?\*\//g, '');
+    const cssDeclaresBubbleDisplay = /\.selection-copy\s*\{[^}]*\bdisplay\s*:/.test(cssCode);
+    const cssHasVisibleClass = /\.selection-copy\.visible/.test(cssCode);
+    add(
+      'V1',
+      '样式表不再声明 .selection-copy 的 display（不与 Monaco ContentWidget 抢属性）',
+      !cssDeclaresBubbleDisplay && !cssHasVisibleClass,
+      { cssDeclaresBubbleDisplay, cssHasVisibleClass },
+    );
+
+    // V2：**不得设置 useDisplayNone: true**。
+    //
+    // 反直觉的一点：`useDisplayNone` 看起来像"我自己管 display"，但在
+    // `setPosition()` 里它是被取反后参与三元判断的 ——
+    //   `!this.useDisplayNone && 有锚点 && preference非空 ? setDisplay("block") : setDisplay("none")`
+    // 一旦设成 true，条件恒假 → **永远走 else → 被钉死在 display:none**。
+    // 想让它显示反而得自己去写 display，那就退回了 V1 要修的老问题。
+    const jsSetsUseDisplayNone = /useDisplayNone:\s*true/.test(jsCode);
+    // 同理不能自己写 hidden 属性（等于第二次抢 display）
+    const jsSetsHiddenAttr = /bubble\.hidden\s*=\s*(true|false)/.test(jsCode);
+    add(
+      'V2',
+      '不设 useDisplayNone、不写 bubble.hidden（避免把节点钉死在 display:none）',
+      !jsSetsUseDisplayNone && !jsSetsHiddenAttr,
+      { jsSetsUseDisplayNone, jsSetsHiddenAttr },
+    );
+
+    // V3：`layoutContentWidget` **必须传原始 widget 对象**。
+    //
+    // 公开层 `editor.layoutContentWidget(w)` 内部执行 `w.getPosition()`，把结果写进
+    // 它自己的包装器 `position` 字段，再转交视图层做实际定位。
+    // 若传进去的不是带 getPosition 的对象（比如传了包装器或 undefined），
+    // 锚点直接丢失 → 按钮不出现。这是"代码看着对、按钮就是不出现"的隐蔽来源。
+    const layoutCallShape = /editor\.layoutContentWidget\(contentWidget\)/.test(js);
+    // 锚点必须带 preference 数组，否则 setPosition 里 `preference.length > 0` 过不去、
+    // Monaco 会主动 setDisplay("none")。
+    const returnsPreference = /preference:\s*\[ContentWidgetPositionPreference\.ABOVE/.test(js);
+    // 锚点还要带 positionAffinity，保证折行行的锚落在"该视觉行左缘"而不是飘到下一行。
+    const returnsAffinity = /positionAffinity:/.test(js);
+    add(
+      'V3',
+      'content widget 锚点带 preference 且带 positionAffinity，layout 调用传原始 widget',
+      layoutCallShape && returnsPreference && returnsAffinity,
+      { layoutCallShape, returnsPreference, returnsAffinity },
+    );
+
+    // V4：**查找框 tooltip 闪烁的根因在 Monaco 自己身上，我们只能"不去招惹它"**。
+    //
+    // 证据（来自打包产物 editor-BdtEMBbM.js）：
+    //   `n!==this._wantsAltCommand && (this._wantsAltCommand=n, this.updateLabel(),
+    //    this.updateTooltip(), ...)`  —— 挂在 AltKeyTracker 上，
+    //   **每次 alt/ctrl/shift/meta 状态变化**都重画标签；
+    //   `updateLabel()` 走 `localize(1726,"{0} ({1})",label,t)` 生成 "Close (Escape)"；
+    //   `updateTooltip()` → `setupManagedHover(...)` 是**自绘 hover DOM，不是原生 title**。
+    // 所以前两次"把 title 改成 aria-label"的方向对但打不中 —— 那个面板根本不来自 title。
+    // 我们能做的：保证自己不在高频事件里重排 DOM（否则让旁边控件的自绘 hover 反复重建），
+    // 并明令这一条，防止以后有人又在 selectionchange / scroll 里做重排"优化"。
+    const noReorderInHotPath = !/editor\.onDidChangeCursorSelection\([\s\S]{0,600}?(appendChild|insertBefore|\.style\.(width|height|display|visibility))/.test(jsCode);
+    const noScrollReorder = !/editor\.onDidScrollChange\([\s\S]{0,400}?(appendChild|insertBefore|\.style\.(width|height|display|visibility))/.test(jsCode);
+    add(
+      'V4',
+      '高频事件（选区/滚动）回调里不重排 DOM —— 不招惹 Monaco 自绘 hover 反复重建',
+      noReorderInHotPath && noScrollReorder,
+      { noReorderInHotPath, noScrollReorder },
+    );
+
+    // V5：查找框关闭按钮的 hover 面板由我们自己**抑制重绘**：创建编辑器后
+    // 给 find widget 的关闭按钮挂一个"冻结"，让它不再响应 alt 键状态变化。
+    // 这是唯一能真正消除闪烁的手段（触发源在 Monaco 内部，改不了它的源码）。
+    const suppressesFindHover = /function freezeFindWidgetHover\s*\(/.test(js);
+    const freezeCalledAfterCreate = /state\.editor = window\.monaco\.editor\.create[\s\S]{0,4000}?freezeFindWidgetHover\(\)/.test(js);
+    // 必须同时保留"鼠标仍能看到提示"的能力，不能为了不闪而把 hover 整个删掉。
+    const keepsNativeTitle = /setAttribute\('title'/.test(js);
+    add(
+      'V5',
+      '编辑器创建后抑制查找框关闭按钮的 hover 重绘（消除闪烁，且不丢提示）',
+      suppressesFindHover && freezeCalledAfterCreate && keepsNativeTitle,
+      { suppressesFindHover, freezeCalledAfterCreate, keepsNativeTitle },
+    );
+
+    // V6：**裸标识符必须真的有绑定** —— 用 TypeScript 编译器做真实作用域分析。
+    //
+    // 为什么需要：上一版 `setupSelectionCopyBubble` 里写的是 `editor.getSelection()` /
+    // `editor.getModel()`，而**该函数根本没有 `editor` 这个绑定**（同名的 `editor`
+    // 只是别的函数的局部变量，不构成闭包）。`getPosition()` 又是由 Monaco 在自己的
+    // 渲染循环里回调的 —— 里面抛的 ReferenceError 被 Monaco 内部吞掉，
+    // 外部**看不到任何报错**，表现就只是"按钮永远不出现"。
+    //
+    // 这类缺陷比"逻辑写错"更难查：代码读起来完全正确，`renderer.js` 也不走 tsc
+    // （L2 只做语法解析，语法本身没问题）。所以这里用 TS 编译器做**语义**检查：
+    // 把 renderer.js 当 JS 解析，收集所有 `Cannot find name` 诊断。
+    //
+    // 提取成独立脚本 `tools/check-renderer-scope.mjs` 也是同样的逻辑，
+    // 便于在没有 Electron 的环境里单跑（GUI 自检在本机沙箱跑不起来）。
+    const scopeReportPath = path.join(__dirname, '..', '..', 'tools', 'renderer-scope-report.json');
+    let rendererUndefined: string[] = [];
+    let scopeCheckOk = true;
+    try {
+      if (fs.existsSync(scopeReportPath)) {
+        const parsed = JSON.parse(fs.readFileSync(scopeReportPath, 'utf8')) as { undefinedNames?: string[] };
+        rendererUndefined = parsed.undefinedNames ?? [];
+      } else {
+        // 没有预生成报告时不判失败（避免"忘了跑生成脚本"变成假红），但要如实标注
+        scopeCheckOk = false;
+      }
+    } catch {
+      scopeCheckOk = false;
+    }
+    add(
+      'V6',
+      '`renderer.js` 中的裸标识符都能解析到绑定（防 Monaco 回调里的静默 ReferenceError）',
+      scopeCheckOk && rendererUndefined.length === 0,
+      { scopeCheckOk, undefinedNames: rendererUndefined },
     );
 
     // renderer.js 不经 tsc，这里至少保证可被解析（语法错误会在此暴露）
