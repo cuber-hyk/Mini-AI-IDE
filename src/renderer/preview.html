@@ -14,6 +14,7 @@
       <span class="pv-title">回程预览</span>
       <span id="pv-meta" class="pv-meta">尚未采集</span>
       <span class="spacer"></span>
+      <button id="pv-apply-all" type="button" class="pv-apply-all" title="依次应用全部可用的变更（每个都会单独做三向校验，失败的跳过不影响其余）">全部应用</button>
       <button id="pv-collapse" type="button" title="收起预览面板（把高度还给网页）">收起</button>
       <button id="pv-undo" type="button">撤销</button>
     </header>
@@ -21,7 +22,7 @@
     <div id="pv-notes" class="pv-notes"></div>
 
     <ul id="pv-list" class="pv-list">
-      <li class="pv-empty">点工具栏「采集回复」把右侧最新回复解析成待应用变更。</li>
+      <li class="pv-empty">点工具栏「采集回复」：这里会列出被改动的文件，点某个文件就在左侧编辑器里看它的变更。</li>
     </ul>
 
     <script src="./preview.js"></script>

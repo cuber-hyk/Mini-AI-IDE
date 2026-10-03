@@ -23,10 +23,14 @@
       <button id="btn-snippet" type="button" title="把当前选中内容格式化为带文件真实行号的片段（含 ### 文件： 与 ### 范围： 头）复制到剪贴板，供你粘贴给模型做局部修改">
         复制选中片段
       </button>
-      <button id="btn-save" type="button" disabled>保存 (Ctrl+S)</button>
-      <button id="btn-sidebar" type="button" title="显示/隐藏左侧目录树（Ctrl+B）">目录树</button>
-      <button id="btn-web" type="button" title="显示/隐藏右侧 AI 网页（Ctrl+Shift+A）">AI 网页</button>
-      <button id="btn-preview-toggle" type="button" title="显示/隐藏右下角回程预览面板">回程预览</button>
+      <!--
+        这里原本有个「保存 (Ctrl+S)」按钮，已按用户意见移除：
+        Ctrl+S 是人人都会的快捷键，为它单独占一个工具栏按钮不划算，
+        而工具栏宽度在按钮变多后已经很挤。
+        保存能力**没有丢** —— 快捷键注册在 Monaco 上（见 renderer.js 的 initMonaco）：
+          window.monaco.KeyMod.CtrlCmd | window.monaco.KeyCode.KeyS
+        未保存状态改由工具栏的「● 未保存」文字 + 文件名旁的白点提示（见 renderDirty）。
+      -->
       <span id="dirty-flag" class="dirty"></span>
     </header>
 
@@ -41,20 +45,33 @@
 
       <section class="editor-wrap">
         <div class="editor-head">
+          <!-- 目录树显隐：图标按钮放在**编辑器板块顶部左侧**（不是全局工具栏）。
+               为什么不放进 sidebar 内部：侧栏隐藏时按钮会跟着消失，用户再也点不回来。
+               与网页区的显隐按钮（网页区顶部工具条）遵循同一条规则：
+               折叠/展开由"被折叠的那块板自己"来控制，但按钮必须留在始终可见的地方。 -->
+          <button id="btn-sidebar" type="button" class="icon-btn" title="显示/隐藏目录树（Ctrl+B）">
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
+              <path d="M6.5 2.5v11" />
+            </svg>
+          </button>
           <span id="file-name" class="file-name">未打开文件</span>
           <span id="file-dot" class="file-dot" title="有未保存的修改" hidden></span>
           <span class="spacer"></span>
-          <!-- diff 视图的操作条：与主流编辑器一致，先看 diff 再决定是否应用 -->
+          <!-- diff 标记的操作条。差异**内联渲染在编辑器里**（原地标红/绿），
+               不是一个独立的对比面板 —— 所以这里只放"这个文件有变更"的说明与操作。 -->
           <span id="diff-actions" class="diff-actions" hidden>
+            <span class="diff-tag" title="编辑器里的红色/绿色标记就是这个文件的变更">变更预览</span>
             <span id="diff-label" class="diff-label"></span>
+            <button id="btn-diff-prev" type="button" title="上一个被改动的文件">‹ 上一个</button>
+            <button id="btn-diff-next" type="button" title="下一个被改动的文件">下一个 ›</button>
             <button id="btn-diff-apply" type="button" class="primary">应用此变更</button>
-            <button id="btn-diff-close" type="button">退出对比</button>
+            <button id="btn-diff-close" type="button">退出预览</button>
           </span>
         </div>
-        <!-- 普通编辑视图 -->
+        <!-- 普通编辑视图。内联 diff 就画在这个编辑器上（decoration + view zone），
+             **不再有第二个 Monaco 宿主**：用户看到的始终是同一个编辑器、同一份真实文件内容。 -->
         <div id="monaco" class="monaco"></div>
-        <!-- 差异视图（进入时替换显示；用 Monaco DiffEditor 渲染） -->
-        <div id="monaco-diff" class="monaco" hidden></div>
         <div id="info" class="info">未打开文件</div>
       </section>
 
@@ -69,12 +86,12 @@
         <textarea
           id="requirement"
           class="requirement"
-          rows="1"
-          placeholder="在这里写需求，然后点右侧按钮复制完整 prompt"
+          rows="2"
+          placeholder="在这里写需求，然后点右侧按钮复制完整提示词"
           spellcheck="false"
         ></textarea>
-        <button id="btn-copy-prompt" type="button" class="primary" title="组装完整 prompt（需求 + 工作环境 + 目录结构 + 格式要求）到剪贴板，由你自己粘贴到右侧网页">
-          复制 prompt
+        <button id="btn-copy-prompt" type="button" class="primary" title="组装完整提示词（需求 + 工作环境 + 目录结构 + 格式要求）到剪贴板，由你自己粘贴到右侧网页">
+          复制提示词
         </button>
       </div>
     </footer>

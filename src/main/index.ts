@@ -48,6 +48,20 @@ const WEB_MIN_WIDTH = 420;
 const PREVIEW_MIN_HEIGHT = 160;
 /** 网页区（右上角）的最小高度，保证聊天界面可用 */
 const WEB_MIN_HEIGHT = 220;
+/**
+ * 网页区顶部工具条高度：显隐开关放在**各自板块顶部**（用户反馈：
+ * 全局工具栏里一排带文字的「目录树」「AI 网页」按钮不像折叠/展开该有的样子）。
+ */
+const WEB_BAR_HEIGHT = 30;
+/**
+ * 网页隐藏后，右边缘**把手**的两种宽度（VS Code 收起侧栏的同款做法）。
+ *
+ * 为什么需要它：网页隐藏时，若把工具条一起隐藏，开关就跟着消失，
+ * 用户**再也点不回来**（本项目已犯过一次，见ADR 与能力文档的陷阱表）。
+ * 所以工具条视图永不销毁：网页可见时它是顶部横条，隐藏时贴到右边缘变成竖把手。
+ */
+const HANDLE_BAR_WIDTH = 28; // hover / 刚隐藏后展开的宽度
+const HANDLE_BAR_PEEK = 5; // 静置时的窄条宽度（不干扰阅读）
 
 const SELF_TEST = process.argv.includes('--self-test');
 /** 界面运行时探针：不联网，加载编辑器后读回 Monaco 实际选项并试改文本，然后退出 */
@@ -58,10 +72,17 @@ const DIAGNOSE = process.argv.includes('--diagnose');
 interface Layout {
   editorBounds: { x: number; y: number; width: number; height: number };
   webBounds: { x: number; y: number; width: number; height: number };
+  /**
+   * 网页区顶部工具条 / 隐藏后的右边缘把手（同一个视图的两种形态）。
+   * 始终有非零宽度——它承载着"把网页叫回来"的唯一常驻入口。
+   */
+  webBarBounds: { x: number; y: number; width: number; height: number };
   previewBounds: { x: number; y: number; width: number; height: number };
   dividerX: number;
   /** 右侧上下分割线（y 坐标）；预览隐藏时等于总高度，即网页占满右列 */
   splitY: number;
+  /** 网页是否可见（渲染进程据此决定 webbar 走横条还是竖把手形态） */
+  webVisible: boolean;
 }
 
 /** 分区宽度（编辑器内部左侧目录树，渲染进程自绘，这里只持久化用户选择） */
@@ -87,11 +108,21 @@ function languageIdFor(relPath: string): string {
 }
 
 /**
- * 三区布局：左侧编辑器 | 右上网页 | **右下回程预览**
+ * 三区布局：左侧编辑器 | 右上（网页顶栏 + 网页）| **右下回程预览**
  *
  * 为什么把预览放右下角（用户建议）：原先预览挤在编辑器下方，把编辑器高度压得很低，
  * 而且 diff 只有一百多像素高，根本没法看。放到右列下半区后，编辑器高度不受影响。
- * 右侧网页可整体隐藏（`webVisible=false`），此时预览占满右列。
+ *
+ * **网页整体隐藏时（`webVisible=false`）编辑器占满全窗口**：右列没有任何内容视图，
+ * 若仍按原样留白就会露出 BaseWindow 的白底（用户实测反馈：隐藏网页就是一片白）。
+ *
+ * ⚠️ 但**工具条视图不能一起隐藏** —— 它上面的按钮是"把网页叫回来"的唯一常驻入口。
+ * 早期实现跟着网页一起隐藏，结果用户点完隐藏就再也回不来（本项目已犯过）。
+ * 现在改为：网页隐藏时工具条贴到**窗口右边缘**，变成一条竖把手
+ * （静置 `HANDLE_BAR_PEEK` px 窄条，hover 展开到 `HANDLE_BAR_WIDTH`），
+ * 与 VS Code 收起侧栏时的把手同一思路。
+ *
+ * 把手是**覆盖**在右侧一小条上，不占布局宽度，因此编辑器仍能占满 `width`。
  */
 function computeLayout(
   width: number,
@@ -100,6 +131,19 @@ function computeLayout(
   previewHeight = 0,
   webVisible = true
 ): Layout {
+  // 网页隐藏：编辑器独占整个窗口；网页与预览归零；工具条贴右边缘成为竖把手
+  if (!webVisible) {
+    return {
+      editorBounds: { x: 0, y: 0, width, height },
+      webBounds: { x: width, y: 0, width: 0, height: 0 },
+      webBarBounds: { x: width - HANDLE_BAR_WIDTH, y: 0, width: HANDLE_BAR_WIDTH, height },
+      previewBounds: { x: width, y: 0, width: 0, height: 0 },
+      dividerX: width,
+      splitY: height,
+      webVisible: false,
+    };
+  }
+
   const w = Math.max(editorWidth, EDITOR_MIN_WIDTH);
   const rightX = w;
   const rightW = Math.max(0, width - w);
@@ -107,17 +151,18 @@ function computeLayout(
   const maxPreview = Math.max(PREVIEW_MIN_HEIGHT, height - WEB_MIN_HEIGHT);
   const ph = Math.min(Math.max(wanted, PREVIEW_MIN_HEIGHT), maxPreview);
   const showPreview = previewHeight > 0;
-
-  // 网页隐藏时，预览占满右列（不再保留 WEB_MIN_HEIGHT）
-  const webH = !webVisible ? 0 : showPreview ? Math.max(WEB_MIN_HEIGHT, height - ph) : height;
-  const previewY = webVisible ? webH : 0;
+  const columnH = showPreview ? Math.max(WEB_MIN_HEIGHT, height - ph) : height;
+  const webH = Math.max(0, columnH - WEB_BAR_HEIGHT);
+  const previewY = columnH;
   const finalPh = showPreview ? height - previewY : 0;
   return {
     editorBounds: { x: 0, y: 0, width: w, height },
-    webBounds: { x: rightX, y: 0, width: rightW, height: webH },
+    webBounds: { x: rightX, y: WEB_BAR_HEIGHT, width: rightW, height: webH },
+    webBarBounds: { x: rightX, y: 0, width: rightW, height: WEB_BAR_HEIGHT },
     previewBounds: { x: rightX, y: previewY, width: rightW, height: finalPh },
     dividerX: w,
     splitY: showPreview ? previewY : height,
+    webVisible: true,
   };
 }
 
@@ -226,33 +271,162 @@ async function bootstrap(): Promise<void> {
   });
   // 预览视图与编辑器视图使用同一分区，便于复用同一份 preload 缓存策略
 
+  // 网页区顶部工具条：**独立视图**，只放网页/预览的显隐开关。
+  // 为什么不用 <iframe> 也不用盖在网页上：它是本程序自己的界面，
+  // 与网页视图同层并排（网页本体从 WEB_BAR_HEIGHT 之下开始），互不遮挡。
+  const webBarView = new WebContentsView({
+    webPreferences: {
+      preload: path.join(__dirname, 'webbarPreload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      // 纯本地界面，不需要网络也不需要网页会话
+      partition: 'persist:editor-ui',
+    },
+  });
+
   win.contentView.addChildView(editorView);
+  win.contentView.addChildView(webBarView);
   win.contentView.addChildView(webView);
   win.contentView.addChildView(previewView);
   editorView.setBounds(layout.editorBounds);
+  webBarView.setBounds(layout.webBarBounds);
   webView.setBounds(layout.webBounds);
   previewView.setBounds(layout.previewBounds);
   previewView.setVisible(false);
+
+  /** 把当前网页/预览的可见状态广播给网页区工具条（它的按钮高亮靠这个） */
+  function broadcastChromeState(): void {
+    if (webBarView.webContents.isDestroyed()) return;
+    webBarView.webContents.send(CHANNELS.chromeState, {
+      webVisible,
+      previewVisible: webVisible && previewHeight > 0,
+    });
+  }
+
+  /**
+   * 统一的"显示/隐藏网页"入口。
+   *
+   * 三个调用方都走这里，保证几何、菜单勾选、三个渲染进程的状态**永远一致**：
+   *  1. 网页区顶部工具条的「隐藏」按钮；
+   *  2. 网页隐藏后右边缘把手的「展开」按钮；
+   *  3. View 菜单的「AI 网页」勾选项（兜底，永远可见）。
+   * 另外编辑器的 `Ctrl+Shift+A` 走 IPC，最终也落到 `CHANNELS.setWebVisible`。
+   */
+  function setWebVisible(visible: boolean): void {
+    webVisible = visible;
+    relayout();
+    buildApplicationMenu();
+    // 编辑器渲染进程也持有状态镜像（虽然没有该按钮），一并回灌
+    if (!editorView.webContents.isDestroyed()) {
+      editorView.webContents.send(CHANNELS.chromeState, {
+        webVisible,
+        previewVisible: webVisible && previewHeight > 0,
+      });
+    }
+  }
 
   /** 按当前 previewHeight / webVisible 重算三区并应用 */
   function relayout(): void {
     const s = win.getContentSize();
     const w = s[0] ?? 1440;
     const h = s[1] ?? 900;
+    // 网页隐藏时编辑器占满全宽，分栏宽度约束不再有意义（但仍需夹在合法区间）
     editorWidth = Math.min(Math.max(editorWidth, EDITOR_MIN_WIDTH), Math.max(EDITOR_MIN_WIDTH, w - WEB_MIN_WIDTH));
     layout = computeLayout(w, h, editorWidth, previewHeight, webVisible);
     editorView.setBounds(layout.editorBounds);
+    webBarView.setBounds(layout.webBarBounds);
+    //工具条**始终可见**：网页隐藏时它变成右边缘把手，是"把网页叫回来"的唯一常驻入口
+    webBarView.setVisible(true);
     webView.setBounds(layout.webBounds);
     webView.setVisible(webVisible && layout.webBounds.height > 0);
     previewView.setBounds(layout.previewBounds);
-    previewView.setVisible(previewHeight > 0);
+    // 网页隐藏时预览一并隐藏：它属于"网页区"，网页不在就没有意义
+    previewView.setVisible(webVisible && previewHeight > 0);
+    broadcastChromeState();
   }
 
   win.on('resize', relayout);
 
-  /* ---------------- 加载三个视图 ---------------- */
-  // 预览面板：加载本地页面（与编辑器同源，便于复用样式约定）
-  await previewView.webContents.loadFile(path.join(__dirname, '..', 'renderer', 'preview.html'));
+  /**
+   * 窗口**真正显示 / 尺寸确定**后必须重算一次视图几何。
+   *
+   * 踩坑（用户实测）：启动后底部内容被切掉，**拖一下窗口就恢复**。
+   * 根因不在 CSS 也不在渲染进程的布局，而在主进程这边 ——
+   * `new BaseWindow({ width, height })` 之后立刻 `getContentSize()`，
+   * 此刻窗口**还没显示**，量到的内容区尺寸与显示后的真实视口不一致
+   * （Windows 的边框、缩放、DPI 适配都要到显示时才最终确定）。
+   * 于是四个视图按"显示前的尺寸"定了 bounds，而 bounds **不会自动跟随视口** ——
+   * 表现就是编辑器底部（需求输入区）被切掉一截。
+   * 拖窗口能恢复，是因为那才会触发 `win.on('resize', relayout)`。
+   *
+   * 为什么不能靠"显示前多 measure 几次"绕过：
+   * 显示前量到的尺寸本来就是错的，必须等显示完成才有真实值。
+   *
+   * 事件选择（**BaseWindow 的事件面比 BrowserWindow 窄，别照抄**）：
+   * - `'show'`：窗口显示出来的那一刻 —— 最贴近"初始布局已确定"的信号。
+   * - `'resized'`：**真实**尺寸变化完成。macOS 上 `resize` 与 `resized` 是两个事件，
+   *   首次显示若被系统按屏幕可用区域调整过尺寸，只有这个能捕获。
+   * ⚠️ BaseWindow **没有** `'ready-to-show'`（那是 BrowserWindow 的），写上去编译不过。
+   *
+   * relayout 幂等，重复调用无副作用，多挂几个入口是安全的。
+   */
+  win.once('show', () => {
+    relayout();
+  });
+  win.once('resized', () => {
+    relayout();
+  });
+  // 编辑器页面加载完成后再补一次：视图尺寸与页面布局是两件事，
+  // 页面真正拿到最终视口宽度后自身会重排，主进程这边也应对齐一次真实尺寸。
+  editorView.webContents.on('did-finish-load', () => {
+    relayout();
+  });
+
+  /**
+ * 加载本地界面页面，失败时重试。
+ *
+ * ⚠️ 为什么需要重试（本机实测踩坑）：
+ * 同一分区（`persist:editor-ui`）下连续创建多个 `WebContentsView` 并 `loadFile` 时，
+ * 偶发 `ERR_FAILED (-2)`。实测把 webbar.html 的内容换成 preview.html 的内容、
+ * 加载顺序也换过，失败对象会**在两个视图之间飘移** —— 与页面内容、加载顺序都无关，
+ * 是渲染进程创建时序的问题。因此这里用"重试若干次 + 间隔"把它吸收掉：
+ * 失败是偶发的，重试即恢复。
+ *
+ * 之所以必须成功：这些视图承载着唯一的功能入口（网页区显隐开关在 webbar 里），
+ * 加载失败等于整个应用没有网页控制入口，不能静默跳过。
+ */
+async function loadLocalView(
+  view: WebContentsView,
+  fileName: string,
+  attempts = 4
+): Promise<void> {
+  const target = path.join(__dirname, '..', 'renderer', fileName);
+  let lastErr: unknown = null;
+  for (let i = 1; i <= attempts; i += 1) {
+    try {
+      await view.webContents.loadFile(target);
+      return;
+    } catch (err) {
+      lastErr = err;
+      const detail = err instanceof Error ? err.message : String(err);
+      process.stderr.write(`[load] ${fileName} 第 ${i}/${attempts} 次加载失败：${detail}\n`);
+      if (i < attempts) {
+        await new Promise((r) => setTimeout(r, 150 * i));
+      }
+    }
+  }
+  throw new Error(`加载 ${fileName} 连续 ${attempts} 次失败：${lastErr instanceof Error ? lastErr.message : String(lastErr)}`);
+}
+
+/* ---------------- 加载本地界面视图 ----------------
+ * 顺序：预览面板 → 网页区工具条 →（下方）编辑器页面。
+ * 顺序本身不是根因（换顺序失败对象会飘移），但先加载两个小页面、
+ * 让它们与编辑器页面错开，可以减少并发创建渲染进程的压力。
+ */
+  await loadLocalView(previewView, 'preview.html');
+  await loadLocalView(webBarView, 'webbar.html');
 
   /* ---------------- IPC ---------------- */
   const getEditorWindow = () => null; // 目录选择不需要父窗口句柄；保留签名以便后续接入
@@ -267,16 +441,20 @@ async function bootstrap(): Promise<void> {
     editorWidth = Math.min(Math.max(Math.round(requested), EDITOR_MIN_WIDTH), Math.max(EDITOR_MIN_WIDTH, total - WEB_MIN_WIDTH));
     layout = computeLayout(total, height, editorWidth, previewHeight, webVisible);
     editorView.setBounds(layout.editorBounds);
+    webBarView.setBounds(layout.webBarBounds);
     webView.setBounds(layout.webBounds);
     previewView.setBounds(layout.previewBounds);
     settings.update({ editorWidth: layout.editorBounds.width });
     return { editorWidth: layout.editorBounds.width };
   });
 
-  /** 显示/隐藏右侧 AI 网页（工具栏开关 / Ctrl+Shift+A） */
+  /** 显示/隐藏右侧 AI 网页。
+   *
+   * 三个入口（顶部工具条按钮 / 右边缘把手 / View 菜单）都汇聚到 `setWebVisible`，
+   * 它再调用本IPC handler —— 保证走同一条路径、状态不会分叉。
+   */
   ipcMain.handle(CHANNELS.setWebVisible, (_e, visible: unknown) => {
-    webVisible = visible !== false;
-    relayout();
+    setWebVisible(visible !== false);
     return { visible: webVisible };
   });
 
@@ -302,7 +480,7 @@ async function bootstrap(): Promise<void> {
   });
 
   /**
-   * 在**编辑器内**以 Monaco DiffEditor 显示某个变更（与主流编辑器一致：先看 diff 再应用）。
+   * 在**编辑器内**以内联标记显示某个变更（删除行标红、新增行插在旁边）。
    * 主进程负责算出两侧完整文本，编辑器只负责渲染。
    */
   ipcMain.handle(CHANNELS.showDiffInEditor, async (_e, collectionId: unknown, index: unknown) => {
@@ -313,6 +491,36 @@ async function bootstrap(): Promise<void> {
     if (!payload) return { ok: false, error: '采集结果已过期或该变更不存在，请重新采集' };
     if (!editorView.webContents.isDestroyed()) {
       editorView.webContents.send(CHANNELS.diffData, payload);
+    }
+    /*
+     * 顺手通知右下角面板高亮这一条。
+     * 两个视图是独立渲染进程（ADR-0002），彼此不能调用，所以必须经主进程转发；
+     * 否则用「上一个 / 下一个」在编辑器里跳走后，面板高亮会停在原地对不上。
+     */
+    if (!previewView.webContents.isDestroyed()) {
+      previewView.webContents.send(CHANNELS.activeDiff, index);
+    }
+    return { ok: true };
+  });
+
+  /**
+   * 编辑器内的「上一个 / 下一个」跳转（由 renderer 在切到相邻变更时调用）。
+   *
+   * 为什么不复用 showDiffInEditor：那是个通用入口（谁都可以请求预览某个变更），
+   * 而这里要额外把高亮同步给右下角面板；单独一个通道语义更清楚，
+   * 也避免为了同步高亮而给每个调用方都塞一份转发逻辑。
+   */
+  ipcMain.handle(CHANNELS.stepDiff, async (_e, collectionId: unknown, index: unknown) => {
+    if (typeof collectionId !== 'string' || typeof index !== 'number') {
+      return { ok: false, error: '参数不合法' };
+    }
+    const payload = await buildEditorDiff(collectionId, index);
+    if (!payload) return { ok: false, error: '采集结果已过期或该变更不存在，请重新采集' };
+    if (!editorView.webContents.isDestroyed()) {
+      editorView.webContents.send(CHANNELS.diffData, payload);
+    }
+    if (!previewView.webContents.isDestroyed()) {
+      previewView.webContents.send(CHANNELS.activeDiff, index);
     }
     return { ok: true };
   });
@@ -325,6 +533,8 @@ async function bootstrap(): Promise<void> {
     const h = typeof height === 'number' && Number.isFinite(height) ? Math.round(height) : 0;
     previewHeight = h > 0 ? Math.max(PREVIEW_MIN_HEIGHT, h) : 0;
     relayout();
+    // View 菜单里「回程预览面板」的勾选状态要跟着变
+    buildApplicationMenu();
     return { height: layout.previewBounds.height, visible: previewHeight > 0 };
   });
 
@@ -336,10 +546,13 @@ async function bootstrap(): Promise<void> {
   }
 
   /**
-   * 构造"编辑器内 diff"所需的两侧完整文本。
+   * 构造"编辑器内联 diff"所需的两侧完整文本。
    *
    * 与预览面板共用同一份三向校验：算不出（或校验不过）就返回 null，
    * 由调用方报错——**不会出现"显示了 diff 但应用会失败"**的情况。
+   *
+   * 附带 `siblings` / `position`：编辑器的「上一个 / 下一个」需要在批次内跳转，
+   * 而 payload 本身只描述单个变更，所以这里顺带把同批次的定位信息一起带上。
    */
   async function buildEditorDiff(
     collectionId: string,
@@ -367,6 +580,16 @@ async function bootstrap(): Promise<void> {
     const computed = computeApply(read.text, block, mode);
     if (!computed.ok) return null;
 
+    /* 同批次内可导航的变更（供编辑器「上一个 / 下一个」）。
+     必须在 map 之后按类型收窄：`filePath` 可能是 null，而 `exactOptionalPropertyTypes`
+     下 optional 字段不接受 null。 */
+    const siblings: import('../shared/contract').EditorDiffSibling[] = [];
+    cached.blocks.forEach((b, i) => {
+      if (typeof b.filePath === 'string') {
+        siblings.push({ collectionId, index: i, filePath: b.filePath });
+      }
+    });
+
     return {
       active: true,
       filePath: read.relPath,
@@ -376,6 +599,8 @@ async function bootstrap(): Promise<void> {
       collectionId,
       index,
       identical: computed.text === read.text,
+      siblings,
+      position: siblings.findIndex((s) => s.index === index),
     };
   }
 
@@ -629,6 +854,26 @@ async function bootstrap(): Promise<void> {
       relayout();
     }
     pushPreviewToPanel(previewResult);
+
+    /*
+     * 采集成功后**自动把第一个可应用的变更送进编辑器**（Monaco DiffEditor）。
+     *
+     * 为什么必须自动（用户实测反馈："diff 还是在右下角，没有在编辑器中渲染"）：
+     * 之前的 `showDiffInEditor` 链路是通的，但**唯一调用点在右下角面板的按钮上**——
+     * 等于要求用户先看面板、再点一次按钮，才看得到 diff。主流编辑器的行为是
+     * "变更出现在哪就在哪看"，所以这里在采集返回时直接进编辑器。
+     *
+     * 仍然复用 `buildEditorDiff`：它带同一份三向校验，
+     * 因此**不会出现"编辑器里显示了 diff、点应用却失败"**的情况。
+     * 校验不过（文件已变 / 区间非法）就跳过自动打开，理由留给面板显示。
+     */
+    const firstApplicable = blocks.find((b) => b.applicable);
+    if (firstApplicable && !editorView.webContents.isDestroyed()) {
+      const payload = await buildEditorDiff(collectionId, firstApplicable.index);
+      if (payload) {
+        editorView.webContents.send(CHANNELS.diffData, payload);
+      }
+    }
     return previewResult;
   });
   /**
@@ -676,16 +921,40 @@ async function bootstrap(): Promise<void> {
       contextNext = block.range.end < lines.length ? (lines[block.range.end] ?? null) : null;
     }
 
-    return returnPath.applyChange({
+    /*
+     * 落盘成功后**必须广播给编辑器**，否则它一直显示旧内容。
+     * 用户实测："应用后没有及时刷新文件，显示仍然是旧代码，
+     * 只有关闭文件重新打开才会显示应用后的代码" ——
+     * 因为落盘在主进程，而编辑器是另一个渲染进程，不会自动察觉磁盘变化。
+     */
+    const outcome = await returnPath.applyChange({
       filePath,
       block,
       ...(expectedOriginal !== undefined ? { expectedOriginal } : {}),
       contextPrev,
       contextNext,
     });
+    if (outcome.ok) {
+      notifyFileChanged(filePath);
+    }
+    return outcome;
   });
 
-  ipcMain.handle(CHANNELS.undoSave, () => returnPath.undoLast());
+  /** 通知编辑器：磁盘上的这个文件刚被改写了（成功落盘后才调用） */
+  function notifyFileChanged(filePath: string) {
+    if (!editorView.webContents.isDestroyed()) {
+      editorView.webContents.send(CHANNELS.fileChanged, filePath);
+    }
+  }
+
+  ipcMain.handle(CHANNELS.undoSave, async () => {
+    const result = await returnPath.undoLast();
+    // 撤销也是改写磁盘，同样要通知编辑器刷新
+    if (result.ok && result.filePath) {
+      notifyFileChanged(result.filePath);
+    }
+    return result;
+  });
 
   /**
    * 把编辑器里的选中内容格式化为"带文件真实行号"的片段并写入剪贴板。
@@ -786,49 +1055,83 @@ async function bootstrap(): Promise<void> {
     return root;
   }
 
-  /* ---------------- 菜单（提供"打开目录"入口） ---------------- */
-  const menu = Menu.buildFromTemplate([
-    {
-      label: 'File',
-      submenu: [
+  /* ---------------- 菜单 ----------------
+   *
+   * View 菜单里的「AI 网页」是**最后一道兜底**：网页显隐的主入口在网页区顶部工具条，
+   * 而网页隐藏时那块工具条变成右边缘把手。菜单是应用级 UI、**永远不会被隐藏**，
+   * 保证"网页永远能被叫回来"（与把手、`Ctrl+Shift+A` 快捷键并存）。
+   *
+   * 因为菜单项带勾选状态，必须跟随实际显隐重建 —— 故抽成函数而不是一次性常量。
+   */
+  function buildApplicationMenu(): void {
+    Menu.setApplicationMenu(
+      Menu.buildFromTemplate([
         {
-          label: '打开目录…',
-          accelerator: 'CmdOrCtrl+O',
-          click: () => {
-            void (async () => {
-              const { dialog } = await import('electron');
-              const picked = await dialog.showOpenDialog(win, { properties: ['openDirectory'] });
-              if (!picked.canceled && picked.filePaths[0]) {
-                setRootAndNotify(picked.filePaths[0]);
-              }
-            })();
-          },
+          label: 'File',
+          submenu: [
+            {
+              label: '打开目录…',
+              accelerator: 'CmdOrCtrl+O',
+              click: () => {
+                void (async () => {
+                  const { dialog } = await import('electron');
+                  const picked = await dialog.showOpenDialog(win, { properties: ['openDirectory'] });
+                  if (!picked.canceled && picked.filePaths[0]) {
+                    setRootAndNotify(picked.filePaths[0]);
+                  }
+                })();
+              },
+            },
+            {
+              label: '只复制输出格式要求（不含上下文）',
+              click: () => {
+                const text = getFormatSpec('short');
+                clipboard.writeText(text);
+                process.stdout.write(`[format] 已复制格式要求（${text.length} 字符）到剪贴板\n`);
+              },
+            },
+            { type: 'separator' },
+            { role: 'quit', label: '退出' },
+          ],
         },
         {
-          label: '只复制输出格式要求（不含上下文）',
-          click: () => {
-            const text = getFormatSpec('short');
-            clipboard.writeText(text);
-            process.stdout.write(`[format] 已复制格式要求（${text.length} 字符）到剪贴板\n`);
-          },
+          label: 'View',
+          submenu: [
+            { role: 'reload', label: '重新加载编辑器' },
+            { role: 'toggleDevTools', label: '开发者工具' },
+            { type: 'separator' },
+            {
+              label: 'AI 网页',
+              type: 'checkbox',
+              checked: webVisible,
+              accelerator: 'CmdOrCtrl+Shift+A',
+              click: () => {
+                setWebVisible(!webVisible);
+              },
+            },
+            {
+              label: '回程预览面板',
+              type: 'checkbox',
+              checked: previewHeight > 0,
+              click: () => {
+                previewHeight =
+                  previewHeight > 0
+                    ? 0
+                    : Math.max(PREVIEW_MIN_HEIGHT, Math.round((win.getContentSize()[1] ?? 900) * 0.4));
+                relayout();
+                buildApplicationMenu();
+              },
+            },
+            { type: 'separator' },
+            { role: 'resetZoom', label: '重置缩放' },
+            { role: 'zoomIn', label: '放大' },
+            { role: 'zoomOut', label: '缩小' },
+          ],
         },
-        { type: 'separator' },
-        { role: 'quit', label: '退出' },
-      ],
-    },
-    {
-      label: 'View',
-      submenu: [
-        { role: 'reload', label: '重新加载编辑器' },
-        { role: 'toggleDevTools', label: '开发者工具' },
-        { type: 'separator' },
-        { role: 'resetZoom', label: '重置缩放' },
-        { role: 'zoomIn', label: '放大' },
-        { role: 'zoomOut', label: '缩小' },
-      ],
-    },
-  ]);
-  Menu.setApplicationMenu(menu);
+      ])
+    );
+  }
+  buildApplicationMenu();
 
   /* ---------------- 先决定根目录，再加载页面 ----------------
    * 顺序很重要：渲染进程在页面加载完成时就会调用 `getRoot()`。
@@ -888,7 +1191,7 @@ async function bootstrap(): Promise<void> {
     if (isMainFrame) process.stderr.write(`[editor] 加载失败 ${code} ${desc} ${url}\n`);
   });
 
-  await editorView.webContents.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  await loadLocalView(editorView, 'index.html');
 
   // 告知渲染进程：记忆的目录已失效（让界面明确提示，而不是"看似有目录、实际读不了"）
   if (staleRoot && !editorView.webContents.isDestroyed()) {

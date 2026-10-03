@@ -69,6 +69,56 @@ body {
   cursor: default;
 }
 
+/*
+ * 板块顶部的**图标式**显隐按钮。
+ *
+ * 此前目录树与 AI 网页的显隐是全局工具栏里两个带中文文字的按钮。用户反馈：
+ * "正常的折叠展开不都是在对应板块顶部增加图标按钮吗，没见过这种带文字的"。
+ * 改造后：目录树开关在编辑器顶部条左侧，网页/预览开关在网页区顶部工具条
+ * （独立的 webbar 视图）。此处只定义编辑器的这一枚，网页区那份在 webbar.css。
+ */
+.icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.icon-btn svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: var(--text-dim);
+  stroke-width: 1.2;
+  stroke-linecap: round;
+}
+
+.icon-btn:hover {
+  background: #222834;
+  border-color: var(--border);
+}
+
+.icon-btn:hover svg {
+  stroke: #cdd3dd;
+}
+
+/* 高亮 = 该区域当前可见（与网页区工具条同一语义） */
+.icon-btn.active {
+  background: rgba(91, 141, 239, 0.16);
+  border-color: rgba(91, 141, 239, 0.42);
+}
+
+.icon-btn.active svg {
+  stroke: var(--accent);
+}
+
 .root-label {
   color: var(--text-dim);
   font-size: 12px;
@@ -278,7 +328,12 @@ body {
 
 /* 需求输入区：参考右侧 DeepSeek 输入框的观感（圆角外壳 + 聚焦描边 + 圆形按钮） */
 .prompt-bar {
-  flex: 0 0 auto;
+  /* flex-shrink 必须放开（不能是 0）：视口高度紧张时（窗口小、字体变大），
+     禁止收缩会让本区**不缩**，直接把底部边框顶出可视范围 —— 表现为
+     "启动后输入框底部溢出，拖一下窗口就恢复"（用户实测）。
+     配合 .requirement 的 max-height: 220px封顶，正常情况下永远用不到收缩。 */
+  flex: 0 1 auto;
+  min-height: 0;
   padding: 8px 10px 10px;
   background: var(--bg);
   border-top: 1px solid var(--border);
@@ -287,11 +342,16 @@ body {
 .prompt-shell {
   display: flex;
   align-items: flex-end;
-  gap: 8px;
+  gap: 10px;
   background: #1e222b;
   border: 1px solid #333a47;
   border-radius: 14px;
-  padding: 7px 8px 7px 14px;
+  padding: 10px 10px 10px 16px;
+  /* 与父级 .prompt-bar 配对：允许在视口紧张时收缩，
+     否则收缩的是外壳 padding 而非内容，视觉上仍是"底部被切"。
+     overflow:hidden 让收缩时内容不顶破圆角。 */
+  min-height: 0;
+  overflow: hidden;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
@@ -302,9 +362,14 @@ body {
 
 .requirement {
   flex: 1 1 auto;
-  min-height: 22px;
-  max-height: 120px;
+  /* 高度区间：内容少时收缩到 2 行，随粘贴/输入逐步撑开，到 10 行封顶后滚动。
+     【不要把 min-height 和 max-height 写成同一个值】—— 两者相同时高度被钉死，
+     JS 的 auto-grow（内联 height）会被 min/max 钳制住而永远失效，表现为「粘贴不撑开」。
+     这两个值必须与 renderer.js 里 setupRequirementAutoGrow 的 MIN_H / MAX_H 保持一致。 */
+  min-height: 44px;
+  max-height: 220px;
   resize: none;
+  overflow-y: auto;
   background: transparent;
   color: var(--text);
   border: none;
@@ -314,30 +379,106 @@ body {
   line-height: 1.5;
 }
 
+/*
+ * 需求输入框的滚动条（用户实测截图问题）。
+ *
+ * 默认的 `overflow-y: auto` 在 Windows 上是**带上下箭头的白色原生滚动条**，
+ * 压在深色输入框里极其扎眼（截图里就是这样）。
+ * 这里按 Trae 的观感改成「细窄深色条、悬停才明显、无箭头」：
+ *   - 先把原生条整体隐藏（::-webkit-scrollbar 宽 0）
+ *   - 再用 ::-webkit-scrollbar-thumb 画自己的细条
+ *
+ * 与 Monaco 内部滚动条用的是同一套手法（本项目已在编辑器里验证过可行）。
+ */
+.requirement::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+.requirement::-webkit-scrollbar-thumb {
+  width: 6px;
+  border-radius: 3px;
+  background: rgba(150, 160, 180, 0.28);
+}
+
+.requirement::-webkit-scrollbar-thumb:hover {
+  background: rgba(150, 160, 180, 0.5);
+}
+
+.requirement::-webkit-scrollbar-track {
+  background: transparent;
+}
+
 .requirement::placeholder {
   color: #6b7280;
 }
 
-/* 圆形主按钮（DeepSeek 的发送键观感） */
+/* 主按钮：药丸形（此前是 34px 圆形，「复制 prompt」五个字必然折成两行） */
 .prompt-bar button.primary {
   flex: 0 0 auto;
-  width: 34px;
-  height: 34px;
-  min-width: 34px;
-  border-radius: 50%;
+  /* 与输入框内容区高度对齐（4 行 ×22px），不再是一枚偏矮的小圆钮 */
+  height: 36px;
+  padding: 0 18px;
+  border-radius: 18px;
   border: none;
   background: #4d6bfe;
   color: #fff;
-  font-size: 11px;
-  font-weight: 600;
-  line-height: 1.05;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 36px;
   cursor: pointer;
-  white-space: normal;
-  padding: 0;
+  white-space: nowrap;
+  transition: background 0.15s ease;
 }
 
 .prompt-bar button.primary:hover:not(:disabled) {
   background: #6280ff;
+}
+
+.prompt-bar button.primary:active:not(:disabled) {
+  background: #3f5ce8;
+}
+
+/* ---------------- 选区右上角的浮动复制按钮 ----------------
+ *
+ * 用户建议：选中代码后在选区右上角冒一个小按钮，比顶部常驻按钮更顺手。
+ * 没有选区时不显示（没有可复制的内容，出现就是误导）。
+ */
+/*
+ * 选区浮动复制按钮。
+ *
+ * 定位由 **Monaco 的 content widget** 负责（见 renderer.js 的 setupSelectionCopyBubble），
+ * 样式里**不能再写 position / left / top** —— 那会与 Monaco 的内联定位打架。
+ * 显隐用 `.visible` 类：Monaco 把 widget 的 DOM 挂进自己的 overflow-guard，
+ * 用 `hidden` 属性会与它的生命周期打架。
+ */
+.selection-copy {
+  z-index: 20;
+  display: none;
+  padding: 2px 9px;
+  border-radius: 5px;
+  background: #2c5cc5;
+  border: 1px solid #3f6fd8;
+  color: #fff;
+  font: inherit;
+  font-size: 12px;
+  line-height: 18px;
+  cursor: pointer;
+  user-select: none;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+.selection-copy.visible {
+  display: inline-block;
+}
+
+.selection-copy:hover {
+  background: #3868d8;
+}
+
+.selection-copy.done {
+  background: #1d7a45;
+  border-color: #2b9c5c;
 }
 
 /* 目录树与编辑器之间的拖拽边线 */
@@ -359,7 +500,7 @@ body {
   display: none;
 }
 
-/* diff 视图操作条 */
+/* diff 预览操作条 */
 .diff-actions {
   display: flex;
   align-items: center;
@@ -370,10 +511,24 @@ body {
   display: none;
 }
 
+/* 「变更预览」标签：明确告诉用户编辑器里的红/绿标记就是差异 */
+.diff-tag {
+  background: rgba(220, 80, 60, 0.16);
+  border: 1px solid rgba(220, 80, 60, 0.5);
+  border-radius: 3px;
+  color: #f0a58c;
+  font-size: 11px;
+  padding: 1px 6px;
+  white-space: nowrap;
+}
+
 .diff-label {
   color: #e8c07a;
   font-size: 12px;
   white-space: nowrap;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .diff-actions button {
@@ -391,6 +546,80 @@ body {
   background: #2c5cc5;
   border-color: #3f6fd8;
   color: #fff;
+}
+
+.diff-actions button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* ---------------- 内联 diff：差异与原文件整合显示 ----------------
+ *
+ * 差异不另开面板，而是在**同一个编辑器**里就地标注：
+ * 删除行标红 + 文字删除线；新增行用 view zone 插在旁边（淡绿底）。
+ * 这些 class 由 renderer.js 的 decorations / view zone DOM 挂上。
+ */
+
+.inline-deleted {
+  background: rgba(220, 60, 60, 0.16);
+}
+
+/* 删除线：整行文字横线，明确"这行应用后就没了" */
+.inline-deleted .view-line span {
+  text-decoration: line-through;
+  text-decoration-color: rgba(240, 130, 120, 0.75);
+}
+
+/* 行号左侧装订线的删除标记 */
+.inline-deleted-gutter {
+  background: rgba(220, 60, 60, 0.35);
+  width: 3px !important;
+  margin-left: 3px;
+}
+
+.inline-deleted-ln {
+  color: #f09a90;
+  background: rgba(220, 60, 60, 0.22);
+}
+
+.inline-added-group {
+  background: rgba(60, 180, 90, 0.08);
+  border-left: 3px solid rgba(80, 200, 110, 0.55);
+}
+
+.inline-added {
+  display: flex;
+  align-items: baseline;
+  font-family: 'Cascadia Code', Consolas, 'Courier New', monospace;
+  font-size: 14px;
+  line-height: 22px;
+  height: 22px;
+}
+
+.inline-added-ln {
+  flex: 0 0 auto;
+  min-width: 46px;
+  padding-right: 10px;
+  text-align: right;
+  color: #7fd39a;
+  background: rgba(60, 180, 90, 0.16);
+  user-select: none;
+}
+
+.inline-added-sign {
+  flex: 0 0 auto;
+  width: 16px;
+  text-align: center;
+  color: #8fe0a8;
+  user-select: none;
+}
+
+.inline-added-text {
+  flex: 1 1 auto;
+  white-space: pre;
+  color: #d8f0de;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .monaco[hidden] {
@@ -435,6 +664,12 @@ body {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  /* min-height: 0 —— flex 子项默认 min-height:auto，内容高过剩余空间时**不缩**，
+     于是需求输入框一撑开就把编辑器顶出视口、底部被裁（用户实测"输入框底部有点溢出"）。
+     与 .monaco 上的 min-height: 0 是同一个道理，必须成对写。 */
+  min-height: 0;
+  /* 选区浮动复制按钮要用它做定位上下文（position: absolute 的参照） */
+  position: relative;
 }
 
 .monaco {
@@ -444,6 +679,10 @@ body {
 
 .info {
   height: 26px;
+  /* flex-shrink: 0 —— 状态行是固定高度的信息条，不参与纵向压缩。
+     纵向可压缩的是它上面的 .monaco（flex:1 + min-height:0），
+     压掉状态行只会让提示文字被切成半行，反而更糟。 */
+  flex: 0 0 auto;
   line-height: 26px;
   padding: 0 10px;
   border-top: 1px solid var(--border);

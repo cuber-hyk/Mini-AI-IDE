@@ -15,6 +15,7 @@ const CH = {
   previewData: 'preview:data',
   setPreviewPanel: 'ui:set-preview-panel',
   showDiffInEditor: 'ui:show-diff-in-editor',
+  activeDiff: 'preview:active-diff',
 } as const;
 
 const bridge = {
@@ -26,6 +27,16 @@ const bridge = {
     ipcRenderer.invoke(CH.showDiffInEditor, collectionId, index),
   onPreviewData: (listener: (preview: unknown) => void) => {
     ipcRenderer.on(CH.previewData, (_e, preview) => listener(preview));
+  },
+  /**
+   * 主进程转发「当前正在编辑器里预览的是第几个变更」。
+   *
+   * 为什么需要：编辑器与本面板是**两个独立渲染进程**（ADR-0002 进程边界），
+   * 彼此不能直接调用。用户用「上一个 / 下一个」在编辑器里跳走之后，
+   * 本面板的高亮必须跟着走，否则两边显示的"当前文件"就对不上了。
+   */
+  onActiveDiff: (listener: (index: unknown) => void) => {
+    ipcRenderer.on(CH.activeDiff, (_e, index) => listener(index));
   },
 };
 

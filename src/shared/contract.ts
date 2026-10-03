@@ -43,14 +43,34 @@ export const CHANNELS = {
   setPreviewPanel: 'ui:set-preview-panel',
   /** 主进程 → 右下角预览面板：推送待预览数据 */
   previewData: 'preview:data',
+  /**
+   * 主进程 → 右下角预览面板：当前正在编辑器里预览的是第几个变更。
+   * 两个视图是独立渲染进程（ADR-0002），彼此不能调用，
+   * 用「上一个 / 下一个」在编辑器里跳走后要靠它同步高亮。
+   */
+  activeDiff: 'preview:active-diff',
   /** 显示/隐藏右侧 AI 网页视图 */
   setWebVisible: 'ui:set-web-visible',
+  /** 主进程 → 网页区工具条：当前网页/预览的可见状态 */
+  chromeState: 'ui:chrome-state',
   /** 显示/隐藏左侧目录树（文件）面板 */
   setSidebarVisible: 'ui:set-sidebar-visible',
   /** 调整左侧目录树宽度（像素） */
   setSidebarWidth: 'ui:set-sidebar-width',
   /** 编辑器 → 主进程：请求在**编辑器内**显示某个变更的 diff */
   showDiffInEditor: 'ui:show-diff-in-editor',
+  /** 编辑器 → 主进程：跳到批次内的上一个 / 下一个变更（并同步右下角面板高亮） */
+  stepDiff: 'ui:step-diff',
+  /**
+   * 主进程 → 编辑器：**磁盘上的文件被回程链路改写了**。
+   *
+   * 为什么必须有（用户实测："应用后没有及时刷新文件，显示仍然是旧代码，
+   * 只有关闭文件重新打开才会显示应用后的代码"）：
+   * 落盘发生在主进程，而编辑器是**另一个渲染进程**，它不会自动知道磁盘变了。
+   * 此前 `applyChange` 返回后没有任何广播，于是编辑器一直显示旧内容 ——
+   * 只有用户手动关掉重开才会重新读盘。
+   */
+  fileChanged: 'fs:file-changed',
   /** 主进程 → 编辑器：指示进入/退出 diff 视图 */
   diffData: 'editor:diff-data',
   /** 主进程 → 编辑器：目录树可见性/宽度变化 */
@@ -292,17 +312,21 @@ export interface UndoResult {
 /**
  * 编辑器内 diff 视图的数据。
  *
- * 设计说明：差异**在编辑器里渲染**（Monaco 的 DiffEditor），而不是另开一块面板 ——
- * 与主流编辑器一致：先看 diff，再决定是否应用。`original` / `modified` 是两侧完整文本。
+ * 设计说明：差异**内联渲染在编辑器里**（删除行标红删除线、新增行用 view zone 插在旁边），
+ * 而不是另开一块对比面板 —— 用户明确要求「diff 与原文件整合一起显示，而不是分两个板块」。
+ * 也不使用 Monaco 的 DiffEditor：那会变成左边「当前文件」、右边「应用后」两栏并排。
+ *
+ * `original` / `modified` 是两侧完整文本，由主进程算出并**已通过三向校验**，
+ * 因此不会出现「编辑器里显示了 diff、点应用却失败」。
  */
 export interface EditorDiffPayload {
   /** 退出 diff 视图时为 false */
   active: boolean;
   /** 目标文件（相对根目录） */
   filePath?: string;
-  /** 变更前的完整原文（左侧） */
+  /** 变更前的完整原文 —— 编辑器里显示的就是它（不改动一个字符） */
   original?: string;
-  /** 应用后的完整新文（右侧） */
+  /** 应用后的完整新文（内联标记据此算出哪些行新增 / 删除） */
   modified?: string;
   /** 语言标注（用于语法高亮） */
   language?: string;
@@ -311,6 +335,17 @@ export interface EditorDiffPayload {
   index?: number;
   /** 应用后与当前文件完全相同时为 true */
   identical?: boolean;
+  /** 同批次内可导航的变更列表，供「上一个 / 下一个」在文件之间跳转 */
+  siblings?: EditorDiffSibling[];
+  /** 本变更在 siblings 中的位置 */
+  position?: number;
+}
+
+/** 批次内的一个可导航变更（只带定位信息，不带文本 —— 文本按需现算） */
+export interface EditorDiffSibling {
+  collectionId: string;
+  index: number;
+  filePath?: string;
 }
 
 /** preload 通过 contextBridge 暴露给渲染进程的唯一接口面 */
@@ -355,6 +390,8 @@ export interface EditorBridge {
   setSidebarWidth(width: number): Promise<{ width: number }>;
   /** 请求在编辑器内以 diff 视图显示某个变更 */
   showDiffInEditor(collectionId: string, index: number): Promise<{ ok: boolean; error?: string }>;
+  /** 跳到批次内相邻的变更；主进程会同时把右下角面板的高亮同步过去 */
+  stepDiff(collectionId: string, index: number): Promise<{ ok: boolean; error?: string }>;
   /** 主进程 → 编辑器：进入（或退出）diff 视图 */
   onDiffData(listener: (data: EditorDiffPayload) => void): void;
   /** 主进程 → 编辑器：目录树可见性/宽度变化 */

@@ -33,9 +33,11 @@ const CH = {
   copyWholeFile: 'ui:copy-whole-file',
   setPreviewPanel: 'ui:set-preview-panel',
   setWebVisible: 'ui:set-web-visible',
+  chromeState: 'ui:chrome-state',
   setSidebarVisible: 'ui:set-sidebar-visible',
   setSidebarWidth: 'ui:set-sidebar-width',
   showDiffInEditor: 'ui:show-diff-in-editor',
+  stepDiff: 'ui:step-diff',
   diffData: 'editor:diff-data',
   sidebarChanged: 'ui:sidebar-changed',
   collectReply: 'return:collect',
@@ -43,6 +45,7 @@ const CH = {
   undoSave: 'return:undo',
   rootChanged: 'fs:root-changed',
   rootStale: 'fs:root-stale',
+  fileChanged: 'fs:file-changed',
 } as const;
 
 const bridge = {
@@ -65,11 +68,18 @@ const bridge = {
   setSidebarWidth: (width: number) => ipcRenderer.invoke(CH.setSidebarWidth, width),
   showDiffInEditor: (collectionId: string, index: number) =>
     ipcRenderer.invoke(CH.showDiffInEditor, collectionId, index),
+  /** 跳到批次内相邻的变更（主进程会同时同步右下角面板的高亮） */
+  stepDiff: (collectionId: string, index: number) =>
+    ipcRenderer.invoke(CH.stepDiff, collectionId, index),
   onDiffData: (listener: (data: unknown) => void) => {
     ipcRenderer.on(CH.diffData, (_e, data) => listener(data));
   },
   onSidebarChanged: (listener: (state: unknown) => void) => {
     ipcRenderer.on(CH.sidebarChanged, (_e, state) => listener(state));
+  },
+  /** 网页/预览可见性变化（网页区工具条那边改了，本进程据此同步状态） */
+  onChromeState: (listener: (state: unknown) => void) => {
+    ipcRenderer.on(CH.chromeState, (_e, state) => listener(state));
   },
   collectReply: () => ipcRenderer.invoke(CH.collectReply),
   applyChange: (input: unknown) => ipcRenderer.invoke(CH.applyChange, input),
@@ -79,6 +89,13 @@ const bridge = {
   },
   onRootStale: (listener: (info: unknown) => void) => {
     ipcRenderer.on(CH.rootStale, (_e, info) => listener(info));
+  },
+  /**
+   * 订阅「磁盘文件被回程链路改写」。
+   * 落盘在主进程、编辑在另一个渲染进程，不广播的话编辑器就一直显示旧内容。
+   */
+  onFileChanged: (listener: (filePath: unknown) => void) => {
+    ipcRenderer.on(CH.fileChanged, (_e, filePath) => listener(filePath));
   },
 };
 

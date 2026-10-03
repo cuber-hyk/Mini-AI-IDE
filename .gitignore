@@ -22,3 +22,6 @@ tools/**/out/
 
 # 注意：Dev Flow 仓储记忆路径（AGENTS.md、CONTEXT.md、docs/ 全部子目录）
 # 必须保持被跟踪，禁止在此忽略。详见 docs/ai/context-map.md 的维护规则。
+
+# 助手工作区记忆（本地状态，不入库）
+.workbuddy/

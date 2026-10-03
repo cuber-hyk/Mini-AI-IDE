@@ -21,7 +21,7 @@
 | 回程解析 / 一键应用 / 输出格式 | `docs/capabilities/return-path-and-format-contract.md`、`docs/adr/2026-10-02-return-path-contract-and-trust-boundary.md` | 指纹与网络层细节 |
 | 指纹与环境特征 | `docs/adr/2026-10-02-honest-electron-identity.md`（ADR-0001）、`docs/adr/2026-10-02-zero-injection-and-automation-trace-baseline.md`（ADR-0003） | 实现细节代码（`src/shared/userAgent.ts` 为落地实现） |
 | 会话 / 登录持久化 | `docs/capabilities/session-persistence.md`（会话分区命名 ADR 为**候选未建项**，暂由该能力文档承载） | 计划文档 |
-| UI / 设计规则 | `DESIGN.md` + `design-tokens.json`（**尚未创建**，由计划步骤 P5 产出） | — |
+| UI / 设计规则 | `docs/capabilities/app-shell.md` 的「布局规则」「左侧编辑器与目录树的当前行为」「底部需求输入区的当前行为」 | — |
 
 ## 过程证据（非默认上下文）
 
@@ -38,6 +38,7 @@
 | 决策记录 | `docs/adr/` |
 | 回程机制（一键同步） | `docs/capabilities/return-path-and-format-contract.md` |
 | 应用实现（P2 已落地） | `src/main/`、`src/renderer/`、`src/shared/`；脚本 `scripts/`；测试 `test/` |
+| 视图与入口对照（4 个 WebContentsView） | `src/renderer/index.html`（编辑器）、`preview.*`（回程预览面板）、`webbar.*`（网页区顶栏 / 网页隐藏时的右边缘把手）；preload 各自独立 |
 | 自动化特征核验工具 | `tools/trace-verifier/` |
 | 可达性与会话实测工具 | `tools/reachability-probe/` |
 
@@ -49,11 +50,16 @@
 | 构建 | `npm run build` |
 | 类型检查 | `npm run typecheck` |
 | 单元测试 | `npm test` |
-| 启动自检（不联网，28 项） | `npm run self-test` |
+| 启动自检（不联网，115 项） | `npm run self-test` |
 | 会话/网络诊断（需先关闭应用） | `npm run diagnose` |
 | 界面运行时探针（读回 Monaco 实际选项） | `npm run ui-probe` |
 | 启动应用 | `npm start`（**需在普通 PowerShell，勿在 AI 沙箱内**） |
 | 会话是否仍需登录 | `pwsh -File tools\run-p0b-reachability.ps1 -ProbeOnly` |
+
+> ⚠️ **AI 沙箱内跑不了 `self-test` 与 `start`**：`GPU process isn't usable. Goodbye.`
+> （GPU 缓存目录被占用，GPU 进程反复 `exit_code=-1073741819`；`--disable-gpu` 无效）。
+> 这是环境限制而非代码缺陷（改动前的基线同样失败）。沙箱内请用
+> `npm test` + `npm run typecheck` 验证；需要跑完整自检时在普通 PowerShell 执行。
 
 ## 维护规则
 

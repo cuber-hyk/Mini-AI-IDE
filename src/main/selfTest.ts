@@ -260,6 +260,10 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
 
   /* ---- E) 通道名一致性（preload 在沙箱下无法 require shared，故用源码比对兜底）---- */
   // 主进程 → 渲染进程的单向通道（不需要 ipcMain.handle）
+  //
+  // ⚠️ 这份排除名单也必须与实现同步：新增一个「主进程 → 渲染进程」的通道时，
+  // 只在 contract.ts 里加常量是**不够**的 —— 自检会误报"未注册 ipcMain 处理器"。
+  // 判断依据：代码里只有 `webContents.send(CHANNELS.x)`、没有 `ipcMain.handle(CHANNELS.x)`。
   const oneWayChannels: string[] = [
     CHANNELS.setRootInternal,
     CHANNELS.rootChanged,
@@ -267,6 +271,10 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     CHANNELS.previewData,
     CHANNELS.diffData,
     CHANNELS.sidebarChanged,
+    // 以下三个是后加的，漏在这里会让 E1/E2 误报（用户实测脚本报 missing 却查不到实现）：
+    CHANNELS.chromeState,   // → webbar
+    CHANNELS.activeDiff,    // → 预览面板
+    CHANNELS.fileChanged,   // → 编辑器（落盘广播）
   ];
   const requiredChannels = Object.values(CHANNELS).filter((c) => !oneWayChannels.includes(c));
   const missingHandlers = requiredChannels.filter((c) => !registeredChannels.includes(c));
@@ -277,20 +285,45 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   });
   let preloadSrcCheck: { ok: boolean; detail: string } = { ok: false, detail: '未读取到 preload.js' };
   try {
-    const preloadPath = path.join(__dirname, 'preload.js');
-    const src = fs.readFileSync(preloadPath, 'utf8');
-    const literals = [...src.matchAll(/'((?:fs|ui|return):[a-z-]+)'/g)].map((m) => m[1] as string);
+    /*
+     * 必须把**三个 preload 一起扫**：现在有四个渲染进程，每个各有自己的窄桥
+     *（editor / webbar / preview，以及 web 视图无 preload）。
+     * 只扫 `preload.js` 会误报 —— 例如 `preview:active-diff` 属于**预览面板**的桥，
+     * 编辑器 preload 里本来就不该出现它，缺了是正确的，断言却判成 FAIL。
+     *
+     * 通道名前缀也放宽到 `preview:`（此前只认 fs|ui|return，
+     * 等于对 preview 侧的通道完全不做漂移检查）。
+     */
+    const preloadFiles = ['preload.js', 'previewPreload.js', 'webbarPreload.js'];
+    const literals: string[] = [];
+    const perFile: Record<string, string[]> = {};
+    for (const f of preloadFiles) {
+      const src = fs.readFileSync(path.join(__dirname, f), 'utf8');
+      const found = [...src.matchAll(/'((?:fs|ui|return|preview):[a-z-]+)'/g)].map((m) => m[1] as string);
+      perFile[f] = found;
+      literals.push(...found);
+    }
     const contractSet = new Set<string>(Object.values(CHANNELS));
-    const unknown = literals.filter((c) => !contractSet.has(c));
+    // 去重后再判unknown：同一个通道在多个 preload 里出现是正常的
+    const unknown = [...new Set(literals)].filter((c) => !contractSet.has(c));
     const missing = requiredChannels.filter((c) => !literals.includes(c));
     preloadSrcCheck = {
       ok: unknown.length === 0 && missing.length === 0,
-      detail: `literals=${literals.join(',')} unknown=[${unknown.join(',')}] missing=[${missing.join(',')}]`,
+      detail:
+        `unknown=[${unknown.join(',')}] missing=[${missing.join(',')}] ` +
+        Object.entries(perFile)
+          .map(([f, cs]) => `${f}=[${cs.join(',')}]`)
+          .join(' '),
     };
   } catch (err) {
     preloadSrcCheck = { ok: false, detail: `读取失败：${err instanceof Error ? err.message : String(err)}` };
   }
-  add('E2', 'preload 内联通道名与 shared/contract 完全一致（无漂移）', preloadSrcCheck.ok, preloadSrcCheck.detail);
+  add(
+    'E2',
+    '各 preload 内联通道名与 shared/contract 完全一致（无漂移、无错放）',
+    preloadSrcCheck.ok,
+    preloadSrcCheck.detail,
+  );
 
   /* ---- L) 渲染进程界面契约：HTML 里的 id 与 renderer 的引用必须一致 ----
    * 为什么需要：`document.getElementById('x')` 取不到时返回 null，随后在事件里炸掉或静默失效，
@@ -303,6 +336,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   try {
     const html = fs.readFileSync(htmlPath, 'utf8');
     const js = fs.readFileSync(jsPath, 'utf8');
+    const css = fs.readFileSync(path.join(rendererDir, 'style.css'), 'utf8');
     const htmlIds = new Set([...html.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1] as string));
     const usedIds = [...js.matchAll(/getElementById\('([^']+)'\)/g)].map((m) => m[1] as string);
     const missingIds = [...new Set(usedIds)].filter((id) => !htmlIds.has(id));
@@ -452,10 +486,19 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       }
       add('L9', '预览面板：preview.js 语法可解析', pvParseError === null, pvParseError ?? 'OK');
 
-      // 面板必须能渲染逐行 diff，且样式里定义了三类行（context/add/del）
-      const hasDiffRender = /pv-line/.test(pvJs) && /kind === 'add'/.test(pvJs) && /kind === 'del'/.test(pvJs);
-      const hasDiffCss = /\.pv-line\.add/.test(pvCss) && /\.pv-line\.del/.test(pvCss);
-      add('L10', '预览面板：具备逐行 diff 渲染与增删样式', hasDiffRender && hasDiffCss, { hasDiffRender, hasDiffCss });
+      /*
+       * L10：面板改为**只列文件**（2026-10-03）。
+       * 原来这里断言"能渲染逐行 diff + 三类行样式"，那条路已经被否掉：
+       * 差异一律内联渲染在左侧编辑器里（见 P 组），面板再画一份就成了重复呈现。
+       */
+      const listsFiles = /pv-file-row/.test(pvJs) && /pv-file-name/.test(pvJs) && /showDiffInEditor/.test(pvJs);
+      const hasFileCss = /\.pv-file-name/.test(pvCss) && /\.pv-file-apply/.test(pvCss);
+      const noInlineDiff = !/pv-line/.test(pvJs) && !/pv-hunk/.test(pvJs);
+      add('L10', '预览面板：只罗列文件（不渲染逐行 diff）且有对应样式', listsFiles && hasFileCss && noInlineDiff, {
+        listsFiles,
+        hasFileCss,
+        noInlineDiff,
+      });
 
       // 面板通过独立 preload 暴露桥接口，且通道名与主进程一致
       const pvPreload = fs.readFileSync(path.join(__dirname, 'previewPreload.js'), 'utf8');
@@ -470,6 +513,530 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     } catch (err) {
       add('L8', '预览面板界面契约检查', false, `读取失败：${err instanceof Error ? err.message : String(err)}`);
     }
+
+    /* ---- N) 网页区顶部工具条（webbar）契约 ----
+     *
+     * 为什么单列一组：网页/预览的显隐开关**只**存在于这个视图里。
+     * 一旦它在 HTML/JS/preload 任一处对不上，用户就没有任何入口控制网页显隐，
+     * 而这类问题在 tsc 与单测里都看不见（三个文件都不参与类型检查的相互引用）。
+     */
+    try {
+      const wbHtml = fs.readFileSync(path.join(rendererDir, 'webbar.html'), 'utf8');
+      const wbJs = fs.readFileSync(path.join(rendererDir, 'webbar.js'), 'utf8');
+      const wbCss = fs.readFileSync(path.join(rendererDir, 'webbar.css'), 'utf8');
+
+      const wbIds = new Set([...wbHtml.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1] as string));
+      const wbUsed = [...new Set([...wbJs.matchAll(/getElementById\('([^']+)'\)/g)].map((m) => m[1] as string))];
+      const wbMissing = wbUsed.filter((id) => !wbIds.has(id));
+      add('N1', '网页区工具条：JS 引用的元素 id 都存在于 webbar.html', wbMissing.length === 0, {
+        htmlIdCount: wbIds.size,
+        usedIdCount: wbUsed.length,
+        missing: wbMissing,
+      });
+
+      let wbParseError: string | null = null;
+      try {
+        new vm.Script(wbJs, { filename: 'webbar.js' });
+      } catch (err) {
+        wbParseError = err instanceof Error ? err.message : String(err);
+      }
+      add('N2', '网页区工具条：webbar.js 语法可解析', wbParseError === null, wbParseError ?? 'OK');
+
+      // 图标按钮必须真的绑了事件，且样式定义了 .icon-btn 外观
+      const wbBoundWeb = /el\.web\.addEventListener\(/.test(wbJs);
+      const wbBoundPreview = /el\.preview\.addEventListener\(/.test(wbJs);
+      const wbBoundRestore = /el\.restore\.addEventListener\(/.test(wbJs);
+      const wbHasIconCss = /\.icon-btn/.test(wbCss) && /\.icon-btn\.active/.test(wbCss);
+      add('N3', '网页区工具条：显隐按钮绑定了事件且有图标按钮样式', wbBoundWeb && wbBoundPreview && wbBoundRestore && wbHasIconCss, {
+        boundWeb: wbBoundWeb,
+        boundPreview: wbBoundPreview,
+        boundRestore: wbBoundRestore,
+        hasIconCss: wbHasIconCss,
+      });
+
+      // N5：网页隐藏后的**右边缘把手**必须存在（这是"能再展开"的唯一常驻入口）
+      const hasHandleEl = /id="btn-restore"/.test(wbHtml) && /class="handle"/.test(wbHtml);
+      const hasHandleCss =
+        /\.webbar\.handle-mode/.test(wbCss) && /\.handle:hover/.test(wbCss) && /writing-mode:\s*vertical-rl/.test(wbCss);
+      add('N5', '网页区工具条：具备右边缘把手形态（竖排 + hover 展开）', hasHandleEl && hasHandleCss, {
+        hasHandleEl,
+        hasHandleCss,
+      });
+
+      // N6：刚隐藏后要高亮提示 —— 否则 5px 窄条会被当成窗口边框忽略
+      const hasHint = /just-hidden/.test(wbJs) && /just-hidden/.test(wbCss) && /HINT_MS/.test(wbJs);
+      add('N6', '网页隐藏后有 3 秒高亮提示（just-hidden）', hasHint, { hasHint });
+
+      // 独立 preload：窄接口 + 通道名与主进程一致
+      const wbPreload = fs.readFileSync(path.join(__dirname, 'webbarPreload.js'), 'utf8');
+      const wbBridgeOk =
+        /exposeInMainWorld\('webbarBridge'/.test(wbPreload) &&
+        wbPreload.includes("'ui:set-web-visible'") &&
+        wbPreload.includes("'ui:set-preview-panel'") &&
+        wbPreload.includes("'ui:chrome-state'");
+      add('N4', '网页区工具条：独立 preload 暴露窄 bridge 且通道名正确', wbBridgeOk, {
+        exposeInMainWorld: /exposeInMainWorld\('webbarBridge'/.test(wbPreload),
+      });
+    } catch (err) {
+      add('N1', '网页区工具条界面契约检查', false, `读取失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    /* ---- O) 显隐开关的位置与输入区体验（本轮用户反馈的四项） ---- */
+
+    // O1：全局工具栏**不再**放带文字的「目录树」「AI 网页」按钮
+    //理由（用户原话）："正常的折叠展开不都是在对应板块顶部增加图标按钮吗，
+    //     没见过有这种带文字的按钮"。目录树开关移到编辑器顶部条，网页开关移到网页区顶栏。
+    const toolbarBlock = /<header class="toolbar">([\s\S]*?)<\/header>/.exec(html)?.[1] ?? '';
+    const toolbarHasTextToggles = /id="btn-sidebar"/.test(toolbarBlock) || /id="btn-web"/.test(toolbarBlock);
+    add('O1', '全局工具栏已移除带文字的「目录树」「AI 网页」按钮', toolbarBlock.length > 0 && !toolbarHasTextToggles, {
+      toolbarFound: toolbarBlock.length > 0,
+      stillHasSidebarBtn: /id="btn-sidebar"/.test(toolbarBlock),
+      stillHasWebBtn: /id="btn-web"/.test(toolbarBlock),
+    });
+
+    // O2：目录树开关是编辑器顶部条里的**图标按钮**（有 svg、无文字），且仍受 Ctrl+B 控制
+    const editorHead = /<div class="editor-head">([\s\S]*?)<\/div>/.exec(html)?.[1] ?? '';
+    const sidebarBtnInHead = /id="btn-sidebar"[^>]*class="icon-btn"/.test(editorHead) && /<svg/.test(editorHead);
+    const ctrlBKept = /e\.key === 'b'/.test(js);
+    add('O2', '目录树开关为编辑器顶部条内的图标按钮，且 Ctrl+B 快捷键保留', sidebarBtnInHead && ctrlBKept, {
+      inEditorHead: sidebarBtnInHead,
+      ctrlBKept,
+    });
+
+    // O3：需求输入框有 JS 高度自适应（此前只有 CSS 的 min/max，实际永远一行高）
+    //
+    // 判据换过：原来查 `rows >= 3`，那是在没有 auto-grow 时用 HTML 属性当"默认高度"的代理。
+    // 现在 auto-grow 接管了，**真实上下限由 CSS min/max-height 决定**（rows 只是折叠时的初始提示，
+    // 用户也明确要求过"只有默认高度、没有最大高度"）。
+    //
+    // ⚠️ 此处**不再重复解析 CSS**：`min ≠ max` 与「CSS/JS 上下限一致」由 R2 / R3 断言，
+    // 这里只补它们没覆盖的一点——auto-grow 本身在不在。
+    // （曾经在此处再解析一遍，变量名直接与 R2 撞出 TS2451。）
+    const hasAutoGrow =
+      /setupRequirementAutoGrow/.test(js) && /scrollHeight/.test(js) && /addEventListener\('input'/.test(js);
+    const rowsAttr = /id="requirement"[\s\S]{0,200}?rows="(\d+)"/.exec(html)?.[1];
+    add('O3', '需求输入框有 JS 高度自适应（高度区间的有效性由 R2/R3 断言）', hasAutoGrow, {
+      hasAutoGrow,
+      rows: rowsAttr ?? null,
+    });
+
+    // O4：「复制提示词」按钮是药丸形且文案已更新（34px 圆形装不下五个字，必然折行）
+    //
+    // 判据不写死 17px/18px 这类具体数值 —— 调一次内边距或高度就会漂移。
+    // 真正要保证的是**药丸的几何定义：圆角半径 ≥ 高度的一半**。
+    const primaryRule = /\.prompt-bar button\.primary\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    const btnH = Number(/height:\s*(\d+)px/.exec(primaryRule)?.[1] ?? 0);
+    const radius = Number(/border-radius:\s*(\d+)px/.exec(primaryRule)?.[1] ?? 0);
+    const pillStyle = btnH > 0 && radius >= btnH / 2;
+    const copyBtnText = /id="btn-copy-prompt"[\s\S]{0,400}?>\s*([^<]+?)\s*</.exec(html)?.[1] ?? '';
+    add('O4', '「复制提示词」为药丸形按钮且文案正确', pillStyle && copyBtnText === '复制提示词', {
+      pillStyle,
+      height: btnH || null,
+      borderRadius: radius || null,
+      buttonText: copyBtnText,
+    });
+
+    /*
+     * O5：采集后**自动**进编辑器 diff —— 主进程里必须存在"采集即推 diffData"的调用。
+     * 注意匹配编译产物：`CHANNELS` 在 tsc 输出里是 `contract_1.CHANNELS`，故只匹配尾部 `CHANNELS.diffData`。
+     */
+    const mainJs = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
+    const autoDiff =
+      /blocks\.find\(\(b\) => b\.applicable\)/.test(mainJs) &&
+      /firstApplicable/.test(mainJs) &&
+      /\.send\(\s*(?:contract_1\.)?CHANNELS\.diffData/.test(mainJs);
+    add('O5', '采集成功后自动把第一个可应用变更送进编辑器 diff（无需手动点按钮）', autoDiff, {
+      findsApplicable: /blocks\.find\(\(b\) => b\.applicable\)/.test(mainJs),
+      hasFirstApplicable: /firstApplicable/.test(mainJs),
+      sendsDiffData: /\.send\(\s*(?:contract_1\.)?CHANNELS\.diffData/.test(mainJs),
+    });
+
+    /*
+     * O6：网页隐藏后**必须还能回来**（本项目已犯过一次这个错）。
+     *
+     * 早期实现把显隐开关放进网页区顶部工具条，网页隐藏时工具条跟着隐藏 ——
+     * 用户点完就再也回不来。因此断言两条：
+     *  1. 工具条视图在网页隐藏时**仍然 setVisible(true)**（变成右边缘把手）；
+     *  2. 隐藏分支里 webBarBounds 的宽度**不为 0**（否则把手没有落脚处）。
+     */
+    const notAlwaysVisible = /webBarView\.setVisible\(webVisible\)/.test(mainJs);
+    const alwaysVisible = /webBarView\.setVisible\(true\)/.test(mainJs);
+    const handleBounds = /webBarBounds:\s*\{\s*x:\s*width - HANDLE_BAR_WIDTH/.test(mainJs);
+    add('O6', '网页隐藏后工具条仍可见且把手几何有效（能再展开）', alwaysVisible && handleBounds && !notAlwaysVisible, {
+      alwaysVisible,
+      handleBounds,
+      stillConditional: notAlwaysVisible,
+    });
+
+    // O7：View 菜单必须有「AI 网页」勾选项作为**兜底入口**（菜单永远不会被隐藏）
+    const menuHasWebItem = /label:\s*'AI 网页'/.test(mainJs) && /type:\s*'checkbox'/.test(mainJs);
+    const menuHasShortcut = /CmdOrCtrl\+Shift\+A/.test(mainJs);
+    add('O7', 'View 菜单提供「AI 网页」勾选项与快捷键（兜底入口）', menuHasWebItem && menuHasShortcut, {
+      menuHasWebItem,
+      menuHasShortcut,
+    });
+
+    /* ---------------- P 组：内联 diff（差异与原文件整合显示）----------------
+     *
+     * 用户要求（2026-10-03）：diff **不要**左右并排成两个板块，而要整合在原文件上显示。
+     * 这组断言把该形态固化下来，防止将来有人"顺手改回"DiffEditor：
+     *  - P1 不再有第二个 Monaco 宿主（`monaco-diff` / `createDiffEditor` 全部消失）
+     *  - P2 内联标记确实画在**同一个**编辑器上（decorations + view zone）
+     *  - P3 预览期只读，且退出后恢复可编辑
+     *  - P4 预览前校验编辑器内容与 original 一致（防止标记画在错误位置上）
+     *  - P5 右下角面板不再渲染逐行 diff
+     *  - P6 两个视图之间有高亮同步通道（跨进程，靠主进程转发）
+     */
+    const previewJs = fs.readFileSync(path.join(rendererDir, 'preview.js'), 'utf8');
+    const previewPreloadJs = fs.readFileSync(path.join(__dirname, 'previewPreload.js'), 'utf8');
+    const noSecondHost = !/id="monaco-diff"/.test(html) && !/createDiffEditor/.test(js);
+    add('P1', '不再使用第二个 Monaco 宿主（无 monaco-diff / createDiffEditor）', noSecondHost, {
+      hasMonacoDiffHost: /id="monaco-diff"/.test(html),
+      hasCreateDiffEditor: /createDiffEditor/.test(js),
+    });
+
+    const inlineMechanism =
+      /createDecorationsCollection/.test(js) &&
+      /changeViewZones/.test(js) &&
+      /inline-deleted/.test(js) &&
+      /inline-added/.test(js);
+    add('P2', '差异以行内标记叠加在原编辑器上（decoration + view zone）', inlineMechanism, {
+      usesDecorations: /createDecorationsCollection/.test(js),
+      usesViewZones: /changeViewZones/.test(js),
+      marksDeleted: /inline-deleted/.test(js),
+      marksAdded: /inline-added/.test(js),
+    });
+
+    const readOnlyWhenPreview = /updateOptions\(\{\s*readOnly:\s*true\s*\}\)/.test(js);
+    const restoredOnExit = /updateOptions\(\{\s*readOnly:\s*false\s*\}\)/.test(js);
+    add('P3', '预览期只读、退出后恢复可编辑', readOnlyWhenPreview && restoredOnExit, {
+      readOnlyWhenPreview,
+      restoredOnExit,
+    });
+
+    // 标记画在编辑器内容上，因此必须先确认内容就是 original，否则宁可不画
+    const guardsContent = /model\.getValue\(\) !== original/.test(js);
+    add('P4', '画标记前校验编辑器内容与 original 一致（防止标记错位）', guardsContent, {
+      guardsContent,
+    });
+
+    const noHunkInPanel = !/renderHunk/.test(previewJs) && !/pv-hunk/.test(previewJs);
+    add('P5', '右下角面板只列文件、不再渲染逐行 diff', noHunkInPanel, {
+      stillRendersHunks: /renderHunk/.test(previewJs),
+      stillHasHunkCss: /pv-hunk/.test(previewJs),
+    });
+
+    const highlightSync =
+      /onActiveDiff/.test(previewJs) &&
+      /activeDiff/.test(previewPreloadJs) &&
+      /CHANNELS\.activeDiff/.test(mainJs);
+    add('P6', '编辑器与右下角面板之间有高亮同步通道（跨进程经主进程转发）', highlightSync, {
+      panelListens: /onActiveDiff/.test(previewJs),
+      preloadExposes: /activeDiff/.test(previewPreloadJs),
+      mainForwards: /CHANNELS\.activeDiff/.test(mainJs),
+    });
+
+    /* ---------------- Q 组：应用后刷新 / 全部应用 / 选区浮层 / 输入框观感 ----------------
+     *
+     * Q1 是本轮修的一个**真实缺陷**：落盘在主进程、编辑在另一个渲染进程，
+     * `applyChange` 返回后没有任何广播，编辑器一直显示旧内容（用户实测：
+     * "应用后没有及时刷新文件，只有关闭文件重新打开才会显示应用后的代码"）。
+     * 这条断言防止将来把广播删掉、或只改一半（加了通道但没在 handler 里发）。
+     */
+    /*
+     * 注意读的是**仓库里的 .ts 源码**，不是 __dirname 下的编译产物 ——
+     * 自检运行时 __dirname 是 dist/main，那里只有 .js，没有 .ts。
+     */
+    const srcMainDir = path.join(__dirname, '..', '..', 'src', 'main');
+    const mainTs = fs.readFileSync(path.join(srcMainDir, 'index.ts'), 'utf8');
+    const preloadTs = fs.readFileSync(path.join(srcMainDir, 'preload.ts'), 'utf8');
+    /* 通道名的权威定义在契约层，不在 index.ts */
+    const contractTs = fs.readFileSync(path.join(srcMainDir, '..', 'shared', 'contract.ts'), 'utf8');
+    const previewHtml = fs.readFileSync(path.join(rendererDir, 'preview.html'), 'utf8');
+    // 网页区顶部工具条（webbar）：显隐开关的唯一常驻入口，单独读出来供 T1 断言
+    const webbarHtml = fs.readFileSync(path.join(rendererDir, 'webbar.html'), 'utf8');
+    const webbarJs = fs.readFileSync(path.join(rendererDir, 'webbar.js'), 'utf8');
+    const hasFileChangedChannel = /fileChanged:\s*'fs:file-changed'/.test(contractTs);
+    const notifiesOnApply = /notifyFileChanged\(filePath\)/.test(mainTs);
+    const notifiesOnUndo = /notifyFileChanged\(result\.filePath\)/.test(mainTs);
+    const editorListens = /onFileChanged/.test(js) && /onFileChanged/.test(preloadTs);
+    add(
+      'Q1',
+      '落盘后广播 fileChanged、编辑器收到即重读（修复"应用后仍显示旧代码"）',
+      hasFileChangedChannel && notifiesOnApply && notifiesOnUndo && editorListens,
+      { hasFileChangedChannel, notifiesOnApply, notifiesOnUndo, editorListens },
+    );
+
+    /*
+     * Q2：全部应用必须**顺序**执行 —— 每个变更单独做三向校验，
+     * 校验基线是"读文件那一刻的原文"；并发会让两次写入基于同一份基线而互相覆盖。
+     * 同时要求"单条失败不中断整体"（某个文件校验不过，其余仍应能应用）。
+     */
+    const appliesSequentially = /for \(let i = 0; i < blocks\.length; i \+= 1\)/.test(previewJs);
+    const toleratesFailure = /failed\.push/.test(previewJs) && !/Promise\.all/.test(previewJs);
+    const applyAllBound = /pv-apply-all/.test(previewJs) && /pv-apply-all/.test(previewHtml);
+    add(
+      'Q2',
+      '「全部应用」存在且顺序执行、单条失败不中断（并发会破坏三向校验基线）',
+      appliesSequentially && toleratesFailure && applyAllBound,
+      { appliesSequentially, toleratesFailure, applyAllBound },
+    );
+
+    // Q3：选区浮动复制按钮 —— 有选区才出现，无选区不显示；仍只写剪贴板不碰网页。
+    const bubbleExists = /selection-copy/.test(js) && /selection-copy/.test(css);
+    const hidesWhenEmpty = /selection\.isEmpty\(\)/.test(js) && /bubble\.hidden = true/.test(js);
+    add('Q3', '选区右上角浮动复制按钮存在且无选区时隐藏', bubbleExists && hidesWhenEmpty, {
+      bubbleExists,
+      hidesWhenEmpty,
+    });
+
+    // Q4：输入框滚动条必须是自绘细条 —— Windows 原生条是带箭头的白色块，压在深色框里极扎眼
+    const customScrollbar = /\.requirement::-webkit-scrollbar-thumb/.test(css);
+    const hidesNative = /\.requirement::-webkit-scrollbar\s*\{[^}]*width:\s*0/.test(css);
+    add('Q4', '需求输入框用自绘细滚动条、隐藏原生带箭头滚动条', customScrollbar && hidesNative, {
+      customScrollbar,
+      hidesNative,
+    });
+
+    // Q5：浮动按钮的定位上下文 —— .editor-wrap 必须有 position: relative，
+    // 否则 absolute 会跑到更外层容器，位置完全错掉。
+    const wrapIsRelative = /\.editor-wrap\s*\{[^}]*position:\s*relative/.test(css);
+    add('Q5', '编辑器容器是浮动按钮的定位上下文（position: relative）', wrapIsRelative, { wrapIsRelative });
+
+    // ---- R 组：修复「浮层按钮不出现」与「输入框不撑开/底部溢出」两个实测缺陷 ----
+    //
+    // 为什么单独开一组：Q3/Q4 只验证了「代码/样式文本存在」，而这两个 bug 恰恰是
+    // **文本在、但永远不执行/被CSS 钳制失效**。存在性断言对它们完全无效，
+    // 必须断言「执行前提」与「两端常量一致」。
+
+    // R1：浮层按钮必须等state.editor 就绪后才建。
+    // Monaco 是 window.require 异步加载的；若setupSelectionCopyBubble 写成顶层 IIFE，
+    // 它会在 state.editor 还是 null 时执行并静默 return（按钮永远不出现）。
+    // 断言：它是具名函数声明，且调用点在 initMonaco 的 require 回调内。
+    const bubbleIsNamedFn = /function setupSelectionCopyBubble\(\)\s*\{/.test(js);
+    const bubbleNotTopLevelIife = !/\(function setupSelectionCopyBubble\(\)/.test(js);
+    const bubbleCalledAfterEditor =
+      /state\.editor = window\.monaco\.editor\.create[\s\S]{0,1200}?setupSelectionCopyBubble\(\)/.test(js);
+    add(
+      'R1',
+      '选区浮层按钮在 state.editor 就绪后才挂载（异步 require 下不再静默 return）',
+      bubbleIsNamedFn && bubbleNotTopLevelIife && bubbleCalledAfterEditor,
+      { bubbleIsNamedFn, bubbleNotTopLevelIife, bubbleCalledAfterEditor },
+    );
+
+    // R2：输入框必须 min ≠ max。
+    // 曾经 min-height 与 max-height 同为 88px，高度被钉死，JS 内联 height 被钳制住，
+    // auto-grow 形同虚设（用户实测：粘贴不撑开）。
+    const reqBlock = /\.requirement\s*\{([\s\S]*?)\}/.exec(css)?.[1] ?? '';
+    const minH = /min-height:\s*(\d+)px/.exec(reqBlock)?.[1];
+    const maxH = /max-height:\s*(\d+)px/.exec(reqBlock)?.[1];
+    const heightNotPinned = minH !== undefined && maxH !== undefined && minH !== maxH;
+    add(
+      'R2',
+      '输入框高度区间 min ≠ max（否则 CSS 钳制会让 auto-grow 永久失效）',
+      heightNotPinned,
+      { minH: minH ?? '未设置', maxH: maxH ?? '未设置' },
+    );
+
+    // R3：CSS 的 min/max 与 JS 的 MIN_H / MAX_H 必须一致，否则会出现
+    // 「JS 以为到顶了、CSS 还在放行」的错位（表现为要么不滚、要么留白）。
+    const jsMinH = /const MIN_H = (\d+)/.exec(js)?.[1];
+    const jsMaxH = /const MAX_H = (\d+)/.exec(js)?.[1];
+    const boundsMatch = minH === jsMinH && maxH === jsMaxH;
+    add(
+      'R3',
+      '输入框高度上下限在 CSS 与 JS 中一致',
+      boundsMatch,
+      { cssMin: minH ?? '未设置', cssMax: maxH ?? '未设置', jsMin: jsMinH ?? '未设置', jsMax: jsMaxH ?? '未设置' },
+    );
+
+    // R4：归零测量时必须同时放开 min/max-height，
+    // 否则 min-height 会把 scrollHeight 顶起来，量到的不是真实内容高度。
+    const growBlock = /function grow\(\)\s*\{([\s\S]*?)\n    \}/.exec(js)?.[1] ?? '';
+    const resetsMinH = /minHeight\s*=\s*'0px'/.test(growBlock);
+    const releasesMaxH = /maxHeight\s*=\s*'none'/.test(growBlock);
+    add(
+      'R4',
+      'auto-grow 归零时同时放开 min/max-height（scrollHeight 量到真实内容高度）',
+      resetsMinH && releasesMaxH,
+      { resetsMinH, releasesMaxH },
+    );
+
+    // R5：垂直方向的三处 flex 收缩许可。缺任一条，
+    // 输入框撑高时编辑器不缩 → 底部被推出视口（用户实测"输入框底部有点溢出"）。
+    const wrapAllowsShrink = /\.editor-wrap\s*\{[^}]*min-height:\s*0/.test(css);
+    const promptBarAllowsShrink = /\.prompt-bar\s*\{[^}]*min-height:\s*0/.test(css);
+    add(
+      'R5',
+      '编辑器容器与输入区允许在 flex 中收缩（输入框撑高不顶出视口）',
+      wrapAllowsShrink && promptBarAllowsShrink,
+      { wrapAllowsShrink, promptBarAllowsShrink },
+    );
+
+    // R6：**min-height: 0 必须配可收缩的 flex**。
+    // 上一版写了 `flex: 0 0 auto` + `min-height: 0` —— 这是**无效组合**：
+    // flex-shrink: 0 直接禁止收缩，min-height: 0 根本轮不到起作用，
+    // 于是视口一紧张输入区就不缩，把底部边框顶出可视范围。
+    // 现象很有欺骗性：「启动时底部溢出，拖一下窗口就恢复」——
+    // 因为拖窗口触发了重排，而不是任何 JS 逻辑在起作用。
+    const promptBarBlock = /\.prompt-bar\s*\{([\s\S]*?)\}/.exec(css)?.[1] ?? '';
+    const promptBarShrinkable = /flex:\s*0\s+1\s+auto/.test(promptBarBlock);
+    const promptBarNoHardZero = !/flex:\s*0\s+0\s+auto/.test(promptBarBlock);
+    add(
+      'R6',
+      '输入区 flex 允许收缩（min-height:0 配flex-shrink:0 是无效组合）',
+      promptBarShrinkable && promptBarNoHardZero,
+      { promptBarShrinkable, promptBarNoHardZero },
+    );
+
+    // R7：高度必须跟随实际宽度持续校正，不能只在启动时量一次。
+    // 脚本同步执行时 flex 布局尚未稳定、字体未就位，此时量到的 scrollHeight 不可靠，
+    // 写死的内联 height 就是错的 → 表现为初始页面底部溢出。
+    // 用 ResizeObserver 跟随宽度是正解；首次测量放到 rAF 之后。
+    const hasResizeObserver = /new ResizeObserver\(/.test(js);
+    const roGuard = /function growIfWidthChanged[\s\S]*?w === lastWidth[\s\S]*?return/.test(js);
+    const firstMeasureInRaf = /requestAnimationFrame\(function \(\)\s*\{[\s\S]{0,200}?grow\(\)/.test(js);
+    // 防自激：RO 观察自身元素，必须靠"宽度没变就跳过"断开height → RO → height 的回环
+    add(
+      'R7',
+      '输入框高度跟随实际宽度校正（RO + 宽度守卫 + 首测延后到 rAF）',
+      hasResizeObserver && roGuard && firstMeasureInRaf,
+      { hasResizeObserver, roGuard, firstMeasureInRaf },
+    );
+
+    // R8：缩放窗口后必须能重算高度，且**不要求输入框非空**。
+    // 上一版判了 `value.length > 0`，空输入框这条路直接走不通。
+    // 收窄到 auto-grow 那个处理器：源码里有多个 resize 监听（浮层也挂了一个用来失效宽度缓存），
+    // 不加限定会匹配到不相干的那个。
+    const resizeHandler =
+      /const MAX_H = \d+;[\s\S]{0,4000}?window\.addEventListener\('resize',[\s\S]*?\}\);/.exec(js)?.[0] ?? '';
+    const resizeCallsGrow = /grow\(\)/.test(resizeHandler);
+    const resizeNotGatedOnValue = !/value\.length\s*>\s*0/.test(resizeHandler);
+    add(
+      'R8',
+      '缩放窗口即重算高度，且不因输入框为空而跳过',
+      resizeCallsGrow && resizeNotGatedOnValue,
+      { resizeCallsGrow, resizeNotGatedOnValue },
+    );
+
+    // ---- S 组：视图几何必须在窗口真正显示后重算 ----
+    //
+    // 背景：用户实测「启动后底部被切，拖一下窗口就恢复」。
+    // 根因**不在 CSS、也不在渲染进程**，而在主进程：
+    // `new BaseWindow(...)` 之后立刻 getContentSize()，此刻窗口还没显示，
+    // 量到的内容区与显示后的真实视口不一致（边框/缩放/DPI 此时才最终确定），
+    // 四个视图就按错尺寸定了 bounds，而 bounds 不会自动跟随视口。
+    // 拖窗口能恢复只是因为那才会触发 win.on('resize', relayout) —— 属误认。
+    const relayoutOnShow =
+      /win\.once\('show',\s*\(\)\s*=>\s*\{[\s\S]{0,80}?relayout\(\)/.test(mainTs);
+    const relayoutOnFinishLoad = /did-finish-load[\s\S]{0,200}?relayout\(\)/.test(mainTs);
+    add(
+      'S1',
+      '窗口显示后重算视图几何（修"启动即溢出、拖窗口才恢复"）',
+      relayoutOnShow && relayoutOnFinishLoad,
+      { relayoutOnShow, relayoutOnFinishLoad },
+    );
+
+    // S2：给状态行显式 flex-shrink: 0 —— 它是固定高度信息条，
+    // 纵向压缩只应作用在 .monaco 上；压状态行会把提示文字切成半行。
+    const infoBlock = /\.info\s*\{([\s\S]*?)\}/.exec(css)?.[1] ?? '';
+    const infoNotShrunk = /flex:\s*0\s+0\s+auto/.test(infoBlock);
+    add('S2', '状态行不参与纵向压缩（纵向只压编辑器本体）', infoNotShrunk, { infoNotShrunk });
+
+    // T 组：显隐开关**只能有一套**，不允许出现功能重复的第二份入口。
+    //
+    // 背景（用户指出）：编辑器工具栏里有个「回程预览」文字按钮，网页区右上角
+    // 又有一个分栏图标按钮，两者调的是**同一个** setPreviewPanel，
+    // 连面板高度算法都逐行相同 —— 纯重复，且误导用户以为它们管的是两件事。
+    // 已删掉工具栏那个，只保留网页区右上角的图标。
+    //
+    // 断言要点：预览开关在**编辑器页面里不应再出现**（连 DOM 都不能有）。
+    const previewToggleInEditor = /btn-preview-toggle/.test(html) || /btnPreviewToggle/.test(js);
+    // 网页区那个必须还在，且仍挂在 setPreviewPanel 上
+    const previewToggleInWebbar = /btn-preview-toggle/.test(webbarHtml);
+    const webbarWired = /setPreviewPanel/.test(webbarJs);
+    add(
+      'T1',
+      '回程预览开关只有网页区右上角一处（编辑器里不再有重复按钮）',
+      !previewToggleInEditor && previewToggleInWebbar && webbarWired,
+      { previewToggleInEditor, previewToggleInWebbar, webbarWired },
+    );
+
+    // ---- U 组：浮层复制按钮的定位与提示；保存按钮移除后快捷键仍在 ----
+
+    // U1：**不能把 Position 对象当字符偏移量传给 getPositionAt**。
+    // `getPositionAt(offset: number)` 收的是数字，而 `getEndPosition()` 返回 Position 对象，
+    // 误传后被转成 NaN → `style.top = NaN + 'px'` 是非法 CSS 值、被浏览器丢弃 →
+    // 按钮停在hidden 状态。表现：代码文件"歪着出现"，markdown 干脆不出现
+    // （wordWrap 换行更多，命中不同分支）。
+    //
+    // ⚠️ 必须先剥掉注释再匹配：这段错误写法的说明就写在代码旁的注释里，
+    // 直接对全文 grep 会把注释当成违规代码。
+    const jsCode = js
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/(^|[^:])\/\/.*$/gm, '$1');
+    const usesOffsetApi = /getPositionAt\(\s*selection\.getEndPosition\(\)/.test(jsCode);
+    const usesPositionDirectly = /const end = selection\.getEndPosition\(\)/.test(jsCode);
+    add(
+      'U1',
+      '选区定位直接用 Position，不再误传给 getPositionAt（修 md 文件不出现复制按钮）',
+      !usesOffsetApi && usesPositionDirectly,
+      { usesOffsetApi, usesPositionDirectly },
+    );
+
+    // U2：浮层**不再自己算绝对坐标**。此前用 getTopForLineNumber / getOffsetForColumn
+    // 拿到的是**编辑器视口内坐标**，而浮层挂在编辑器外部的 .editor-wrap 上，
+    // 两套坐标系在滚动 / wordWrap 折行时必然脱节 —— 表现就是 md 这类折行多的
+    // 文件按钮算不到位置、干脆不出现。改用IContentWidget 后定位交给 Monaco。
+    const noManualCoords =
+      !/getTopForLineNumber/.test(jsCode) && !/getOffsetForColumn/.test(jsCode);
+    add(
+      'U2',
+      '浮层不再自己算绝对坐标（改由 Monaco content widget 定位，修 md 折行错位）',
+      noManualCoords,
+      { noManualCoords },
+    );
+
+    // U3：浮层元素**不能用原生 title**。原生 tooltip 在元素位置变化时失效重建，
+    // 而 place() 每次都写 style.left/top → hover 提示反复闪烁（用户实测：
+    // 查找框关闭按钮的 Close (Escape) 面板一直闪）。改用 aria-label。
+    const bubbleUsesTitle = /\.selection-copy[\s\S]{0,400}?\.title\s*=/.test(js);
+    const bubbleUsesAria = /bubble\.setAttribute\('aria-label'/.test(js);
+    add(
+      'U3',
+      '浮层按钮不用原生 title（避免重排导致 tooltip 闪烁），改用 aria-label',
+      !bubbleUsesTitle && bubbleUsesAria,
+      { bubbleUsesTitle, bubbleUsesAria },
+    );
+
+    // U4：位置**完全交给 Monaco**（addContentWidget / layoutContentWidget），
+    // 我们一个 style.left/top 都不写。
+    //
+    // 这才是 tooltip 闪烁的根因修复：闪烁不是因为「写多了次」，
+    // 而是因为**我们在高频事件里重排 DOM**，让旁边控件的原生 tooltip
+    // 反复失效重建。只要不写style，这条链就断了。
+    // 另需suppressMouseDown，否则点按钮会先把选区弄丢、按钮自己消失。
+    const addedAsContentWidget = /editor\.addContentWidget\(contentWidget\)/.test(js);
+    const noStyleWrites = !/bubble\.style\.(left|top)\s*=/.test(jsCode);
+    const suppressMouseDown = /suppressMouseDown:\s*true/.test(js);
+    add(
+      'U4',
+      '浮层定位交给 content widget（不写 style，故不会打断原生 tooltip）',
+      addedAsContentWidget && noStyleWrites && suppressMouseDown,
+      { addedAsContentWidget, noStyleWrites, suppressMouseDown },
+    );
+
+    // U5：保存按钮已移除，但**Ctrl+S 快捷键必须还在**。
+    // 按钮只是入口之一，删了按钮不能把能力一起删掉 ——
+    // 断言快捷键注册仍然存在，且页面里不再有 btn-save。
+    const saveButtonGone = !/btn-save/.test(html) && !/btnSave/.test(js);
+    const ctrlSStillBound = /KeyMod\.CtrlCmd\s*\|\s*window\.monaco\.KeyCode\.KeyS/.test(js);
+    add(
+      'U5',
+      '保存按钮已移除，但 Ctrl+S 快捷键仍注册（能力不随入口一起丢）',
+      saveButtonGone && ctrlSStillBound,
+      { saveButtonGone, ctrlSStillBound },
+    );
 
     // renderer.js 不经 tsc，这里至少保证可被解析（语法错误会在此暴露）
     let parseError: string | null = null;

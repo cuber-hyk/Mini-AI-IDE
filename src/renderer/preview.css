@@ -74,6 +74,32 @@ body {
   border-color: var(--accent);
 }
 
+/* 「全部应用」：主操作，与「撤销」这类次要按钮区分开 */
+.pv-head button.pv-apply-all {
+  background: #2c5cc5;
+  border-color: #3f6fd8;
+  color: #fff;
+}
+
+.pv-head button.pv-apply-all:hover:enabled {
+  background: #3868d8;
+}
+
+.pv-head button.pv-apply-all:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* 已应用的条目：置灰并去掉 hover 反馈，明确"这个文件已经落盘了" */
+.pv-file.done {
+  opacity: 0.55;
+}
+
+.pv-file.done.clickable:hover {
+  background: none;
+  border-color: transparent;
+}
+
 .pv-notes {
   flex: 0 0 auto;
   max-height: 3.2em;
@@ -93,7 +119,7 @@ body {
   min-height: 0;
   list-style: none;
   margin: 0;
-  padding: 6px 8px 10px;
+  padding: 4px 6px 8px;
   overflow: auto;
 }
 
@@ -102,65 +128,89 @@ body {
   padding: 4px 0;
 }
 
-/* 一条待应用变更 */
-.pv-item {
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  margin-bottom: 8px;
-  background: #171a21;
+/* ---------------- 一个文件 = 一行 ----------------
+ *
+ * 本面板**不再渲染 diff**：差异一律内联显示在左侧编辑器里。
+ * 每行只回答"改哪个文件、改哪一段、加了几行删了几行"，
+ * 点整行 → 左侧编辑器打开该文件并内联标记。
+ */
+
+.pv-file {
+  border: 1px solid transparent;
+  border-radius: 4px;
+  margin-bottom: 2px;
   overflow: hidden;
 }
 
-.pv-item.blocked {
-  border-color: #5a3a3a;
+.pv-file.blocked {
+  opacity: 0.62;
 }
 
-.pv-item-head {
+/* 可点击（有对应文件的可应用变更） */
+.pv-file.clickable {
+  cursor: pointer;
+}
+
+.pv-file.clickable:hover {
+  background: #1c2029;
+  border-color: var(--border);
+}
+
+/* 当前正在编辑器里预览的那一条 */
+.pv-file.active {
+  background: rgba(91, 141, 239, 0.16);
+  border-color: var(--accent);
+}
+
+.pv-file-row {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px 7px;
-  background: #1b1f27;
-  border-bottom: 1px solid var(--border);
+  gap: 8px;
+  padding: 4px 7px;
 }
 
-.pv-path {
+.pv-file-main {
   flex: 1 1 auto;
-  min-width: 120px;
-  background: #10131a;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.pv-file-name {
   color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 2px 6px;
-  font: inherit;
-}
-
-.pv-tag {
-  flex: 0 0 auto;
-  font-size: 11px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  background: #262a33;
-  color: var(--text-dim);
+  font-size: 12.5px;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 1 auto;
 }
 
-.pv-tag.weak {
-  background: #4a3a20;
-  color: #e8c07a;
+.pv-file-sub {
+  color: var(--text-dim);
+  font-size: 11px;
+  white-space: nowrap;
+  flex: 0 0 auto;
 }
 
-.pv-tag.stat-add {
-  background: #16301f;
+/* 增删统计：正负分色，一眼看出改动量 */
+.pv-file-stat {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 5px;
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 11px;
+}
+
+.pv-stat-add {
   color: var(--add-text);
 }
 
-.pv-tag.stat-del {
-  background: #33181c;
+.pv-stat-del {
   color: var(--del-text);
 }
 
-.pv-item-head button {
+.pv-file-apply {
   flex: 0 0 auto;
   white-space: nowrap;
   background: #2c5cc5;
@@ -172,104 +222,63 @@ body {
   cursor: pointer;
 }
 
-.pv-item-head button:disabled {
+.pv-file-apply:hover:enabled {
+  background: #3868d8;
+}
+
+.pv-file-apply:disabled {
   background: #2a2d34;
   border-color: var(--border);
   color: var(--text-dim);
   cursor: default;
 }
 
-.pv-item-head button.pv-btn-compare {
-  background: #262a33;
-  border-color: var(--border);
-  color: var(--text);
+/* ---------------- 次级：提示 / 改路径 ---------------- */
+
+.pv-file-details {
+  padding: 0 7px 5px;
 }
 
-.pv-item-head button.pv-btn-compare:hover {
-  border-color: var(--accent);
-}
-
-/* 面板内仍保留可滚动的 diff 预览；但确认改动请用「在编辑器中对比」（更清晰） */
-.pv-hunks {
-  max-height: 220px;
-  overflow: auto;
+.pv-file-details:empty {
+  display: none;
 }
 
 .pv-hint {
-  padding: 4px 7px;
   color: #e8c07a;
   font-size: 11px;
-  border-bottom: 1px solid var(--border);
+  padding: 2px 0;
 }
 
-/* 逐行差异（主流编辑器风格：左侧行号 + 增删底色） */
-.pv-hunks {
-  font-family: "Cascadia Code", Consolas, "Courier New", monospace;
-  font-size: 12px;
-  line-height: 1.45;
-  overflow-x: auto;
-}
-
-.pv-hunk + .pv-hunk {
-  border-top: 1px dashed var(--border);
-}
-
-.pv-hunk-head {
-  padding: 2px 8px;
+/* 「改路径」是文字链形式：不主动占视觉，但必须可达（模型偶尔给错路径） */
+.pv-link {
+  background: none;
+  border: none;
+  padding: 0;
   color: var(--text-dim);
-  background: #12141a;
-  user-select: none;
+  font: inherit;
+  font-size: 11px;
+  text-decoration: underline;
+  cursor: pointer;
 }
 
-.pv-line {
-  display: flex;
-  white-space: pre;
+.pv-link:hover {
+  color: var(--accent);
 }
 
-.pv-no {
-  flex: 0 0 auto;
-  width: 4ch;
-  padding-right: 4px;
-  text-align: right;
-  color: #5d6779;
-  user-select: none;
+.pv-path-row {
+  margin-top: 3px;
 }
 
-.pv-no.new {
-  width: 4ch;
+.pv-path {
+  width: 100%;
+  background: #10131a;
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 2px 6px;
+  font: inherit;
 }
 
-.pv-sign {
-  flex: 0 0 auto;
-  width: 1.4ch;
-  text-align: center;
-  color: var(--text-dim);
-  user-select: none;
-}
-
-.pv-text {
-  flex: 1 1 auto;
-  padding-left: 4px;
-}
-
-.pv-line.add {
-  background: var(--add-bg);
-}
-
-.pv-line.add .pv-sign,
-.pv-line.add .pv-text {
-  color: var(--add-text);
-}
-
-.pv-line.del {
-  background: var(--del-bg);
-}
-
-.pv-line.del .pv-sign,
-.pv-line.del .pv-text {
-  color: var(--del-text);
-}
-
-.pv-line.context .pv-text {
-  color: #9aa4b6;
+.pv-path[hidden] {
+  display: none;
 }
