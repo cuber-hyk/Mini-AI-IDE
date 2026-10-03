@@ -5,6 +5,27 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **选区复制按钮的锚点从「选区末行」改为「选区首行」**（用户反馈："这个复制按钮虽然有，但是位置有点问题，好像是最后一行的右上角，不是整体的区域的右上角"）。
+  上一版用 `selection.getEndPosition()`，按钮跟着**选区最后一行**跑；改为 `selection.getStartPosition()`（Monaco 中恒指向文档序更靠前的一端），锚在**首行行尾**。配合 `preference: ABOVE`，按钮落在整个选区外接矩形的右上角外侧，不再遮挡第一行文字。
+
+### Removed
+
+- **删除 `freezeFindWidgetHover()`**（第十轮加的查找框 hover 抑制）。该实现**基于一个已被源码证伪的假设**：
+  - 原假设："`ActionViewItem.updateTooltip()` 每次重画都 dispose 旧 hover 再重建 → 闪烁"。
+  - 读 `node_modules/monaco-editor/esm/vs/base/browser/ui/actionbar/actionViewItems.js` 后证伪：
+    `updateTooltip()` 是 `if (!this.customHover && title !== '') { 建 } else if (this.customHover) { update }` —— **只在首建，之后只 update，不重建**；而 `update()` 内部仅 `await hoverWidget?.update(...)`，既不 show 也不 hide。
+  - 更关键的是**该补丁本身有害**：`setupManagedHover()` 里有 `if (targetElement.title !== '') { console.warn(...); targetElement.title = ''; }` —— 它会主动清掉我们写的 `title`；而它自己 `setAttribute('custom-hover','true')` 是属性写入（我们的 `MutationObserver` 只监听 `childList/subtree`，管不到），于是形成"删属性 → 被加回 → 清 title → 再写 title"的 churn。**补丁成了噪声源。**
+  - 自检断言 V4 因此**反转**：从"必须有这个抑制函数"改为"**不允许**再引入此类渲染层补丁"。
+
+### Note
+
+- **查找框 hover 闪烁问题仍未修复**，但本轮把调查从"猜"推进到"可判定"：
+  - 已定位全部相关源码（含行号），确认 `close` / `prev` / `next` 三个按钮的构造**逐字相同**（同为 `SimpleButton` + `hoverLifecycleOptions = { groupId: 'find-widget' }`），**唯一差别是 close 多一个只处理 Tab 的 `onKeyDown`**。
+  - 由此得到两条**互斥**假设（H1：SimpleButton 共性；H2：close 独有），必须实测二选一，补丁落点完全不同。
+  - 新增只读诊断探针 `window.__uiFindHoverProbe()` 与入口 `npm run ui-probe:findhover`：打开查找框后在窗口期内派发合成 Alt 事件，统计 `monaco-hover` 浮层节点的增删次数，用来判定闪烁归属。探针**只读、不写 DOM、不触碰网页**。
+
 ### Note
 
 - 术语演进：早期表述"如实 Electron 身份"已由 ADR-0001 修正为 **"不伪造、不自报、内部自洽"**（依据 P0b 受控实验）。下方历史条目中的旧提法保留原样，以反映当时的认知。

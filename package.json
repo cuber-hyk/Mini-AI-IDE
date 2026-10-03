@@ -13,12 +13,15 @@
     "diagnose": "npm run build && electron . --diagnose",
     "ui-probe": "npm run build && electron . --ui-probe",
     "ui-probe:bubble": "npm run build && electron . --ui-probe --test-bubble",
-    "setup:electron": "node scripts/install-electron.mjs"
+    "ui-probe:findhover": "npm run build && electron . --ui-probe --test-findhover",
+    "setup:electron": "node scripts/install-electron.mjs",
+    "postinstall": "patch-package"
   },
   "devDependencies": {
     "@types/node": "22.10.2",
     "electron": "44.5.1",
     "monaco-editor": "0.57.0",
+    "patch-package": "8.0.0",
     "tsx": "4.23.15",
     "typescript": "5.9.3"
   }

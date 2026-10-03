@@ -989,13 +989,14 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     const jsCode = js
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/(^|[^:])\/\/.*$/gm, '$1');
-    const usesOffsetApi = /getPositionAt\(\s*selection\.getEndPosition\(\)/.test(jsCode);
-    const usesPositionDirectly = /const end = selection\.getEndPosition\(\)/.test(jsCode);
+    const usesOffsetApi = /getPositionAt\(\s*selection\.get(Start|End)Position\(\)/.test(jsCode);
+    // 锚点必须来自 getStartPosition()（第十一轮：改锚首行，见 V5）。
+    const usesStartAnchor = /selection\.getStartPosition\(\)/.test(jsCode);
     add(
       'U1',
-      '选区定位直接用 Position，不再误传给 getPositionAt（修 md 文件不出现复制按钮）',
-      !usesOffsetApi && usesPositionDirectly,
-      { usesOffsetApi, usesPositionDirectly },
+      '选区定位直接用 Position，不再误传给 getPositionAt，且锚点取自选区首行',
+      !usesOffsetApi && usesStartAnchor,
+      { usesOffsetApi, usesStartAnchor },
     );
 
     // U2：浮层**不再自己算绝对坐标**。此前用 getTopForLineNumber / getOffsetForColumn
@@ -1119,38 +1120,50 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       { layoutCallShape, returnsPreference, returnsAffinity },
     );
 
-    // V4：**查找框 tooltip 闪烁的根因在 Monaco 自己身上，我们只能"不去招惹它"**。
+    // V4：**页面里不得再出现"抑制 Monaco hover"的那类补丁**。
     //
-    // 证据（来自打包产物 editor-BdtEMBbM.js）：
-    //   `n!==this._wantsAltCommand && (this._wantsAltCommand=n, this.updateLabel(),
-    //    this.updateTooltip(), ...)`  —— 挂在 AltKeyTracker 上，
-    //   **每次 alt/ctrl/shift/meta 状态变化**都重画标签；
-    //   `updateLabel()` 走 `localize(1726,"{0} ({1})",label,t)` 生成 "Close (Escape)"；
-    //   `updateTooltip()` → `setupManagedHover(...)` 是**自绘 hover DOM，不是原生 title**。
-    // 所以前两次"把 title 改成 aria-label"的方向对但打不中 —— 那个面板根本不来自 title。
-    // 我们能做的：保证自己不在高频事件里重排 DOM（否则让旁边控件的自绘 hover 反复重建），
-    // 并明令这一条，防止以后有人又在 selectionchange / scroll 里做重排"优化"。
-    const noReorderInHotPath = !/editor\.onDidChangeCursorSelection\([\s\S]{0,600}?(appendChild|insertBefore|\.style\.(width|height|display|visibility))/.test(jsCode);
-    const noScrollReorder = !/editor\.onDidScrollChange\([\s\S]{0,400}?(appendChild|insertBefore|\.style\.(width|height|display|visibility))/.test(jsCode);
+    // 历史（第十一轮修正）：第十轮曾加过一个 `freezeFindWidgetHover()`，
+    // 依据是"`updateTooltip()` 每次重画都 dispose 旧 hover 再重建 → 闪"。
+    // 读 `actionViewItems.js` 的 `updateTooltip()` 后证伪：
+    //   `if (!this.customHover && title !== '') { 建 } else if (this.customHover) { update }`
+    // —— **只在首建，之后只 update，不重建**。而 `update()` 内部只是
+    // `await hoverWidget?.update(...)`，既不 show 也不 hide。
+    //
+    // 更糟的是那个补丁有**副作用**：`setupManagedHover()` 里有
+    //   `if (targetElement.title !== '') { console.warn(...); targetElement.title = ''; }`
+    // 它会主动清掉我们写的 title；而它自己 `setAttribute('custom-hover','true')`
+    // 又是属性写入（我们的 MutationObserver 只监听 childList/subtree，管不到），
+    // 于是形成"删属性→被加回→清 title→再写 title"的 churn —— 补丁本身成了噪声源。
+    //
+    // 所以本条断言的意图反过来了：**不允许**再引入这类 DOM 层抑制，
+    // 真因只能靠"实测定位 + 上游补丁"解决，不能靠猜机制在渲染层打补丁。
+    const noHoverSuppressionPatch =
+      !/function freezeFindWidgetHover\s*\(/.test(js) &&
+      !/findHoverObserver/.test(js) &&
+      // 只拦**写**：探针里读 `getAttribute('custom-hover')` 属诊断用途，是允许的。
+      !/setAttribute\(\s*['"]custom-hover['"]/.test(js) &&
+      !/removeAttribute\(\s*['"]custom-hover['"]/.test(js) &&
+      !/querySelectorAll\([^)]*custom-hover/.test(js);
     add(
       'V4',
-      '高频事件（选区/滚动）回调里不重排 DOM —— 不招惹 Monaco 自绘 hover 反复重建',
-      noReorderInHotPath && noScrollReorder,
-      { noReorderInHotPath, noScrollReorder },
+      '不在渲染层做"抑制 Monaco hover"的补丁（该机制已被源码证伪，且带 title 清空副作用）',
+      noHoverSuppressionPatch,
+      { noHoverSuppressionPatch },
     );
 
-    // V5：查找框关闭按钮的 hover 面板由我们自己**抑制重绘**：创建编辑器后
-    // 给 find widget 的关闭按钮挂一个"冻结"，让它不再响应 alt 键状态变化。
-    // 这是唯一能真正消除闪烁的手段（触发源在 Monaco 内部，改不了它的源码）。
-    const suppressesFindHover = /function freezeFindWidgetHover\s*\(/.test(js);
-    const freezeCalledAfterCreate = /state\.editor = window\.monaco\.editor\.create[\s\S]{0,4000}?freezeFindWidgetHover\(\)/.test(js);
-    // 必须同时保留"鼠标仍能看到提示"的能力，不能为了不闪而把 hover 整个删掉。
-    const keepsNativeTitle = /setAttribute\('title'/.test(js);
+    // V5：复制按钮的锚点必须落在**选区首行**，而不是末行。
+    //
+    // 用户反馈（第十一轮）："这个复制按钮……好像是最后一行的右上角，
+    // 不是整体的区域的右上角"。上一版用 `getEndPosition()`，按钮跟着
+    // 选区最后一行跑。正确锚点是 `getStartPosition()`（Monaco 里恒指向
+    // 文档序更靠前的一端）的行尾 —— 那才是选区外接矩形的右上角。
+    const anchorsAtStart = /selection\.getStartPosition\(\)/.test(js);
+    const noLegacyEndAnchor = !/const end = selection\.getEndPosition\(\)/.test(js);
     add(
       'V5',
-      '编辑器创建后抑制查找框关闭按钮的 hover 重绘（消除闪烁，且不丢提示）',
-      suppressesFindHover && freezeCalledAfterCreate && keepsNativeTitle,
-      { suppressesFindHover, freezeCalledAfterCreate, keepsNativeTitle },
+      '复制按钮锚在选区首行右端（外接矩形右上角），不再锚末行',
+      anchorsAtStart && noLegacyEndAnchor,
+      { anchorsAtStart, noLegacyEndAnchor },
     );
 
     // V6：**裸标识符必须真的有绑定** —— 用 TypeScript 编译器做真实作用域分析。

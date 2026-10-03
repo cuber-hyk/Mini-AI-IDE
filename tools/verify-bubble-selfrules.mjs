@@ -45,21 +45,14 @@ t('V3', 'layoutCallShape', /editor\.layoutContentWidget\(contentWidget\)/.test(j
 t('V3', 'returnsPreference', /preference:\s*\[ContentWidgetPositionPreference\.ABOVE/.test(js));
 t('V3', 'returnsAffinity', /positionAffinity:/.test(js));
 
-// ---- V4：高频回调不重排 DOM ----
-const reorderRe = /(appendChild|insertBefore|\.style\.(width|height|display|visibility))/;
-const inSelectionCb = /editor\.onDidChangeCursorSelection\([\s\S]{0,700}?\)/.exec(jsCode);
-const inScrollCb = /editor\.onDidScrollChange\([\s\S]{0,500}?\)/.exec(jsCode);
-t('V4', 'noReorderInHotPath', !(inSelectionCb && reorderRe.test(inSelectionCb[0])), {
-  snippet: inSelectionCb ? inSelectionCb[0].slice(0, 120) : null,
-});
-t('V4', 'noScrollReorder', !(inScrollCb && reorderRe.test(inScrollCb[0])), {
-  snippet: inScrollCb ? inScrollCb[0].slice(0, 120) : null,
-});
+// ---- V4：不得再出现"抑制 Monaco hover"的渲染层补丁（机制已证伪） ----
+// 只拦**写**：探针里读 `getAttribute('custom-hover')` 属诊断用途，是允许的。
+t('V4', 'noHoverSuppressionPatch', !/function freezeFindWidgetHover\s*\(/.test(js) && !/findHoverObserver/.test(js) && !/setAttribute\(\s*['"]custom-hover['"]/.test(js) && !/removeAttribute\(\s*['"]custom-hover['"]/.test(js) && !/querySelectorAll\([^)]*custom-hover/.test(js));
 
-// ---- V5：查找框 hover 抑制 ----
-t('V5', 'suppressesFindHover', /function freezeFindWidgetHover\s*\(/.test(js));
-t('V5', 'freezeCalledAfterCreate', /state\.editor = window\.monaco\.editor\.create[\s\S]{0,4000}?freezeFindWidgetHover\(\)/.test(js));
-t('V5', 'keepsNativeTitle', /setAttribute\('title'/.test(js));
+// ---- V5：锚点必须在选区首行（外接矩形右上角） ----
+t('V5', 'anchorsAtStart', /selection\.getStartPosition\(\)/.test(js));
+t('V5', 'noLegacyEndAnchor', !/const end = selection\.getEndPosition\(\)/.test(js));
+t('U1', 'usesStartAnchor', /selection\.getStartPosition\(\)/.test(jsCode));
 
 // ---- 回归：U3 / U4 仍成立 ----
 t('U3', 'bubbleUsesAria', /bubble\.setAttribute\('aria-label'/.test(js));

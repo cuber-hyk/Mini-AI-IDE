@@ -1287,6 +1287,29 @@ async function loadLocalView(
       return;
     }
 
+    // 查找框 hover 闪烁归属实测（仅在 `--test-findhover` 时做）：
+    // 派发合成 Alt 事件并在窗口期内统计 monaco-hover 浮层节点的增删次数，
+    // 用来判定"闪"是 SimpleButton 共性还是 close 独有 —— 决定补丁落点。
+    if (process.argv.includes('--test-findhover')) {
+      let hoverProbe: unknown = null;
+      try {
+        hoverProbe = await editorView.webContents.executeJavaScript(
+          'typeof window.__uiFindHoverProbe === "function" ? window.__uiFindHoverProbe() : null',
+          true
+        );
+      } catch (err) {
+        hoverProbe = { ok: false, reason: err instanceof Error ? err.message : String(err) };
+      }
+      process.stdout.write(`\n===== 查找框 hover 闪烁探针 =====\n${JSON.stringify(hoverProbe, null, 2)}\n`);
+      const h = hoverProbe as { ok?: boolean; flashing?: boolean; buttonsFound?: unknown[] } | null;
+      process.stdout.write(
+        `[ui-probe] 浮层被反复重建（会闪）：${h?.flashing ? '是' : '否'}；` +
+          `识别到的查找框按钮：${Array.isArray(h?.buttonsFound) ? h?.buttonsFound.length : 0} 个\n`
+      );
+      app.exit(editable && wraps && layoutOk ? 0 : 1);
+      return;
+    }
+
     // 差异视图实测（仅在 `--test-diff` 时做）：确认 Monaco DiffEditor 真能创建并拿到两侧模型
     if (process.argv.includes('--test-diff')) {
       const sample = 'const a = 1;\nconst b = 2;\n';

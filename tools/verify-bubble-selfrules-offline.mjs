@@ -49,21 +49,22 @@ add(
     /positionAffinity:/.test(js)
 );
 
-// V4
+// V4 —— 不得再出现"抑制 Monaco hover"的渲染层补丁（该机制已被源码证伪）
 add(
   'V4',
-  '高频事件（选区/滚动）回调里不重排 DOM',
-  !/editor\.onDidChangeCursorSelection\([\s\S]{0,600}?(appendChild|insertBefore|\.style\.(width|height|display|visibility))/.test(jsCode) &&
-    !/editor\.onDidScrollChange\([\s\S]{0,400}?(appendChild|insertBefore|\.style\.(width|height|display|visibility))/.test(jsCode)
+  '不在渲染层做"抑制 Monaco hover"的补丁（机制已证伪，且带 title 清空副作用）',
+  !/function freezeFindWidgetHover\s*\(/.test(js) &&
+    !/findHoverObserver/.test(js) &&
+    !/setAttribute\(\s*['"]custom-hover['"]/.test(js) &&
+    !/removeAttribute\(\s*['"]custom-hover['"]/.test(js) &&
+    !/querySelectorAll\([^)]*custom-hover/.test(js)
 );
 
-// V5
+// V5 —— 复制按钮锚在选区首行右端（外接矩形右上角）
 add(
   'V5',
-  '编辑器创建后抑制查找框关闭按钮的 hover 重绘（消除闪烁，且不丢提示）',
-  /function freezeFindWidgetHover\s*\(/.test(js) &&
-    /state\.editor = window\.monaco\.editor\.create[\s\S]{0,4000}?freezeFindWidgetHover\(\)/.test(js) &&
-    /setAttribute\('title'/.test(js)
+  '复制按钮锚在选区首行右端（外接矩形右上角），不再锚末行',
+  /selection\.getStartPosition\(\)/.test(js) && !/const end = selection\.getEndPosition\(\)/.test(js)
 );
 
 // renderer.js 仍可解析

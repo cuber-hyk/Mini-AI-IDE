@@ -91,8 +91,6 @@
      */
     diffDecorations: null,
     selectionBubbleReady: false, // 选区浮层复制按钮是否已挂载（幂等保护）
-    /** 蹲查找框出现的 MutationObserver（抑制自绘 hover 闪烁，见 freezeFindWidgetHover） */
-    findHoverObserver: null,
     /** 内联 diff 中"插入的新增行"用 view zone 画出（它们不是真实文本，见 renderInlineDiff） */
     diffZoneIds: [],
     /** 当前正在预览的变更（退出预览时清理） */
@@ -284,6 +282,111 @@
     return result;
   };
 
+  /**
+   * 查找框 hover「闪烁」归属探针（只读诊断，不修任何东西）。
+   *
+   * 【为什么要它】这个"闪"报告了三轮、修了两轮都没解决，根因是**前两轮都在猜机制**。
+   * 本轮把 Monaco 源码读到行号之后，得到两条**互斥**的假设，必须靠实测二选一：
+   *   H1（SimpleButton 共性）：prev / next / close 三个按钮构造逐字相同
+   *      （都是 `new SimpleButton({..., hoverLifecycleOptions})`），若三者**都闪**，
+   *      补丁应打在共用的 `_setupDelayedHover`（把 delayed 改 instant）。
+   *   H2（close 独有）：close 比另两个多一个 `onKeyDown`（只处理 Tab）。若
+   *      **只有 close 闪**，说明触发源是它独有的东西，补丁落点完全不同。
+   *
+   * 【怎么测】不模拟鼠标（那需要注入，违反项目硬约束）。改为：
+   *   1. 打开查找框，把三类按钮找出来，读它们的 hover 相关状态；
+   *   2. 在编辑器根节点上挂 MutationObserver，**统计 hover 浮层节点的增删次数**；
+   *   3. 用 `dispatchEvent` 在**文档层**派发合成 Alt keydown/keyup。
+   *      注意：这是给**我们自己**的页面派发合成事件用于**观测**，不触碰网页、
+   *      不写任何 DOM，与"零注入网页"（ADR-0003）无关；且只读计数，不修行为。
+   *   4. 报出每个按钮对应的浮层重建次数 —— **谁重建次数高，谁就是闪烁源**。
+   *
+   * 本函数**只读**：除了派发事件与挂观察器，不改任何 DOM/样式。
+   */
+  window.__uiFindHoverProbe = function () {
+    if (!state.editor) return { ok: false, reason: '编辑器尚未创建' };
+    const dom = state.editor.getDomNode();
+    if (!dom) return { ok: false, reason: '编辑器根节点不存在' };
+
+    // 1) 打开查找框（走 Monaco 自己的 action，不合成键盘事件）
+    const findAction = state.editor.getAction('actions.find');
+    if (!findAction) return { ok: false, reason: '找不到 actions.find 动作' };
+    findAction.run();
+
+    const findDom = dom.querySelector('.find-widget');
+    if (!findDom) return { ok: false, reason: '查找框未出现（actions.find 未生效）' };
+
+    // 2) 找出三个按钮。SimpleButton 的 domNode 带 class "button" + codicon 图标。
+    //    用 aria-label 前缀区分：Close / Previous / Next。
+    const buttons = [];
+    const allButtons = findDom.querySelectorAll('.button');
+    for (let i = 0; i < allButtons.length; i += 1) {
+      const node = allButtons[i];
+      const label = node.getAttribute('aria-label') || '';
+      let kind = null;
+      if (/^Close/i.test(label)) kind = 'close';
+      else if (/^Previous/i.test(label)) kind = 'prev';
+      else if (/^Next/i.test(label)) kind = 'next';
+      if (kind) buttons.push({ kind, node, label });
+    }
+
+    // 3) 统计 hover 浮层节点的增删。Monaco 自绘 hover 的根节点 class 是 monaco-hover。
+    //    也统计 custom-hover 属性：它是"自绘 hover 已挂"的标记。
+    let added = 0;
+    let removed = 0;
+    const observer = new MutationObserver(function (records) {
+      for (let i = 0; i < records.length; i += 1) {
+        const rec = records[i];
+        for (let j = 0; j < rec.addedNodes.length; j += 1) {
+          const n = rec.addedNodes[j];
+          if (n.nodeType === 1 && (n.classList?.contains('monaco-hover') || n.querySelector?.('.monaco-hover'))) added += 1;
+        }
+        for (let j = 0; j < rec.removedNodes.length; j += 1) {
+          const n = rec.removedNodes[j];
+          if (n.nodeType === 1 && (n.classList?.contains('monaco-hover') || n.querySelector?.('.monaco-hover'))) removed += 1;
+        }
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    // 4) 派发合成的 Alt 按下/抬起（观测用；不写 DOM、不碰网页）
+    const fireAlt = function (type) {
+      document.dispatchEvent(
+        new KeyboardEvent(type, { key: 'Alt', code: 'AltLeft', altKey: type === 'keydown', bubbles: true, cancelable: true })
+      );
+    };
+
+    const before = { added, removed };
+    fireAlt('keydown');
+    fireAlt('keyup');
+    fireAlt('keydown');
+    fireAlt('keyup');
+    // 等一帧让 MutationObserver 回调跑完
+    return new Promise(function (resolve) {
+      window.setTimeout(function () {
+        observer.disconnect();
+        resolve({
+          ok: true,
+          buttonsFound: buttons.map(function (b) {
+            return {
+              kind: b.kind,
+              label: b.label,
+              // 是否已被 Monaco 挂上自绘 hover 标记
+              customHover: b.node.getAttribute('custom-hover'),
+              hasTitle: b.node.hasAttribute('title'),
+            };
+          }),
+          // Alt 四次派发期间，页面里 monaco-hover 浮层节点的增删次数
+          hoverAdded: added - before.added,
+          hoverRemoved: removed - before.removed,
+          // 判定：有增删 = 浮层确实被反复重建 = 会闪
+          flashing: added - before.added > 0 || removed - before.removed > 0,
+          note: 'hoverAdded/hoverRemoved 只在 Alt 派发窗口内计数；两者非零即说明浮层被反复重建',
+        });
+      }, 300);
+    });
+  };
+
   /* ---------------- Monaco 初始化 ----------------
    * 可读性选项集中在此，便于对照主流编辑器调整。
    * 注意：**不设 readOnly** —— 默认即可编辑；保存走 Ctrl+S，未保存由状态点提示。
@@ -317,75 +420,6 @@
     scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10, useShadows: false },
     stickyScroll: { enabled: false },
   };
-
-  /* ---------------- 查找框 tooltip 闪烁的抑制 ----------------
-   *
-   * 【现象】在编辑器里按 Ctrl+F 打开查找框后，把鼠标移到关闭按钮上，
-   * 那个 "Close (Escape)" 提示面板会**反复闪烁**（用户截图里能看到多层叠加）。
-   *
-   * 【根因】排查了两轮都打偏，第三轮直接读 Monaco 打包产物才定住：
-   * 触发源**完全在 Monaco 自己的代码里**，与我们的浮层按钮无关。
-   *
-   * 1. 关闭按钮是一个 `MenuEntryActionViewItem`，它的 `updateLabel()` 会
-   *    通过 `localize(1726,"{0} ({1})", label, keybindingLabel)` 重新生成标题文本。
-   * 2. 这个 `updateLabel()` 挂在 **AltKeyTracker** 上：
-   *      `n !== this._wantsAltCommand && (this._wantsAltCommand = n, this.updateLabel(), this.updateTooltip(), ...)`
-   *    也就是说，**每一次 alt/ctrl/shift/meta 键状态变化**（按下或抬起任一个修饰键）
-   *    它都会重画一次标签，并 `updateTooltip()`。
-   * 3. `updateTooltip()` 走 `setupManagedHover(...)`，那是 Monaco **自绘的 hover DOM**
-   *    （会给自己打上 `custom-hover="true"` 属性），**不是原生 `title`**。
-   *    于是每次重画都 dispose 旧的、重建一个新的 hover 容器 → 视觉上就是闪。
-   *
-   * 【为什么前两轮的修法方向都不对】
-   * - 第一轮怀疑 `getPositionAt` 收到 Position 对象产生 NaN —— 那是另一个 bug 的真因。
-   * - 第二轮把浮层的 `title` 改成 `aria-label` —— 方向对（原生 title 确实会因重排失效），
-   *   但**打不中**：那个面板根本不来自 title，而是 Monaco 自绘的 hover。
-   *
-   * 【我们的修法】不 patch Monaco（改不了它的源码），改为**把自绘 hover 换成原生 title**：
-   * 原生 title 由浏览器托管，**不随 DOM 重排销毁重建**，因此无论 Monaco 怎么重画标签，
-   * 都不会再闪。做法是去掉节点上的 `custom-hover` 标记（那是自绘 hover 的开关），
-   * 并把当前标题写进 `title`。这样能力不减（鼠标悬停仍能看到 "Close (Esc)"），
-   * 只是从"自绘、会闪"换成"原生、稳定"。
-   *
-   * 注意：本函数**只在 Electron 内、对 Monaco 自己创建的 DOM** 做属性调整，
-   * 不涉及任何网页内容，与零注入原则（ADR-0003）无关也不冲突。
-   */
-  function freezeFindWidgetHover() {
-    if (!state.editor || !window.monaco) return;
-    const dom = state.editor.getDomNode();
-    if (!dom) return;
-
-    /**
-     * 把某个元素从"自绘 hover"切到"原生 title"。
-     * - 自绘 hover 的开关是 `custom-hover="true"`，去掉它 Monaco 就不再挂自绘容器；
-     * - 原生 title 取元素现有的 `aria-label`（Monaco 会给 action 项写 aria-label），
-     *   没有再退回 `aria-description`，都没有就跳过 —— **不凭空编造提示文本**。
-     */
-    const pinAsNativeTitle = function (node) {
-      if (node.hasAttribute('custom-hover')) node.removeAttribute('custom-hover');
-      if (node.getAttribute('title')) return; // 已有原生 title，不动
-      const label =
-        node.getAttribute('aria-label') ||
-        node.getAttribute('aria-description') ||
-        (node.textContent ? node.textContent.trim() : '');
-      if (label) node.setAttribute('title', label);
-    };
-
-    // 查找框是懒创建的：Ctrl+F 时才出现在 .overflow-guard 里。
-    // 用一个挂在编辑器根节点上的 MutationObserver 蹲它出现，出现即处理。
-    const scan = function () {
-      const nodes = dom.querySelectorAll('.monaco-editor .action-item, .monaco-editor [custom-hover="true"]');
-      for (let i = 0; i < nodes.length; i += 1) pinAsNativeTitle(nodes[i]);
-    };
-
-    scan();
-    const observer = new MutationObserver(function () {
-      scan();
-    });
-    observer.observe(dom, { childList: true, subtree: true });
-
-    state.findHoverObserver = observer;
-  }
 
   /* ---------------- Monaco 初始化 ---------------- */
   function initMonaco() {
@@ -426,8 +460,6 @@
       });
       // 选区浮层复制按钮必须等state.editor 就绪后才能建（见 setupSelectionCopyBubble 注释）
       setupSelectionCopyBubble();
-      // 抑制查找框关闭按钮的自绘 hover 反复重建（消除闪烁，见 freezeFindWidgetHover 注释）
-      freezeFindWidgetHover();
     });
   }
 
@@ -1375,18 +1407,32 @@
         const selection = editor.getSelection();
         if (!selection || selection.isEmpty()) return null;
 
-        const end = selection.getEndPosition();
+        /**
+         * 【锚在选区**首行**的右端，而不是末行】
+         *
+         * 用户反馈（第十一轮）："这个复制按钮……好像是最后一行的右上角，
+         * 不是整体的区域的右上角"。上一版锚在 `getEndPosition()`，
+         * 于是按钮跟着**选区最后一行**跑，视觉上像是"贴着选区底边"。
+         *
+         * 用户要的是**外接矩形的右上角**，那就是首行的右端：
+         *   - `getStartPosition()` 在 Monaco 里恒指向**文档序更靠前**的那一端
+         *     （从上往下拖、从下往上拖，返回值都一样），所以它天然就是矩形上缘；
+         *   - 再取该行的**行尾列**，水平上就落在矩形右缘。
+         *
+         * 注意与 `ABOVE` 的配合：锚在首行行尾 + 浮在锚点上方，
+         * 按钮就盖在"整体选区框的右上角外侧"，不遮挡选区第一行文字。
+         */
+        const start = selection.getStartPosition();
         const lineCount = editor.getModel().getLineCount();
-        // 选区末端行号越界（文件被外部改短等）：不猜位置，直接收起。
-        if (end.lineNumber < 1 || end.lineNumber > lineCount) return null;
+        // 首行行号越界（文件被外部改短等）：不猜位置，直接收起。
+        if (start.lineNumber < 1 || start.lineNumber > lineCount) return null;
 
-        // 锚在选区末端的**行尾**：按钮就落在"选区右端行的右上角"。
-        // 折行时该逻辑行会折成多个视觉行，Monaco 会把 anchor 解析到正确的视觉行；
-        // positionAffinity=Left 保证锚在行尾折行处取的是"该视觉行的左缘"，不会飘到下一行去。
-        const column = editor.getModel().getLineMaxColumn(end.lineNumber);
+        // 折行时该逻辑行会折成多个视觉行；positionAffinity=Left 让 Monaco 把锚
+        // 解析到该视觉行的左缘，避免锚点飘到折行的下一视觉行去。
+        const column = editor.getModel().getLineMaxColumn(start.lineNumber);
         return {
-          position: { lineNumber: end.lineNumber, column: column },
-          // ABOVE 优先：按钮浮在所选那行**上方**，不遮挡选区文字；空间不足时退到 BELOW。
+          position: { lineNumber: start.lineNumber, column: column },
+          // ABOVE 优先：按钮浮在选区**上缘**外侧，不遮挡选区文字；空间不足时退到 BELOW。
           preference: [ContentWidgetPositionPreference.ABOVE, ContentWidgetPositionPreference.BELOW],
           positionAffinity: window.monaco.editor.PositionAffinity
             ? window.monaco.editor.PositionAffinity.Left
