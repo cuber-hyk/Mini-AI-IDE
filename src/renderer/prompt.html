@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'none'; img-src 'self' data:"
+    />
+    <title>提示词设置 — 输出格式要求</title>
+    <link rel="stylesheet" href="./prompt.css" />
+  </head>
+  <body>
+    <!--
+      提示词编辑面板（独立浮层视图，由主进程居中放置在窗口上层）。
+
+      它改的是**系统提示词里的「输出格式要求」那一段** —— 也就是让"一键同步"
+      能成立的那份约定（### 文件：路径、### 范围：N-M、围栏怎么写）。
+      提示词的其余部分（用户需求 / 工作环境 / 目录结构）由程序生成，用户不需要也不该改。
+
+      交互设计要点：
+       1. 左侧是**内置默认的要点摘要**（不是原文全文），用来看"默认要求了什么"；
+       2. 右侧是编辑框 —— 首次打开时已预填默认全文，用户看到的就是实际生效的内容；
+       3. 底部实时显示"当前使用：内置默认 / 自定义"，并给出长度与保存状态；
+       4. 「恢复默认」是**先转成默认文本再让你确认保存**的两步（不直接清空、不静默替换），
+          避免误点一下就丢掉自己写的内容。
+    -->
+    <div class="pm-shell">
+      <header class="pm-head">
+        <span class="pm-title">提示词设置</span>
+        <span class="pm-sub">输出格式要求</span>
+        <span class="spacer"></span>
+        <span id="pm-close" class="pm-x" role="button" tabindex="0" aria-label="关闭（Esc）" title="关闭（Esc）">✕</span>
+      </header>
+
+      <div class="pm-body">
+        <aside class="pm-side">
+          <div class="pm-side-title">内置默认要求什么</div>
+          <ul class="pm-side-list">
+            <li><b>写清目标文件</b>：代码块上方一行 <code>### 文件：相对路径</code></li>
+            <li><b>写清替换范围</b>：局部改动加一行 <code>### 范围：起始行-结束行</code></li>
+            <li><b>一个文件一个块</b>：块内只有该文件内容，不带行号、不用省略号</li>
+            <li><b>围栏照抄输入片段</b>：语言标注与围栏行都跟着你给的片段走</li>
+            <li><b>围栏必须成对闭合</b>，长度按内容自适应（内容含反引号时外层加长）</li>
+          </ul>
+          <div class="pm-side-note">
+            这几条是解析器能认出「改了哪个文件的哪几行」的前提。<br />
+            改动它们之前，先确认你的模型输出仍然满足上面的形式，否则回程无法自动识别。
+          </div>
+        </aside>
+
+        <section class="pm-main">
+          <!--
+            版本页签（用户设计）：简洁版 / 完整版**各自独立**编辑与保存。
+            为什么分页签而不是"一个框加一个下拉"：两版内容差异较大（示例数不同），
+            页签能让用户直接看到"这一版现在是什么"，而不是切一次弹一次。
+          -->
+          <div class="pm-tabs" role="tablist" aria-label="提示词版本">
+            <button type="button" class="pm-tab" role="tab" data-variant="short" aria-selected="true">
+              简洁版
+              <span class="pm-tab-sub">6 个示例 · 日常默认</span>
+            </button>
+            <button type="button" class="pm-tab" role="tab" data-variant="full" aria-selected="false">
+              完整版
+              <span class="pm-tab-sub">8 个示例 · 逐条详解</span>
+            </button>
+            <span class="pm-tab-spacer"></span>
+            <span id="pm-tab-using" class="pm-tab-using" title="底部双段开关当前选中的版本就是它"></span>
+          </div>
+
+          <div class="pm-row">
+            <span class="pm-label">格式要求正文</span>
+            <span id="pm-status" class="pm-status"></span>
+            <span class="spacer"></span>
+            <span id="pm-count" class="pm-count"></span>
+          </div>
+
+          <textarea
+            id="pm-editor"
+            class="pm-editor"
+            spellcheck="false"
+            wrap="off"
+            placeholder="在这里编辑要随提示词一起发给模型的「输出格式要求」…"
+          ></textarea>
+
+          <div id="pm-hint" class="pm-hint"></div>
+        </section>
+      </div>
+
+      <footer class="pm-foot">
+        <span id="pm-usage" class="pm-usage"></span>
+        <span class="spacer"></span>
+        <button id="pm-reset" type="button" class="pm-btn ghost" title="载入内置默认全文（先载入、再点保存才生效，不会直接覆盖你写的内容）">
+          恢复默认
+        </button>
+        <button id="pm-cancel" type="button" class="pm-btn">取消</button>
+        <button id="pm-save" type="button" class="pm-btn primary">保存</button>
+      </footer>
+    </div>
+    <script src="./prompt.js"></script>
+  </body>
+</html>

@@ -46,8 +46,10 @@ const CH = {
   rootChanged: 'fs:root-changed',
   rootStale: 'fs:root-stale',
   fileChanged: 'fs:file-changed',
+  openPromptPanel: 'ui:open-prompt-panel',
+  getFormatSpecVariant: 'ui:get-format-spec-variant',
+  setFormatSpecVariant: 'ui:set-format-spec-variant',
 } as const;
-
 const bridge = {
   chooseRoot: () => ipcRenderer.invoke(CH.chooseRoot),
   getRoot: () => ipcRenderer.invoke(CH.getRoot),
@@ -57,7 +59,11 @@ const bridge = {
     ipcRenderer.invoke(CH.sliceFile, relPath, startLine, endLine),
   writeFile: (relPath: string, text: string) => ipcRenderer.invoke(CH.writeFile, relPath, text),
   setSplit: (editorWidth: number) => ipcRenderer.invoke(CH.setSplit, editorWidth),
-  copyFormatSpec: () => ipcRenderer.invoke(CH.copyFormatSpec, 'short'),
+  // 不传版本 ⇒ 主进程用**当前开关状态**（不再硬编码 'short'；早期硬编码会让
+  // 底部开关拨到"完整版"后，这条链路的实际行为与显示不一致）
+  copyFormatSpec: () => ipcRenderer.invoke(CH.copyFormatSpec),
+  getFormatSpecVariant: () => ipcRenderer.invoke(CH.getFormatSpecVariant),
+  setFormatSpecVariant: (variant: string) => ipcRenderer.invoke(CH.setFormatSpecVariant, variant),
   getContext: () => ipcRenderer.invoke(CH.getContext),
   copyPrompt: (requirement: string, targetFiles: string[]) => ipcRenderer.invoke(CH.copyPrompt, requirement, targetFiles),
   copyNumberedSnippet: (input: unknown) => ipcRenderer.invoke(CH.copyNumberedSnippet, input),
@@ -66,6 +72,8 @@ const bridge = {
   setWebVisible: (visible: boolean) => ipcRenderer.invoke(CH.setWebVisible, visible),
   setSidebarVisible: (visible: boolean) => ipcRenderer.invoke(CH.setSidebarVisible, visible),
   setSidebarWidth: (width: number) => ipcRenderer.invoke(CH.setSidebarWidth, width),
+  /** 请求主进程打开「提示词编辑面板」（面板是独立视图，只能由主进程显示） */
+  openPromptPanel: () => ipcRenderer.invoke(CH.openPromptPanel),
   showDiffInEditor: (collectionId: string, index: number) =>
     ipcRenderer.invoke(CH.showDiffInEditor, collectionId, index),
   /** 跳到批次内相邻的变更（主进程会同时同步右下角面板的高亮） */
@@ -76,6 +84,14 @@ const bridge = {
   },
   onSidebarChanged: (listener: (state: unknown) => void) => {
     ipcRenderer.on(CH.sidebarChanged, (_e, state) => listener(state));
+  },
+  /**
+   * 订阅「打开提示词编辑面板」请求。
+   * 面板是**独立视图**（ADR-0002 进程边界），编辑器自己不能显示它，
+   * 只能由主进程显示后广播一次，编辑器据此点亮工具栏按钮的激活态。
+   */
+  onOpenPromptPanel: (listener: () => void) => {
+    ipcRenderer.on(CH.openPromptPanel, () => listener());
   },
   /** 网页/预览可见性变化（网页区工具条那边改了，本进程据此同步状态） */
   onChromeState: (listener: (state: unknown) => void) => {

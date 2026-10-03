@@ -1,0 +1,472 @@
+/*
+ * 提示词编辑面板样式。
+ *
+ * 视觉基调与编辑器（style.css）一致：暗色、`--bg-elevated` 抬升面板、`--accent` 作主色。
+ * 面板是覆盖式浮层，故整体做成"一整块圆角卡片"，靠外部留白与编辑器区分 ——
+ * 不引入半透明遮罩：其它视图是**独立 WebContentsView**，本视图的 CSS 遮罩
+ * 盖不到它们，画一个半透明底只会让面板自己变脏（遮罩必须由主进程调 bounds 表达）。
+ */
+
+:root {
+  --bg: #16181d;
+  --bg-elevated: #1e2128;
+  --bg-sunken: #14161a;
+  --border: #2b2f38;
+  --border-strong: #3a4050;
+  --text: #d8dbe2;
+  --text-dim: #8b93a1;
+  --accent: #5b8def;
+  --accent-dim: rgba(91, 141, 239, 0.15);
+  --ok: #4fbf7f;
+  --warn: #e0a458;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  color: var(--text);
+  font: 13px/1.5 "Segoe UI", system-ui, -apple-system, "Microsoft YaHei", sans-serif;
+  overflow: hidden;
+  /* 面板是个整体卡片，拖拽边缘不应该选中里面的文字 */
+  user-select: none;
+}
+
+.pm-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  overflow: hidden;
+  /* 让它看起来"浮"在编辑器之上 */
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.55);
+}
+
+/* ---------------- 顶栏 ---------------- */
+
+.pm-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 44px;
+  padding: 0 12px 0 16px;
+  background: linear-gradient(180deg, #252a34, #20242c);
+  border-bottom: 1px solid var(--border);
+}
+
+.pm-title {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+.pm-sub {
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.spacer {
+  flex: 1 1 auto;
+}
+
+.pm-x {
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  color: var(--text-dim);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.pm-x:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+.pm-x:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* ---------------- 主体：左说明 + 右编辑 ---------------- */
+
+.pm-body {
+  flex: 1 1 auto;
+  display: flex;
+  min-height: 0;
+}
+
+.pm-side {
+  flex: 0 0 232px;
+  padding: 14px 12px 12px 16px;
+  border-right: 1px solid var(--border);
+  background: rgba(0, 0, 0, 0.14);
+  overflow-y: auto;
+}
+
+.pm-side-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin-bottom: 10px;
+}
+
+.pm-side-list {
+  margin: 0;
+  padding: 0 0 0 2px;
+  list-style: none;
+}
+
+.pm-side-list li {
+  position: relative;
+  padding: 0 0 0 14px;
+  margin-bottom: 9px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #bfc6d2;
+}
+
+.pm-side-list li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  opacity: 0.75;
+}
+
+.pm-side-list b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.pm-side-list code {
+  font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 11px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+  color: #cfe0ff;
+}
+
+.pm-side-note {
+  margin-top: 12px;
+  padding: 9px 10px;
+  font-size: 11.5px;
+  line-height: 1.6;
+  color: var(--text-dim);
+  background: rgba(224, 164, 88, 0.08);
+  border: 1px solid rgba(224, 164, 88, 0.25);
+  border-radius: 6px;
+}
+
+/* 右侧编辑区 */
+
+.pm-main {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: 12px 14px 10px;
+}
+
+/* ---------------- 版本页签（简洁版 / 完整版） ----------------
+ *
+ * 两版**各自独立编辑**：切页签时会把编辑框换成该版的内容与状态。
+ * 页签做成"卡片式"而不是下划线式 —— 每版要带一行副标题（示例数/定位），
+ * 下划线式放不下这行小字。
+ */
+.pm-tabs {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.pm-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 14px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.25;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.pm-tab:hover {
+  border-color: #465065;
+  color: var(--text);
+}
+
+.pm-tab[aria-selected='true'] {
+  border-color: var(--accent);
+  background: rgba(91, 141, 239, 0.12);
+  color: var(--text);
+}
+
+.pm-tab-sub {
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--text-dim);
+  opacity: 0.85;
+}
+
+.pm-tab-spacer {
+  flex: 1 1 auto;
+}
+
+/* 右上角提示"底部开关当前选中哪一版"，避免用户改了 A 版却发现发出去的是 B 版 */
+.pm-tab-using {
+  align-self: center;
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.pm-tab-using b {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* 有未保存改动时，页签上挂一个小圆点（切走了也能看见"这版还没存"） */
+.pm-tab.has-dirty::after {
+  content: '';
+  position: absolute;
+  margin: -2px 0 0 -6px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #e6a23c;
+}
+
+.pm-tab {
+  position: relative;
+}
+
+.pm-row {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 7px;
+}
+
+.pm-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.pm-status {
+  font-size: 11.5px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.pm-status.is-default {
+  border-color: var(--border);
+}
+
+.pm-status.is-custom {
+  color: #bcd3ff;
+  border-color: rgba(91, 141, 239, 0.45);
+  background: var(--accent-dim);
+}
+
+.pm-status.is-dirty {
+  color: #f0c98a;
+  border-color: rgba(224, 164, 88, 0.45);
+  background: rgba(224, 164, 88, 0.12);
+}
+
+.pm-count {
+  font-size: 11.5px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.pm-count.over {
+  color: var(--warn);
+}
+
+/*
+ * 编辑框：不换行 + 横向滚动。
+ *
+ * 为什么**不用**自动换行：格式要求里大量出现围栏与固定列格式
+ *（`### 文件：` 后面紧跟路径、围栏行独占一行），折行会让"一行就是一个标记"
+ * 这个视觉结构消失，用户很难看出自己有没有少写一个换行。
+ * 编辑器里也是同一取舍（Monaco 上给了 wordWrap，但 markdown 的围栏段落仍按行读）。
+ */
+.pm-editor {
+  flex: 1 1 auto;
+  min-height: 0;
+  width: 100%;
+  resize: none;
+  padding: 12px 14px;
+  background: var(--bg-sunken);
+  color: #d5dae3;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: 12.5px/1.65 Consolas, "Cascadia Mono", "Courier New", monospace;
+  tab-size: 2;
+  white-space: pre;
+  overflow: auto;
+  user-select: text;
+}
+
+.pm-editor:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-dim);
+}
+
+.pm-editor::placeholder {
+  color: #5c646f;
+}
+
+/* 自绘细滚动条：Windows 原生条在深色框里极其扎眼（编辑器里踩过同一个坑） */
+.pm-editor::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.pm-editor::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.pm-editor::-webkit-scrollbar-thumb {
+  background: #383e4a;
+  border: 3px solid var(--bg-sunken);
+  border-radius: 8px;
+}
+
+.pm-editor::-webkit-scrollbar-thumb:hover {
+  background: #4a5260;
+}
+
+.pm-editor::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.pm-hint {
+  flex: 0 0 auto;
+  min-height: 16px;
+  margin-top: 7px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+
+.pm-hint.warn {
+  color: var(--warn);
+}
+
+.pm-hint.ok {
+  color: var(--ok);
+}
+
+/* ---------------- 底栏 ---------------- */
+
+.pm-foot {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  background: linear-gradient(0deg, #20242c, #232830);
+}
+
+.pm-usage {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.pm-usage b {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.pm-btn {
+  height: 30px;
+  padding: 0 14px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  background: #262a33;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.pm-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.pm-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.pm-btn.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--text-dim);
+}
+
+.pm-btn.ghost:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--border);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.pm-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #0d1220;
+  font-weight: 600;
+}
+
+.pm-btn.primary:hover:not(:disabled) {
+  background: #6f9bf3;
+  border-color: #6f9bf3;
+}
+
+.pm-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

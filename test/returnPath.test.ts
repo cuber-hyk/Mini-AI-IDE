@@ -8,6 +8,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import {
+  applySnippetRangeFallback,
   computeApply,
   extractPathMentions,
   formatNumberedSnippet,
@@ -415,6 +416,42 @@ describe('行区间指令与片段替换（三向校验）', () => {
     if (!r.ok) return;
     assert.equal(r.text, ['l1', 'l2', 'l3', 'Z4', 'Z5'].join('\n'));
   });
+
+  it('新内容比原区间多 1 行：替换区间、后续行整体下移，起始行之前保持原样', () => {
+    // 模拟实测场景：原文件 10 行，选中 2-10（9 行），模型返回 10 行新内容
+    const orig = ['H1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7', 'a8', 'a9', 'a10'].join('\n');
+    const block = mkBlock('n1\nn2\nn3\nn4\nn5\nn6\nn7\nn8\nn9\nn10');
+    const r = computeApply(orig, block, {
+      kind: 'replace-lines',
+      start: 2,
+      end: 10,
+      expectedOriginal: orig.split('\n').slice(1).join('\n'),
+      contextPrev: 'H1',
+      contextNext: null,
+    });
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
+    assert.equal(
+      r.text,
+      ['H1', 'n1', 'n2', 'n3', 'n4', 'n5', 'n6', 'n7', 'n8', 'n9', 'n10'].join('\n'),
+      '第 1 行必须原样保留，其余为 10 行新内容（共 11 行）'
+    );
+  });
+
+  it('新内容比原区间少：删除原区间剩余行，后续行整体上移', () => {
+    // 原区间 2-4 共 3 行，新内容只有 1 行 → 原 l4 被删，l5 上移
+    const r = computeApply(fileText, mkBlock('X2'), {
+      kind: 'replace-lines',
+      start: 2,
+      end: 4,
+      expectedOriginal: 'l2\nl3\nl4',
+      contextPrev: 'l1',
+      contextNext: 'l5',
+    });
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
+    assert.equal(r.text, ['l1', 'X2', 'l5'].join('\n'));
+  });
 });
 
 describe('带行号片段的格式化与还原', () => {
@@ -440,5 +477,68 @@ describe('带行号片段的格式化与还原', () => {
     const round = stripNumberedPrefix(formatNumberedSnippet(original, 80));
     assert.equal(round.text, original);
     assert.equal(round.startLine, 80);
+  });
+});
+
+describe('applySnippetRangeFallback（选区记忆兜底）', () => {
+  const mkBlock = (filePath: string | null, range: { start: number; end: number } | null) => ({
+    code: 'NEW',
+    language: 'py',
+    filePath,
+    pathSource: 'none' as const,
+    range,
+    start: 0,
+    end: 0,
+    strippedPathLine: null,
+  });
+
+  it('模型未回显区间 + 路径与片段一致 → 回填区间（防整文件覆盖）', () => {
+    const blocks = [mkBlock('Mini-AI-IDE-test.md', null)];
+    const note = applySnippetRangeFallback(blocks, { relPath: 'Mini-AI-IDE-test.md', startLine: 2, endLine: 10 });
+    assert.ok(note);
+    assert.match(note, /2-10/);
+    assert.deepEqual(blocks[0]?.range, { start: 2, end: 10 });
+  });
+
+  it('路径比较大小写不敏感（Windows 文件名语义）', () => {
+    const blocks = [mkBlock('mini-ai-ide-test.md', null)];
+    applySnippetRangeFallback(blocks, { relPath: 'Mini-AI-IDE-TEST.md', startLine: 2, endLine: 10 });
+    assert.deepEqual(blocks[0]?.range, { start: 2, end: 10 });
+  });
+
+  it('模型已回显区间 → 不改动（显式指令优先于选区记忆）', () => {
+    const blocks = [mkBlock('a.md', { start: 5, end: 6 })];
+    const note = applySnippetRangeFallback(blocks, { relPath: 'a.md', startLine: 2, endLine: 10 });
+    assert.equal(note, null);
+    assert.deepEqual(blocks[0]?.range, { start: 5, end: 6 });
+  });
+
+  it('目标文件与片段不一致 → 不回填', () => {
+    const blocks = [mkBlock('other.md', null)];
+    const note = applySnippetRangeFallback(blocks, { relPath: 'a.md', startLine: 2, endLine: 10 });
+    assert.equal(note, null);
+    assert.equal(blocks[0]?.range, null);
+  });
+
+  it('路径未解析出（null）→ 不回填，宁可交预览人工确认', () => {
+    const blocks = [mkBlock(null, null)];
+    const note = applySnippetRangeFallback(blocks, { relPath: 'a.md', startLine: 2, endLine: 10 });
+    assert.equal(note, null);
+    assert.equal(blocks[0]?.range, null);
+  });
+
+  it('多个无区间同路径块 → 不猜，维持 null', () => {
+    const blocks = [mkBlock('a.md', null), mkBlock('a.md', null)];
+    const note = applySnippetRangeFallback(blocks, { relPath: 'a.md', startLine: 2, endLine: 10 });
+    assert.equal(note, null);
+    assert.equal(blocks[0]?.range, null);
+    assert.equal(blocks[1]?.range, null);
+  });
+
+  it('无选区记忆（null）→ 不回填', () => {
+    const blocks = [mkBlock('a.md', null)];
+    const note = applySnippetRangeFallback(blocks, null);
+    assert.equal(note, null);
+    assert.equal(blocks[0]?.range, null);
   });
 });

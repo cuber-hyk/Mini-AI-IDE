@@ -171,8 +171,11 @@ check(
 
 check(
   'Q3',
-  '选区右上角浮动复制按钮存在且无选区时隐藏',
-  /selection-copy/.test(js) && /selection-copy/.test(styleCss) && /selection\.isEmpty\(\)/.test(js) && /bubble\.hidden = true/.test(js),
+  '选区右上角浮动复制按钮存在且无选区时收起（收起由 getPosition() 返回 null 驱动）',
+  /selection-copy/.test(js) &&
+    /selection-copy/.test(styleCss) &&
+    /selection\.isEmpty\(\)/.test(js) &&
+    /getPosition:\s*function\s*\(\)\s*\{[\s\S]{0,500}?return null/.test(js),
   {},
 );
 
@@ -245,7 +248,7 @@ check(
 
 // R5：垂直方向两处 flex 收缩许可，缺任一条则输入框撑高时底部被推出视口。
 const r5a = /\.editor-wrap\s*\{[^}]*min-height:\s*0/.test(styleCss);
-const r5b = /\.prompt-bar\s*\{[^}]*min-height:\s*0/.test(styleCss);
+const r5b = /\.prompt-bar\s*\{[\s\S]*?flex:\s*0\s+1\s+auto/.test(styleCss);
 check(
   'R5',
   '编辑器容器与输入区允许在 flex 中收缩（输入框撑高不顶出视口）',
@@ -253,16 +256,42 @@ check(
   { wrapAllowsShrink: r5a, promptBarAllowsShrink: r5b },
 );
 
-// R6：min-height: 0 必须配可收缩的 flex。
-// 上一版 `flex: 0 0 auto` + `min-height: 0` 是**无效组合**：flex-shrink: 0 直接禁止收缩。
-// 现象有欺骗性：「启动时底部溢出，拖窗口就恢复」—— 靠的是重排，不是任何 JS 逻辑。
+// R6：输入区**可缩，但不能缩到内容放不下**（两个方向都踩过）。
+//  · `flex: 0 0 auto`（禁缩）→ 视口紧张时本区不缩，底部边框被顶出可视范围；
+//  · `flex: 0 1 auto` + `min-height: 0` → 过头，本区被压到低于内容高度，
+//    而 shell 当时是 overflow: hidden，输入框下沿被裁掉一条（用户截图"底部溢出"）。
 const r6block = /\.prompt-bar\s*\{([\s\S]*?)\}/.exec(styleCss)?.[1] ?? '';
 const r6a = /flex:\s*0\s+1\s+auto/.test(r6block);
 const r6b = !/flex:\s*0\s+0\s+auto/.test(r6block);
-check('R6', '输入区 flex 允许收缩（min-height:0 配 flex-shrink:0 是无效组合）', r6a && r6b, {
-  shrinkable: r6a,
-  noHardZero: r6b,
+const r6barMin = Number(/min-height:\s*(\d+)px/.exec(r6block)?.[1] ?? 0);
+const r6reqMin = Number(/\.requirement\s*\{([\s\S]*?)\}/.exec(styleCss)?.[1]?.match(/min-height:\s*(\d+)px/)?.[1] ?? 0);
+const r6c = r6barMin >= 8 + 10 + r6reqMin + 10 + 10;
+check(
+  'R6',
+  '输入区 flex 可收缩且 min-height 不小于内容自然高度（不切自身内容）',
+  r6a && r6b && r6c,
+  { shrinkable: r6a, noHardZero: r6b, barMinHeight: r6barMin, required: 8 + 10 + r6reqMin + 10 + 10 },
+);
+
+// R6b：外壳不得 overflow: hidden —— 它把"差几像素"变成"看得见的一条切边"。
+// 注意：必须**先去掉 CSS 注释**再断言。注释里为了说明历史会写出 overflow: hidden，
+// 若直接匹配原文，这些检查会被自己的说明文字误伤（实现时踩过）。
+const stripCssComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '');
+const r6bBlock = stripCssComments(/\.prompt-shell\s*\{([\s\S]*?)\}/.exec(styleCss)?.[1] ?? '');
+check('R6b', '需求输入外壳不用 overflow:hidden（避免把高度差变成可见切边）', !/overflow:\s*hidden/.test(r6bBlock), {
+  shellClips: /overflow:\s*hidden/.test(r6bBlock),
 });
+
+// R6c：auto-grow 写回的高度必须含元素自身 padding。
+// scrollHeight 不含自身 padding，而 border-box 下 height 是含 padding 的总高 ——
+// 直接 height = scrollHeight 会矮一个 padding，正是"底部缺一条"的直接成因。
+const r6cGrow = /function grow\(\)\s*\{([\s\S]*?)\n    \}/.exec(js)?.[1] ?? '';
+check(
+  'R6c',
+  'auto-grow 的高度把元素自身 padding 计入（scrollHeight 不含 padding）',
+  /scrollHeight\s*\+\s*BOX_PAD/.test(r6cGrow) && /const BOX_PAD\s*=\s*\d+/.test(js),
+  { addsPad: /scrollHeight\s*\+\s*BOX_PAD/.test(r6cGrow) },
+);
 
 // R7：高度必须跟随实际宽度持续校正，不能只在启动时量一次。
 const r7a = /new ResizeObserver\(/.test(js);
@@ -273,6 +302,18 @@ check(
   '输入框高度跟随实际宽度校正（RO + 宽度守卫 + 首测延后到 rAF）',
   r7a && r7b && r7c,
   { hasResizeObserver: r7a, roGuard: r7b, firstMeasureInRaf: r7c },
+);
+
+// R8：新增的"提示词版本双段开关"不得撑高结尾区，否则 R6 的 min-height 预算会被打破。
+// 它是 .prompt-shell 里的一行内 flex 子项，高度必须 < .requirement 的最小高度（44px）。
+const swBlock = /\.variant-switch\s*\{([\s\S]*?)\n\}/.exec(styleCss)?.[1] ?? '';
+const swH = Number(/height:\s*(\d+)px/.exec(swBlock)?.[1] ?? 0);
+const reqMin2 = Number(/\.requirement\s*\{([\s\S]*?)\}/.exec(styleCss)?.[1]?.match(/min-height:\s*(\d+)px/)?.[1] ?? 0);
+check(
+  'R8',
+  '双段开关高度不超过输入框最小高度（不破坏结尾区的高度预算）',
+  swH > 0 && reqMin2 > 0 && swH < reqMin2,
+  { switchHeight: swH, requirementMinHeight: reqMin2 },
 );
 
 // R8：缩放窗口必须重算高度，且不因输入框为空而跳过。
@@ -335,13 +376,15 @@ const jsCode = js
 // U1：不能把 Position 对象当字符偏移量传给 getPositionAt。
 // 误传 → NaN → `style.top = NaN + 'px'` 非法 CSS 被丢弃 → 按钮停在 hidden。
 // 表现：代码文件"歪着出现"，markdown 干脆不出现（wordWrap 换行更多）。
-const u1a = /getPositionAt\(\s*selection\.getEndPosition\(\)/.test(jsCode);
-const u1b = /const end = selection\.getEndPosition\(\)/.test(jsCode);
+// 现版本进一步改为直接锚 `getStartPosition()`（Monaco 中恒指向文档序更靠前的一端），
+// 使按钮落在**整个选区外接矩形**的右上角，而不是末行的右上角。
+const u1a = /getPositionAt\(\s*selection\.get(Start|End)Position\(\)/.test(jsCode);
+const u1b = /selection\.getStartPosition\(\)/.test(jsCode);
 check(
   'U1',
-  '选区定位直接用 Position，不再误传给 getPositionAt（修 md 文件不出现复制按钮）',
+  '选区定位直接用 Position（锚首行），不再误传给 getPositionAt',
   !u1a && u1b,
-  { usesOffsetApi: u1a, usesPositionDirectly: u1b },
+  { usesOffsetApi: u1a, usesStartAnchor: u1b },
 );
 
 // U2：浮层**不再自己算绝对坐标**。自己算在 markdown 上必然错位：
@@ -386,6 +429,107 @@ check('U5', '保存按钮已移除，但 Ctrl+S 快捷键仍注册（能力不�
   saveButtonGone: u5a,
   ctrlSStillBound: u5b,
 });
+
+/* ---- W 组：应用状态跨视图同步 ---- */
+// 应用有两个入口（面板按钮 / 编辑器工具条）。走编辑器那条时面板不知情，
+// 条目会一直显示"应用"可用态、与磁盘脱节（用户实测反馈）。
+// 修法：主进程在落盘成功后广播 preview:applied，面板据 index 标「已应用 ✓」。
+// 注意：`tsc` 会把 `CHANNELS.appliedChange` 编译成 `contract_1.CHANNELS.appliedChange`，
+// 因此**不能**在 dist 产物里直接搜字面量 `preview:applied`（这是记录在案的假失败陷阱）。
+const w1a = /\.send\(\s*(?:contract_1\.)?CHANNELS\.appliedChange/.test(mainJs);
+const w1b = /preview:applied/.test(previewPreloadJs);
+const w1c = /onAppliedChange/.test(previewPreloadJs);
+check('W1', '新增 preview:applied 广播通道（主进程 → 预览面板）', w1a && w1b && w1c, {
+  inMain: w1a,
+  inPreload: w1b,
+  preloadExposes: w1c,
+});
+
+// 广播必须挂在**落盘成功之后**（outcome.ok），否则失败也会把条目标成已应用。
+// 先剥掉注释再匹配，并留足窗口 —— 中间有一大段解释性注释（曾用 200 字符窗口误报）。
+const mainJsCode = mainJs.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+const w2a = /if\s*\(\s*outcome\.ok\s*\)[\s\S]{0,600}?notifyChangeState\(\{\s*kind:\s*'applied'/.test(mainJsCode);
+// 撤销也要复位（否则撤销后按钮仍显示「已应用 ✓」）
+const w2b = /notifyChangeState\(\{\s*kind:\s*'undone'/.test(mainJsCode);
+check('W2', '应用成功才广播、撤销后广播复位', w2a && w2b, {
+  appliedAfterOk: w2a,
+  undoneBroadcast: w2b,
+});
+
+// 面板必须订阅并有处理函数（否则通道形同虚设）
+const w3a = /bridge\.onAppliedChange\(/.test(previewJs);
+const w3b = /function markAppliedIndex/.test(previewJs) && /function markUnapplied/.test(previewJs);
+check('W3', '预览面板订阅广播并按 index/filePath 更新条目状态', w3a && w3b, {
+  subscribed: w3a,
+  handlers: w3b,
+});
+
+/* ---- X 组：格式模板的围栏自洽性 ---- */
+// 演进：最初不变量是"正文零反引号"（因为写在说明里的裸围栏会被模型当成代码块开头，
+// 而后面没有配对闭合 → 输出"有开头没结尾"）。后来改为"用五反引号包示例"，
+// 示例里必须出现三/四反引号才直观，于是真正的不变量变成：
+//   **每一段围栏都必须与同长度的另一段配对**（绝不留没人闭合的 opener）。
+const specSrc = read(path.join(repo, 'src', 'shared', 'formatSpec.ts'));
+try {
+  const distSpec = read(path.join(repo, 'dist', 'shared', 'formatSpec.js'));
+  // 运行期取最终文本（比在源码里做正则更准）
+  const mod = require(path.join(repo, 'dist', 'shared', 'formatSpec.js'));
+  const unbalanced = (t) => {
+    const c = {};
+    for (const m of t.match(/`{3,}/g) || []) c[m.length] = (c[m.length] || 0) + 1;
+    return Object.entries(c).filter(([, n]) => n % 2 !== 0);
+  };
+  const bad = unbalanced(mod.FORMAT_SPEC_SHORT).concat(unbalanced(mod.FORMAT_SPEC_FULL));
+  check('X1', '格式模板的围栏全部成对（不存在未闭合的 opener）', bad.length === 0, { unbalanced: bad });
+} catch (e) {
+  check('X1', '格式模板的围栏全部成对（不存在未闭合的 opener）', false, { error: String(e && e.message) });
+}
+// 最终原则（方案甲）：输入输出共用同一条骨架 —— 行号只在 ### 范围，内容里不写行号
+const x2 =
+  /完全一致|照着它把结果写回来|同一条骨架|结构完全相同/.test(specSrc) &&
+  /### 范围：/.test(specSrc) &&
+  /绝不在行首写行号|不含行号/.test(specSrc);
+check('X2', '格式模板：结构对称（输入输出同骨架）+ 行号只在 ### 范围', x2, {
+  hasSymmetry: /完全一致|照着它把结果写回来|同一条骨架|结构完全相同/.test(specSrc),
+  hasRangeAnchor: /### 范围：/.test(specSrc),
+  hasNoLineNo: /绝不在行首写行号|不含行号/.test(specSrc),
+});
+const x3 = /成对|闭合/.test(specSrc) && /四个反引号/.test(specSrc) && /多一个|比它再多/.test(specSrc);
+check('X3', '格式模板：围栏成对闭合 + 至少四个反引号（内容含更多时加长）', x3, {
+  hasPair: /成对|闭合/.test(specSrc),
+  hasFour: /四个反引号/.test(specSrc),
+  hasAdaptive: /多一个|比它再多/.test(specSrc),
+});
+// 用户反馈（few-shot 必须够全）：示例要成体系地覆盖各类场景，且每段都有输入/输出对照。
+try {
+  const mod2 = require(path.join(repo, 'dist', 'shared', 'formatSpec.js'));
+  const full = mod2.FORMAT_SPEC_FULL;
+  const short = mod2.FORMAT_SPEC_SHORT;
+  const all = short + full;
+  const titles = (full.match(/示例 \d+｜/g) || []).length;
+  const ins = (full.match(/【我给你的】/g) || []).length;
+  const outs = (full.match(/【你该给我的】/g) || []).length;
+  check('X4', '格式模板：示例覆盖全部 8 类场景且输入/输出逐一对照', titles === 8 && ins === outs && ins >= 8, {
+    titles,
+    ins,
+    outs,
+  });
+  check(
+    'X5',
+    '格式模板：不含解析器不认识的 ### 续： 约定 + 保留语言标注对照表',
+    !/###\s*续/.test(all) && /语言标注/.test(all) && /typescript/.test(all),
+    {
+      hasContinuation: /###\s*续/.test(all),
+      hasLangTable: /语言标注/.test(all),
+      hasTsLabel: /typescript/.test(all),
+    }
+  );
+  check('X6', '格式模板：截断场景改为分多轮给完整文件', /分多轮/.test(all) && /完整/.test(all), {
+    hasMultiRound: /分多轮/.test(all),
+  });
+} catch (e) {
+  check('X4', '格式模板：示例覆盖全部 8 类场景且输入/输出逐一对照', false, { error: String(e && e.message) });
+}
 
 console.log(`\n通过 ${pass} / 失败 ${fail}`);
 process.exit(fail === 0 ? 0 : 1);

@@ -16,6 +16,7 @@ const CH = {
   setPreviewPanel: 'ui:set-preview-panel',
   showDiffInEditor: 'ui:show-diff-in-editor',
   activeDiff: 'preview:active-diff',
+  appliedChange: 'preview:applied',
 } as const;
 
 const bridge = {
@@ -37,6 +38,15 @@ const bridge = {
    */
   onActiveDiff: (listener: (index: unknown) => void) => {
     ipcRenderer.on(CH.activeDiff, (_e, index) => listener(index));
+  },
+  /**
+   * 主进程广播「某个变更已被应用 / 被撤销」。
+   *
+   * 为什么需要：应用有**两个入口**（本面板按钮 / 左侧编辑器工具条）。
+   * 走编辑器那条时本面板不知情，条目会一直显示可用态、与磁盘脱节（用户实测反馈）。
+   */
+  onAppliedChange: (listener: (event: unknown) => void) => {
+    ipcRenderer.on(CH.appliedChange, (_e, event) => listener(event));
   },
 };
 

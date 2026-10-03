@@ -17,13 +17,20 @@ import * as path from 'node:path';
 
 import { CHANNELS } from '../shared/contract';
 import { buildPrompt, getFormatSpec } from '../shared/formatSpec';
-import { computeApply, formatNumberedSnippet, parseModelReply, stripNumberedPrefix } from '../shared/returnPath';
+import {
+  alignConsumedLines,
+  computeApply,
+  formatNumberedSnippet,
+  parseModelReply,
+  stripNumberedPrefix,
+} from '../shared/returnPath';
 import { buildSnippetText, buildWholeFileText, fenceFor } from '../shared/snippet';
 import { createFixtures, type FixturePaths } from './fixtures';
 import type { FileService } from './fileService';
 import { SettingsStore, isUsableRoot, SELF_TEST_SETTINGS_FILE } from './settings';
 import { buildContextSummary } from './contextSummary';
 import { COLLECT_STRATEGIES, collectReply } from './replyCollector';
+import { ConsumptionStore, fingerprintOf, sessionKeyOf } from './consumptionStore';
 import { ReturnPathService } from './returnPathService';
 
 interface BootInfo {
@@ -275,6 +282,8 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     CHANNELS.chromeState,   // → webbar
     CHANNELS.activeDiff,    // → 预览面板
     CHANNELS.fileChanged,   // → 编辑器（落盘广播）
+    CHANNELS.appliedChange, // → 预览面板（应用/撤销状态同步）
+    CHANNELS.openPromptPanel, // → 编辑器（请求打开提示词面板；面板本体是独立视图）
   ];
   const requiredChannels = Object.values(CHANNELS).filter((c) => !oneWayChannels.includes(c));
   const missingHandlers = requiredChannels.filter((c) => !registeredChannels.includes(c));
@@ -294,7 +303,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
      * 通道名前缀也放宽到 `preview:`（此前只认 fs|ui|return，
      * 等于对 preview 侧的通道完全不做漂移检查）。
      */
-    const preloadFiles = ['preload.js', 'previewPreload.js', 'webbarPreload.js'];
+    const preloadFiles = ['preload.js', 'previewPreload.js', 'webbarPreload.js', 'promptPreload.js'];
     const literals: string[] = [];
     const perFile: Record<string, string[]> = {};
     for (const f of preloadFiles) {
@@ -337,6 +346,23 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     const html = fs.readFileSync(htmlPath, 'utf8');
     const js = fs.readFileSync(jsPath, 'utf8');
     const css = fs.readFileSync(path.join(rendererDir, 'style.css'), 'utf8');
+    /*
+     * 主进程 / preload / 契约 / 设置 的**源码**（不是 __dirname 下的编译产物：那里只有 .js）。
+     *
+     * ⚠️ 必须在 try 的开头就读取：Y 组（提示词面板）等后续分组都要用 `mainTs`/`preloadTs`，
+     * 而 `const` 没有提升 —— 读到用不到就会抛 ReferenceError，整份自检报告会退化成一条 FAIL。
+     */
+    const srcMainDir = path.join(__dirname, '..', '..', 'src', 'main');
+    const mainTs = fs.readFileSync(path.join(srcMainDir, 'index.ts'), 'utf8');
+    const preloadTs = fs.readFileSync(path.join(srcMainDir, 'preload.ts'), 'utf8');
+    /* 通道名的权威定义在契约层，不在 index.ts */
+    const contractTs = fs.readFileSync(path.join(srcMainDir, '..', 'shared', 'contract.ts'), 'utf8');
+    /* 设置持久化层：自定义格式要求存这里（Y8 要核对字段确实存在） */
+    const settingsTs = fs.readFileSync(path.join(srcMainDir, 'settings.ts'), 'utf8');
+    const previewHtml = fs.readFileSync(path.join(rendererDir, 'preview.html'), 'utf8');
+    // 网页区顶部工具条（webbar）：显隐开关的唯一常驻入口，单独读出来供 T1 断言
+    const webbarHtml = fs.readFileSync(path.join(rendererDir, 'webbar.html'), 'utf8');
+    const webbarJs = fs.readFileSync(path.join(rendererDir, 'webbar.js'), 'utf8');
     const htmlIds = new Set([...html.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1] as string));
     const usedIds = [...js.matchAll(/getElementById\('([^']+)'\)/g)].map((m) => m[1] as string);
     const missingIds = [...new Set(usedIds)].filter((id) => !htmlIds.has(id));
@@ -413,8 +439,8 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     const chainOk = Object.values(collectChain).every(Boolean);
     add(
       'L6',
-      '「采集回复」链路首尾相连（按钮→bridge→通道→preload→主进程）+ 4 套采集策略已就绪',
-      chainOk && COLLECT_STRATEGIES.length >= 4,
+      '「采集回复」链路首尾相连（按钮→bridge→通道→preload→主进程）+ 3 套采集策略已就绪',
+      chainOk && COLLECT_STRATEGIES.length >= 3,
       { ...collectChain, strategies: COLLECT_STRATEGIES.map((s) => s.id) }
     );
 
@@ -581,6 +607,264 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       add('N1', '网页区工具条界面契约检查', false, `读取失败：${err instanceof Error ? err.message : String(err)}`);
     }
 
+    /* ---- Y) 提示词编辑面板（用户自定义系统 prompt 的格式段） ----
+     *
+     * 用户需求原话："目前这个系统自带提示词是默认固定的，我希望可以支持用户自行修改系统 prompt。
+     * 具体可以在 IDE 顶部增加一列 Settings，增加一个关于修改 prompt 的行，
+     * 用户点击后打开一个提示词编辑的面板。"
+     *
+     * 这组断言锁住三件缺一不可的事：
+     *   1. **入口存在且不止一个**（设置菜单行 / 编辑器齿轮 / 快捷键），
+     *      且都汇聚到同一条主进程路径 —— 入口分散但路径唯一，状态才不会分叉；
+     *   2. **面板是真的能编辑**（有编辑框、有状态回显、有恢复默认），
+     *      不是只显示一段说明文字；
+     *   3. **用户内容真的被用上**（复制 prompt / 复制格式要求 / 复制整段 prompt 三条链路
+     *      都必须经过 resolveFormatSpec）—— 否则"能改但改了没用"是最坏的结果。
+     */
+    try {
+      const pmHtml = fs.readFileSync(path.join(rendererDir, 'prompt.html'), 'utf8');
+      const pmJs = fs.readFileSync(path.join(rendererDir, 'prompt.js'), 'utf8');
+      const pmCss = fs.readFileSync(path.join(rendererDir, 'prompt.css'), 'utf8');
+
+      // Y1：id 对齐（面板自己的 HTML ↔ JS），与预览/工具条同一条契约
+      const pmIds = new Set([...pmHtml.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1] as string));
+      const pmUsed = [...new Set([...pmJs.matchAll(/getElementById\('([^']+)'\)/g)].map((m) => m[1] as string))];
+      const pmMissing = pmUsed.filter((id) => !pmIds.has(id));
+      add('Y1', '提示词面板：JS 引用的元素 id 都存在于 prompt.html', pmMissing.length === 0, {
+        htmlIdCount: pmIds.size,
+        usedIdCount: pmUsed.length,
+        missing: pmMissing,
+      });
+
+      let pmParseError: string | null = null;
+      try {
+        new vm.Script(pmJs, { filename: 'prompt.js' });
+      } catch (err) {
+        pmParseError = err instanceof Error ? err.message : String(err);
+      }
+      add('Y2', '提示词面板：prompt.js 语法可解析', pmParseError === null, pmParseError ?? 'OK');
+
+      // Y3：面板必须真的是"编辑器"而不是只读展示 —— 编辑框 + 保存/恢复默认/取消三按钮 + 未保存状态
+      const hasEditorArea = /<textarea[\s\S]{0,400}?id="pm-editor"/.test(pmHtml);
+      const hasSave = /id="pm-save"/.test(pmHtml) && /el\.save\.addEventListener\('click',\s*save\)/.test(pmJs);
+      const hasReset = /id="pm-reset"/.test(pmHtml) && /el\.reset\.addEventListener\('click',\s*resetToDefault\)/.test(pmJs);
+      const hasCancel = /id="pm-cancel"/.test(pmHtml) && /el\.cancel\.addEventListener\('click',\s*close\)/.test(pmJs);
+      const hasDirtyState = /未保存/.test(pmJs) && /\.dirty =/.test(pmJs);
+      add('Y3', '提示词面板：具备编辑框 + 保存/恢复默认/取消，且回显"未保存"状态', hasEditorArea && hasSave && hasReset && hasCancel && hasDirtyState, {
+        hasEditorArea,
+        hasSave,
+        hasReset,
+        hasCancel,
+        hasDirtyState,
+      });
+
+      /*
+       * Y3b：**版本页签**（用户设计）。
+       *
+       * 面板要能分别查看/编辑"简洁版"与"完整版" —— 两版各有自己的内置默认与自定义。
+       * 断言 HTML 里确实有两个页签、JS 里确实有 perVariant 的独立编辑态。
+       */
+      const hasTabs =
+        (pmHtml.match(/class="pm-tab"/g) ?? []).length === 2 &&
+        /data-variant="short"/.test(pmHtml) &&
+        /data-variant="full"/.test(pmHtml);
+      const tabSwitching = /perVariant\s*=\s*\{/.test(pmJs) && /function switchTo\(/.test(pmJs);
+      add('Y3b', '提示词面板：两个版本页签 + 各自的独立编辑态（切走不丢草稿）', hasTabs && tabSwitching, {
+        tabCount: (pmHtml.match(/class="pm-tab"/g) ?? []).length,
+        tabSwitching,
+      });
+
+      /*
+       * Y4：「恢复默认」必须是**两步**（载入编辑框 → 用户再点保存），不能一键直接落库。
+       * 一键清空是**不可撤销**的：用户辛苦写的格式约定会瞬间消失。
+       * 断言方式是读 resetToDefault 的实现里到底是"写编辑框"还是"调 bridge.reset"。
+       * 分版本后载入的是**当前页签那一版**的默认全文（state[active].defaultSpec）。
+       */
+      const resetFnBody = /function resetToDefault\(\)\s*\{([\s\S]*?)\n  \}/.exec(pmJs)?.[1] ?? '';
+      const resetLoadsEditor = /el\.editor\.value\s*=/.test(resetFnBody) && /defaultSpec/.test(resetFnBody);
+      const resetDoesNotPersist = !/bridge\.reset\(/.test(resetFnBody);
+      add('Y4', '提示词面板：「恢复默认」先载入编辑框、不直接落库（可反悔）', resetLoadsEditor && resetDoesNotPersist, {
+        resetLoadsEditor,
+        resetDoesNotPersist,
+      });
+
+      // Y5：Esc 关闭 + Ctrl+S 保存（浮层类界面的通用约定，也是本窗口里最自然的键位）
+      const escCloses = /e\.key === 'Escape'/.test(pmJs) && /close\(\)/.test(pmJs);
+      const ctrlSSaves = /e\.key === 's'/.test(pmJs) && /void save\(\)/.test(pmJs);
+      add('Y5', '提示词面板：Esc 关闭、Ctrl+S 保存', escCloses && ctrlSSaves, { escCloses, ctrlSSaves });
+
+      // Y6：独立 preload 暴露窄 bridge，通道名与契约一致；save/reset 必须带 variant 参数
+      const pmPreload = fs.readFileSync(path.join(__dirname, 'promptPreload.js'), 'utf8');
+      const pmBridgeOk =
+        /exposeInMainWorld\('promptBridge'/.test(pmPreload) &&
+        pmPreload.includes("'ui:prompt-panel-state'") &&
+        pmPreload.includes("'ui:save-prompt-spec'") &&
+        pmPreload.includes("'ui:reset-prompt-spec'") &&
+        pmPreload.includes("'ui:close-prompt-panel'") &&
+        /save:\s*\(variant: string, spec: string\)/.test(pmPreload) &&
+        /reset:\s*\(variant: string\)/.test(pmPreload);
+      add('Y6', '提示词面板：独立 preload 暴露窄 bridge，通道名正确且 save/reset 带版本参数', pmBridgeOk, {
+        exposeInMainWorld: /exposeInMainWorld\('promptBridge'/.test(pmPreload),
+        saveWithVariant: /save:\s*\(variant: string, spec: string\)/.test(pmPreload),
+      });
+
+      /*
+       * Y7：**设置菜单里必须有那一行** —— 这是用户点名要的入口
+       *（"在 IDE 顶部增加一列 Settings，增加一个关于修改 prompt 的行"）。
+       * 同时要求编辑器工具栏也有一枚齿轮（面板/菜单都不在编辑器进程里，
+       * 齿轮是"我在编辑器里就能随手打开"的那条路）。
+       */
+      const settingsMenu = /label:\s*'Settings'/.test(mainTs) && /label:\s*'修改提示词…'/.test(mainTs);
+      const gearInEditor = /id="btn-settings"/.test(html) && /el\.btnSettings\.addEventListener\('click'/.test(js);
+      const gearOpensPanel = /bridge\.openPromptPanel\(\)/.test(js) && /openPromptPanel:\s*'ui:open-prompt-panel'/.test(preloadTs);
+      add('Y7', '入口齐备：Settings 菜单「修改提示词…」+ 编辑器工具栏齿轮（均通往同一面板）', settingsMenu && gearInEditor && gearOpensPanel, {
+        settingsMenu,
+        gearInEditor,
+        gearOpensPanel,
+      });
+
+      /*
+       * Y8：**用户内容必须真的被用上**。
+       *
+       * 分版本后链路变成：
+       *   ① 编辑器「复制提示词」→ copyPrompt → resolveFormatSpec(customSpecsOf(...), variant)
+       *   ② File 菜单「只复制输出格式要求」→ 同一条 customSpecsOf 取值
+       *   ③ 面板读写的是 settings.customFormatSpecShort / customFormatSpecFull
+       * 任一条漏了就回到"改了没用"（最坏的失败形态：用户以为生效了）。
+       * 另外还要求开关状态（formatSpecVariant）在两个方向上都有 handler。
+       */
+      const usesInCopyPrompt = /formatSpec:\s*resolveFormatSpec\(customSpecsOf\(settings\.get\(\)\)/.test(mainTs);
+      const usesInCopyFormat = /resolveFormatSpec\(customSpecsOf\(/.test(mainTs) &&
+        /formatSpecVariant/.test(mainTs);
+      const panelReadsSetting =
+        /customFormatSpecShort/.test(mainTs) &&
+        /customFormatSpecFull/.test(mainTs) &&
+        /customFormatSpecShort:\s*string \| null/.test(settingsTs) &&
+        /customFormatSpecFull:\s*string \| null/.test(settingsTs);
+      const hasToggleLink = /ipcMain\.handle\(CHANNELS\.getFormatSpecVariant/.test(mainTs) &&
+        /ipcMain\.handle\(CHANNELS\.setFormatSpecVariant/.test(mainTs);
+      add('Y8', '自定义内容真的被用上（分版本三条链路 + 开关状态可读写）', usesInCopyPrompt && usesInCopyFormat && panelReadsSetting && hasToggleLink, {
+        usesInCopyPrompt,
+        usesInCopyFormat,
+        panelReadsSetting,
+        hasToggleLink,
+      });
+
+      // Y9：几何 —— 面板是浮层，必须有最小可读尺寸，且显示时居中（不是贴 0,0 的小窗）
+      const panelGeometry = /PROMPT_PANEL_MIN_WIDTH\s*=\s*(\d+)/.exec(mainTs)?.[1];
+      const centersHorizontally = /x:\s*Math\.round\(\(w - width\)\s*\/\s*2\)/.test(mainTs);
+      const hasMinHeight = /PROMPT_PANEL_MIN_HEIGHT\s*=\s*(\d+)/.exec(mainTs)?.[1];
+      add('Y9', '提示词面板：有最小可读尺寸且水平居中（是浮层而非贴角小窗）', Boolean(panelGeometry) && Number(panelGeometry) >= 420 && centersHorizontally && Boolean(hasMinHeight), {
+        minWidth: panelGeometry ?? null,
+        minHeight: hasMinHeight ?? null,
+        centersHorizontally,
+      });
+
+      // 样式必须存在（否则面板是一片没有边框的裸文本，与其它面板的观感割裂）
+      const hasPanelCss = /\.pm-shell\s*\{/.test(pmCss) && /\.pm-editor\s*\{/.test(pmCss) && /\.pm-btn\.primary/.test(pmCss);
+      add('Y10', '提示词面板：样式表定义了外壳/编辑框/主按钮', hasPanelCss, { hasPanelCss });
+
+      /*
+       * Y11：**handler 必须在页面加载之前注册**（真实缺陷，用户截图报过）。
+       *
+       * 现象：打开面板 → 编辑框一片空白 + 底部红字
+       *   `No handler registered for 'ui:prompt-panel-state'`。
+       * 根因：面板渲染进程在 DOMContentLoaded 就会 `invoke` 这个通道来预填内容，
+       * 而这几个 `ipcMain.handle` 原先写在 index.ts 靠后的"IPC 区" —— 中间隔着一串
+       * `await`，面板加载完成时它们还没注册。
+       *
+       * 这条断言直接比对**注册位置 vs 加载位置在源码里的先后**：
+       * `ipcMain.handle(CHANNELS.promptPanelState` 的行号必须小于
+       * `loadLocalView(promptView` 的行号。这类"顺序错误"tsc 与其它断言都看不到。
+       */
+      const mainLines = mainTs.split('\n');
+      const regLine = mainLines.findIndex((l) => /ipcMain\.handle\(CHANNELS\.promptPanelState/.test(l));
+      const loadLine = mainLines.findIndex((l) => /loadLocalView\(promptView/.test(l));
+      add('Y11', '提示词面板：状态 handler 在页面加载之前注册（防"面板打开即报未注册"）', regLine >= 0 && loadLine >= 0 && regLine < loadLine, {
+        handlerLine: regLine >= 0 ? regLine + 1 : null,
+        loadLine: loadLine >= 0 ? loadLine + 1 : null,
+      });
+
+      /*
+       * Y12：**面板自带默认文本兜底**。
+       *
+       * 万一 `getState()` 仍然失败（任何原因），面板不能只剩一个空白框 + 一行红字：
+       * 要先显示内置默认原文让用户有事可做。
+       * 断言兜底副本与内置模板**逐字一致** —— 早期只比对首行，默认模板升级后
+       * 副本会悄悄过期，那时面板在失败分支会显示一份**过时**的要求，比空白更糟。
+       */
+      const hasFallback = /FALLBACK_SPEC/.test(pmJs) && /el\.editor\.value\s*=/.test(pmJs);
+      const fallbackBlock = /const FALLBACK_SPEC = \[([\s\S]*?)\]\.join\('\\n'\)/.exec(pmJs)?.[1] ?? '';
+      const fallbackText = (fallbackBlock.match(/"(?:[^"\\]|\\.)*"/g) ?? [])
+        .map((s) => JSON.parse(s) as string)
+        .join('\n');
+      const fallbackMatchesDefault = fallbackText === getFormatSpec('short');
+      const hasRetry = /const LOAD_RETRIES/.test(pmJs) && /load\(tries \+ 1\)/.test(pmJs);
+      add(
+        'Y12',
+        '提示词面板：读状态失败时有默认文本兜底（与内置默认逐字一致）+ 重试（不留空白框）',
+        hasFallback && fallbackMatchesDefault && hasRetry,
+        {
+          hasFallback,
+          fallbackMatchesDefault,
+          hasRetry,
+          fallbackLines: fallbackText.split('\n').length,
+          defaultLines: getFormatSpec('short').split('\n').length,
+        }
+      );
+
+      /*
+       * Y14：**底部双段开关**（用户设计）。
+       *
+       * "开 = 完整版（FULL），关 = 简洁版（SHORT）"，放在需求输入框旁。
+       * 断言：HTML 有开关结构（两个选项）、JS 有读写持久化（get/set）、
+       * 键盘可达（Space/Enter），以及样式表里画了滑块。
+       */
+      const editorCss = fs.readFileSync(path.join(rendererDir, 'style.css'), 'utf8');
+      const swHtml =
+        /id="variant-switch"/.test(html) &&
+        (html.match(/class="variant-opt"/g) ?? []).length === 2 &&
+        /data-variant="short"/.test(html) &&
+        /data-variant="full"/.test(html);
+      const swJs =
+        /setupVariantSwitch/.test(js) &&
+        /bridge\.setFormatSpecVariant/.test(js) &&
+        /bridge\.getFormatSpecVariant/.test(js) &&
+        /e\.key === ' '/.test(js);
+      const swCss = /\.variant-switch\s*\{/.test(editorCss) && /\.variant-thumb\s*\{/.test(editorCss);
+      add('Y14', '底部双段开关：结构 + 持久化读写 + 键盘可达 + 样式', swHtml && swJs && swCss, {
+        swHtml,
+        swJs,
+        swCss,
+      });
+
+      /*
+       * Y15：**开关状态必须贯通到实际发出去的内容**。
+       *
+       * 最坏的失败形态：界面显示"完整版"，但 copyPrompt 仍按短版拼 —— 用户无从察觉。
+       * 断言 copyPrompt 链路确实读了 settings.formatSpecVariant。
+       */
+      const variantUsedInCopyPrompt =
+        /resolveFormatSpec\(customSpecsOf\(settings\.get\(\)\),\s*settings\.get\(\)\.formatSpecVariant\)/.test(mainTs);
+      add('Y15', '开关状态贯通：复制提示词链路确实读取 formatSpecVariant', variantUsedInCopyPrompt, {
+        variantUsedInCopyPrompt,
+      });
+
+      /*
+       * Y13：保存失败时**不清空编辑框**。
+       * 用户刚写的内容不能因为一次调用失败而消失 —— 只报错、保留内容、放开按钮可重试。
+       */
+      const saveFnBody = /async function save\(\)\s*\{([\s\S]*?)\n  \}/.exec(pmJs)?.[1] ?? '';
+      const keepsContentOnFailure = !/el\.editor\.value\s*=/.test(saveFnBody.split('catch')[1] ?? '');
+      const reEnablesSave = /el\.save\.disabled\s*=\s*false/.test(saveFnBody.split('catch')[1] ?? '');
+      add('Y13', '提示词面板：保存失败时保留编辑框内容并放开按钮（可重试）', keepsContentOnFailure && reEnablesSave, {
+        keepsContentOnFailure,
+        reEnablesSave,
+      });
+    } catch (err) {
+      add('Y1', '提示词面板界面契约检查', false, `读取失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+
     /* ---- O) 显隐开关的位置与输入区体验（本轮用户反馈的四项） ---- */
 
     // O1：全局工具栏**不再**放带文字的「目录树」「AI 网页」按钮
@@ -736,6 +1020,27 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       mainForwards: /CHANNELS\.activeDiff/.test(mainJs),
     });
 
+    /*
+     * P7：应用状态同步。
+     *
+     * 真实缺陷（用户实测）：「在左侧编辑器中应用代码后，右侧底部的采集应用状态没有同步更新」。
+     * 根因：应用有**两个入口** —— ① 预览面板自己的按钮；② 左侧编辑器工具条的「应用此变更」。
+     * 走 ② 时落盘在主进程完成，面板完全不知情，条目一直显示可应用的假状态。
+     * 修法：主进程在落盘成功后广播 `preview:applied`，面板据 index 标「已应用 ✓」。
+     */
+    const appliedSync =
+      /onAppliedChange/.test(previewJs) &&
+      /appliedChange/.test(previewPreloadJs) &&
+      /CHANNELS\.appliedChange/.test(mainJs) &&
+      /markAppliedIndex/.test(previewJs) &&
+      /markUnapplied/.test(previewJs);
+    add('P7', '应用/撤销状态在两个入口间同步（编辑器应用后面板同步标记）', appliedSync, {
+      panelListens: /onAppliedChange/.test(previewJs),
+      preloadExposes: /appliedChange/.test(previewPreloadJs),
+      mainBroadcasts: /CHANNELS\.appliedChange/.test(mainJs),
+      panelHasHandlers: /markAppliedIndex/.test(previewJs) && /markUnapplied/.test(previewJs),
+    });
+
     /* ---------------- Q 组：应用后刷新 / 全部应用 / 选区浮层 / 输入框观感 ----------------
      *
      * Q1 是本轮修的一个**真实缺陷**：落盘在主进程、编辑在另一个渲染进程，
@@ -746,16 +1051,11 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     /*
      * 注意读的是**仓库里的 .ts 源码**，不是 __dirname 下的编译产物 ——
      * 自检运行时 __dirname 是 dist/main，那里只有 .js，没有 .ts。
+     *
+     * ⚠️ 这段**必须在最前面**读：Y 组（提示词面板）等后续分组都要用 mainTs/preloadTs，
+     * 而 const 没有提升 —— 放在后面会让自检直接抛 ReferenceError（整份报告变成一条 FAIL）。
+     * 实际读取已上移到本 try 块开头，此处只留说明。
      */
-    const srcMainDir = path.join(__dirname, '..', '..', 'src', 'main');
-    const mainTs = fs.readFileSync(path.join(srcMainDir, 'index.ts'), 'utf8');
-    const preloadTs = fs.readFileSync(path.join(srcMainDir, 'preload.ts'), 'utf8');
-    /* 通道名的权威定义在契约层，不在 index.ts */
-    const contractTs = fs.readFileSync(path.join(srcMainDir, '..', 'shared', 'contract.ts'), 'utf8');
-    const previewHtml = fs.readFileSync(path.join(rendererDir, 'preview.html'), 'utf8');
-    // 网页区顶部工具条（webbar）：显隐开关的唯一常驻入口，单独读出来供 T1 断言
-    const webbarHtml = fs.readFileSync(path.join(rendererDir, 'webbar.html'), 'utf8');
-    const webbarJs = fs.readFileSync(path.join(rendererDir, 'webbar.js'), 'utf8');
     const hasFileChangedChannel = /fileChanged:\s*'fs:file-changed'/.test(contractTs);
     const notifiesOnApply = /notifyFileChanged\(filePath\)/.test(mainTs);
     const notifiesOnUndo = /notifyFileChanged\(result\.filePath\)/.test(mainTs);
@@ -879,28 +1179,68 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     // R5：垂直方向的三处 flex 收缩许可。缺任一条，
     // 输入框撑高时编辑器不缩 → 底部被推出视口（用户实测"输入框底部有点溢出"）。
     const wrapAllowsShrink = /\.editor-wrap\s*\{[^}]*min-height:\s*0/.test(css);
-    const promptBarAllowsShrink = /\.prompt-bar\s*\{[^}]*min-height:\s*0/.test(css);
+    const promptBarShrinkable = /\.prompt-bar\s*\{[\s\S]*?flex:\s*0\s+1\s+auto/.test(css);
     add(
       'R5',
       '编辑器容器与输入区允许在 flex 中收缩（输入框撑高不顶出视口）',
-      wrapAllowsShrink && promptBarAllowsShrink,
-      { wrapAllowsShrink, promptBarAllowsShrink },
+      wrapAllowsShrink && promptBarShrinkable,
+      { wrapAllowsShrink, promptBarShrinkable },
     );
 
-    // R6：**min-height: 0 必须配可收缩的 flex**。
-    // 上一版写了 `flex: 0 0 auto` + `min-height: 0` —— 这是**无效组合**：
-    // flex-shrink: 0 直接禁止收缩，min-height: 0 根本轮不到起作用，
-    // 于是视口一紧张输入区就不缩，把底部边框顶出可视范围。
-    // 现象很有欺骗性：「启动时底部溢出，拖一下窗口就恢复」——
-    // 因为拖窗口触发了重排，而不是任何 JS 逻辑在起作用。
+    // R6：输入区**可缩，但不能缩到内容放不下**。
+    //
+    // 这条规则经过三个版本才收敛，两个方向都踩过：
+    //  · `flex: 0 0 auto`（禁缩）+ min-height: 0 → 无效组合，视口紧张时本区不缩，
+    //    把底部边框顶出可视范围（"启动时底部溢出，拖一下窗口就恢复"）；
+    //  · `flex: 0 1 auto` + `min-height: 0` → 过头了，本区被压到**低于自身内容高度**，
+    //    当时 .prompt-shell 还是 overflow: hidden，于是输入框下沿被裁掉一条
+    //    （用户实测截图"底部输入框溢出了一部分"）。
+    //
+    // 正解：flex 允许收缩，但 min-height 取**内容自然高度**（8 + (10+44+10) + 10 = 82），
+    // 需要让高度时优先压 .layout（它能一路压到 0）。
     const promptBarBlock = /\.prompt-bar\s*\{([\s\S]*?)\}/.exec(css)?.[1] ?? '';
-    const promptBarShrinkable = /flex:\s*0\s+1\s+auto/.test(promptBarBlock);
-    const promptBarNoHardZero = !/flex:\s*0\s+0\s+auto/.test(promptBarBlock);
+    const barShrinkable = /flex:\s*0\s+1\s+auto/.test(promptBarBlock);
+    const barNotHardZero = !/flex:\s*0\s+0\s+auto/.test(promptBarBlock);
+    const barMinHeight = /min-height:\s*(\d+)px/.exec(promptBarBlock)?.[1];
+    // shell 的内边距(10+10) + 输入框最小高(44) + bar 内边距(8+10) = 82
+    const reqMinForBar = /\.requirement\s*\{([\s\S]*?)\}/.exec(css)?.[1] ?? '';
+    const reqMinPx = Number(/min-height:\s*(\d+)px/.exec(reqMinForBar)?.[1] ?? 0);
+    const expectedBarMin = 8 + 10 + reqMinPx + 10 + 10;
+    const barMinFitsContent = Number(barMinHeight) >= expectedBarMin;
     add(
       'R6',
-      '输入区 flex 允许收缩（min-height:0 配flex-shrink:0 是无效组合）',
-      promptBarShrinkable && promptBarNoHardZero,
-      { promptBarShrinkable, promptBarNoHardZero },
+      '输入区 flex 可收缩、且 min-height 不小于内容自然高度（不会把自身内容切掉）',
+      barShrinkable && barNotHardZero && barMinFitsContent,
+      { barShrinkable, barNotHardZero, barMinHeight: barMinHeight ?? '未设置', expectedBarMin },
+    );
+
+    // R6b：外壳不得用 overflow: hidden 静默裁掉输入框。
+    // 它曾把"差几像素"变成"看得出来的一条切边"（用户截图里的底部溢出）。
+    // 现在靠 .prompt-bar 的 min-height 保证放得下；宁可有明显溢出也不要静默裁切。
+    //
+    // 注意：**必须先去掉 CSS 注释**再断言。注释里为了说明历史会写出 overflow: hidden，
+    // 直接匹配原文会被自己的说明文字误伤（实现时踩过）。
+    const stripCssComments = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '');
+    const shellBlock = stripCssComments(/\.prompt-shell\s*\{([\s\S]*?)\}/.exec(css)?.[1] ?? '');
+    const shellClips = /overflow:\s*hidden/.test(shellBlock);
+    add(
+      'R6b',
+      '需求输入外壳不用 overflow:hidden（避免把高度差变成可见切边）',
+      !shellClips,
+      { shellClips },
+    );
+
+    // R6c：auto-grow 写回的高度必须含元素自身 padding。
+    // `scrollHeight` 不含自身 padding，而 box-sizing: border-box 下 height 是含 padding 的
+    // 总高 —— 直接 height = scrollHeight 会矮一个 padding，正是"底部缺一条"的直接成因。
+    const growBodyForPad = /function grow\(\)\s*\{([\s\S]*?)\n    \}/.exec(js)?.[1] ?? '';
+    const addsPad = /scrollHeight\s*\+\s*BOX_PAD/.test(growBodyForPad);
+    const padDeclared = /const BOX_PAD\s*=\s*\d+/.test(js);
+    add(
+      'R6c',
+      'auto-grow 的高度把元素自身 padding 计入（scrollHeight 不含 padding）',
+      addsPad && padDeclared,
+      { addsPad, padDeclared },
     );
 
     // R7：高度必须跟随实际宽度持续校正，不能只在启动时量一次。
@@ -1308,6 +1648,106 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     parsedPath: specParsed.blocks[0]?.filePath,
   });
 
+  /*
+   * F3b：格式模板里的**每一段围栏必须自洽成对**。
+   *
+   * 演进说明：最初这条断言是"**不得出现**任何三个及以上连续反引号"——
+   * 因为那时的模板在说明文字里写出孤立的三反引号（如「.py 用 ```python」），
+   * 模型会把它当成**代码块开头**，而后面没有配对闭合 → 输出"有开头没结尾"
+   * （用户实测：第一次输出没有 ``` 结尾）。
+   *
+   * 但后来模板改成"用五反引号包住示例"（示例里必须出现三/四反引号才直观），
+   * "零反引号"这个判据就不再成立、且会阻止正确写法。真正的不变量是：
+   *   **规格说明里出现的每一段反引号，都必须与同长度的另一段配对**（成对出现），
+   *   绝不能留下一个"没人闭合的opener"去带偏模型。
+   *
+   * 判据：把所有 `{3,}` 序列按长度分组，要求每个长度组的**条数都是偶数**
+   * （即开、闭各一次）。长度为奇数的组 = 存在未闭合的围栏。
+   */
+  const unbalanced = (text: string): Record<string, number> => {
+    const counts: Record<string, number> = {};
+    for (const m of text.match(/`{3,}/g) || []) counts[String(m.length)] = (counts[String(m.length)] ?? 0) + 1;
+    return Object.fromEntries(Object.entries(counts).filter(([, n]) => n % 2 !== 0));
+  };
+  const shortUnbalanced = unbalanced(getFormatSpec('short'));
+  const fullUnbalanced = unbalanced(getFormatSpec('full'));
+  add(
+    'F3b',
+    '格式模板里的围栏全部成对（不存在没人闭合的围栏 → 不会带偏模型输出）',
+    Object.keys(shortUnbalanced).length === 0 && Object.keys(fullUnbalanced).length === 0,
+    { shortUnbalanced, fullUnbalanced }
+  );
+
+  /*
+   * F3c：围栏规则与结构对称性要点必须都在。
+   *
+   * 用户实测的冲突场景（历史）：.md 文件 + 只改纯代码行时，旧的两条规则并列、没有优先级，
+   * 模型只能折中。
+   * 最终拍板（方案甲）：**输入输出共用同一条骨架** ——
+   *   ① 成对闭合；② 用四个反引号、内容含更多时加长；
+   *   ③ 行号只由 ### 范围 表达、内容里不写行号。
+   *
+   * 用户反馈（few-shot 必须够全）后追加检查：
+   *   ④ 示例要覆盖全部 8 类场景（含"含四个反引号"这种最刁钻的）；
+   *   ⑤ **不许**再出现 `### 续：` 这类解析器根本不认识的续写约定；
+   *   ⑥ 语言标注对照表要在（用户原自定义提示词里的有用内容不能被删掉）。
+   */
+  const specAll = getFormatSpec('short') + getFormatSpec('full');
+  const specFull = getFormatSpec('full');
+  add(
+    'F3c',
+    '格式模板：结构对称 + 围栏成对闭合 + 四个反引号 + 内容不含行号',
+    /成对|闭合/.test(specAll) &&
+      /四个反引号/.test(specAll) &&
+      /完全一致|照着它把结果写回来|同一条骨架|结构完全相同/.test(specAll) &&
+      /绝不在行首写行号|不含行号/.test(specAll),
+    {
+      hasPair: /成对|闭合/.test(specAll),
+      hasFour: /四个反引号/.test(specAll),
+      hasSymmetry: /完全一致|照着它把结果写回来|同一条骨架|结构完全相同/.test(specAll),
+      hasNoLineNo: /绝不在行首写行号|不含行号/.test(specAll),
+    }
+  );
+  add(
+    'F3d',
+    '格式模板：示例覆盖全部 8 类场景（few-shot 够全）',
+    // FULL 版里 8 个「示例 N｜」都要在，且每段都有【我给你的】/【你该给我的】配成对
+    // （正文导语里各多提一次，故为 8+1；关键是输入与输出**数量相等**）
+    (specFull.match(/示例 \d+｜/g) || []).length === 8 &&
+      (specFull.match(/【我给你的】/g) || []).length === (specFull.match(/【你该给我的】/g) || []).length &&
+      (specFull.match(/【我给你的】/g) || []).length >= 8,
+    {
+      titles: (specFull.match(/示例 \d+｜/g) || []).length,
+      inputs: (specFull.match(/【我给你的】/g) || []).length,
+      outputs: (specFull.match(/【你该给我的】/g) || []).length,
+    }
+  );
+  add(
+    'F3g',
+    '格式模板：简洁版保留 6 个示例（高频易错场景不缺席）',
+    // 用户反馈后 SHORT 从 4 个补到 6 个：内嵌围栏 / 局部 / 整文件 / 纯文本 / 新建 / 纯对话
+    (getFormatSpec('short').match(/示例 \d+｜/g) || []).length === 6,
+    { shortTitles: (getFormatSpec('short').match(/示例 \d+｜/g) || []).length }
+  );
+  add(
+    'F3e',
+    '格式模板：不含解析器不认识的 ### 续： 约定 + 保留语言标注对照表',
+    !/###\s*续/.test(specAll) &&
+      /语言标注/.test(specAll) &&
+      /\.ts\s*\/\s*\.tsx\s+typescript|typescript/.test(specAll),
+    {
+      hasContinuation: /###\s*续/.test(specAll),
+      hasLangTable: /语言标注/.test(specAll),
+      hasTsLabel: /typescript/.test(specAll),
+    }
+  );
+  add(
+    'F3f',
+    '格式模板：截断场景改为"分多轮给完整文件"，而非中间截断',
+    /分多轮/.test(specAll) && /完整/.test(specAll),
+    { hasMultiRound: /分多轮/.test(specAll), hasFull: /完整/.test(specAll) }
+  );
+
   const appliedWhole = computeApply('old body', parsed.blocks[0]!, { kind: 'replace-whole-file' });
   add(
     'F4',
@@ -1367,28 +1807,126 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     stripNumberedPrefix(numbered)
   );
 
-  /* ---- M) 提示词片段组装：围栏自适应（防内容里的 ``` 提前闭合） ---- */
+  /* ---- J8-J11) 覆盖范围归一化：模型多写区间外的行时不得重复 ----
+   *
+   * 真实缺陷背景（用户实测："改个片段，覆盖范围出了问题"）：
+   * `### 范围：2-10` 由用户选中片段自动生成，只说明"我选了几行"，不约束模型只回显这几行。
+   * 模型习惯给"能跑通的完整函数"，常把区间**外**、紧挨着区间的那几行也写进来。
+   * 那些行不在区间内不会被删 → 原样应用就会出现**两份**，看起来像"整块都乱了"。
+   * 归一化后：区间按模型实际覆盖范围收敛（2-10 → 2-11），结果与用户手改一致。
+   */
+  const bubbleOriginal = [
+    '冒泡排序：',
+    '```python',
+    'def bubble_sort(arr):',
+    '    """',
+    '    冒泡排序(基础版)',
+    '    时间复杂度：O(n²)',
+    '    空间复杂度：O(1)',
+    '    """',
+    '    n = len(arr)',
+    '    for i in range(n):',
+    '        for j in range(0, n - i - 1):',
+    '```',
+  ].join('\n');
+
+  // 模型多写了第 11 行（区间 2-10 之外的 `for j` 循环体）
+  const overBlock = parseModelReply(
+    ['### 范围: 2-10', '```python', '```python', 'def bubble_sort(arr):', '    n = len(arr)', '    for i in range(n):', '        for j in range(0, n - i - 1):', '```'].join('\n')
+  ).blocks[0]!;
+  const bubbleLines = bubbleOriginal.split('\n');
+  const overApplied = computeApply(bubbleOriginal, overBlock, {
+    kind: 'replace-lines',
+    start: 2,
+    end: 10,
+    expectedOriginal: bubbleLines.slice(1, 10).join('\n'),
+    contextPrev: bubbleLines[0] ?? null,
+    contextNext: bubbleLines[10] ?? null,
+  });
+  const overText = overApplied.ok ? overApplied.text : '';
+  const overOccurrences = overText.split('\n').filter((l) => l.includes('for j in range')).length;
+  add(
+    'J8',
+    '覆盖范围归一化：模型多写区间外的行时收敛区间（不产生重复块）',
+    overApplied.ok && overApplied.normalized?.from === 10 && overApplied.normalized?.to === 11 && overOccurrences === 1,
+    overApplied.ok ? { normalized: overApplied.normalized, forJ出现次数: overOccurrences } : overApplied
+  );
+
+  // 模型只回显区间内的行 —— 不得触发归一化（避免误扩区间）
+  const exactBlock = parseModelReply(
+    ['### 范围: 2-10', '```python', '```python', 'def bubble_sort(arr):', '    冒泡排序(基础版)', '    n = len(arr)', '    for i in range(n):', '```'].join('\n')
+  ).blocks[0]!;
+  const exactApplied = computeApply(bubbleOriginal, exactBlock, {
+    kind: 'replace-lines',
+    start: 2,
+    end: 10,
+    expectedOriginal: bubbleLines.slice(1, 10).join('\n'),
+    contextPrev: bubbleLines[0] ?? null,
+    contextNext: bubbleLines[10] ?? null,
+  });
+  add(
+    'J9',
+    '覆盖范围归一化：模型未越界时不改动区间（保守，不误扩）',
+    exactApplied.ok && exactApplied.normalized === undefined,
+    exactApplied.ok ? { normalized: exactApplied.normalized ?? null } : exactApplied
+  );
+
+  // 对齐函数本身：多写一行 → 消费到 11；只覆盖区间 → 消费 9 行
+  add(
+    'J10',
+    '游标对齐：多写区间外的行时消费行数超出区间长度',
+    alignConsumedLines(bubbleLines.slice(1), ['```python', 'def bubble_sort(arr):', '    n = len(arr)', '    for i in range(n):', '        for j in range(0, n - i - 1):']) === 10,
+    alignConsumedLines(bubbleLines.slice(1), ['```python', 'def bubble_sort(arr):', '    n = len(arr)', '    for i in range(n):', '        for j in range(0, n - i - 1):'])
+  );
+
+  add(
+    'J11',
+    '游标对齐：只重写区间内容时消费行数不超过区间长度',
+    alignConsumedLines(bubbleLines.slice(1), ['```python', 'def bubble_sort(arr):', '    冒泡排序(基础版)', '    n = len(arr)', '    for i in range(n):']) <= 9,
+    alignConsumedLines(bubbleLines.slice(1), ['```python', 'def bubble_sort(arr):', '    冒泡排序(基础版)', '    n = len(arr)', '    for i in range(n):'])
+  );
+
+  /* ---- M) 提示词片段组装：输入输出同构 + 围栏自适应（防内容里的 ``` 提前闭合） ---- */
   const plainSnippet = buildSnippetText({ relPath: 'src/a.py', text: 'def f():\n    pass', startLine: 80 });
   add(
     'M1',
-    '局部片段含路径行/行区间/语言标注/带行号内容',
+    '局部片段为四部件骨架（### 文件 + ### 范围 + 四反引号围栏 + 无行号内容）',
     plainSnippet.text ===
-      ['### 文件：src/a.py', '### 范围：80-81', '```python', ' 80| def f():', ' 81|     pass', '```'].join('\n'),
+      ['### 文件：src/a.py', '### 范围：80-81', '````python', 'def f():', '    pass', '````'].join('\n'),
+    plainSnippet.text
+  );
+
+  add(
+    'M1b',
+    '片段围栏内**不含行号前缀**（行号只由 ### 范围 表达；防纯文本文件被写入行号）',
+    !/^\s*\d+\|/m.test(plainSnippet.text),
     plainSnippet.text
   );
 
   const nestedContent = '冒泡排序：\n```python\ndef bubble_sort(arr):\n    pass\n```';
   const nestedSnippet = buildSnippetText({ relPath: 'notes.md', text: nestedContent, startLine: 1 });
-  add('M2', '内容含 ``` 时外层围栏自动加长为 ````（不提前闭合）', nestedSnippet.fence === '````' && nestedSnippet.text.includes('```python') && nestedSnippet.text.endsWith('\n````'), {
+  add('M2', '内容含 ``` 时外层围栏至少四个（不提前闭合）', nestedSnippet.fence === '````' && nestedSnippet.text.includes('```python') && nestedSnippet.text.endsWith('\n````'), {
     fence: nestedSnippet.fence,
   });
 
   const whole = buildWholeFileText('src/a.ts', 'export const a = 1;');
   add(
     'M3',
-    '整文件片段用「这个文件是」声明 + 围栏，且**不含 `### ` 标题行**（避免被回程解析器当作待应用代码块）',
-    whole.text === ['这个文件是 src/a.ts', '', '```typescript', 'export const a = 1;', '```'].join('\n') && !/^### /m.test(whole.text),
+    '整文件片段与局部片段**同骨架**（### 文件 + ### 范围：1-N + 围栏），不再用「这个文件是」头部',
+    whole.text === ['### 文件：src/a.ts', '### 范围：1-1', '````typescript', 'export const a = 1;', '````'].join('\n') &&
+      !whole.text.includes('这个文件是'),
     whole.text
+  );
+
+  add(
+    'M3b',
+    '两种片段的结构位逐字同构（含围栏行相同、行数相同）',
+    (() => {
+      const a = buildSnippetText({ relPath: 'x.py', text: 'v', startLine: 1 }).text.split('\n');
+      const b = buildWholeFileText('x.py', 'v').text.split('\n');
+      return a.length === b.length && a.length === 5 && a[2] === b[2] && a[4] === b[4];
+    })(),
+    { local: plainSnippet.text.split('\n').length, whole: whole.text.split('\n').length }
   );
 
   const wholeNested = buildWholeFileText('notes.md', '# 标题\n\n```python\nprint(1)\n```');
@@ -1396,10 +1934,12 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     fence: wholeNested.fence,
   });
 
-  add('M5', '围栏长度取内容中最长反引号串 + 1（最少 3）', fenceFor('```\n`````\n```') === '``````' && fenceFor('用 `x` 调用') === '```', {
-    longest: fenceFor('```\n`````\n```'),
-    inline: fenceFor('用 `x` 调用'),
-  });
+  add(
+    'M5',
+    '围栏长度取内容中最长反引号串 + 1，**下限为四个**（与提示词「用四个反引号」一致）',
+    fenceFor('```\n`````\n```') === '``````' && fenceFor('用 `x` 调用') === '````' && fenceFor('plain') === '````',
+    { longest: fenceFor('```\n`````\n```'), inline: fenceFor('用 `x` 调用'), plain: fenceFor('plain') }
+  );
 
   /* ---- K) 回程闭环：采集 → 解析 → 应用 → 撤销 ---- */
   // 用一个假的页面运行器验证采集器本身（不依赖真实站点）。
@@ -1427,6 +1967,31 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   add('K2', '全部策略未命中时如实报告失败（不伪造结果）', noneCollected.strategyId === null && noneCollected.replyText === '' && noneCollected.attempts.length === COLLECT_STRATEGIES.length, {
     attempts: noneCollected.attempts.map((a) => a.strategyId),
   });
+
+  /* ---- K2x) 消费判定层（L2）：指纹相同 → 无新内容；会话隔离；重新生成放行 ---- */
+  // 会话标识剥掉查询参数（与采集器 URL 归一化同源）
+  add('K2a', '会话标识按 origin+pathname 归一（剥掉 query）', sessionKeyOf('https://chat.deepseek.com/a/chat/s/abc?x=1&t=2') === 'https://chat.deepseek.com/a/chat/s/abc', {
+    key: sessionKeyOf('https://chat.deepseek.com/a/chat/s/abc?x=1&t=2'),
+  });
+  add('K2b', '指纹稳定且定长（同文本同值、不同文本不同值）', fingerprintOf('abc') === fingerprintOf('abc') && fingerprintOf('abc') !== fingerprintOf('abcd') && fingerprintOf('abc').length === 16, {
+    fp: fingerprintOf('abc'),
+  });
+
+  const consume = new ConsumptionStore();
+  const key1 = sessionKeyOf('https://chat.deepseek.com/a/chat/s/abc');
+  const key2 = sessionKeyOf('https://chat.deepseek.com/a/chat/s/def');
+  const first = consume.consume(key1, '回复-A');
+  const again = consume.consume(key1, '回复-A');
+  const changed = consume.consume(key1, '回复-B');
+  const otherSession = consume.consume(key2, '回复-A');
+  add('K2c', '同会话同指纹 → 判定已消费（noNewContent）', first.consumed === false && again.consumed === true && again.previous === fingerprintOf('回复-A'), {
+    first: first.consumed,
+    again: again.consumed,
+  });
+  add('K2d', '同会话新指纹 → 放行并更新记录（重新生成后可再采）', changed.consumed === false && consume.peek(key1)?.fingerprint === fingerprintOf('回复-B'), {
+    changed: changed.consumed,
+  });
+  add('K2e', '不同会话各自独立（互不判重）', otherSession.consumed === false && consume.size === 2, { size: consume.size });
 
   // 真实文件上的"应用 → 撤销"闭环（用样例目录里已有的 hello.ts）
   const rp = new ReturnPathService(input.fileService);

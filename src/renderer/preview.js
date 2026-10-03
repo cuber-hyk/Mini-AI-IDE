@@ -113,6 +113,7 @@
     btn.className = 'pv-file-apply';
     btn.textContent = block.applicable ? '应用' : '不可用';
     btn.disabled = !block.applicable;
+    if (!block.applicable) btn.dataset.blocked = '1';
     btn.title = block.applicable ? '不看预览，直接把这个文件写入磁盘' : '不满足校验条件，无法应用';
     btn.addEventListener('click', function (e) {
       e.stopPropagation();
@@ -207,14 +208,20 @@
     }
 
     const blocks = preview.blocks || [];
-    el.meta.textContent =
-      '批次 ' + preview.collectionId + ' · ' + blocks.length + ' 个文件 · 原文 ' + (preview.replyText || '').length + ' 字符';
+    if (preview.noNewContent) {
+      el.meta.textContent = '已采集过 · 无新内容 · 原文 ' + (preview.replyText || '').length + ' 字符';
+    } else {
+      el.meta.textContent =
+        '批次 ' + preview.collectionId + ' · ' + blocks.length + ' 个文件 · 原文 ' + (preview.replyText || '').length + ' 字符';
+    }
 
     if (blocks.length === 0) {
       setNotes(preview.notes || []);
       const li = document.createElement('li');
       li.className = 'pv-empty';
-      li.textContent = '解析出 0 个代码块 —— 见上方诊断信息。';
+      li.textContent = preview.noNewContent
+        ? '最新回复与上次采集相同，未产生新的待应用变更。若模型已重新生成，等页面输出完成后再次采集。'
+        : '解析出 0 个代码块 —— 见上方诊断信息。';
       el.list.appendChild(li);
       return;
     }
@@ -331,6 +338,62 @@
     void applyAllBlocks();
   });
 
+  /**
+   * 把某个条目标成「已应用 ✓」（按 block.index 匹配）。
+   * 供**本面板自己的**应用按钮，以及主进程广播（编辑器入口应用成功）共用。
+   */
+  function markAppliedIndex(index) {
+    const items = el.list.querySelectorAll('.pv-file');
+    for (let i = 0; i < items.length; i += 1) {
+      const node = items[i];
+      if (Number(node.dataset.index) !== Number(index)) continue;
+      const btn = node.querySelector('.pv-file-apply');
+      if (btn) {
+        btn.textContent = '已应用 ✓';
+        btn.disabled = true;
+      }
+      node.classList.add('done');
+    }
+  }
+
+  /**
+   * 撤销后把条目**恢复成可应用**。
+   *
+   * 快照栈是主进程全局的、不含 collectionId，因此广播只知道 filePath。
+   * 先按路径反查条目；查不到（例如路径被改过）就**保守地把全部条目复位** ——
+   * 宁可多显示一次"可应用"，也不要让面板停留在"已应用 ✓"的假状态。
+   */
+  function markUnapplied(filePath) {
+    const items = el.list.querySelectorAll('.pv-file');
+    let matched = 0;
+    if (filePath) {
+      for (let i = 0; i < items.length; i += 1) {
+        const node = items[i];
+        const input = node.__pathInput;
+        const shown = (input && input.value) || '';
+        const full = node.querySelector('.pv-file-name');
+        const name = full ? full.title || full.textContent || '' : '';
+        if (shown === filePath || name === filePath || (name && filePath.indexOf(name) >= 0)) {
+          resetItem(node);
+          matched += 1;
+        }
+      }
+    }
+    if (matched === 0) {
+      for (let i = 0; i < items.length; i += 1) resetItem(items[i]);
+    }
+  }
+
+  /** 把一个条目复位成「可应用」 */
+  function resetItem(node) {
+    const btn = node.querySelector('.pv-file-apply');
+    if (btn && !btn.dataset.blocked) {
+      btn.textContent = '应用';
+      btn.disabled = false;
+    }
+    node.classList.remove('done');
+  }
+
   el.collapse.addEventListener('click', function () {
     void bridge.setPreviewPanel(0);
   });
@@ -342,10 +405,28 @@
         ? '已撤销对 ' + result.filePath + ' 的上一次应用'
         : '撤销失败：' + ((result && result.error) || '没有可撤销的变更'),
     ]);
+    // 主进程也会广播 appliedChange，这里主动复位一次，避免广播未到时的短暂假状态
+    if (result && result.ok) markUnapplied(result.filePath);
   });
 
   bridge.onPreviewData(function (preview) {
     render(preview);
+  });
+
+  /**
+   * 主进程广播：某个变更已被应用 / 被撤销。
+   *
+   * 覆盖**编辑器入口**的应用（本面板不知情的那条路）与撤销，
+   * 让面板状态与磁盘保持一致（用户实测："在左侧编辑器中应用代码后，
+   * 右下角的采集应用状态没有同步更新"）。
+   */
+  bridge.onAppliedChange(function (event) {
+    if (!event || typeof event !== 'object') return;
+    if (event.kind === 'applied' && typeof event.index === 'number') {
+      markAppliedIndex(event.index);
+      return;
+    }
+    if (event.kind === 'undone') markUnapplied(event.filePath);
   });
 
   /**

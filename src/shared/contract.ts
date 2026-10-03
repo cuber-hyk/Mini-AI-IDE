@@ -5,6 +5,7 @@
  * 也不接受任意路径。渲染进程没有任何直接的文件系统能力。
  */
 import type { TextMeta } from './limits';
+import type { FormatSpecVariant } from './formatSpec';
 
 export const CHANNELS = {
   /** 渲染进程请求系统目录选择对话框（唯一取得路径的合法入口） */
@@ -49,6 +50,15 @@ export const CHANNELS = {
    * 用「上一个 / 下一个」在编辑器里跳走后要靠它同步高亮。
    */
   activeDiff: 'preview:active-diff',
+  /**
+   * 主进程 → 右下角预览面板：某个变更**已被应用**（或已撤销）。
+   *
+   * 为什么需要：应用有**两个入口** —— ① 预览面板自己的「应用」按钮；
+   * ② 左侧编辑器内联预览工具条上的「应用此变更」。走 ② 时面板完全不知情，
+   * 条目会一直显示「应用」可用态，与磁盘真实状态脱节（用户实测反馈）。
+   * 两个视图是独立渲染进程（ADR-0002），所以由主进程在落盘成功后统一广播。
+   */
+  appliedChange: 'preview:applied',
   /** 显示/隐藏右侧 AI 网页视图 */
   setWebVisible: 'ui:set-web-visible',
   /** 主进程 → 网页区工具条：当前网页/预览的可见状态 */
@@ -79,6 +89,31 @@ export const CHANNELS = {
   rootStale: 'fs:root-stale',
   /** 主进程 → 渲染进程：根目录已变更 */
   rootChanged: 'fs:root-changed',
+  /**
+   * 提示词编辑面板 ←→ 主进程：读取当前格式要求（默认原文 + 用户自定义内容 + 状态）。
+   *
+   * 为什么单独开一组通道而不是复用 `ui:copy-format-spec`：那个通道是**动作**
+   * （读出来写剪贴板），而这里要的是**编辑状态**（默认原文用于对比/恢复、
+   * 自定义内容用于呈现、更新时间用于回显）。混在一起会让"复制"这条既有链路变复杂。
+   */
+  promptPanelState: 'ui:prompt-panel-state',
+  /** 保存用户自定义的格式要求（内容为空视同"恢复默认"） */
+  savePromptSpec: 'ui:save-prompt-spec',
+  /** 恢复默认（清空自定义内容） */
+  resetPromptSpec: 'ui:reset-prompt-spec',
+  /** 面板 → 主进程：关闭自己（隐藏面板视图） */
+  closePromptPanel: 'ui:close-prompt-panel',
+  /** 主进程 → 编辑器：请求打开提示词编辑面板（菜单/快捷键/设置按钮都汇聚到这里） */
+  openPromptPanel: 'ui:open-prompt-panel',
+  /**
+   * 编辑器 ↔ 主进程：读 / 写当前使用的提示词版本（底部双段开关的状态）。
+   *
+   * 为什么不用 `ui:copy-format-spec` 顺带解决：那个通道是**动作**（复制到剪贴板），
+   * 而开关要的是**状态**（当前是哪一版、切换后要持久化）。混在一起会让
+   * "每拨一次开关就顺带复制一次"这种副作用出现。
+   */
+  getFormatSpecVariant: 'ui:get-format-spec-variant',
+  setFormatSpecVariant: 'ui:set-format-spec-variant',
 } as const;
 
 export interface DirEntry {
@@ -271,6 +306,13 @@ export interface ReturnPreview {
   /** 解析备注 */
   notes: string[];
   blocks: ReturnPreviewBlock[];
+  /**
+   * 最新回复与上次采集的**内容指纹相同** ⇒ 判定为「已采集过、无新内容」。
+   *
+   * 语义（L2 消费判定层）：一次采集消费一条回复。为 true 时 `blocks` 必为空
+   * （不解析、不产生待应用条目），UI 应显示明确提示而**不回退旧内容**。
+   */
+  noNewContent?: boolean;
   /** 采集失败时的页面结构诊断（只读探测结果，便于判断是选择器过期还是页面没输出） */
   diagnostic?: {
     url: string;
@@ -303,10 +345,94 @@ export interface ApplyChangeResult {
   reason?: string;
 }
 
+/**
+ * 「某个变更的状态变了」——主进程 → 预览面板的广播载荷。
+ *
+ * 覆盖两种入口造成的变化：
+ *  - `applied`：左侧编辑器工具条「应用此变更」落盘成功（面板自己的按钮不需要它，
+ *    但收到也幂等）；
+ *  - `undone`：撤销了一次应用，对应的条目应恢复成「可应用」。
+ *
+ * 用 `index`（批次内唯一）而不是文件名：用户可能刚改过路径，按名字匹配会漏。
+ * 撤销只报"最后一个被撤销的文件路径"，因为快照栈是全局的、不含 collectionId；
+ * 面板按 filePath 反查条目，查不到就整表刷新为可应用（保守但绝不错标）。
+ */
+export interface AppliedChangeEvent {
+  kind: 'applied' | 'undone';
+  index?: number;
+  filePath?: string;
+}
+
 export interface UndoResult {
   ok: boolean;
   filePath?: string;
   error?: string;
+}
+
+/* ------------------------------------------------------------------ *
+ * 提示词编辑面板（用户自定义"输出格式要求"）
+ * ------------------------------------------------------------------ */
+
+/**
+ * 面板需要的全部状态。
+ *
+ * 关键设计：面板**同时**给出「内置默认原文」与「用户当前内容」两份。
+ *  - 只给一份的话，面板无法回答"我改了什么 / 改回默认会变成什么"；
+ *  - 面板里不做 diff 渲染，而是分成两个可见区（默认要点摘要 + 编辑框），
+ *    用户随时能点「恢复默认」拿回原文 —— 比自己比对更不容易出错。
+ */
+/**
+ * 单个版本（简洁版 / 完整版）在面板里的状态。
+ *
+ * 面板做成**分版本**的：每个版本各有自己的内置默认与自定义内容，
+ * 用户在"A 版"上的编辑不会影响"B 版"。
+ */
+export interface PromptVariantState {
+  /** 该版本的内置默认原文，用于「恢复默认」与"与默认不同"的判定 */
+  defaultSpec: string;
+  /** 该版本已保存的自定义内容；null 表示当前用内置默认 */
+  customSpec: string | null;
+  /** 该版本是否正在使用自定义内容 */
+  isCustom: boolean;
+}
+
+export interface PromptPanelState {
+  /** 当前生效版本（底部双段开关的状态） */
+  variant: FormatSpecVariant;
+  /** 简洁版状态 */
+  short: PromptVariantState;
+  /** 完整版状态 */
+  full: PromptVariantState;
+  /** 自定义内容的保存时间（ISO）；两版都没自定义时为 null */
+  updatedAt: string | null;
+  /** 自定义内容长度上限 */
+  maxLength: number;
+}
+
+export interface SavePromptSpecResult {
+  ok: boolean;
+  /** 保存后的完整状态（面板据此刷新按钮与提示，无需再请求一次） */
+  state: PromptPanelState;
+  /** 保存的是哪个版本（面板据此给出准确回执） */
+  variant: FormatSpecVariant;
+  /** 是否回落到了默认（内容空白 ⇒ 视同恢复默认） */
+  resetToDefault?: boolean;
+  error?: string;
+}
+
+/**
+ * 提示词面板的桥接口（独立 preload 暴露为 `window.promptBridge`）。
+ *
+ * 边界与其它面板一致：**不能读文件、不能访问 Node、不能触碰网页**。
+ * 它能做的只有"读这一份设置 / 写这一份设置"。
+ */
+export interface PromptPanelBridge {
+  getState(): Promise<PromptPanelState>;
+  /** 保存指定版本的自定义内容（空内容 ⇒ 该版本恢复默认） */
+  save(variant: FormatSpecVariant, spec: string): Promise<SavePromptSpecResult>;
+  /** 把指定版本恢复为内置默认 */
+  reset(variant: FormatSpecVariant): Promise<SavePromptSpecResult>;
+  close(): Promise<{ ok: boolean }>;
 }
 
 /**
@@ -363,6 +489,13 @@ export interface EditorBridge {
    * **程序不会把它送进输入框**——需要用户自己粘贴到提示词里（零注入边界，见 ADR-0003）。
    */
   copyFormatSpec(): Promise<CopyFormatResult>;
+  /**
+   * 读当前使用的提示词版本（底部双段开关的初始状态）。
+   * 启动时渲染进程据此把开关拨到正确位置——不读就会"显示简洁版、实际发的是完整版"。
+   */
+  getFormatSpecVariant(): Promise<FormatSpecVariant>;
+  /** 切换提示词版本并持久化（返回落盘后的实际值，供渲染进程校正显示） */
+  setFormatSpecVariant(variant: FormatSpecVariant): Promise<FormatSpecVariant>;
   /** 取工作环境摘要（当前目录 + 目录树 + 运行环境），用于界面预览 */
   getContext(): Promise<ContextSummary>;
   /**
@@ -388,6 +521,13 @@ export interface EditorBridge {
   setSidebarVisible(visible: boolean): Promise<{ visible: boolean }>;
   /** 调整左侧目录树宽度（像素） */
   setSidebarWidth(width: number): Promise<{ width: number }>;
+  /**
+   * 请求打开「提示词编辑面板」。
+   *
+   * 面板是**独立渲染进程**（ADR-0002 进程边界），编辑器不能直接显示它；
+   * 这里只上报意图，由主进程显示面板并居中摆放。
+   */
+  openPromptPanel(): Promise<{ ok: boolean }>;
   /** 请求在编辑器内以 diff 视图显示某个变更 */
   showDiffInEditor(collectionId: string, index: number): Promise<{ ok: boolean; error?: string }>;
   /** 跳到批次内相邻的变更；主进程会同时把右下角面板的高亮同步过去 */
@@ -396,6 +536,13 @@ export interface EditorBridge {
   onDiffData(listener: (data: EditorDiffPayload) => void): void;
   /** 主进程 → 编辑器：目录树可见性/宽度变化 */
   onSidebarChanged(listener: (state: { visible: boolean; width: number }) => void): void;
+  /**
+   * 主进程 → 编辑器：请求打开「提示词编辑面板」。
+   *
+   * 入口有三个（设置菜单行 / 编辑器工具栏齿轮 / 快捷键），全部汇聚到主进程，
+   * 由它显示面板视图并广播一次本事件；编辑器据此点亮工具栏按钮的激活态。
+   */
+  onOpenPromptPanel(listener: () => void): void;
   /**
    * 从网页视图**只读**采集最新回复并解析为待应用变更。
    * 不落盘、不修改页面；只回传预览数据。
@@ -417,5 +564,7 @@ declare global {
   interface Window {
     /** 由 preload 注入；除此外渲染进程不得假设任何能力 */
     editorBridge: EditorBridge;
+    /** 提示词编辑面板的独立桥（仅 prompt.html 里存在） */
+    promptBridge?: PromptPanelBridge;
   }
 }

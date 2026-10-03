@@ -85,6 +85,15 @@ export function registerFileIpc(getEditorWindow: () => BrowserWindow | null, ser
     CHANNELS.showDiffInEditor,
     // 「上一个 / 下一个」跳转：渲染进程 → 主进程（要读批次缓存并驱动编辑器视图）
     CHANNELS.stepDiff,
+    // 提示词编辑面板（独立渲染进程）：读状态 / 保存 / 恢复默认 / 关闭 / 打开
+    CHANNELS.promptPanelState,
+    CHANNELS.savePromptSpec,
+    CHANNELS.resetPromptSpec,
+    CHANNELS.closePromptPanel,
+    CHANNELS.openPromptPanel,
+    // 提示词版本开关（底部双段开关的状态读写）
+    CHANNELS.getFormatSpecVariant,
+    CHANNELS.setFormatSpecVariant,
   ];
   /*
    * ⚠️ 这份清单必须与 `index.ts` 里实际的 `ipcMain.handle` 保持同步。
@@ -99,6 +108,7 @@ export function registerFileIpc(getEditorWindow: () => BrowserWindow | null, ser
    *   - chromeState  （→ webbar，网页/预览可见状态）
    *   - activeDiff   （→ preview面板，当前正在预览第几个变更）
    *   - fileChanged  （→ editor，落盘后广播，编辑器据此重读）
+   *   - openPromptPanel（→ editor，请求打开提示词面板；面板本体是独立视图）
    *   - diffData / sidebarChanged / previewData / rootChanged / rootStale
    */
 }

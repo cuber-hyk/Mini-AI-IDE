@@ -34,6 +34,8 @@
     resizer: document.getElementById('resizer'),
     requirement: document.getElementById('requirement'),
     btnCopyPrompt: document.getElementById('btn-copy-prompt'),
+    // 提示词版本双段开关（开=完整版 / 关=简洁版），状态持久化在主进程设置里
+    variantSwitch: document.getElementById('variant-switch'),
     // 回程预览已移到**右下角独立面板**（preview.html / preview.js）；
     // 它的显隐开关也一并移到了网页区右上角（webbar.html），此处不再有触发按钮
     btnCollect: document.getElementById('btn-collect'),
@@ -47,6 +49,8 @@
     btnDiffClose: document.getElementById('btn-diff-close'),
     btnDiffPrev: document.getElementById('btn-diff-prev'),
     btnDiffNext: document.getElementById('btn-diff-next'),
+    // 提示词设置入口（齿轮）：面板本体是独立视图，这里只是"打开"的入口
+    btnSettings: document.getElementById('btn-settings'),
   };
 
   /**
@@ -899,6 +903,34 @@
   });
 
   /*
+   * 提示词设置（齿轮）。
+   *
+   * 面板本体是**独立视图**，本渲染进程拿不到它、也不该去操作它 ——
+   * 这里只把"用户想打开面板"这个意图交给主进程（面板由主进程显示并居中摆放）。
+   * 打开后主进程会广播 `ui:open-prompt-panel`，据此把齿轮点亮成激活态。
+   */
+  el.btnSettings.addEventListener('click', function () {
+    void openPromptSettings();
+  });
+
+  async function openPromptSettings() {
+    try {
+      await bridge.openPromptPanel();
+    } catch (err) {
+      setInfo(`打开提示词设置失败：${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  bridge.onOpenPromptPanel(function () {
+    // 面板已在主进程侧显示；这里只做视觉反馈（否则点了没反应的观感很差）
+    el.btnSettings.classList.add('active');
+    setInfo('已在提示词设置面板里编辑「输出格式要求」——Esc 关闭');
+    window.setTimeout(function () {
+      el.btnSettings.classList.remove('active');
+    }, 1200);
+  });
+
+  /*
    * 「AI 网页」的显隐按钮已移到**网页区自己的顶部工具条**（webbar.html）——
    * 折叠/展开应在被折叠的那块板上操作，而不是挤在左侧编辑器工具栏里。
    * 因此这里没有按钮，只有快捷键与主进程状态同步。
@@ -1589,11 +1621,24 @@
    * 顶到没有内容可看；需求本身通常也就几句话。
    */
   (function setupRequirementAutoGrow() {
-    const MIN_H = 44;  // 2 行
+    const MIN_H = 44;  // 2 行（含上下 padding，见下面 BOX_PAD 的说明）
     const MAX_H = 220; // 10 行（= CSS 的 min/max-height，两处必须一致）
 
     let lastWidth = -1;   // 上一次测量时的内容宽度
     let lastHeight = -1;  // 上一次写入的高度（避免重复写同样的值）
+
+    /**
+     * 元素自身的上下内边距（CSS `.requirement { padding: 2px 0 }`）。
+     *
+     * 为什么必须单独加回来：`scrollHeight` **不含元素自身的内边距**，
+     * 而 `box-sizing: border-box`（见 style.css 的 `*` 规则）下，我们写进
+     * `style.height` 的值是**含内边距**的总高。若直接 `height = scrollHeight`，
+     * 声明高度会比真实内容矮一个 padding —— 外层 `.prompt-shell` 又是
+     * `overflow: hidden`，于是底部被**裁掉一条边**，表现为"输入框底部溢出/被切"
+     * （用户实测截图：输入框下沿缺一条）。
+     * 两处 padding 若改动，这里要跟着改。
+     */
+    const BOX_PAD = 4;
 
     function grow() {
       const ta = el.requirement;
@@ -1603,7 +1648,8 @@
       ta.style.height = 'auto';
       ta.style.minHeight = '0px';
       ta.style.maxHeight = 'none';
-      const contentH = ta.scrollHeight;
+      // scrollHeight 不含自身 padding —— 补上才是 border-box 需要的总高
+      const contentH = ta.scrollHeight + BOX_PAD;
       const wanted = Math.min(Math.max(contentH, MIN_H), MAX_H);
       ta.style.height = wanted + 'px';
       ta.style.minHeight = MIN_H + 'px';
@@ -1657,12 +1703,78 @@
   })();
 
   /**
+   * 提示词版本双段开关。
+   *
+   * 语义：`data-variant="short"` → 简洁版（6 个示例）；`"full"` → 完整版（8 个示例 + 逐条详解）。
+   * 状态**持久化在主进程**（settings.json 的 formatSpecVariant）—— 启动时拉一次、
+   * 每次切换写一次。不缓存在渲染进程，避免"界面显示 A、主进程实际发的是 B"。
+   *
+   * 三条交互路径都走同一个 applyVariant：
+   *   ① 点左边的「简洁」/ 右边的「完整」；
+   *   ② 点整个开关（在已选中的一侧再点无效果，保持幂等）；
+   *   ③ 键盘 Space / Enter（开关有 tabindex=0，是可聚焦控件）。
+   */
+  (function setupVariantSwitch() {
+    const sw = el.variantSwitch;
+    if (!sw) return;
+    const opts = Array.prototype.slice.call(sw.querySelectorAll('.variant-opt'));
+
+    /** 把界面拨到某个版本（纯显示，不写主进程） */
+    function paint(variant) {
+      const v = variant === 'full' ? 'full' : 'short';
+      sw.dataset.variant = v;
+      sw.setAttribute('aria-checked', v === 'full' ? 'true' : 'false');
+      opts.forEach(function (b) {
+        b.setAttribute('aria-pressed', b.dataset.variant === v ? 'true' : 'false');
+      });
+    }
+
+    /** 切换并落盘；用主进程返回的值回绘（以实际落盘结果为准） */
+    async function applyVariant(variant) {
+      const v = variant === 'full' ? 'full' : 'short';
+      paint(v); // 先乐观更新，点下去就有反馈
+      try {
+        const actual = await bridge.setFormatSpecVariant(v);
+        paint(actual);
+      } catch (err) {
+        setInfo('切换提示词版本失败：' + (err && err.message ? err.message : String(err)), true);
+      }
+    }
+
+    opts.forEach(function (b) {
+      b.addEventListener('click', function (e) {
+        e.stopPropagation(); // 避免冒泡到外壳再触发一次（会"点了又弹回去"）
+        void applyVariant(b.dataset.variant);
+      });
+    });
+
+    sw.addEventListener('keydown', function (e) {
+      if (e.key === ' ' || e.key === 'Enter' || e.key === 'Spacebar') {
+        e.preventDefault();
+        void applyVariant(sw.dataset.variant === 'full' ? 'short' : 'full');
+      }
+    });
+
+    // 启动时对齐主进程里的真实值（不读就会"显示简洁版、实际发的是完整版"）
+    void (async function initVariant() {
+      try {
+        const v = await bridge.getFormatSpecVariant();
+        paint(v);
+      } catch (err) {
+        paint('short'); // 拉取失败时按默认显示，不影响按钮本身可用
+      }
+    })();
+  })();
+
+  /**
    * 「复制提示词」：把你在应用内写的需求 + 工作环境 + 目录树 + 格式要求
    * 组装成完整提示词写入**系统剪贴板**，再由你自己 Ctrl+V 到右侧输入框。
    * 程序**不会**写入网页 —— 这是零注入边界（见 ADR-0003）。
    *
    * 注意这里**不再传"要改的文件"**：路径与代码内容一起给出（参见「复制整个文件」/
    * 「复制选中片段」）。单独给一个路径、不给内容，模型无法据此改文件。
+   *
+   * 用哪一版格式要求由底部开关决定（主进程读设置里的 formatSpecVariant）。
    */
   el.btnCopyPrompt.addEventListener('click', async function () {
     const requirement = el.requirement.value.trim();
@@ -1677,8 +1789,13 @@
       setInfo('复制提示词失败：' + (result.error ?? '未知错误'), true);
       return;
     }
+    const vName = el.variantSwitch && el.variantSwitch.dataset.variant === 'full' ? '完整版' : '简洁版';
     setInfo(
-      '已复制完整提示词（' + result.length + ' 字符，含需求/工作环境/目录结构/格式要求）—— 请到右侧输入框 Ctrl+V 粘贴，然后自己按发送'
+      '已复制完整提示词（' +
+        result.length +
+        ' 字符，含需求/工作环境/目录结构/格式要求·' +
+        vName +
+        '）—— 请到右侧输入框 Ctrl+V 粘贴，然后自己按发送'
     );
     el.btnCopyPrompt.textContent = '已复制 ✓';
     setTimeout(function () {
@@ -1736,7 +1853,9 @@
     el.btnCollect.textContent = '采集中…';
     try {
       const preview = await bridge.collectReply();
-      if (preview && preview.ok) {
+      if (preview && preview.ok && preview.noNewContent) {
+        setInfo('最新回复已采集过，无新内容 —— 详见右下角面板。若模型已重新生成，等页面输出完成后再采集');
+      } else if (preview && preview.ok) {
         setInfo('已采集并解析：' + ((preview.blocks && preview.blocks.length) || 0) + ' 个待应用变更 —— 见右下角预览面板（含逐行 diff）');
       } else {
         setInfo('采集失败：' + ((preview && preview.error) || '未采集到回复') + ' —— 详见右下角面板的诊断信息', true);

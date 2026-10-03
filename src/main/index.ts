@@ -14,9 +14,9 @@
 import { app, BaseWindow, clipboard, ipcMain, Menu, session, WebContentsView } from 'electron';
 import * as path from 'node:path';
 
-import { CHANNELS, type ApplyChangeInput, type ReturnPreview, type RootInfo } from '../shared/contract';
-import { buildPrompt, getFormatSpec } from '../shared/formatSpec';
-import { parseModelReply, computeApply, type ParsedCodeBlock } from '../shared/returnPath';
+import { CHANNELS, type ApplyChangeInput, type AppliedChangeEvent, type PromptPanelState, type PromptVariantState, type SavePromptSpecResult, type ReturnPreview, type RootInfo } from '../shared/contract';
+import { buildPrompt, getFormatSpec, resolveFormatSpec, normalizeVariant, MAX_CUSTOM_FORMAT_SPEC_LENGTH, type CustomFormatSpecs, type FormatSpecVariant } from '../shared/formatSpec';
+import { parseModelReply, computeApply, applySnippetRangeFallback, type ParsedCodeBlock, type SnippetRangeMemory } from '../shared/returnPath';
 import { buildSnippetText, buildWholeFileText } from '../shared/snippet';
 import { diffTexts } from '../shared/diff';
 import { checkUaConsistency, stripSelfDeclarations } from '../shared/userAgent';
@@ -25,9 +25,10 @@ import { registerFileIpc } from './ipc';
 import { createFixtures } from './fixtures';
 import { runSelfTest } from './selfTest';
 import { runDiagnose } from './diagnose';
-import { SettingsStore, isUsableRoot, PRODUCTION_SETTINGS_FILE, SELF_TEST_SETTINGS_FILE } from './settings';
+import { SettingsStore, isUsableRoot, PRODUCTION_SETTINGS_FILE, SELF_TEST_SETTINGS_FILE, type Settings } from './settings';
 import { buildContextSummary } from './contextSummary';
 import { collectReply } from './replyCollector';
+import { ConsumptionStore, sessionKeyOf } from './consumptionStore';
 import { ReturnPathService } from './returnPathService';
 
 /* ------------------------------------------------------------------ *
@@ -62,6 +63,18 @@ const WEB_BAR_HEIGHT = 30;
  */
 const HANDLE_BAR_WIDTH = 28; // hover / 刚隐藏后展开的宽度
 const HANDLE_BAR_PEEK = 5; // 静置时的窄条宽度（不干扰阅读）
+
+/**
+ * 提示词编辑面板（覆盖式浮层）的尺寸区间。
+ *
+ * 为什么是"窗口比例 + 上下限"而不是固定像素：面板里放的是一个**多行长文本编辑器**，
+ * 写格式约定时经常要对照好几屏内容。固定 480px 高在 1080p 上只有十几行可见，
+ * 用户会不停滚动；而纯比例在大屏上又会拉到失真。两者取交集最稳。
+ */
+const PROMPT_PANEL_MIN_WIDTH = 560;
+const PROMPT_PANEL_MAX_WIDTH = 980;
+const PROMPT_PANEL_MIN_HEIGHT = 420;
+const PROMPT_PANEL_MAX_HEIGHT = 900;
 
 const SELF_TEST = process.argv.includes('--self-test');
 /** 界面运行时探针：不联网，加载编辑器后读回 Monaco 实际选项并试改文本，然后退出 */
@@ -286,15 +299,44 @@ async function bootstrap(): Promise<void> {
     },
   });
 
+  /**
+   * 提示词编辑面板：**独立视图**，默认隐藏，点设置菜单/工具栏齿轮时才显示。
+   *
+   * 为什么不做成编辑器里的 DOM 弹层：编辑器渲染进程的 CSP 是 `default-src 'none'`，
+   * 且它持有的是**文件系统能力**（save/writeFile）。让"编辑提示词文本"这件事
+   * 跑在持有文件写权限的进程里，等于给一个纯文本编辑框配上文件写权限 ——
+   * 没必要扩大它的能力面。独立视图 + 独立窄桥，风险面最小（与预览面板同一套做法）。
+   */
+  const promptView = new WebContentsView({
+    webPreferences: {
+      preload: path.join(__dirname, 'promptPreload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+      // 纯本地界面，不需要网络也不需要网页会话
+      partition: 'persist:editor-ui',
+    },
+  });
+  const PROMPT_HIDDEN_BOUNDS = { x: -10000, y: -10000, width: 0, height: 0 };
+
   win.contentView.addChildView(editorView);
   win.contentView.addChildView(webBarView);
   win.contentView.addChildView(webView);
   win.contentView.addChildView(previewView);
+  /*
+   * 提示词面板**最后添加**：后加入的子视图在更上层。
+   * 它是一块覆盖式浮层，必须盖住编辑器与网页，否则打开后会被它们挡住。
+   */
+  win.contentView.addChildView(promptView);
   editorView.setBounds(layout.editorBounds);
   webBarView.setBounds(layout.webBarBounds);
   webView.setBounds(layout.webBounds);
   previewView.setBounds(layout.previewBounds);
   previewView.setVisible(false);
+  // 先移到屏幕外的零尺寸位置并隐藏：加载完成前若它已占据屏幕，会闪一下空白页面
+  promptView.setBounds(PROMPT_HIDDEN_BOUNDS);
+  promptView.setVisible(false);
 
   /** 把当前网页/预览的可见状态广播给网页区工具条（它的按钮高亮靠这个） */
   function broadcastChromeState(): void {
@@ -347,7 +389,84 @@ async function bootstrap(): Promise<void> {
     broadcastChromeState();
   }
 
+  /**
+   * 提示词面板的显示/隐藏（覆盖式浮层）。
+   *
+   * 与三区布局**刻意解耦**：它是浮层，改窗口大小只需重算它自己的居中几何，
+   * 不必（也不该）去动编辑器/网页的 bounds —— 否则打开面板就会把用户的
+   * 分栏拖拽结果悄悄改掉。因此这里不调 `relayout()`，只调 `promptPanelBounds()`。
+   */
+  function promptPanelBounds(): { x: number; y: number; width: number; height: number } {
+    const s = win.getContentSize();
+    const w = s[0] ?? 1440;
+    const h = s[1] ?? 900;
+    const width = Math.min(PROMPT_PANEL_MAX_WIDTH, Math.max(PROMPT_PANEL_MIN_WIDTH, Math.round(w * 0.62)));
+    const height = Math.min(PROMPT_PANEL_MAX_HEIGHT, Math.max(PROMPT_PANEL_MIN_HEIGHT, Math.round(h * 0.78)));
+    // 略偏上：视觉重心在上方，比几何居中更稳（下方留出的空白用于"关闭"后的呼吸感）
+    const y = Math.max(24, Math.round((h - height) * 0.42));
+    return { x: Math.round((w - width) / 2), y, width, height };
+  }
+
+  /**
+   * 从设置里取出分版本的自定义内容，喂给 `resolveFormatSpec`。
+   *
+   * 单独抽一个函数是因为**三条消费链路**（复制提示词 / 只复制格式要求 / 面板状态）
+   * 必须都从这里拿，才能保证"能改也真的改了"——分散取值最容易漏掉某一条。
+   */
+  function customSpecsOf(s: Settings): CustomFormatSpecs {
+    return { short: s.customFormatSpecShort, full: s.customFormatSpecFull };
+  }
+
+  /**
+   * 收集面板需要的全部状态。
+   *
+   * `defaultSpec` 每次现取（而不是缓存）——「恢复默认」必须拿到**当前版本**的默认文本；
+   * 缓存会让"升级后点恢复默认，拿回的还是旧版模板"这种问题静默发生。
+   *
+   * 分版本返回：面板要能分别展示/编辑简洁版与完整版。
+   */
+  function promptPanelState(): PromptPanelState {
+    const cur = settings.get();
+    const mk = (variant: FormatSpecVariant): PromptVariantState => {
+      const custom = variant === 'full' ? cur.customFormatSpecFull : cur.customFormatSpecShort;
+      return {
+        defaultSpec: getFormatSpec(variant),
+        customSpec: custom,
+        isCustom: typeof custom === 'string' && custom.trim().length > 0,
+      };
+    };
+    return {
+      variant: cur.formatSpecVariant,
+      short: mk('short'),
+      full: mk('full'),
+      updatedAt: cur.customFormatSpecUpdatedAt,
+      maxLength: MAX_CUSTOM_FORMAT_SPEC_LENGTH,
+    };
+  }
+
+  function showPromptPanel(): void {
+    promptView.setBounds(promptPanelBounds());
+    promptView.setVisible(true);
+    promptView.webContents.focus();
+    // 编辑器渲染进程据此点亮工具栏齿轮的激活态（面板是独立视图，它自己看不到）
+    if (!editorView.webContents.isDestroyed()) {
+      editorView.webContents.send(CHANNELS.openPromptPanel);
+    }
+  }
+
+  function hidePromptPanel(): void {
+    promptView.setVisible(false);
+    // 移出可见区域：只 setVisible(false) 在某些平台仍可能保留最后帧
+    promptView.setBounds(PROMPT_HIDDEN_BOUNDS);
+    // 键盘焦点交还编辑器，否则用户按 Ctrl+S 等快捷键会落在隐藏面板上
+    if (!editorView.webContents.isDestroyed()) editorView.webContents.focus();
+  }
+
   win.on('resize', relayout);
+  // 面板是浮层：窗口尺寸变了只需重算它自己的居中几何（不动三区，见 promptPanelBounds 注释）
+  win.on('resize', () => {
+    if (promptView.getVisible()) promptView.setBounds(promptPanelBounds());
+  });
 
   /**
    * 窗口**真正显示 / 尺寸确定**后必须重算一次视图几何。
@@ -420,13 +539,78 @@ async function loadLocalView(
   throw new Error(`加载 ${fileName} 连续 ${attempts} 次失败：${lastErr instanceof Error ? lastErr.message : String(lastErr)}`);
 }
 
+/* ---------------- 提示词编辑面板的 IPC ----------------
+ *
+ * ⚠️ **必须在加载 prompt.html 之前注册**（用户实测踩坑）：
+ * 面板渲染进程在 `DOMContentLoaded` 那一刻就会调 `bridge.getState()`，
+ * 而本函数是 `async` 的、中间有一串 `await`。此前这几个 handler 写在文件靠后的
+ * "IPC 区"，于是面板加载完成时它们还没注册 → 面板拿到
+ * `No handler registered for 'ui:prompt-panel-state'`：
+ * 底部报错、编辑框空白（用户看到的正是这两点）。
+ *
+ * 这也解释了为什么预览面板没出过这个问题：它的 preload 只 `ipcRenderer.on(...)`
+ * 订阅广播，用查询面板的关键词搜不到它、看上去"少了"，其实**不需要**被查询到。
+ * 而面板要**拉取**状态，是主动 invoke —— 注册时机就成了硬约束。
+ *
+ * 通用规则：**渲染进程可能在页面加载瞬间调用的 handler，都要在 `loadLocalView` 之前注册。**
+ */
+  ipcMain.handle(CHANNELS.promptPanelState, (): PromptPanelState => promptPanelState());
+
+  /** 编辑器工具栏的齿轮 / 快捷键：只负责"把面板显示出来"（三个入口汇聚到这里） */
+  ipcMain.handle(CHANNELS.openPromptPanel, () => {
+    showPromptPanel();
+    return { ok: true };
+  });
+
+  /**
+   * 保存用户自定义内容（**按版本**）。
+   *
+   * 语义（与面板文案一致）：**内容为空白 ⇒ 等同于恢复默认**。
+   * 这样"清空并保存"与"点恢复默认"是同一个结果，用户不会走到
+   * "保存了一个空格式要求、提示词里那段约定凭空消失"的状态
+   *（那会让模型输出无法被解析，且没有任何报错）。
+   */
+  ipcMain.handle(
+    CHANNELS.savePromptSpec,
+    (_e, variant: unknown, spec: unknown): SavePromptSpecResult => {
+      const v = normalizeVariant(variant);
+      const raw = typeof spec === 'string' ? spec : '';
+      const text = raw.slice(0, MAX_CUSTOM_FORMAT_SPEC_LENGTH);
+      const key = v === 'full' ? 'customFormatSpecFull' : 'customFormatSpecShort';
+      if (text.trim().length === 0) {
+        settings.update({ [key]: null, customFormatSpecUpdatedAt: null });
+        process.stdout.write(`[prompt] 自定义格式要求（${v}）已清空，回到内置默认\n`);
+        return { ok: true, variant: v, state: promptPanelState(), resetToDefault: true };
+      }
+      settings.update({ [key]: text, customFormatSpecUpdatedAt: new Date().toISOString() });
+      // 只记长度：格式要求是用户内容，不整段写日志
+      process.stdout.write(`[prompt] 已保存自定义格式要求（${v}，${text.length} 字符）\n`);
+      return { ok: true, variant: v, state: promptPanelState() };
+    }
+  );
+
+  ipcMain.handle(CHANNELS.resetPromptSpec, (_e, variant: unknown): SavePromptSpecResult => {
+    const v = normalizeVariant(variant);
+    const key = v === 'full' ? 'customFormatSpecFull' : 'customFormatSpecShort';
+    settings.update({ [key]: null, customFormatSpecUpdatedAt: null });
+    process.stdout.write(`[prompt] 已恢复默认格式要求（${v}）\n`);
+    return { ok: true, variant: v, state: promptPanelState(), resetToDefault: true };
+  });
+
+  ipcMain.handle(CHANNELS.closePromptPanel, () => {
+    hidePromptPanel();
+    return { ok: true };
+  });
+
 /* ---------------- 加载本地界面视图 ----------------
- * 顺序：预览面板 → 网页区工具条 →（下方）编辑器页面。
- * 顺序本身不是根因（换顺序失败对象会飘移），但先加载两个小页面、
+ * 顺序：预览面板 → 网页区工具条 → 提示词面板 →（下方）编辑器页面。
+ * 顺序本身不是根因（换顺序失败对象会飘移），但先加载几个小页面、
  * 让它们与编辑器页面错开，可以减少并发创建渲染进程的压力。
  */
   await loadLocalView(previewView, 'preview.html');
   await loadLocalView(webBarView, 'webbar.html');
+  // 提示词面板：同样是本地页面。它的 handler 已在上方注册完毕（见那段注释）。
+  await loadLocalView(promptView, 'prompt.html');
 
   /* ---------------- IPC ---------------- */
   const getEditorWindow = () => null; // 目录选择不需要父窗口句柄；保留签名以便后续接入
@@ -611,7 +795,11 @@ async function loadLocalView(
    * 用户随后自己把它粘贴到提示词里——发出去的动作仍然是人的。
    */
   ipcMain.handle(CHANNELS.copyFormatSpec, (_e, variant: unknown) => {
-    const text = getFormatSpec(variant === 'full' ? 'full' : 'short');
+    // 版本由调用方指定（不传则回落到当前开关状态）；有自定义内容就用自定义
+    //（"用户可以改系统 prompt"的落点之一）
+    const s = settings.get();
+    const v = variant === undefined || variant === null ? s.formatSpecVariant : normalizeVariant(variant);
+    const text = resolveFormatSpec(customSpecsOf(s), v);
     try {
       clipboard.writeText(text);
       return { ok: true, length: text.length };
@@ -619,6 +807,21 @@ async function loadLocalView(
       return { ok: false, length: 0, error: err instanceof Error ? err.message : String(err) };
     }
   });
+
+  ipcMain.handle(CHANNELS.getFormatSpecVariant, () => settings.get().formatSpecVariant);
+
+  ipcMain.handle(CHANNELS.setFormatSpecVariant, (_e, variant: unknown) => {
+    const v = normalizeVariant(variant);
+    settings.update({ formatSpecVariant: v });
+    process.stdout.write(`[format] 提示词版本已切换为 ${v}\n`);
+    return v;
+  });
+
+  /*
+   * 提示词编辑面板的 4 个 handler 已上移到"加载本地界面视图 **之前**"注册
+   * （见那一段的长注释）：面板页面一加载就会 `invoke('ui:prompt-panel-state')`，
+   * 而本函数中间的 `await` 会让"靠后注册"变成"注册太晚"。
+   */
 
   /** 取工作环境摘要（只读；不含"当前打开的文件"，见 contextSummary 注释） */
   ipcMain.handle(CHANNELS.getContext, () => buildContextSummary(fileService.getRoot()));
@@ -638,6 +841,30 @@ async function loadLocalView(
   const collections = new Map<string, { blocks: ParsedCodeBlock[]; at: string; replyLength: number }>();
   const MAX_COLLECTIONS = 5;
   let collectionSeq = 0;
+
+  /**
+   * 采集消费判定（L2）：一次采集消费一条回复，状态只放主进程内存。
+   *
+   * 为什么不能在页面上做标记：零注入（ADR-0003）要求对网页只读不写，
+   * 因此用**内容指纹**比对实现"同一条回复只消费一次"。详见 consumptionStore.ts。
+   */
+  const consumption = new ConsumptionStore();
+
+  /**
+   * 最近一次「复制选中片段」的选区记忆。
+   *
+   * 为什么必须记：`### 范围：N-M` 只出现在**剪贴板提示词**里，模型回不回显是它的自由；
+   * 采集策略虽已补抓正文里的范围行，但模型不按约定回显时仍然拿不到。
+   * 缺了区间，解析结果的 range 为 null，应用层只能按「整文件替换」处理 ——
+   * 用户实测：选中 2-10 行让模型改，应用时整个文件被覆盖、区间外的行全丢。
+   *
+   * 因此复制片段成功那一刻把选区记在主进程，采集解析后由
+   * `applySnippetRangeFallback` 回填给路径一致的无区间块。
+   * 只记最近一次：用户复制了新片段，旧选区自然失效（多轮对话以最后一次意图为准）；
+   * 「复制整个文件」（copyWholeFile）是**上下文**用途，刻意**不更新**此记忆 ——
+   * 给全文不等于改全文，最近一次明确的片段选区仍然有效。
+   */
+  let lastSnippetRange: SnippetRangeMemory | null = null;
 
   /**
    * 从网页视图**只读**采集最新回复并解析为待预览变更。
@@ -697,7 +924,44 @@ async function loadLocalView(
       };
     }
 
+    /*
+     * L2 消费判定：同一条回复只消费一次。
+     *
+     * 必须在**解析之前**判定 —— 判为"无新内容"时不解析、不落缓存、不产生待应用条目，
+     * 否则用户会看到一堆"和上次一模一样"的待应用项，还以为链路坏了。
+     *
+     * `consume()` 把"判断"与"记录"合成一步（原子），避免出现
+     * "某条分支忘了记录 → 同一条回复被反复消费"这类难查的静默缺陷。
+     */
+    const sessionKey = sessionKeyOf(collected.url);
+    const verdict = consumption.consume(sessionKey, collected.replyText);
+    if (verdict.consumed) {
+      return {
+        ok: true,
+        collectionId: emptyId,
+        strategyId: collected.strategyId,
+        strategyDescription: collected.strategyDescription,
+        attempts: collected.attempts,
+        replyText: collected.replyText,
+        notes: [
+          '最新回复与上次采集内容相同 —— 已采集过，无新内容',
+          `内容指纹 ${verdict.fingerprint}（会话键 ${sessionKey}）`,
+          '若模型已重新生成，请等页面输出完成后再点「采集回复」',
+        ],
+        blocks: [],
+        noNewContent: true,
+      };
+    }
+
     const parsed = parseModelReply(collected.replyText);
+
+    /*
+     * 选区兜底：模型没回显 `### 范围：N-M`（或采集没采到）时，用「复制片段那一刻」
+     * 的选区回填 —— 不回填的话该块会被当成整文件替换，应用时覆盖整个文件。
+     * 必须在缓存（collections.set）与 diff/预览计算之前做，
+     * 保证预览里看到的 diff 与实际应用行为一致。
+     */
+    const fallbackNote = applySnippetRangeFallback(parsed.blocks, lastSnippetRange);
 
     /*
      * 诊断信息必须**紧凑**。
@@ -712,6 +976,7 @@ async function loadLocalView(
       ...parsed.notes,
       `采集：策略 ${collected.strategyId} · ${collected.replyText.length} 字符 / ${collectedLines.length} 行 · 围栏标记 ${fenceMarkCount} 处`,
       `首行：${firstLine}${(collectedLines[0] ?? '').length > 60 ? '…' : ''}`,
+      ...(fallbackNote ? [fallbackNote] : []),
     ];
 
     const collectionId = emptyId;
@@ -812,6 +1077,17 @@ async function loadLocalView(
             diff = diffTexts(readForDiff.text, computed.text);
             if (diff.identical) {
               hints.push('应用后内容与当前文件完全相同，无需改动');
+            }
+            /*
+             * 覆盖范围归一化提示：模型回显内容比 `### 范围：N-M` 覆盖得更远时，
+             * computeApply 会把区间收敛到模型实际写到的行（否则区间外的原文行会残留、
+             * 与新内容重复，看起来像"改个片段结果整块都乱了"）。
+             * 这里明确告诉用户收敛成了什么，不让它成为隐式行为。
+             */
+            if (computed.normalized) {
+              hints.push(
+                `模型回显的内容覆盖更远，已把区间 ${b.range?.start}-${computed.normalized.from} 收敛为 ${b.range?.start}-${computed.normalized.to}`
+              );
             }
           } else {
             applicable = false;
@@ -936,6 +1212,12 @@ async function loadLocalView(
     });
     if (outcome.ok) {
       notifyFileChanged(filePath);
+      /*
+       * 同步右下角预览面板：应用有**两个入口**（面板按钮 / 编辑器工具条），
+       * 走编辑器那条时面板不知情，会一直显示「应用」可用态（用户实测反馈）。
+       * 主进程在落盘成功后统一广播，两个入口都覆盖。
+       */
+      notifyChangeState({ kind: 'applied', index: raw.index, filePath });
     }
     return outcome;
   });
@@ -947,11 +1229,20 @@ async function loadLocalView(
     }
   }
 
+  /** 通知右下角预览面板：某个变更的状态变了（应用成功 / 被撤销） */
+  function notifyChangeState(event: AppliedChangeEvent) {
+    if (!previewView.webContents.isDestroyed()) {
+      previewView.webContents.send(CHANNELS.appliedChange, event);
+    }
+  }
+
   ipcMain.handle(CHANNELS.undoSave, async () => {
     const result = await returnPath.undoLast();
     // 撤销也是改写磁盘，同样要通知编辑器刷新
     if (result.ok && result.filePath) {
       notifyFileChanged(result.filePath);
+      // 并让预览面板把对应条目恢复成「可应用」，否则撤销后按钮仍显示「已应用 ✓」
+      notifyChangeState({ kind: 'undone', filePath: result.filePath });
     }
     return result;
   });
@@ -976,6 +1267,9 @@ async function loadLocalView(
     const parts = buildSnippetText({ relPath, text, startLine });
     try {
       clipboard.writeText(parts.text);
+      // 记住选区：回程解析拿不到行区间时用它兜底（见 lastSnippetRange 注释）。
+      // 只在剪贴板真正写入成功后记录，失败不污染记忆。
+      lastSnippetRange = { relPath: parts.relPath, startLine: parts.startLine, endLine: parts.endLine };
       return { ok: true, snippet: parts.text, length: parts.text.length, startLine: parts.startLine, endLine: parts.endLine };
     } catch (err) {
       return { ok: false, snippet: parts.text, length: parts.text.length, error: err instanceof Error ? err.message : String(err) };
@@ -1030,7 +1324,8 @@ async function loadLocalView(
         environment: ctx.environment,
         tree: ctx.tree ? `${ctx.tree}${ctx.treeTruncated ? '\n…（目录较多，已截断）' : ''}` : null,
       },
-      formatSpec: getFormatSpec('short'),
+      // 版本取底部开关的当前状态（持久化在设置里）
+      formatSpec: resolveFormatSpec(customSpecsOf(settings.get()), settings.get().formatSpecVariant),
       targetFiles: files,
     });
     try {
@@ -1085,10 +1380,45 @@ async function loadLocalView(
             {
               label: '只复制输出格式要求（不含上下文）',
               click: () => {
-                const text = getFormatSpec('short');
+                const s = settings.get();
+                const text = resolveFormatSpec(customSpecsOf(s), s.formatSpecVariant);
                 clipboard.writeText(text);
-                process.stdout.write(`[format] 已复制格式要求（${text.length} 字符）到剪贴板\n`);
+                process.stdout.write(
+                  `[format] 已复制格式要求（${s.formatSpecVariant}，${text.length} 字符）到剪贴板\n`
+                );
               },
+            },
+            {
+              // 与底部开关同一语义，但这里可以**指定版本**（不看当前开关状态）。
+              // 留着它是因为"临时想拿另一版"时不必先拨开关、拿完再拨回来。
+              label: '复制输出格式要求（指定版本）',
+              submenu: [
+                {
+                  label: '简洁版（Short）',
+                  click: () => {
+                    const s = settings.get();
+                    const text = resolveFormatSpec(customSpecsOf(s), 'short');
+                    clipboard.writeText(text);
+                    process.stdout.write(`[format] 已复制格式要求（short，${text.length} 字符）到剪贴板\n`);
+                  },
+                },
+                {
+                  label: '完整版（Full）',
+                  click: () => {
+                    const s = settings.get();
+                    const text = resolveFormatSpec(customSpecsOf(s), 'full');
+                    clipboard.writeText(text);
+                    process.stdout.write(`[format] 已复制格式要求（full，${text.length} 字符）到剪贴板\n`);
+                  },
+                },
+              ],
+            },
+            // 与「设置」菜单同一动作：菜单里放两份是**有意的**
+            //（用户找"改提示词"时既可能从 File 找、也可能从 Settings 找）
+            {
+              label: '修改提示词…',
+              accelerator: 'CmdOrCtrl+Shift+P',
+              click: () => showPromptPanel(),
             },
             { type: 'separator' },
             { role: 'quit', label: '退出' },
@@ -1126,6 +1456,45 @@ async function loadLocalView(
             { role: 'resetZoom', label: '重置缩放' },
             { role: 'zoomIn', label: '放大' },
             { role: 'zoomOut', label: '缩小' },
+          ],
+        },
+        {
+          /*
+           * 应用级设置菜单。
+           *
+           * 「修改提示词…」放在这里而不是散在别处：用户要找的是"改系统 prompt"
+           * 这件事本身，菜单名必须给出可预期的落点（用户原话：
+           * "具体可以在 IDE 顶部增加一列 Settings，增加一个关于修改 prompt 的行"）。
+           *
+           * 为什么同时给快捷键：格式要求是这个应用里**改得最频繁**的一段文本
+           *（每换一个模型/一种任务就可能想调），比"打开目录"更常用，
+           * 值得一个随手可达的入口。
+           */
+          label: 'Settings',
+          submenu: [
+            {
+              label: '修改提示词…',
+              accelerator: 'CmdOrCtrl+Shift+P',
+              click: () => showPromptPanel(),
+            },
+            { type: 'separator' },
+            {
+              // 只读回显当前状态，避免用户"以为自己改过、其实还是默认"。
+              // 这里**不**动态更新：菜单在 buildApplicationMenu() 时构建，
+              // 保存后面板会重算状态；菜单文本在下一次重建时刷新即可
+              //（与 View 菜单的勾选项同一条路径，见 buildApplicationMenu 的调用点）。
+              label: (() => {
+                const cur = settings.get();
+                const v = cur.formatSpecVariant;
+                const custom = v === 'full' ? cur.customFormatSpecFull : cur.customFormatSpecShort;
+                const using = typeof custom === 'string' && custom.trim().length > 0;
+                const vName = v === 'full' ? '完整版' : '简洁版';
+                return using
+                  ? `提示词：${vName} · 自定义（${custom.split('\n').length} 行）`
+                  : `提示词：${vName} · 内置默认`;
+              })(),
+              enabled: false,
+            },
           ],
         },
       ])

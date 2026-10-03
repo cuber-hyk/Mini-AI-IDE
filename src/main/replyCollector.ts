@@ -10,8 +10,24 @@
  * 因此这里用**多套候选策略**依次尝试，并把"用了哪套策略、命中几条"如实报出来，
  * 便于用户与开发者判断是否需要补策略。
  *
- * 采集内容刻意与"预览"处理分离：本模块只负责拿到**文本**，
- * 解析（围栏/路径/行区间）交给 src/shared/returnPath.ts 的纯函数。
+ * ------------------------------------------------------------------
+ * 采集判据：**新鲜度优先**（2026-10-03 重设计）
+ * ------------------------------------------------------------------
+ * 早期判据是"取含 <pre> 最多的 markdown 容器"。它有一个致命缺陷：
+ * 多轮对话里每条回复各含 1 个 <pre> 时**全部平局** → 停在文档序**第一个**，
+ * 也就是**最旧的回复**；即使不平局，"pre 最多"与"最新"也毫无关系。
+ * 实测症状：第一次采集正确（当时会话里只有一条回复），继续对话后再采集拿到的仍是旧回复。
+ *
+ * 现在的判据只有一条：**文档序最后**（`querySelectorAll` 返回的就是文档序）。
+ * 一切与新鲜度无关的判据（pre 最多 / 文本最长）**全部废弃**。
+ *
+ * ------------------------------------------------------------------
+ * 围栏自适应（L3）
+ * ------------------------------------------------------------------
+ * 最新回复若是 ````markdown 包裹、内容里内嵌 ```python，采集脚本若用写死的三反引号
+ * 外围栏，解析器 splitFences 会把**内层的闭合行**误判为外层闭合 → 截断/多出空块。
+ * 因此外围栏长度必须按内容自适应：**比内容中最长的连续反引号序列多 1，最少 3**
+ * （与提示词组装侧 src/shared/snippet.ts 的 fenceFor 同一规则）。
  */
 
 export interface CollectStrategy {
@@ -24,166 +40,173 @@ export interface CollectStrategy {
 }
 
 /**
- * 候选策略：从"最具体的助手消息容器"到"最泛的代码块"逐步降级。
+ * 采集脚本里共用的一段**内联工具函数源码**（字符串拼接，注入页面执行）。
  *
- * 说明：
- *  - 每套策略先排出若干候选节点，再从中取**最靠后**的一个（最新一条回复）；
- *  - 只读 `innerText` / `textContent`，不做任何 DOM 变更；
- *  - 不用 CSS 类名做语义判断（类名是构建产物，随时变），只用结构特征与属性标记。
+ * 抽成常量是为了让三套策略共用同一份实现，避免"围栏自适应只改了一处"这类漂移。
+ * 里面的实现必须与 src/shared/snippet.ts 的 `fenceFor` 规则一致。
+ */
+const COLLECT_HELPERS = `
+  // 围栏自适应：比内容中最长的连续反引号多 1，最少 3（与 snippet.ts 的 fenceFor 同规则）
+  var fenceFor = function (content) {
+    var longest = 0;
+    var re = /\\\`+/g;
+    var m;
+    while ((m = re.exec(content)) !== null) {
+      if (m[0].length > longest) longest = m[0].length;
+    }
+    var n = Math.max(3, longest + 1);
+    return new Array(n + 1).join('\\\`');
+  };
+  // 用自适应围栏把一段纯文本包成代码块
+  var fenced = function (lang, src) {
+    var f = fenceFor(src);
+    return f + (lang || '') + '\\n' + src + '\\n' + f;
+  };
+  // 从一个 <pre> 取语言标注（取不到就不标，不伪造）
+  var langOf = function (pre) {
+    try {
+      var codeEl = pre.querySelector('code');
+      var holder = codeEl || pre;
+      var m = /language-([\\w+#-]+)/.exec((holder.className || '').toString());
+      return m && m[1] ? m[1] : '';
+    } catch (e) { return ''; }
+  };
+  // 从一个 <pre> 取内容：innerText 原样（保留内层围栏行、空行与缩进）
+  var textOf = function (pre) {
+    try {
+      return ((pre.innerText || '').trim() || (pre.textContent || '').trim());
+    } catch (e) { return ''; }
+  };
+  // markdown 语义容器：按**文档序取最后一个** —— 这就是"最新一条回复"
+  //
+  // ⚠️ 两个必须处理的现实情况（都靠仿真测试暴露，不排除就恒定采不到）：
+  //  1) 代码块类名形如 language-markdown，而 [class*="markdown"] 是**子串匹配** →
+  //     会把 <code class="language-markdown"> 也当成"markdown 容器"，
+  //     且它在容器更深处、文档序更靠后，"取最后一个"会选中它（内部没有 pre）。
+  //  2) 回复内部还有 <div class="ds-markdown-title"> 这类**子块**同样命中选择器，
+  //     它是新回复里文档序最后的一个 —— 但它内部也没有 pre。
+  // 因此：**优先取"最后一个内部含 pre 的候选"**；都含 pre 时取文档序最后那个。
+  // 取不到含 pre 的候选时（纯文本回复），退回"最后一个非 pre/code 候选"。
+  var lastMarkdownNode = function (requirePre) {
+    var nodes = document.querySelectorAll('[class*="markdown"]');
+    var fallback = null;
+    for (var i = nodes.length - 1; i >= 0; i -= 1) {
+      var el = nodes[i];
+      var tag = (el.tagName || '').toUpperCase();
+      if (tag === 'PRE' || tag === 'CODE') continue;
+      if (fallback === null) fallback = el;
+      if (!requirePre) return el;
+      var hasPre = false;
+      try { hasPre = el.querySelectorAll('pre').length > 0; } catch (e) { hasPre = false; }
+      if (hasPre) return el;
+    }
+    return requirePre ? fallback : fallback;
+  };
+  // 线索（### 文件：/ ### 范围：）**只从给定容器内**提取。
+  // 早期是整页扫描取最后一条：最新回复不带标题时会取到**历史回复**的路径 → 错配。
+  var hintIn = function (root, kind) {
+    if (!root) return '';
+    var pathRe = /(?:文件|文件名|路径|file|filename|path)\\s*[:：]\\s*([^\\s\\\`]+\\.[A-Za-z0-9]+)/;
+    var rangeRe = /(?:范围|行号|lines?|range)\\s*[:：]\\s*(?:替换第\\s*)?(\\d{1,7})\\s*[-\\u2013\\u2014~\\u81f3\\u5230]\\s*(\\d{1,7})/;
+    var all;
+    try {
+      all = root.querySelectorAll('*');
+    } catch (e) { return ''; }
+    // 从后往前扫（越靠后越接近"最新回复里的收尾说明"），命中的第一条即为线索
+    for (var i = all.length - 1; i >= 0; i -= 1) {
+      var own = (all[i].textContent || '').trim();
+      if (own.length === 0 || own.length > 200) continue;
+      if (kind === 'path') {
+        var mp = pathRe.exec(own);
+        if (mp && mp[1]) return mp[1];
+      } else {
+        var mr = rangeRe.exec(own);
+        if (mr && mr[1] && mr[2]) return '### \\u8303\\u56f4\\uff1a' + mr[1] + '-' + mr[2];
+      }
+    }
+    return '';
+  };
+`;
+
+/**
+ * 候选策略：**每一层都必须保持「最新」语义**，不接受"有内容就行"。
+ *
+ *  - S1 最新回复容器（markdown 语义容器，文档序最后一个）内的全部 <pre>；
+ *  - S2 该容器整体文本（容器无 pre 时用：纯文本回复 / 结构变化）；
+ *  - S3 文档序最后一个 <pre>（结构兜底：最后一个 pre 大概率属于最新回复）。
  */
 export const COLLECT_STRATEGIES: CollectStrategy[] = [
   {
-    id: 'code-blocks-with-page-path',
-    description: '页面里的路径标题（### 文件：…）+ markdown 容器内的 <pre> 代码块',
+    id: 'latest-reply-container',
+    description: '最新一条回复容器（文档序最后一个 markdown 容器）内的代码块 + 容器内线索',
     script: `(() => {
-      const build = (pres) => pres
-        .map((p) => {
-          const codeEl = p.querySelector('code');
-          const src = ((p.innerText || '').trim() || (p.textContent || '').trim());
-          if (!src) return '';
-          let lang = '';
-          try {
-            const holder = codeEl || p;
-            const m = /language-([\\w+#-]+)/.exec((holder.className || '').toString());
-            if (m && m[1]) lang = m[1];
-          } catch (e) { /* 忽略 */ }
-          return '\`\`\`' + lang + '\\n' + src + '\\n\`\`\`';
-        })
-        .filter((t) => t.length > 0)
-        .join('\\n\\n');
+      ${COLLECT_HELPERS}
+      var node = lastMarkdownNode(true);
+      if (!node) return [];
 
-      // 1) 页面级路径：按“### 文件：xxx”扫描**整页文本节点**，取最后一条（最新回复）
-      //    这样处理是刻意的：目标站点把标题与代码块渲染成**兄弟节点**，
-      //    路径并不在代码块所在容器内部，只抓 <pre> 会丢掉它。
-      let pathHint = '';
-      try {
-        const all = Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,h6,p,div,span,strong'));
-        for (let i = all.length - 1; i >= 0; i -= 1) {
-          const el = all[i];
-          // 只取“自身文本很短”的节点，避免命中整页容器
-          const own = (el.textContent || '').trim();
-          if (own.length === 0 || own.length > 120) continue;
-          const m = /(?:文件|文件名|路径|file|filename|path)\\s*[:：]\\s*([^\\s\`]+\\.[A-Za-z0-9]+)/.exec(own);
-          if (m && m[1]) { pathHint = m[1]; break; }
-        }
-      } catch (e) { /* 忽略 */ }
-
-      // 2) 代码块：选含 <pre> 最多的 markdown 容器
-      const preOf = (root) => Array.from(root.querySelectorAll('pre'));
-      let node = null;
-      let bestCount = 0;
-      for (const el of document.querySelectorAll('[class*="markdown"]')) {
-        const n = preOf(el).length;
-        if (n > bestCount) { bestCount = n; node = el; }
+      // 容器内 <pre> 按**文档序**拼接：一条回复可以有多个代码块
+      var pres = Array.from(node.querySelectorAll('pre'));
+      var parts = [];
+      for (var i = 0; i < pres.length; i += 1) {
+        var src = textOf(pres[i]);
+        if (src) parts.push(fenced(langOf(pres[i]), src));
       }
-      let code = node ? build(preOf(node)) : '';
-      if (!code) {
-        const groups = new Map();
-        for (const p of document.querySelectorAll('pre')) {
-          const holder = p.closest('[class*="markdown"]') || p.parentElement;
-          if (!holder) continue;
-          const arr = groups.get(holder) || [];
-          arr.push(p);
-          groups.set(holder, arr);
-        }
-        let chosen = null;
-        let max = 0;
-        for (const [holder, pres] of groups) {
-          if (pres.length > max) { max = pres.length; chosen = holder; }
-        }
-        if (chosen) code = build(groups.get(chosen) || []);
-      }
+      if (parts.length === 0) return [];
 
-      if (!code) return [];
-      // 把路径作为首行“### 文件：”带上，交给解析器的既有线索处理
-      return [pathHint ? '### 文件：' + pathHint + '\\n\\n' + code : code];
+      var code = parts.join('\\n\\n');
+
+      // 线索只从**本容器内**取，绝不整页扫描（否则会取到历史回复的路径 → 错配）
+      var pathHint = hintIn(node, 'path');
+      var rangeHint = hintIn(node, 'range');
+
+      // 行区间只在**单代码块**时注入：多块时容器内的"最后一条范围"无法与各块一一对应，
+      // 宁可不注入（交给选区记忆或人工确认），否则会把同一个区间错套到所有块上。
+      var head = [
+        pathHint ? '### 文件：' + pathHint : '',
+        pres.length === 1 && rangeHint ? rangeHint : '',
+      ].filter(function (s) { return s.length > 0; }).join('\\n');
+
+      return [head ? head + '\\n\\n' + code : code];
     })()`,
   },
   {
-    id: 'code-blocks-in-markdown',
-    description: '仅 markdown 容器内的 <pre> 代码块（不含路径；无页面级路径时的次选）',
+    id: 'latest-reply-container-text',
+    description: '最新一条回复容器的整体文本（容器内没有 <pre> 时用：纯文本回复）',
     script: `(() => {
-      const preOf = (root) => Array.from(root.querySelectorAll('pre'));
-      const build = (pres) => pres
-        .map((p) => {
-          const codeEl = p.querySelector('code');
-          const src = ((p.innerText || '').trim() || (p.textContent || '').trim());
-          if (!src) return '';
-          let lang = '';
-          try {
-            const holder = codeEl || p;
-            const m = /language-([\\w+#-]+)/.exec((holder.className || '').toString());
-            if (m && m[1]) lang = m[1];
-          } catch (e) { /* 忽略 */ }
-          return '\`\`\`' + lang + '\\n' + src + '\\n\`\`\`';
-        })
-        .filter((t) => t.length > 0)
-        .join('\\n\\n');
-
-      let node = null;
-      let bestCount = 0;
-      for (const el of document.querySelectorAll('[class*="markdown"]')) {
-        const n = preOf(el).length;
-        if (n > bestCount) { bestCount = n; node = el; }
-      }
-      if (node) {
-        const text = build(preOf(node));
-        if (text) return [text];
-      }
-      const groups = new Map();
-      for (const p of document.querySelectorAll('pre')) {
-        const holder = p.closest('[class*="markdown"]') || p.parentElement;
-        if (!holder) continue;
-        const arr = groups.get(holder) || [];
-        arr.push(p);
-        groups.set(holder, arr);
-      }
-      let chosen = null;
-      let max = 0;
-      for (const [holder, pres] of groups) {
-        if (pres.length > max) { max = pres.length; chosen = holder; }
-      }
-      if (chosen) return [build(groups.get(chosen) || [])];
-      return [];
+      ${COLLECT_HELPERS}
+      var node = lastMarkdownNode(false);
+      if (!node) return [];
+      var t = ((node.innerText || '').trim() || (node.textContent || '').trim());
+      if (!t) return [];
+      // 整体文本里已经带围栏（模型把 markdown 原样输出）时直接返回；
+      // 没有围栏就包一层自适应围栏，保证解析器能识别。
+      if (t.indexOf('\\\`\\\`\\\`') !== -1) return [t];
+      return [fenced('', t)];
     })()`,
   },
   {
-    id: 'last-message-text',
-    description: '含围栏的最长一段容器文本（次选；可能夹带少量 UI 文本）',
+    id: 'last-pre-in-document',
+    description: '文档序最后一个 <pre>（结构兜底：最后一个代码块大概率属于最新回复）',
     script: `(() => {
-      let bestText = '';
-      for (const el of document.querySelectorAll('[class*="markdown"]')) {
-        const t = (el.innerText || '').trim();
-        if (t.indexOf('\`\`\`') === -1) continue;
-        if (t.length > bestText.length) bestText = t;
-      }
-      return bestText ? [bestText] : [];
-    })()`,
-  },
-  {
-    id: 'assistant-role-attr',
-    description: '带 role/data-role/class 语义的助手消息（取最新一条）',
-    script: `(() => {
-      const sel = '[data-role="assistant"], [data-message-author-role="assistant"], [class*="assistant"], [class*="answer"]';
-      const nodes = Array.from(document.querySelectorAll(sel));
-      const texts = nodes.map((n) => (n.innerText || '').trim()).filter((t) => t.includes('\`\`\`'));
-      return texts.length > 0 ? [texts[texts.length - 1]] : [];
-    })()`,
-  },
-  {
-    id: 'whole-page-fences',
-    description: '整页 <pre> 代码块（最后手段，多轮对话里可能取错）',
-    script: `(() => {
-      const pres = Array.from(document.querySelectorAll('pre'));
+      ${COLLECT_HELPERS}
+      var pres = document.querySelectorAll('pre');
       if (pres.length === 0) return [];
-      const joined = pres
-        .map((p) => {
-          const src = ((p.innerText || '').trim() || (p.textContent || '').trim());
-          return src ? '\`\`\`\\n' + src + '\\n\`\`\`' : '';
-        })
-        .filter((t) => t.length > 0)
-        .join('\\n\\n');
-      return joined ? [joined] : [];
+      var last = pres[pres.length - 1];
+      var src = textOf(last);
+      if (!src) return [];
+      // 线索：从该 pre 所在的 markdown 容器内取（依然限定范围，不整页扫描）
+      var holder = null;
+      try { holder = last.closest('[class*="markdown"]'); } catch (e) { holder = null; }
+      var node = holder || last;
+      var pathHint = hintIn(node, 'path');
+      var rangeHint = hintIn(node, 'range');
+      var head = [
+        pathHint ? '### 文件：' + pathHint : '',
+        rangeHint ? rangeHint : '',
+      ].filter(function (s) { return s.length > 0; }).join('\\n');
+      return [fenced(langOf(last), src)].map(function (body) {
+        return head ? head + '\\n\\n' + body : body;
+      });
     })()`,
   },
 ];

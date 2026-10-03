@@ -31,6 +31,15 @@
           window.monaco.KeyMod.CtrlCmd | window.monaco.KeyCode.KeyS
         未保存状态改由工具栏的「● 未保存」文字 + 文件名旁的白点提示（见 renderDirty）。
       -->
+      <!-- 提示词设置入口（齿轮）。面板本体是**独立视图**（见 src/renderer/prompt.html）：
+           编辑器渲染进程持有文件写权限，而"编辑提示词文本"这件事不需要任何文件能力，
+           所以不把它做成编辑器内的 DOM 弹层，避免扩大能力面。 -->
+      <button id="btn-settings" type="button" class="icon-btn" title="提示词设置 · 修改发给模型的输出格式要求（Ctrl+Shift+P）">
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <circle cx="8" cy="8" r="2.4" />
+          <path d="M8 1.6v1.9M8 12.5v1.9M1.6 8h1.9M12.5 8h1.9M3.5 3.5l1.35 1.35M11.15 11.15l1.35 1.35M12.5 3.5l-1.35 1.35M4.85 11.15L3.5 12.5" />
+        </svg>
+      </button>
       <span id="dirty-flag" class="dirty"></span>
     </header>
 
@@ -90,6 +99,22 @@
           placeholder="在这里写需求，然后点右侧按钮复制完整提示词"
           spellcheck="false"
         ></textarea>
+        <!--
+          提示词版本双段开关（用户设计）：开 = 完整版（FULL），关 = 简洁版（SHORT）。
+
+          为什么放在这里而不是菜单里：这是"发给模型的那份约定用哪一版"，
+          和旁边的「复制提示词」是同一次操作的两半 —— 放一起才看得见因果关系。
+          状态持久化在设置里（formatSpecVariant），重启后仍是上次选的那版。
+
+          结构用两个 button + 一个滑块（role=switch 的语义通过 aria-checked 表达），
+          不用 <input type=checkbox>：需要的是"双标签分段控件"，不是勾选框。
+        -->
+        <div class="variant-switch" id="variant-switch" role="switch" aria-checked="false"
+             tabindex="0" title="切换提示词的详细程度：简洁版（6 个示例）/ 完整版（8 个示例 + 逐条详解）。点击或按空格切换">
+          <span class="variant-thumb" aria-hidden="true"></span>
+          <button type="button" class="variant-opt" data-variant="short" aria-pressed="true">简洁</button>
+          <button type="button" class="variant-opt" data-variant="full" aria-pressed="false">完整</button>
+        </div>
         <button id="btn-copy-prompt" type="button" class="primary" title="组装完整提示词（需求 + 工作环境 + 目录结构 + 格式要求）到剪贴板，由你自己粘贴到右侧网页">
           复制提示词
         </button>

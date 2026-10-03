@@ -328,12 +328,23 @@ body {
 
 /* 需求输入区：参考右侧 DeepSeek 输入框的观感（圆角外壳 + 聚焦描边 + 圆形按钮） */
 .prompt-bar {
-  /* flex-shrink 必须放开（不能是 0）：视口高度紧张时（窗口小、字体变大），
-     禁止收缩会让本区**不缩**，直接把底部边框顶出可视范围 —— 表现为
-     "启动后输入框底部溢出，拖一下窗口就恢复"（用户实测）。
-     配合 .requirement 的 max-height: 220px封顶，正常情况下永远用不到收缩。 */
+  /*
+   * 纵向空间分配：谁来"挨饿"的顺序必须是**明确的**。
+   *
+   * 历史（两个相反的症状，都实测过）：
+   *  · 早期写 flex-shrink: 0 —— 视口紧张时本区**不缩**，把底部边框顶出可视范围
+   *    （"启动后输入框底部溢出，拖一下窗口就恢复"）；
+   *  · 改成 flex: 0 1 auto + min-height: 0 后又过头了 —— 本区被压到**低于自身内容高度**，
+   *    而 .prompt-shell 是 overflow: hidden，于是输入框下沿被**裁掉一条**
+   *    （"底部输入框溢出了一部分"，用户截图）。
+   *
+   * 正确做法：本区**可以缩，但不能缩到内容放不下**。
+   * 需要让出高度时优先去压 .layout（它 flex:1 + 各处 min-height:0，能一路压到 0），
+   * 本区只在连 .layout 都压没了之后才参与收缩 —— 即 min-height 取"内容自然高度"。
+   * 内容自然高度 = padding 8 + shell(10+44+10) + padding 10 = 82px（.requirement 最小 2 行）。
+   */
   flex: 0 1 auto;
-  min-height: 0;
+  min-height: 82px;
   padding: 8px 10px 10px;
   background: var(--bg);
   border-top: 1px solid var(--border);
@@ -347,11 +358,16 @@ body {
   border: 1px solid #333a47;
   border-radius: 14px;
   padding: 10px 10px 10px 16px;
-  /* 与父级 .prompt-bar 配对：允许在视口紧张时收缩，
-     否则收缩的是外壳 padding 而非内容，视觉上仍是"底部被切"。
-     overflow:hidden 让收缩时内容不顶破圆角。 */
+  /*
+   * 【不要再给外壳加 overflow: hidden】
+   *
+   * 曾经写 overflow: hidden 是为了"收缩时不顶破圆角"，但它把**任何**几像素的高度差
+   * 都变成了**可见的切边**：输入框明明只差 4px，用户看到的就是"底部溢出了一部分"。
+   * 现在 .prompt-bar 的 min-height 已保证内容放得下，无需再靠裁切兜底；
+   * 万一将来又出现高度不足，宁可让内容正常溢出（可被发现），也不要静默切掉一条。
+   * 圆角由 background + border-radius 自身表现，不依赖裁切。
+   */
   min-height: 0;
-  overflow: hidden;
   transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 
@@ -411,6 +427,86 @@ body {
 
 .requirement::placeholder {
   color: #6b7280;
+}
+
+/* ---------------- 提示词版本双段开关 ----------------
+ *
+ * 用户设计：开 = 完整版（FULL），关 = 简洁版（SHORT）。
+ *
+ * 为什么做成"分段控件 + 滑块"而不是 checkbox：
+ *   两个标签同时可见（简洁 / 完整），用户一眼知道有**两档**、当前在哪档；
+ *   勾选框只能表达"开/关"，还得靠旁边的文字解释"开指什么"。
+ *
+ * 布局：它是 .prompt-shell 里的一个 flex 子项，**不改动行高** ——
+ * 高度 26px 小于输入框最小高度 44px，所以 .prompt-bar 的 min-height: 82px
+ * （= padding 8 + shell(10+44+10) + padding 10）依然成立。
+ */
+.variant-switch {
+  position: relative;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  height: 26px;
+  padding: 2px;
+  border-radius: 13px;
+  background: #171a21;
+  border: 1px solid #333a47;
+  cursor: pointer;
+  user-select: none;
+  /* 与底部对齐（外壳是 align-items: flex-end） */
+  align-self: center;
+  transition: border-color 0.15s ease;
+}
+
+.variant-switch:hover {
+  border-color: #465065;
+}
+
+/* 滑块：靠 data-variant 定位，不做位移计算（两段等宽，用 50% 直接切） */
+.variant-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: calc(50% - 2px);
+  height: calc(100% - 4px);
+  border-radius: 11px;
+  background: #4d6bfe;
+  transition: transform 0.16s ease;
+  pointer-events: none;
+}
+
+/* 切到"完整"：滑块右移一个半宽 */
+.variant-switch[data-variant='full'] .variant-thumb {
+  transform: translateX(100%);
+}
+
+.variant-opt {
+  position: relative;
+  z-index: 1;
+  min-width: 46px;
+  height: 22px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 11px;
+  background: transparent;
+  color: #9aa4b8;
+  font-size: 12px;
+  line-height: 22px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.16s ease;
+}
+
+/* 选中态：白字（滑块已垫在下面） */
+.variant-switch[data-variant='short'] .variant-opt[data-variant='short'],
+.variant-switch[data-variant='full'] .variant-opt[data-variant='full'] {
+  color: #fff;
+}
+
+/* 键盘可达性：焦点环只在键盘聚焦时出现（鼠标点击不显示，避免"点一下就一圈蓝"） */
+.variant-switch:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(91, 141, 239, 0.45);
 }
 
 /* 主按钮：药丸形（此前是 34px 圆形，「复制 prompt」五个字必然折成两行） */
