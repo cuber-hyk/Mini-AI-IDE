@@ -1288,8 +1288,9 @@ async function loadLocalView(
     }
 
     // 查找框 hover 闪烁归属实测（仅在 `--test-findhover` 时做）：
-    // 派发合成 Alt 事件并在窗口期内统计 monaco-hover 浮层节点的增删次数，
-    // 用来判定"闪"是 SimpleButton 共性还是 close 独有 —— 决定补丁落点。
+    // 逐个真实悬停 Close / Previous / Next 三个按钮，直接测量弹出的浮层
+    // **宽度、高度、行数**。用户截图里的现象是"提示被折成两行"，所以
+    // "行数 > 1"就是闪烁根因仍在的直接判据（不需要肉眼观察）。
     if (process.argv.includes('--test-findhover')) {
       let hoverProbe: unknown = null;
       try {
@@ -1300,13 +1301,13 @@ async function loadLocalView(
       } catch (err) {
         hoverProbe = { ok: false, reason: err instanceof Error ? err.message : String(err) };
       }
-      process.stdout.write(`\n===== 查找框 hover 闪烁探针 =====\n${JSON.stringify(hoverProbe, null, 2)}\n`);
-      const h = hoverProbe as { ok?: boolean; flashing?: boolean; buttonsFound?: unknown[] } | null;
+      process.stdout.write(`\n===== 查找框 hover 探针 =====\n${JSON.stringify(hoverProbe, null, 2)}\n`);
+      const h = hoverProbe as { ok?: boolean; anyMultiLineHover?: boolean; verdict?: string; buttons?: unknown[] } | null;
       process.stdout.write(
-        `[ui-probe] 浮层被反复重建（会闪）：${h?.flashing ? '是' : '否'}；` +
-          `识别到的查找框按钮：${Array.isArray(h?.buttonsFound) ? h?.buttonsFound.length : 0} 个\n`
+        `[ui-probe] hover 提示折行：${h?.anyMultiLineHover ? '是（仍会抖）' : '否'}；` +
+          `判定：${h?.verdict ?? '未知'}；测量按钮数：${Array.isArray(h?.buttons) ? h.buttons.length : 0}\n`
       );
-      app.exit(editable && wraps && layoutOk ? 0 : 1);
+      app.exit(editable && wraps && layoutOk && h?.ok === true && h?.anyMultiLineHover === false ? 0 : 1);
       return;
     }
 

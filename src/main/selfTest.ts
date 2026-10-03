@@ -1201,6 +1201,51 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       { scopeCheckOk, undefinedNames: rendererUndefined },
     );
 
+    // V7：**复制按钮必须是横排、且宽度由内容决定**。
+    //
+    // 用户实测截图：按钮里的「复制」被折成**竖排两行**（"复"/"制"各占一行），
+    // 整个按钮缩成一条细长竖条。原因是节点处在 Monaco 的绝对定位容器里，
+    // 宽度被父级与视口边缘挤压，而中文没有词边界 → 浏览器逐字换行。
+    //
+    // 两条约束缺一不可，且**都必须带 `!important`**（Monaco 会给该节点写内联样式）：
+    //   - `white-space: nowrap`  → 禁止换行；
+    //   - `width: max-content`   → 宽度由内容决定，不受父容器挤压。
+    // 用 `width` 而非 `min-width`：绝对定位元素上 `min-width` 只是下限，
+    // 父级更宽时仍会被拉伸，尺寸不稳。
+    const bubbleRule = /\.selection-copy\s*\{([\s\S]*?)\}/.exec(cssCode)?.[1] ?? '';
+    const bubbleNowrap = /white-space:\s*nowrap\s*!important/.test(bubbleRule);
+    const bubbleMaxContent = /width:\s*max-content\s*!important/.test(bubbleRule);
+    // 反向：不允许出现把宽度写死的固定值（那会在不同字号/缩放下不匹配）
+    const bubbleNoFixedWidth = !/^\s*width:\s*\d+px/m.test(bubbleRule);
+    add(
+      'V7',
+      '复制按钮横排且宽度由内容决定（nowrap + max-content，均带 !important）',
+      bubbleNowrap && bubbleMaxContent && bubbleNoFixedWidth && bubbleRule.length > 0,
+      { bubbleNowrap, bubbleMaxContent, bubbleNoFixedWidth },
+    );
+
+    // V8：**查找框 hover 提示必须禁止折行**（治"折行导致尺寸抖动 → hover 反复隐藏重建"）。
+    //
+    // 用户实测对比：`Previous Match (Shift+Enter)` 一行横排、正常；
+    // `Close (Escape)` 折成两行、闪烁 —— 而且前者更长却没折，说明
+    // **折行与文本长度无关**，是浮层被挤在视口右缘、可用宽度不足。
+    //
+    // 关键在于 Monaco 把 `white-space: pre-wrap` 写成了**内联样式**
+    // （见 `hoverWidget.js`：字符串内容 `contentsElement.style.whiteSpace='pre-wrap'`），
+    // 内联声明压过普通样式表规则 —— 所以必须用 `!important` 才能覆盖。
+    //
+    // 同时**必须限定范围**（`:not(:has(*))` = 只命中叶子节点 = 纯文本提示），
+    // 否则会把编辑器里正常的富内容悬停（markdown 预览、多行说明）也硬撑成一行。
+    const hoverNowrap = /\.monaco-hover\s+\.hover-contents:not\(:has\(\*\)\)\s*\{[\s\S]*?white-space:\s*nowrap\s*!important/.test(
+      cssCode,
+    );
+    add(
+      'V8',
+      '查找框 hover 提示禁止折行（!important 覆盖 Monaco 的内联 pre-wrap，且只限纯文本叶子节点）',
+      hoverNowrap,
+      { hoverNowrap },
+    );
+
     // renderer.js 不经 tsc，这里至少保证可被解析（语法错误会在此暴露）
     let parseError: string | null = null;
     try {

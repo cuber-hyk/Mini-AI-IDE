@@ -459,29 +459,102 @@ body {
  * `.selection-copy{display:none}` 与 `.selection-copy.visible{display:inline-block}`
  * 会跟 Monaco 抢同一个属性，表现为"时而出现时而不出现"。
  * 现在只保留**外观**属性，一个 `display` 都不写。
+ *
+ * ⚠️ **`white-space: nowrap` 与 `min-width` 不是装饰，是刚需。**
+ * 用户实测截图：按钮里的「复制」被折成**竖排两行**（"复"/"制"各占一行）。
+ * 原因是 content widget 的容器宽度在极端情况下会被压得很窄（贴视口边缘时），
+ * 中文没有词边界，浏览器逐字换行。`nowrap` 禁止换行，`min-width` 兜住下限，
+ * 两者一起才能保证它始终是一个横排小药丸。
+ * （`width: max-content` 也可以，但在旧版内核里与 Monaco 的绝对定位配合不稳，
+ *  故用 `min-width` + `nowrap` 这组更保守的写法。）
  */
 .selection-copy {
   z-index: 20;
-  padding: 2px 9px;
-  border-radius: 5px;
-  background: #2c5cc5;
-  border: 1px solid #3f6fd8;
+  /**
+   * 【为什么必须锁死宽度行为】
+   *
+   * 用户实测截图：按钮里的「复制」被折成**竖排两行**（"复"/"制"各占一行），
+   * 整个按钮缩成一条细长竖条，很难看。
+   *
+   * 原因不是我们的 padding —— 是 content widget 节点处在 Monaco 的
+   * 绝对定位容器里，宽度受父级与视口边缘共同挤压；中文没有词边界，
+   * 浏览器就逐字换行。
+   *
+   * 两条约束缺一不可：
+   *   - `white-space: nowrap` → 禁止任何换行（治"竖排"）；
+   *   - `width: max-content`  → 宽度由内容决定，**不再受父容器挤压**
+   *     （治"被压窄"）。用 `width` 而非 `min-width`：`min-width` 在
+   *     绝对定位元素上只是下限，父级更宽时仍会被拉伸，尺寸不稳。
+   * 两者都用 `!important`：Monaco 会给该节点写内联样式（display/visibility），
+   * 而 `white-space`/`width` 我们不允许被任何内联写入覆盖。
+   */
+  white-space: nowrap !important;
+  width: max-content !important;
+  box-sizing: border-box;
+  text-align: center;
+  padding: 4px 11px;
+  /* 药丸形：圆角 ≥ 高度一半，视觉上与工具栏的小圆按钮成一家 */
+  border-radius: 999px;
+  background: linear-gradient(180deg, #3a6ad4 0%, #2f5cbe 100%);
+  border: 1px solid #4a7ade;
   color: #fff;
   font: inherit;
   font-size: 12px;
-  line-height: 18px;
+  font-weight: 500;
+  line-height: 17px;
+  letter-spacing: 0.5px;
   cursor: pointer;
   user-select: none;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+  transition: background 0.12s ease, box-shadow 0.12s ease, transform 0.08s ease;
 }
 
 .selection-copy:hover {
-  background: #3868d8;
+  background: linear-gradient(180deg, #4577e0 0%, #3868d0 100%);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.52);
+}
+
+.selection-copy:active {
+  background: linear-gradient(180deg, #2a55b0 0%, #2f5cbe 100%);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.45);
+  transform: translateY(1px);
 }
 
 .selection-copy.done {
-  background: #1d7a45;
+  background: linear-gradient(180deg, #238a4f 0%, #1d7a45 100%);
   border-color: #2b9c5c;
+  box-shadow: 0 2px 8px rgba(29, 122, 69, 0.5);
+}
+
+/* ---------------- 查找框 hover 提示：禁止折行 ----------------
+ *
+ * 用户实测对比（两张截图）：
+ *   - 「Previous Match (Shift+Enter)」→ **一行横排**，hover 正常不闪；
+ *   - 「Close (Escape)」→ 被折成**两行**（"Close" / "(Escape)"），反复闪烁，
+ *     而且是**紧贴视口右缘的那一个**（查找框最后一个按钮）。
+ * 注意「Close (Escape)」只有 14 字符、比 27 字符的 Previous 更短，却折行了
+ * ⇒ **折行与文本长度无关**，纯粹是浮层被挤在视口右缘、可用宽度不足。
+ *
+ * 【根因在 Monaco 的一行内联样式】
+ *   hoverWidget.js：「字符串」类型的 hover 内容会被内联写死
+ *     `contentsElement.style.whiteSpace = 'pre-wrap'`
+ *   内联声明优先级高于样式表，所以**普通 CSS 规则压不过它** —— 前几轮
+ *   在这上面加的 `white-space` 全部无效，看起来就像"这按钮很邪乎"。
+ *
+ * 【修法】用 `!important` 覆盖内联声明（CSS 规范允许样式表的 `!important`
+ * 覆盖元素的内联非 `!important` 声明），但**必须限定范围**，否则会把编辑器里
+ * 正常的悬停提示（变量说明、markdown 预览、多行内容）也硬撑成一行而溢出。
+ *
+ * 【怎么精确限定】看 Monaco 的 DOM 形态（hoverWidget.js 的构建顺序）：
+ *   - **字符串**内容：`.hover-contents` 是**叶子节点**（只含 textNode）；
+ *   - markdown 内容：会 append 一个元素进去 ⇒ **有元素子节点**。
+ * 所以 `:not(:has(*))` 精确圈定"纯文本提示"，正好就是查找框按钮这一类，
+ * 编辑器里的富内容 hover 完全不受影响。
+ *
+ * 效果：提示框保持单行 → 尺寸稳定 → 不再抖 → 不再反复隐藏重建。
+ */
+.monaco-hover .hover-contents:not(:has(*)) {
+  white-space: nowrap !important;
 }
 
 /* 目录树与编辑器之间的拖拽边线 */

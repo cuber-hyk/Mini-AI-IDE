@@ -26,6 +26,33 @@
   - 由此得到两条**互斥**假设（H1：SimpleButton 共性；H2：close 独有），必须实测二选一，补丁落点完全不同。
   - 新增只读诊断探针 `window.__uiFindHoverProbe()` 与入口 `npm run ui-probe:findhover`：打开查找框后在窗口期内派发合成 Alt 事件，统计 `monaco-hover` 浮层节点的增删次数，用来判定闪烁归属。探针**只读、不写 DOM、不触碰网页**。
 
+### Fixed
+
+- **复制按钮不再被折成竖排、并优化外观**（用户反馈："复制按钮样式太丑了，而且是竖着排列的"）。
+  根因：该节点处在 Monaco 的绝对定位容器里，宽度受父级与视口边缘挤压，而中文没有词边界 → 浏览器逐字换行。
+  修法：`white-space: nowrap !important`（禁止换行）+ `width: max-content !important`（宽度由内容决定，不受父容器挤压）。
+  用 `width` 而非 `min-width`：绝对定位元素上 `min-width` 只是下限，父级更宽时仍会被拉伸，尺寸不稳。
+  外观同步优化：药丸形圆角（`border-radius: 999px`）、与深色主题相称的蓝色渐变、hover/active 反馈、复制成功后绿色底。
+
+- **查找框关闭按钮 hover 提示不再折行**（"闪烁"的真凶）。
+  用户截图给出决定性对比：`Previous Match (Shift+Enter)` 是**一行横排**、正常；`Close (Escape)` 被折成**两行**、反复闪烁。
+  关键推论：`Close` (14 字符) 比 `Previous` (27 字符) **更短却折行** ⇒ 折行与文本长度无关，
+  而是浮层被挤在**视口右缘**（关闭按钮是查找框最后一个按钮）、可用宽度不足。
+  折行导致浮层尺寸变化 → 鼠标相对位置随之变化 → `MOUSE_LEAVE`/`MOUSE_OVER` 来回触发 → hover 被反复隐藏重建 = 闪。
+  **根因在 Monaco 的一行内联样式**：`hoverWidget.js` 对字符串类型的 hover 内容写死
+  `contentsElement.style.whiteSpace = 'pre-wrap'`，内联声明压过普通样式表规则 —— 前几轮在此加的 `white-space` 全部无效。
+  修法：用 `!important` 覆盖（CSS 规范允许样式表 `!important` 覆盖内联非 `!important` 声明），
+  并以 `:not(:has(*))` **限定只作用于纯文本叶子节点**（Monaco 的字符串 hover 是叶子；
+  markdown/富内容 hover 会 append 子元素），从而不影响编辑器里正常的变量悬停与多行预览。
+
+### Note
+
+- 本轮**没有**采用"patch Monaco"方案。既然折行可以在 CSS 层精确覆盖，就不必改依赖
+  （`patch-package` 依赖与 `postinstall` 保留备用，但未生成任何 patch 文件）。
+- 探针 `npm run ui-probe:findhover` 的判据同步升级：不再数"浮层重建次数"这种间接信号，
+  改为**逐个真实悬停 Close / Previous / Next，直接测量浮层的宽度、高度与行数**。
+  `lines > 1` 即说明折行仍在。这让"闪烁有没有修好"变成可读数字，不再靠肉眼。
+
 ### Note
 
 - 术语演进：早期表述"如实 Electron 身份"已由 ADR-0001 修正为 **"不伪造、不自报、内部自洽"**（依据 P0b 受控实验）。下方历史条目中的旧提法保留原样，以反映当时的认知。

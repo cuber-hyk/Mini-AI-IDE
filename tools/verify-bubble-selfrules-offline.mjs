@@ -67,6 +67,24 @@ add(
   /selection\.getStartPosition\(\)/.test(js) && !/const end = selection\.getEndPosition\(\)/.test(js)
 );
 
+// V7 —— 复制按钮横排 + 宽度由内容决定（治"复制"被折成竖排）
+const bubbleRule = /\.selection-copy\s*\{([\s\S]*?)\}/.exec(cssCode)?.[1] ?? '';
+add(
+  'V7',
+  '复制按钮横排且宽度由内容决定（nowrap + max-content，均带 !important）',
+  /white-space:\s*nowrap\s*!important/.test(bubbleRule) &&
+    /width:\s*max-content\s*!important/.test(bubbleRule) &&
+    !/^\s*width:\s*\d+px/m.test(bubbleRule) &&
+    bubbleRule.length > 0
+);
+
+// V8 —— 查找框 hover 提示禁止折行（!important 覆盖 Monaco 内联 pre-wrap）
+add(
+  'V8',
+  '查找框 hover 提示禁止折行（覆盖内联 pre-wrap，且只限纯文本叶子节点）',
+  /\.monaco-hover\s+\.hover-contents:not\(:has\(\*\)\)\s*\{[\s\S]*?white-space:\s*nowrap\s*!important/.test(cssCode)
+);
+
 // renderer.js 仍可解析
 let parseError = null;
 try {

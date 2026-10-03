@@ -247,6 +247,24 @@
     const node = ed.getDomNode();
     const nodeRect = node ? node.getBoundingClientRect() : null;
 
+    /**
+     * 【是否被折成竖排】—— 用户实测截图里「复制」变成上下两个字的细长条。
+     *
+     * 判据不能只看宽高比，因为「复制」两字横排本就接近方形。改用**更直接的**两条：
+     *   1. 计算样式的 `white-space` 必须是 `nowrap`（我们锁死了它）；
+     *   2. 节点高度不超过 `line-height + 上下 padding` 的合理上限 ——
+     *      一旦折行，高度会翻倍。
+     * 两者合起来即可判定"没有竖排"。
+     */
+    const lineHeight = parseFloat(cs.lineHeight) || 0;
+    const padTop = parseFloat(cs.paddingTop) || 0;
+    const padBottom = parseFloat(cs.paddingBottom) || 0;
+    const borderTop = parseFloat(cs.borderTopWidth) || 0;
+    const borderBottom = parseFloat(cs.borderBottomWidth) || 0;
+    // 单行时应有的高度（含 padding 与 border）
+    const singleLineHeight = lineHeight + padTop + padBottom + borderTop + borderBottom;
+    const isSingleLine = cs.whiteSpace === 'nowrap' && rect.height <= singleLineHeight + 1.5;
+
     // 是否落在编辑器可视区内
     const inView = Boolean(
       nodeRect &&
@@ -275,6 +293,10 @@
       testLine: targetLine,
       testLineLength: maxLen,
       inView,
+      // 排版自检：不是竖排（单行、无换行）
+      whiteSpace: cs.whiteSpace,
+      singleLineHeight: Math.round(singleLineHeight),
+      isSingleLine,
     };
     // 判定：display 不是 none、尺寸 > 0、且落在编辑器视口内，才算"真的出现了"
     result.visible =
@@ -316,8 +338,10 @@
     const findDom = dom.querySelector('.find-widget');
     if (!findDom) return { ok: false, reason: '查找框未出现（actions.find 未生效）' };
 
-    // 2) 找出三个按钮。SimpleButton 的 domNode 带 class "button" + codicon 图标。
-    //    用 aria-label 前缀区分：Close / Previous / Next。
+    /**
+     * 2) 找出三个按钮。判据用 aria-label 前缀，且**要求它同时是 SimpleButton**
+     *    （class 里含 `button`，且是 codicon 图标按钮）——避免把其它同名按钮抓进来。
+     */
     const buttons = [];
     const allButtons = findDom.querySelectorAll('.button');
     for (let i = 0; i < allButtons.length; i += 1) {
@@ -329,62 +353,90 @@
       else if (/^Next/i.test(label)) kind = 'next';
       if (kind) buttons.push({ kind, node, label });
     }
+    if (buttons.length === 0) return { ok: false, reason: '查找框里没找到 Close/Previous/Next 按钮' };
 
-    // 3) 统计 hover 浮层节点的增删。Monaco 自绘 hover 的根节点 class 是 monaco-hover。
-    //    也统计 custom-hover 属性：它是"自绘 hover 已挂"的标记。
-    let added = 0;
-    let removed = 0;
-    const observer = new MutationObserver(function (records) {
-      for (let i = 0; i < records.length; i += 1) {
-        const rec = records[i];
-        for (let j = 0; j < rec.addedNodes.length; j += 1) {
-          const n = rec.addedNodes[j];
-          if (n.nodeType === 1 && (n.classList?.contains('monaco-hover') || n.querySelector?.('.monaco-hover'))) added += 1;
-        }
-        for (let j = 0; j < rec.removedNodes.length; j += 1) {
-          const n = rec.removedNodes[j];
-          if (n.nodeType === 1 && (n.classList?.contains('monaco-hover') || n.querySelector?.('.monaco-hover'))) removed += 1;
-        }
-      }
-    });
-    observer.observe(document.body, { childList: true, subtree: true });
-
-    // 4) 派发合成的 Alt 按下/抬起（观测用；不写 DOM、不碰网页）
-    const fireAlt = function (type) {
-      document.dispatchEvent(
-        new KeyboardEvent(type, { key: 'Alt', code: 'AltLeft', altKey: type === 'keydown', bubbles: true, cancelable: true })
-      );
+    const sleep = function (ms) {
+      return new Promise(function (r) {
+        window.setTimeout(r, ms);
+      });
     };
 
-    const before = { added, removed };
-    fireAlt('keydown');
-    fireAlt('keyup');
-    fireAlt('keydown');
-    fireAlt('keyup');
-    // 等一帧让 MutationObserver 回调跑完
-    return new Promise(function (resolve) {
-      window.setTimeout(function () {
-        observer.disconnect();
-        resolve({
-          ok: true,
-          buttonsFound: buttons.map(function (b) {
-            return {
-              kind: b.kind,
-              label: b.label,
-              // 是否已被 Monaco 挂上自绘 hover 标记
-              customHover: b.node.getAttribute('custom-hover'),
-              hasTitle: b.node.hasAttribute('title'),
-            };
-          }),
-          // Alt 四次派发期间，页面里 monaco-hover 浮层节点的增删次数
-          hoverAdded: added - before.added,
-          hoverRemoved: removed - before.removed,
-          // 判定：有增删 = 浮层确实被反复重建 = 会闪
-          flashing: added - before.added > 0 || removed - before.removed > 0,
-          note: 'hoverAdded/hoverRemoved 只在 Alt 派发窗口内计数；两者非零即说明浮层被反复重建',
-        });
-      }, 300);
-    });
+    /**
+     * 3) 悬停某个按钮，等浮层出现，然后**直接测量浮层**。
+     *
+     * 这是本轮最重要的判据升级：不再靠"数重建次数"这种间接信号，
+     * 而是直接量浮层的**宽度、高度、行数、white-space**。
+     * 用户截图里的现象就是"提示被折成两行"，那么只要量出**行数 > 1**，
+     * 就说明根因仍在；量出行数为 1 且宽度稳定，就说明修好了。
+     *
+     * 用 `mouseover`（Monaco 的 `_setupDelayedHover` 监听 `MOUSE_OVER`）
+     * 触发，再等 `delay + 余量`。只派发事件、不写 DOM，符合零注入约束。
+     */
+    const hoverOne = async function (b) {
+      const r = b.node.getBoundingClientRect();
+      const opts = {
+        bubbles: true,
+        cancelable: true,
+        clientX: Math.round(r.left + r.width / 2),
+        clientY: Math.round(r.top + r.height / 2),
+        relatedTarget: null,
+      };
+      b.node.dispatchEvent(new MouseEvent('mouseover', opts));
+      // workbench.hover.delay 默认 300ms，多等一点确保浮层已完全渲染
+      await sleep(700);
+
+      const hovers = document.querySelectorAll('.monaco-hover');
+      // 取最后一个（最新的那个）
+      const hover = hovers.length > 0 ? hovers[hovers.length - 1] : null;
+      if (!hover) {
+        b.node.dispatchEvent(new MouseEvent('mouseout', opts));
+        return { kind: b.kind, label: b.label, hoverShown: false };
+      }
+
+      const contents = hover.querySelector('.hover-contents');
+      const cs = contents ? window.getComputedStyle(contents) : null;
+      const rect = hover.getBoundingClientRect();
+      const lineHeight = cs ? parseFloat(cs.lineHeight) || 16 : 16;
+      const padTop = cs ? parseFloat(cs.paddingTop) || 0 : 0;
+      const padBottom = cs ? parseFloat(cs.paddingBottom) || 0 : 0;
+      const singleLine = lineHeight + padTop + padBottom;
+      // 行数 ≈ 内容高 / 行高，四舍五入
+      const lines = cs ? Math.max(1, Math.round(contents.getBoundingClientRect().height / lineHeight)) : 1;
+
+      b.node.dispatchEvent(new MouseEvent('mouseout', opts));
+      return {
+        kind: b.kind,
+        label: b.label,
+        hoverShown: true,
+        hoverWidth: Math.round(rect.width),
+        hoverHeight: Math.round(rect.height),
+        contentsWhiteSpace: cs ? cs.whiteSpace : null,
+        lineHeight: Math.round(lineHeight),
+        singleLineHeight: Math.round(singleLine),
+        lines,
+        // 单行 = 不折行 = 尺寸稳定 = 不抖。这是"闪烁是否被治好"的直接判据。
+        isSingleLine: lines === 1,
+      };
+    };
+
+    return (async function () {
+      const results = [];
+      for (let i = 0; i < buttons.length; i += 1) {
+        // 逐个悬停，中间留间隔让上一个浮层收掉
+        results.push(await hoverOne(buttons[i]));
+        await sleep(250);
+      }
+      const anyMultiLine = results.some(function (r) {
+        return r.hoverShown && r.isSingleLine === false;
+      });
+      return {
+        ok: true,
+        buttons: results,
+        // 判定：任一按钮的提示折成多行 ⇒ 仍会抖 ⇒ 仍会闪
+        anyMultiLineHover: anyMultiLine,
+        verdict: anyMultiLine ? '仍有折行提示（会抖）' : '所有提示均为单行（尺寸稳定）',
+      };
+    })();
   };
 
   /* ---------------- Monaco 初始化 ----------------
