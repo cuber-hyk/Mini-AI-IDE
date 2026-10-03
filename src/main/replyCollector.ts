@@ -71,10 +71,22 @@ const COLLECT_HELPERS = `
       return m && m[1] ? m[1] : '';
     } catch (e) { return ''; }
   };
-  // 从一个 <pre> 取内容：innerText 原样（保留内层围栏行、空行与缩进）
+  // 清理 pre/容器文本的**结构性首尾空行**（"<pre>\\n ... \\n</pre>" 标签带来的换行）。
+  // ⚠️ 绝不能 trim：trim 会把**首行的合法缩进**一并吃掉 —— 模型按选区回显的
+  //    代码块常从缩进行开始（比如选区落在函数体内部，首行 "    n = len(arr)"），
+  //    实测被 trim 吃掉后应用回文件就与源码错位（2026-10-03：n 顶格了、for 还缩进着，
+  //    其余行都在字符串中间不受影响，diff 里表现为"只有首行缩进丢失"）。
+  //    因此只做两次精确剥除：开头「一行纯空白 + 换行」、结尾「换行 + 纯空白」各一次，
+  //    首行缩进与中间行一概不动；内容自带的空行（结构性空行之后的首/尾空行）保留。
+  var cleanText = function (s) {
+    var t = String(s || '').replace(/^[ \\t]*\\r?\\n/, '').replace(/\\r?\\n[ \\t]*$/, '');
+    return t.trim().length === 0 ? '' : t; // 判空可以用 trim，**返回值**绝不用 trim 后的
+  };
+  // 从一个 <pre> 取内容：innerText 优先（贴近渲染结果），为空则回退 textContent；
+  // 两者都只做上面的结构性清理 —— 内层围栏行、空行与缩进一律保留。
   var textOf = function (pre) {
     try {
-      return ((pre.innerText || '').trim() || (pre.textContent || '').trim());
+      return cleanText(pre.innerText) || cleanText(pre.textContent);
     } catch (e) { return ''; }
   };
   // markdown 语义容器：按**文档序取最后一个** —— 这就是"最新一条回复"
@@ -176,7 +188,8 @@ export const COLLECT_STRATEGIES: CollectStrategy[] = [
       ${COLLECT_HELPERS}
       var node = lastMarkdownNode(false);
       if (!node) return [];
-      var t = ((node.innerText || '').trim() || (node.textContent || '').trim());
+      // 容器整体文本同样只做结构性清理（首行缩进保护，与 textOf 同一教训）
+      var t = cleanText(node.innerText) || cleanText(node.textContent);
       if (!t) return [];
       // 整体文本里已经带围栏（模型把 markdown 原样输出）时直接返回；
       // 没有围栏就包一层自适应围栏，保证解析器能识别。

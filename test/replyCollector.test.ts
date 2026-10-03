@@ -272,6 +272,101 @@ describe('采集策略脚本（模拟目标站 DOM）', () => {
     assert.ok(text.includes('```python'), text);
   });
 
+  /* ---- 核心回归：首行缩进保护（修"应用后缩进错乱"） ----
+   *
+   * 用户实测（2026-10-03）：选区落在函数体内部，AI 回显的首行是带 4 空格缩进的
+   * "    n = len(arr)"，页面上 n 与 for 明明对齐，应用回文件后 n 却顶格了、
+   * for 还缩进着 —— diff 里表现为"只有首行缩进丢失"。
+   * 根因：textOf 用 trim() 清理 pre 的结构性首尾换行时，把首行的**合法前导缩进**
+   * 一并吃掉（trim 剥掉开头所有空白直到第一个非空白字符）。其余行在字符串中间
+   * 不受影响，所以错位形态是"仅首行缩进丢失"。
+   * 修复：只剥「首部一行纯空白+换行」「尾部换行+纯空白」，首行缩进绝不动。
+   */
+
+  /** 用户实测场景的片段：选区 9-14（函数体内部），首行带 4 空格缩进 */
+  const INDENTED_SNIPPET_LINES = [
+    '    n = len(arr)  # 注释',
+    '    for i in range(n - 1):  # 注释',
+    '        for j in range(n - 1 - i):',
+    '            if arr[j] > arr[j + 1]:',
+    '                arr[j], arr[j + 1] = arr[j + 1], arr[j]',
+    '    return arr',
+  ];
+
+  it('pre 首部带结构性换行 + 首行带缩进 → 采集后首行缩进保留（n 与 for 对齐）', async () => {
+    // 模拟高亮 <pre> 的常见结构：内容首尾各有一个标签带来的换行
+    const preText = '\n' + INDENTED_SNIPPET_LINES.join('\n') + '\n';
+    const r = makeReply('文件： sort.py', [{ lang: 'python', text: preText }]);
+    const raw = runScript(scriptOf('latest-reply-container'), pageOf([r]));
+    const replyText = normalizeStrategyOutput(raw)[0] as string;
+
+    const { parseModelReply } = await import('../src/shared/returnPath');
+    const code = parseModelReply(replyText).blocks[0]?.code ?? '';
+    const lines = code.split('\n');
+    assert.equal(lines[0], INDENTED_SNIPPET_LINES[0], `首行缩进必须保留，实际：${JSON.stringify(code)}`);
+    assert.equal(lines[1], INDENTED_SNIPPET_LINES[1], '次行缩进必须保留');
+    assert.ok(lines[0].startsWith('    '), '首行必须与 for 同为 4 空格缩进（页面上对齐）');
+  });
+
+  it('pre 无结构性换行、内容直接以缩进行开始 → 首行缩进同样保留', async () => {
+    const r = makeReply('文件： sort.py', [{ lang: 'python', text: INDENTED_SNIPPET_LINES.join('\n') }]);
+    const raw = runScript(scriptOf('latest-reply-container'), pageOf([r]));
+    const replyText = normalizeStrategyOutput(raw)[0] as string;
+
+    const { parseModelReply } = await import('../src/shared/returnPath');
+    const code = parseModelReply(replyText).blocks[0]?.code ?? '';
+    assert.ok(code.startsWith('    n = len(arr)'), `首行缩进必须保留，实际：${JSON.stringify(code)}`);
+  });
+
+  it('端到端：首行缩进的片段 → 采集 → 解析 → replace-lines 应用，缩进逐行一致', async () => {
+    // 原文件 16 行：第 8 行 def，第 9-14 行选区（函数体内部），第 15 行结尾
+    const originalLines = [
+      '"""mod"""', 'import os', '', 'def other():', '    pass', '', '',
+      'def bubble_sort(arr):',
+      ...INDENTED_SNIPPET_LINES,
+      'print(bubble_sort([3, 1, 2]))',
+      '',
+    ];
+    const original = originalLines.join('\n');
+
+    // 页面：pre 首部带结构性换行；容器内带「文件 / 范围」线索（模型回显区间）
+    const preText = '\n' + INDENTED_SNIPPET_LINES.join('\n') + '\n';
+    const r = makeReply('文件： sort.py', [{ lang: 'python', text: preText }]);
+    link(r.container, fakeEl('div', 'ds-markdown-title', '范围：9-14'));
+    const raw = runScript(scriptOf('latest-reply-container'), pageOf([r]));
+    const replyText = normalizeStrategyOutput(raw)[0] as string;
+
+    const { parseModelReply, computeApply } = await import('../src/shared/returnPath');
+    const parsed = parseModelReply(replyText);
+    const block = parsed.blocks[0];
+    assert.ok(block, '必须解析出代码块');
+    assert.deepEqual(block?.range, { start: 9, end: 14 }, '容器内「范围：9-14」应被解析');
+
+    const outcome = computeApply(original, block!, {
+      kind: 'replace-lines',
+      start: 9,
+      end: 14,
+      expectedOriginal: INDENTED_SNIPPET_LINES.join('\n'),
+      contextPrev: 'def bubble_sort(arr):',
+      contextNext: 'print(bubble_sort([3, 1, 2]))',
+    });
+    assert.ok(outcome.ok, `三向校验应通过，实际：${JSON.stringify(outcome)}`);
+    if (!outcome.ok) return;
+
+    const applied = outcome.text.split('\n');
+    assert.equal(applied[8], INDENTED_SNIPPET_LINES[0], `应用后第 9 行必须保留 4 空格缩进（n 与 for 对齐），实际：${JSON.stringify(applied[8])}`);
+    assert.equal(applied[9], INDENTED_SNIPPET_LINES[1], '应用后第 10 行 for 与 n 必须同级缩进');
+    assert.equal(applied[7], 'def bubble_sort(arr):', '区间上一行（def）保持原样');
+    assert.equal(applied[14], 'print(bubble_sort([3, 1, 2]))', '区间下一行保持原样');
+  });
+
+  it('pre 只有空白内容（结构性换行/空格）→ 判空过滤，不产出空代码块', () => {
+    const r = makeReply('文件： sort.py', [{ lang: 'python', text: '\n   \n  \n' }]);
+    const raw = runScript(scriptOf('latest-reply-container'), pageOf([r]));
+    const texts = normalizeStrategyOutput(raw);
+    assert.equal(texts.length, 0, '纯空白 pre 不得产出代码块');
+  });
+
   it('latest-reply-container-text：容器无 <pre> 时回退到整体文本', () => {
     const plain = fakeEl('div', 'ds-markdown', '这是一段纯文本回复，没有代码块。');
     const page = pageOf([{ node: plain }]);
