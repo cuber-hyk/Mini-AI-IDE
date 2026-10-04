@@ -548,7 +548,8 @@
 
 /**
  * 计算两侧文本的行级映射（与主进程 src/shared/diff.ts 同算法：行级 LCS）。
- * 返回按原文顺序排列的 { kind:'del'|'add', oldLine, newLine, text }。
+ * 返回按原文顺序排列的 { kind:'del'|'add', oldLine, newLine, afterLine, text }。
+ * 新增行的 afterLine 是已走过的原文行数（0 表示首行之前）。
  */
   function lineMap(original, modified) {
     const a = original.split(/\r\n|\r|\n/);
@@ -560,7 +561,7 @@
     const ops = [];
     if (a.length > 4000 || b.length > 4000) {
       a.forEach(function (text, i) { ops.push({ kind: 'del', oldLine: i + 1, text: text }); });
-      b.forEach(function (text, j) { ops.push({ kind: 'add', newLine: j + 1, text: text }); });
+      b.forEach(function (text, j) { ops.push({ kind: 'add', newLine: j + 1, afterLine: a.length, text: text }); });
       return ops;
     }
 
@@ -586,7 +587,7 @@
         ops.push({ kind: 'del', oldLine: i + 1, text: a[i] });
         i += 1;
       } else {
-        ops.push({ kind: 'add', newLine: j + 1, text: b[j] });
+        ops.push({ kind: 'add', newLine: j + 1, afterLine: i, text: b[j] });
         j += 1;
       }
     }
@@ -595,7 +596,7 @@
       i += 1;
     }
     while (j < b.length) {
-      ops.push({ kind: 'add', newLine: j + 1, text: b[j] });
+      ops.push({ kind: 'add', newLine: j + 1, afterLine: i, text: b[j] });
       j += 1;
     }
     return ops;
@@ -670,22 +671,16 @@
       });
     });
 
-    /* ---- 2) 插入行：连续的 add 合并成一个 view zone，插在对应删除块之后 ----
+    /* ---- 2) 插入行：同一原文锚点的 add 合并成一个 view zone ----
      *
-     * 插入点 = 该新增行**前面最近的删除行**；没有删除行就挂到文件末尾（纯新增场景）。
-     * 用单趟扫描推进 lastDel，不用 forEach + indexOf（那样是 O(n²)，大文件会卡）。
+     * 插入点由行映射的原文游标决定；即便前面只有未改动的行，也能正确定位。
      */
     const groups = [];
-    let lastDel = total;
     ops.forEach(function (op) {
-      if (op.kind === 'del') {
-        lastDel = op.oldLine;
-        return;
-      }
       if (op.kind !== 'add') return;
       const last = groups[groups.length - 1];
-      if (last && last.afterLine === lastDel) last.lines.push(op);
-      else groups.push({ afterLine: lastDel, lines: [op] });
+      if (last && last.afterLine === op.afterLine) last.lines.push(op);
+      else groups.push({ afterLine: op.afterLine, lines: [op] });
     });
 
     state.editor.changeViewZones(function (accessor) {
@@ -715,7 +710,7 @@
           box.appendChild(row);
         });
 
-        // afterLineNumber 是 1-based，表示插到该行之后
+        // afterLineNumber 表示插到该原文行之后；0 表示首行之前
         const id = accessor.addZone({
           afterLineNumber: Math.min(group.afterLine, total),
           heightInPx: group.lines.length * 22 + 2,

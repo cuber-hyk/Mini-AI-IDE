@@ -31,6 +31,7 @@
 
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { computeApply, parseModelReply } from '../src/shared/returnPath';
 
 import {
   FORMAT_SPEC_FULL,
@@ -132,6 +133,30 @@ test('格式模板：简洁版保留 6 个示例（高频易错场景不缺席�
   // 两个最关键的教学点必须在：内嵌代码块、纯对话不落文件
   assert.match(short, /内嵌代码块/);
   assert.match(short, /不加锚点|不落文件/);
+});
+
+test('两版内置示例均保持原区间，新增行可通过真实解析与替换应用', () => {
+  for (const spec of [FORMAT_SPEC_SHORT, FORMAT_SPEC_FULL]) {
+    for (const exampleNumber of [2, 3]) {
+      const example = spec.split(`示例 ${exampleNumber}｜`)[1]!.split('示例 ')[0]!;
+      // 去掉示例展示用的外围五反引号，交给解析器实际交换的三段式内容。
+      const inputText = example.split('【我给你的】')[1]!.split('【你该给我的】')[0]!.replace(/^`{5}$/gm, '');
+      const outputText = example.split('【你该给我的】')[1]!.replace(/^`{5}$/gm, '');
+      const input = parseModelReply(inputText).blocks[0]!;
+      const output = parseModelReply(outputText).blocks[0]!;
+      assert.deepEqual(output.range, input.range, '新增行不能把范围改为新内容占据的行号');
+      const start = input.range!.start;
+      const prefix = Array.from({ length: start - 1 }, (_, i) => `before ${i}`);
+      const original = [...prefix, input.code, 'tail'].join('\n');
+      const applied = computeApply(original, output, {
+        kind: 'replace-lines', start, end: input.range!.end,
+        expectedOriginal: input.code, contextNext: 'tail',
+      });
+      assert.equal(applied.ok, true, '示例必须可以应用');
+      if (applied.ok) assert.equal(applied.text, [...prefix, output.code, 'tail'].join('\n'));
+      if (exampleNumber === 2) assert.equal(output.code.split('\n').length, 10);
+    }
+  }
 });
 
 test('格式模板：不得出现解析器不认识的 ### 续： 约定', () => {

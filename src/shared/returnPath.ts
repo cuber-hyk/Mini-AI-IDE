@@ -534,73 +534,11 @@ export interface ApplyResult {
   mode: ApplyMode['kind'];
   /** 被替换掉的原文（用于撤销与 diff） */
   replaced: string;
-  /**
-   * 覆盖范围归一化的记录（仅 `replace-lines` 且实际发生调整时存在）。
-   *
-   * 说明模型回显内容比 `范围：N-M` 覆盖得更远时，程序做了怎样的收敛：
-   *  - `from`：归一化前的区间结束行；
-   *  - `to`：归一化后的区间结束行（起始行不变）。
-   * 例：`范围：2-10` 但模型内容实际写到第 11 行 ⇒ `{from:10, to:11}`。
-   * UI 据此可提示"已按模型实际覆盖范围把 2-10 收敛为 2-11"，让用户看得明白。
-   */
-  normalized?: { from: number; to: number };
 }
 
 export type ApplyOutcome =
   | ({ ok: true } & ApplyResult)
   | { ok: false; reason: 'range-invalid' | 'content-mismatch' | 'context-mismatch'; detail: string };
-
-/**
- * 把"替换块"与"区间起始行之后的原文"做双向游标对齐，求出**该块实际覆盖到原文的哪一行**。
- *
- * 为什么要它：`范围：N-M` 由用户选中片段自动生成，只说明"我选了几行"，
- * 不约束模型必须只回显这几行。模型习惯给"能跑通的完整函数"，常把区间之外、
- * 紧挨着区间的那几行也一并写进回显内容。那些行不在区间内、不会被删掉，
- * 原样应用就会**重复出现两份** —— 用户看到的就是"改个片段，结果整块都乱了"。
- *
- * 判据（确定性、不依赖模型措辞）：
- *  - 两侧游标 `i`（走原文，从 start 起）、`j`（走 block）；
- *  - 相等 → 同步前进；
- *  - `block[j]` 在原文 `i` 之后还能找到 → 中间的原文行是被替换掉的，跳过；
- *  - `block[j]` 在原文里再也找不到 → 它是新增行，推进 `j`；
- *  - `j` 走完时，`i` 停在"该块覆盖到原文的第几行"（相对 start 的消费行数）。
- *
- * 返回相对区间起始的**消费行数**（≥ 0）。调用方据此把 `end` 收敛为 `start + consumed - 1`。
- */
-export function alignConsumedLines(origFromStart: string[], blockLines: string[]): number {
-  let i = 0;
-  let j = 0;
-  let consumed = 0;
-  // 上界保护：任何一侧的推进不会超过两侧长度之和
-  const guard = origFromStart.length + blockLines.length + 1;
-  let steps = 0;
-  while (j < blockLines.length && steps <= guard) {
-    steps += 1;
-    const o = i < origFromStart.length ? (origFromStart[i] as string) : null;
-    const b = blockLines[j] as string;
-    if (o !== null && o === b) {
-      i += 1;
-      j += 1;
-      consumed = i;
-      continue;
-    }
-    const lookahead = o === null ? -1 : origFromStart.indexOf(b, i);
-    if (lookahead > i) {
-      // 原文 i..lookahead-1 未出现在该块中 → 视为被替换掉，跳过
-      i = lookahead;
-      continue;
-    }
-    if (lookahead === i) {
-      // 相等分支已处理，这里只可能是 o === null
-      i += 1;
-      consumed = i;
-      continue;
-    }
-    // 该块此行为新增
-    j += 1;
-  }
-  return consumed;
-}
 
 /** 按 1-based 闭区间取行（用于片段校验） */
 export function getLineRange(text: string, start: number, end: number): string[] {
@@ -697,37 +635,17 @@ export function computeApply(
       const replaced = currentSlice;
       const blockLines = block.code.split(/\r\n|\r|\n/);
 
-      /*
-       * ---- 覆盖范围归一化（关键：修"改片段结果整段乱"） ----
-       *
-       * 背景见 alignConsumedLines 的注释：`范围：N-M` 只说明"用户选了几行"，
-       * 不约束模型只回显这几行。模型常把区间外、紧挨着区间的那几行也一并写进来，
-       * 那几行不在区间内不会被删，原样应用就会**重复出现两份**。
-       *
-       * 做法：把替换块与"从 start 起的原文"做双向游标对齐，求出该块**实际消费**了多少行：
-       *  - consumed > 区间行数 → 模型多写了区间外的行 ⇒ 把 end 扩到 start+consumed-1
-       *    （那些行被吞掉，不再重复；最终文本与"用户手改后应有的样子"一致）；
-       *  - consumed < 区间行数 → 模型只重写了区间的前一部分 ⇒ 不收缩（保守），
-       *    仍按原 end 替换，避免把用户没让改的原文行删掉。
-       *
-       * 归一化是**纯计算**，不改动任何文件；实际落盘仍由用户确认后执行（ADR-0004）。
-       */
-      const consumed = alignConsumedLines(allLines.slice(mode.start - 1), blockLines);
-      const rangeLen = mode.end - mode.start + 1;
-      const effEnd = consumed > rangeLen ? mode.start + consumed - 1 : mode.end;
-
+      // 范围只指向原文；新内容行数不限制，区间外内容完整保留。
       const newLines = [
         ...allLines.slice(0, mode.start - 1),
         ...blockLines,
-        ...allLines.slice(effEnd),
+        ...allLines.slice(mode.end),
       ];
-      const adjusted = effEnd !== mode.end;
       return {
         ok: true,
         text: newLines.join('\n'),
         mode: mode.kind,
         replaced,
-        ...(adjusted ? { normalized: { from: mode.end, to: effEnd } } : {}),
       };
     }
     default: {

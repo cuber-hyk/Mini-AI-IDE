@@ -483,6 +483,39 @@ describe('行区间指令与片段替换（三向校验）', () => {
     if (!r.ok) return;
     assert.equal(r.text, ['l1', 'X2', 'l5'].join('\n'));
   });
+
+  it('10-10 替换为十行：相同括号和空行也不能吞掉区间外原文', () => {
+    const lines = Array.from({ length: 25 }, (_, i) => `原第 ${i + 1} 行`);
+    lines[10] = '}';
+    lines[11] = '';
+    const added = [...Array.from({ length: 7 }, (_, i) => `新增 ${i + 1}`), '}', '', '最后一行'];
+    const block = parseModelReply([
+      '### 文件：a.txt', '### 范围：10-10', '````', ...added, '````',
+    ].join('\n')).blocks[0]!;
+    const result = computeApply(lines.join('\n'), block, {
+      kind: 'replace-lines', start: 10, end: 10,
+      expectedOriginal: lines[9]!, contextPrev: lines[8], contextNext: lines[10],
+    });
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    const after = result.text.split('\n');
+    assert.equal(after.length, 34);
+    assert.deepEqual(after.slice(0, 9), lines.slice(0, 9));
+    assert.deepEqual(after.slice(9, 19), added, '新内容应占第 10-19 行');
+    assert.deepEqual(after.slice(19), lines.slice(10), '原第 11 行起须完整保留并后移 9 行');
+    assert.equal(result.replaced, lines[9]);
+  });
+
+  it('缩短区间时新内容恰好等于下一行，也必须保留原下一行', () => {
+    const result = computeApply(fileText, mkBlock('l5'), {
+      kind: 'replace-lines', start: 2, end: 4,
+      expectedOriginal: 'l2\nl3\nl4', contextPrev: 'l1', contextNext: 'l5',
+    });
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.text, 'l1\nl5\nl5');
+    assert.equal(result.replaced, 'l2\nl3\nl4');
+  });
 });
 
 describe('带行号片段的格式化与还原', () => {

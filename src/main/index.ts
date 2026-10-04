@@ -1095,17 +1095,6 @@ async function loadLocalView(
             if (diff.identical) {
               hints.push('应用后内容与当前文件完全相同，无需改动');
             }
-            /*
-             * 覆盖范围归一化提示：模型回显内容比 `### 范围：N-M` 覆盖得更远时，
-             * computeApply 会把区间收敛到模型实际写到的行（否则区间外的原文行会残留、
-             * 与新内容重复，看起来像"改个片段结果整块都乱了"）。
-             * 这里明确告诉用户收敛成了什么，不让它成为隐式行为。
-             */
-            if (computed.normalized) {
-              hints.push(
-                `模型回显的内容覆盖更远，已把区间 ${b.range?.start}-${computed.normalized.from} 收敛为 ${b.range?.start}-${computed.normalized.to}`
-              );
-            }
           } else {
             applicable = false;
             blockedReason = computed.detail;

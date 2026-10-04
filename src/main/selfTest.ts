@@ -18,7 +18,6 @@ import * as path from 'node:path';
 import { CHANNELS } from '../shared/contract';
 import { buildPrompt, getFormatSpec } from '../shared/formatSpec';
 import {
-  alignConsumedLines,
   computeApply,
   formatNumberedSnippet,
   parseModelReply,
@@ -1807,84 +1806,36 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     stripNumberedPrefix(numbered)
   );
 
-  /* ---- J8-J11) 覆盖范围归一化：模型多写区间外的行时不得重复 ----
-   *
-   * 真实缺陷背景（用户实测："改个片段，覆盖范围出了问题"）：
-   * `### 范围：2-10` 由用户选中片段自动生成，只说明"我选了几行"，不约束模型只回显这几行。
-   * 模型习惯给"能跑通的完整函数"，常把区间**外**、紧挨着区间的那几行也写进来。
-   * 那些行不在区间内不会被删 → 原样应用就会出现**两份**，看起来像"整块都乱了"。
-   * 归一化后：区间按模型实际覆盖范围收敛（2-10 → 2-11），结果与用户手改一致。
-   */
-  const bubbleOriginal = [
-    '冒泡排序：',
-    '```python',
-    'def bubble_sort(arr):',
-    '    """',
-    '    冒泡排序(基础版)',
-    '    时间复杂度：O(n²)',
-    '    空间复杂度：O(1)',
-    '    """',
-    '    n = len(arr)',
-    '    for i in range(n):',
-    '        for j in range(0, n - i - 1):',
-    '```',
-  ].join('\n');
-
-  // 模型多写了第 11 行（区间 2-10 之外的 `for j` 循环体）
-  const overBlock = parseModelReply(
-    ['### 范围: 2-10', '```python', '```python', 'def bubble_sort(arr):', '    n = len(arr)', '    for i in range(n):', '        for j in range(0, n - i - 1):', '```'].join('\n')
+  /* ---- J8-J11) 原区间固定，新内容增减行，区间外原文不变 ---- */
+  const rangeLines = Array.from({ length: 25 }, (_, i) => `原第 ${i + 1} 行`);
+  rangeLines[10] = '}';
+  rangeLines[11] = '';
+  const replacement = [...Array.from({ length: 7 }, (_, i) => `新增 ${i + 1}`), '}', '', '最后一行'];
+  const rangeBlock = parseModelReply(
+    ['### 范围：10-10', '````', ...replacement, '````'].join('\n')
   ).blocks[0]!;
-  const bubbleLines = bubbleOriginal.split('\n');
-  const overApplied = computeApply(bubbleOriginal, overBlock, {
-    kind: 'replace-lines',
-    start: 2,
-    end: 10,
-    expectedOriginal: bubbleLines.slice(1, 10).join('\n'),
-    contextPrev: bubbleLines[0] ?? null,
-    contextNext: bubbleLines[10] ?? null,
+  const rangeApplied = computeApply(rangeLines.join('\n'), rangeBlock, {
+    kind: 'replace-lines', start: 10, end: 10,
+    expectedOriginal: rangeLines[9]!, contextPrev: rangeLines[8]!, contextNext: rangeLines[10]!,
   });
-  const overText = overApplied.ok ? overApplied.text : '';
-  const overOccurrences = overText.split('\n').filter((l) => l.includes('for j in range')).length;
-  add(
-    'J8',
-    '覆盖范围归一化：模型多写区间外的行时收敛区间（不产生重复块）',
-    overApplied.ok && overApplied.normalized?.from === 10 && overApplied.normalized?.to === 11 && overOccurrences === 1,
-    overApplied.ok ? { normalized: overApplied.normalized, forJ出现次数: overOccurrences } : overApplied
-  );
-
-  // 模型只回显区间内的行 —— 不得触发归一化（避免误扩区间）
-  const exactBlock = parseModelReply(
-    ['### 范围: 2-10', '```python', '```python', 'def bubble_sort(arr):', '    冒泡排序(基础版)', '    n = len(arr)', '    for i in range(n):', '```'].join('\n')
-  ).blocks[0]!;
-  const exactApplied = computeApply(bubbleOriginal, exactBlock, {
-    kind: 'replace-lines',
-    start: 2,
-    end: 10,
-    expectedOriginal: bubbleLines.slice(1, 10).join('\n'),
-    contextPrev: bubbleLines[0] ?? null,
-    contextNext: bubbleLines[10] ?? null,
+  const rangeAfter = rangeApplied.ok ? rangeApplied.text.split('\n') : [];
+  add('J8', '10-10 替换十行：新内容占第 10-19 行，原第 11 行变为第 20 行',
+    rangeApplied.ok && rangeAfter.length === 34 && rangeAfter.slice(9, 19).join('\n') === replacement.join('\n'), rangeApplied);
+  add('J9', '重复括号与空行不能吞掉原区间外内容',
+    rangeApplied.ok && rangeAfter.slice(0, 9).join('\n') === rangeLines.slice(0, 9).join('\n') &&
+    rangeAfter.slice(19).join('\n') === rangeLines.slice(10).join('\n'), rangeApplied);
+  const shortBlock = { ...rangeBlock, code: 'tail' };
+  const shortened = computeApply('head\na\nb\nc\ntail', shortBlock, {
+    kind: 'replace-lines', start: 2, end: 4,
+    expectedOriginal: 'a\nb\nc', contextPrev: 'head', contextNext: 'tail',
   });
-  add(
-    'J9',
-    '覆盖范围归一化：模型未越界时不改动区间（保守，不误扩）',
-    exactApplied.ok && exactApplied.normalized === undefined,
-    exactApplied.ok ? { normalized: exactApplied.normalized ?? null } : exactApplied
-  );
-
-  // 对齐函数本身：多写一行 → 消费到 11；只覆盖区间 → 消费 9 行
-  add(
-    'J10',
-    '游标对齐：多写区间外的行时消费行数超出区间长度',
-    alignConsumedLines(bubbleLines.slice(1), ['```python', 'def bubble_sort(arr):', '    n = len(arr)', '    for i in range(n):', '        for j in range(0, n - i - 1):']) === 10,
-    alignConsumedLines(bubbleLines.slice(1), ['```python', 'def bubble_sort(arr):', '    n = len(arr)', '    for i in range(n):', '        for j in range(0, n - i - 1):'])
-  );
-
-  add(
-    'J11',
-    '游标对齐：只重写区间内容时消费行数不超过区间长度',
-    alignConsumedLines(bubbleLines.slice(1), ['```python', 'def bubble_sort(arr):', '    冒泡排序(基础版)', '    n = len(arr)', '    for i in range(n):']) <= 9,
-    alignConsumedLines(bubbleLines.slice(1), ['```python', 'def bubble_sort(arr):', '    冒泡排序(基础版)', '    n = len(arr)', '    for i in range(n):'])
-  );
+  add('J10', '缩短原区间，后续行向前移动且相同行完整保留',
+    shortened.ok && shortened.text === 'head\ntail\ntail', shortened);
+  const atEnd = computeApply(rangeLines.slice(0, 10).join('\n'), rangeBlock, {
+    kind: 'replace-lines', start: 10, end: 10, expectedOriginal: rangeLines[9]!,
+  });
+  add('J11', '末行替换为十行：文件增长九行',
+    atEnd.ok && atEnd.text === [...rangeLines.slice(0, 9), ...replacement].join('\n'), atEnd);
 
   /* ---- M) 提示词片段组装：输入输出同构 + 围栏自适应（防内容里的 ``` 提前闭合） ---- */
   const plainSnippet = buildSnippetText({ relPath: 'src/a.py', text: 'def f():\n    pass', startLine: 80 });
