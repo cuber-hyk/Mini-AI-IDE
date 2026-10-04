@@ -47,6 +47,12 @@ export interface ConsumptionVerdict {
   fingerprint: string;
   /** 上一次记录的指纹（没有记录时为 null） */
   previous: string | null;
+  /**
+   * 上次消费这条内容的时间（没有记录时为 null）。
+   * 为什么要把时间一起带出来：界面只说"已采集过"，用户无法判断拦的是哪一次 ——
+   * 带上时间戳，用户一眼能看出"拦的是刚才那次"还是"很久以前那次"。
+   */
+  previousAt: string | null;
 }
 
 /**
@@ -92,10 +98,15 @@ export class ConsumptionStore {
     const fingerprint = fingerprintOf(text);
     const previous = this.records.get(sessionKey) ?? null;
     if (previous && previous.fingerprint === fingerprint) {
-      return { consumed: true, fingerprint, previous: previous.fingerprint };
+      return { consumed: true, fingerprint, previous: previous.fingerprint, previousAt: previous.at };
     }
     this.records.set(sessionKey, { fingerprint, length: text.length, at: new Date().toISOString() });
-    return { consumed: false, fingerprint, previous: previous ? previous.fingerprint : null };
+    return {
+      consumed: false,
+      fingerprint,
+      previous: previous ? previous.fingerprint : null,
+      previousAt: previous ? previous.at : null,
+    };
   }
 
   /** 只读查询（不记录）；供诊断与测试 */

@@ -274,7 +274,28 @@
       return b.applicable;
     });
     if (blocks.length === 0) {
-      setNotes(['没有可应用的变更']);
+      /*
+       * 为什么这里必须把阻塞原因列出来（2026-10-04）：
+       * 原先只刷一行「没有可应用的变更」，把上一次采集的诊断信息**覆盖掉** ——
+       * 用户看到的就成了"采不到回复"，而真实原因常常是
+       * 「目标文件不在当前打开的目录下」「行区间越界」「未确定目标文件」，
+       * 这些理由采集时都已经算过（blockedReason），只是在这一步被丢掉了。
+       */
+      const all = lastPreview.blocks || [];
+      const reasons = [];
+      all.forEach(function (b) {
+        const name = b.filePath ? b.filePath.split(/[\\/]/).pop() : '(未指定文件)';
+        if (b.blockedReason) reasons.push(name + '：' + b.blockedReason);
+        else if (!b.applicable) reasons.push(name + '：不满足应用条件');
+      });
+      if (reasons.length === 0) {
+        setNotes([
+          '没有可应用的变更 —— 本批次没有条目：可能是回复里没有代码块（见上方首行/围栏诊断），' +
+            '或内容与上次采集完全相同。点工具栏「采集回复」可重新采集一次。',
+        ]);
+      } else {
+        setNotes(['没有可应用的变更，原因：'].concat(reasons));
+      }
       return;
     }
 

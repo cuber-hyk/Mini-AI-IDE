@@ -892,6 +892,13 @@ async function loadLocalView(
     });
 
     if (collected.strategyId === null || collected.replyText.length === 0) {
+      // 排查基建：采集失败最需要知道"每个策略各返回了什么"——策略命中数与错误
+      // 一步到位写进终端，用户复现时把这几行发来即可定位（页面结构变化 / 未输出完 / 其它）。
+      process.stdout.write(
+        `[collect] 未采到：${collected.attempts
+          .map((a) => `${a.strategyId}:${a.ok ? `${a.length} 字符` : a.error ?? '空'}`)
+          .join(' · ')}\n`
+      );
       const diagLines: string[] = [];
       if (collected.diagnostic) {
         const d = collected.diagnostic;
@@ -935,6 +942,12 @@ async function loadLocalView(
      */
     const sessionKey = sessionKeyOf(collected.url);
     const verdict = consumption.consume(sessionKey, collected.replyText);
+    // 排查基建：指纹判定与 URL 是"切目录/新对话后采不到"类问题的两个关键事实——
+    // URL 是否真的换了（会话键）、内容是否与上次完全相同（指纹撞车）都写进终端。
+    process.stdout.write(
+      `[collect] 策略 ${collected.strategyId} · ${collected.replyText.length} 字符 · 会话键 ${sessionKey}` +
+        ` · 指纹 ${verdict.fingerprint}${verdict.consumed ? '（与上次相同 → 判已消费）' : ''}\n`
+    );
     if (verdict.consumed) {
       return {
         ok: true,
@@ -946,6 +959,10 @@ async function loadLocalView(
         notes: [
           '最新回复与上次采集内容相同 —— 已采集过，无新内容',
           `内容指纹 ${verdict.fingerprint}（会话键 ${sessionKey}）`,
+          ...(verdict.previousAt ? [`上次采集于 ${new Date(verdict.previousAt).toLocaleString()}`] : []),
+          // 「会话键」随 URL 变化；换会话后 URL 不同 → 键不同 → 不会被这条记录拦住。
+          // 仍拦住说明 URL（会话）没换、且内容一字不差 —— 把这两个事实都摊给用户。
+          '若页面已产生新内容：AI 需生成**不同**内容才会视为新回复（键＝URL 去参数，判重＝内容指纹）',
           '若模型已重新生成，请等页面输出完成后再点「采集回复」',
         ],
         blocks: [],
@@ -1124,6 +1141,18 @@ async function loadLocalView(
       notes: parseNotes,
       blocks,
     };
+    // 排查基建：每个块的路径/区间/可应用性一行写清——"采集到了但全被阻塞"的场景
+    //（典型：切换目录后模型回显的文件在新根目录下不存在）从此在终端直接可读。
+    const applicableCount = blocks.filter((b) => b.applicable).length;
+    const blockedDetail = blocks
+      .filter((b) => !b.applicable)
+      .map((b) => `${b.filePath ?? '(未确定路径)'}:${b.blockedReason ?? '未知'}`)
+      .join('；');
+    process.stdout.write(
+      `[collect] 解析 ${parsed.blocks.length} 块，可应用 ${applicableCount} 个` +
+        `${blockedDetail.length > 0 ? `；阻塞 → ${blockedDetail}` : ''}\n`
+    );
+
     // 推到右下角预览面板，并把面板显示出来（用户建议的位置：不压编辑器高度）
     if (previewHeight <= 0) {
       previewHeight = Math.max(PREVIEW_MIN_HEIGHT, Math.round((win.getContentSize()[1] ?? 900) * 0.4));
