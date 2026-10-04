@@ -1,0 +1,10 @@
+{
+  "ui-bg": { "$type": "color", "$value": "#16181d" },
+  "ui-surface": { "$type": "color", "$value": "#1e2128" },
+  "ui-border": { "$type": "color", "$value": "#2b2f38" },
+  "ui-text": { "$type": "color", "$value": "#d8dbe2" },
+  "ui-muted": { "$type": "color", "$value": "#8b93a1" },
+  "ui-accent": { "$type": "color", "$value": "#5b8def" },
+  "ui-control-height": { "$type": "dimension", "$value": "30px" },
+  "ui-radius": { "$type": "dimension", "$value": "6px" }
+}

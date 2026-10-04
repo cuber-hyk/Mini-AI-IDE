@@ -7,22 +7,15 @@
       content="default-src 'none'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'none'"
     />
     <title>Mini-AI-IDE — 编辑器</title>
+    <link rel="stylesheet" href="./ui-tokens.css" />
+    <link rel="stylesheet" href="./ui.css" />
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
     <header class="toolbar">
-      <button id="btn-open" type="button">打开目录…</button>
+      <button id="btn-open" type="button" class="ui-button">打开目录…</button>
       <span id="root-label" class="root-label">未打开目录</span>
       <span class="spacer"></span>
-      <button id="btn-collect" type="button" title="只读采集右侧最新回复并解析为待应用变更（不修改页面、不落盘），结果显示在右下角预览面板">
-        采集回复
-      </button>
-      <button id="btn-whole-file" type="button" title="把当前打开的整个文件（含路径声明与代码围栏）复制到剪贴板，作为上下文交给模型">
-        复制整个文件
-      </button>
-      <button id="btn-snippet" type="button" title="把当前选中内容格式化为带文件真实行号的片段（含 ### 文件： 与 ### 范围： 头）复制到剪贴板，供你粘贴给模型做局部修改">
-        复制选中片段
-      </button>
       <!--
         这里原本有个「保存 (Ctrl+S)」按钮，已按用户意见移除：
         Ctrl+S 是人人都会的快捷键，为它单独占一个工具栏按钮不划算，
@@ -58,13 +51,20 @@
           <span id="file-name" class="file-name">未打开文件</span>
           <span id="file-dot" class="file-dot" title="有未保存的修改" hidden></span>
           <span class="spacer"></span>
+          <div id="context-menu-wrap" class="context-menu-wrap">
+            <button id="btn-copy-context" type="button" class="ui-button" aria-haspopup="menu" aria-expanded="false" aria-controls="context-menu" title="选择要复制给模型的文件上下文">复制上下文 <span aria-hidden="true">▾</span></button>
+            <div id="context-menu" class="context-menu" role="menu" aria-label="复制上下文" hidden>
+              <button id="btn-whole-file" type="button" role="menuitem" tabindex="-1" title="复制当前整个文件，含路径与代码围栏">复制整个文件</button>
+              <button id="btn-snippet" type="button" role="menuitem" tabindex="-1" title="复制选中内容，含文件路径与真实行号">复制选中片段</button>
+            </div>
+          </div>
           <!-- diff 标记的操作条。差异**内联渲染在编辑器里**（原地标红/绿），
                不是一个独立的对比面板 —— 所以这里只放"这个文件有变更"的说明与操作。 -->
           <span id="diff-actions" class="diff-actions" hidden>
             <span class="diff-tag" title="编辑器里的红色/绿色标记就是这个文件的变更">变更预览</span>
             <span id="diff-label" class="diff-label"></span>
-            <button id="btn-diff-prev" type="button" title="上一个被改动的文件">‹ 上一个</button>
-            <button id="btn-diff-next" type="button" title="下一个被改动的文件">下一个 ›</button>
+            <button id="btn-diff-prev" type="button" aria-label="上一个被改动的文件" title="上一个被改动的文件">‹</button>
+            <button id="btn-diff-next" type="button" aria-label="下一个被改动的文件" title="下一个被改动的文件">›</button>
             <button id="btn-diff-apply" type="button" class="primary">应用此变更</button>
             <button id="btn-diff-close" type="button">退出预览</button>
           </span>
@@ -79,8 +79,7 @@
       <div id="resizer" class="resizer" title="拖动调整左右宽度"></div>
     </main>
 
-    <!-- 回程预览已移到**右下角独立面板**（见 src/renderer/preview.html）：
-         原先挤在编辑器下方，既压低了编辑器高度，diff 也只有一百多像素高没法看。 -->
+    <!-- 变更列表在右侧独立视图（见 preview.html），输入区仍属于编辑器。 -->
     <footer class="prompt-bar">
       <div class="prompt-shell">
         <textarea
@@ -116,6 +115,7 @@
 
     <script src="./vendor/monaco/vs/loader.js"></script>
     <script src="./promptComposer.js"></script>
+    <script src="./editorToolbar.js"></script>
     <script src="./renderer.js"></script>
   </body>
 </html>

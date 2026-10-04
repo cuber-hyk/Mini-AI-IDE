@@ -1,93 +1,92 @@
-/**
- * 网页区顶部工具条 / 右边缘把手（渲染进程脚本）
- *
- * 一个视图、两种形态（由主进程的几何决定，见 webbar.html 顶部注释）：
- *  - 网页可见：顶部横条，放网页与预览的显隐开关；
- *  - 网页隐藏：右边缘竖把手，只有一个「展开 AI 网页」按钮。
- *
- * ⚠️ 本视图**必须始终可见**（哪怕网页已隐藏）。它上面的按钮是
- * "把网页叫回来"的唯一常驻入口——早期实现跟着网页一起隐藏，
- * 用户点完隐藏就再也回不来（本项目已犯过一次，写进了能力文档的陷阱表）。
- *
- * 边界：本视图**不能**读写文件、不能访问 Node、不能向网页写入任何内容；
- * 它只发"切换显隐"的意图给主进程，几何由主进程重算。
- */
+/** 网页顶部工具条：只读采集入口与本地板块显隐，不写入 AI 网页。 */
 (function () {
   'use strict';
-
   const bridge = window.webbarBridge;
   const el = {
-    bar: document.getElementById('bar'),
-    web: document.getElementById('btn-web'),
-    preview: document.getElementById('btn-preview-toggle'),
-    restore: document.getElementById('btn-restore'),
+    bar: document.getElementById('bar'), web: document.getElementById('btn-web'),
+    preview: document.getElementById('btn-preview-toggle'), restore: document.getElementById('btn-restore'),
+    collect: document.getElementById('btn-collect'), status: document.getElementById('collect-status'),
   };
-  if (!bridge || !el.bar || !el.web || !el.preview || !el.restore) {
-    return;
-  }
-
-  /** 与编辑器渲染进程一致的状态镜像，仅用于按钮高亮 */
+  if (!bridge || Object.values(el).some(function (node) { return !node; })) return;
   let webVisible = true;
   let previewVisible = false;
+  let previewWidth = 300;
+  let hintTimer = null;
+  let collecting = false;
 
-  /** 刚隐藏后的高亮提示时长（ms）——用户需要知道"去哪找" */
-  const HINT_MS = 3000;
-
-  /**
-   * 切换形态。
-   *
-   * 静置时只露 5px 窄条（不干扰阅读），hover / 刚隐藏时展开成 28px 带图标与文字。
-   * `hint` 用于刚隐藏后的那 3 秒：强制展开并高亮，告诉用户入口在这里。
-   */
+  function feedback(message, warn) {
+    el.status.textContent = message;
+    el.status.title = message;
+    el.status.classList.toggle('warn', Boolean(warn));
+    // 窄网页栏隐藏状态文字，按钮仍提供完整诊断。
+    el.collect.title = message;
+  }
   function paint(hint) {
     el.bar.classList.toggle('handle-mode', !webVisible);
     el.web.classList.toggle('active', webVisible);
     el.preview.classList.toggle('active', previewVisible);
-    el.web.title = '隐藏 AI 网页（编辑器占满全窗口）· Ctrl+Shift+A';
-    el.preview.title = previewVisible ? '隐藏右下角回程预览面板' : '显示右下角回程预览面板';
-
+    const label = previewVisible ? '隐藏变更列表' : '显示变更列表';
+    el.preview.title = label;
+    el.preview.setAttribute('aria-label', label);
+    el.preview.setAttribute('aria-pressed', String(previewVisible));
     if (!webVisible && hint) {
+      window.clearTimeout(hintTimer);
       el.bar.classList.add('just-hidden');
-      window.setTimeout(function () {
-        el.bar.classList.remove('just-hidden');
-      }, HINT_MS);
+      hintTimer = window.setTimeout(function () { el.bar.classList.remove('just-hidden'); }, 3000);
+    }
+    if (webVisible) el.bar.classList.remove('just-hidden');
+  }
+  async function toggleWeb(visible) {
+    try {
+      const wasVisible = webVisible;
+      const result = await bridge.setWebVisible(visible);
+      webVisible = Boolean(result && result.visible);
+      paint(wasVisible && !webVisible);
+    } catch (err) {
+      feedback('切换 AI 网页失败：' + (err instanceof Error ? err.message : String(err)), true);
     }
   }
-
-  el.web.addEventListener('click', async function () {
-    const result = await bridge.setWebVisible(false);
-    webVisible = Boolean(result && result.visible);
-    // 网页隐藏时预览随之一并隐藏（主进程的几何规则），这里同步高亮
-    previewVisible = false;
-    paint(false);
-  });
-
-  el.restore.addEventListener('click', async function () {
-    const result = await bridge.setWebVisible(true);
-    webVisible = Boolean(result && result.visible);
-    paint(false);
-  });
-
+  el.web.addEventListener('click', function () { void toggleWeb(false); });
+  el.restore.addEventListener('click', function () { void toggleWeb(true); });
   el.preview.addEventListener('click', async function () {
-    const next = !previewVisible;
-    const height = next ? Math.max(220, Math.round(window.innerHeight * 0.4)) : 0;
-    const result = await bridge.setPreviewPanel(height);
-    previewVisible = Boolean(result && result.visible);
-    paint(false);
+    el.preview.disabled = true;
+    try {
+      const result = await bridge.setPreviewPanel(previewVisible ? 0 : previewWidth);
+      previewVisible = Boolean(result && result.visible);
+      if (result && result.width > 0) previewWidth = result.width;
+      paint(false);
+    } catch (err) {
+      feedback('切换变更列表失败：' + (err instanceof Error ? err.message : String(err)), true);
+    } finally {
+      el.preview.disabled = false;
+    }
   });
-
-  /**
-   * 主进程广播当前状态。
-   * 刚从"可见"变为"隐藏"时给一次高亮提示，让用户知道右边缘出现了把手
-   * （否则 5px 窄条很容易被当成边框忽略）。
-   */
-  bridge.onChromeState(function (s) {
-    if (!s) return;
+  el.collect.addEventListener('click', async function () {
+    if (collecting) return;
+    collecting = true;
+    el.collect.disabled = true;
+    el.collect.textContent = '采集中…';
+    feedback('正在只读采集最新回复');
+    try {
+      const result = await bridge.collectReply();
+      if (result && result.ok && result.noNewContent) feedback('最新回复已采集，无新内容');
+      else if (result && result.ok) feedback('已采集 ' + (result.blocks || []).length + ' 个变更');
+      else feedback('采集失败：' + ((result && result.error) || '未采集到回复'), true);
+    } catch (err) {
+      feedback('采集失败：' + (err instanceof Error ? err.message : String(err)), true);
+    } finally {
+      collecting = false;
+      el.collect.disabled = false;
+      el.collect.textContent = '采集回复';
+    }
+  });
+  bridge.onChromeState(function (state) {
+    if (!state) return;
     const wasVisible = webVisible;
-    webVisible = s.webVisible !== false;
-    previewVisible = Boolean(s.previewVisible);
+    webVisible = state.webVisible !== false;
+    previewVisible = Boolean(state.previewVisible);
+    if (state.previewWidth > 0) previewWidth = state.previewWidth;
     paint(wasVisible && !webVisible);
   });
-
   paint(false);
 })();

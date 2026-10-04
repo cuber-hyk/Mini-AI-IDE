@@ -20,6 +20,8 @@ export interface Settings {
   lastRoot: string | null;
   /** 编辑器面板宽度（像素） */
   editorWidth: number | null;
+  /** 变更列宽度（像素）；显隐不改变已保存宽度 */
+  previewWidth: number | null;
   /** 左侧目录树是否显示 */
   sidebarVisible: boolean;
   /** 左侧目录树宽度（像素） */
@@ -48,6 +50,7 @@ export interface Settings {
 const DEFAULTS: Settings = {
   lastRoot: null,
   editorWidth: null,
+  previewWidth: null,
   sidebarVisible: true,
   sidebarWidth: null,
   formatSpecVariant: 'short',
@@ -100,6 +103,9 @@ export class SettingsStore {
       if (typeof parsed.lastRoot === 'string' && parsed.lastRoot.length > 0) out.lastRoot = parsed.lastRoot;
       if (typeof parsed.editorWidth === 'number' && Number.isFinite(parsed.editorWidth) && parsed.editorWidth > 0) {
         out.editorWidth = Math.round(parsed.editorWidth);
+      }
+      if (typeof parsed.previewWidth === 'number' && Number.isFinite(parsed.previewWidth) && parsed.previewWidth > 0) {
+        out.previewWidth = Math.round(parsed.previewWidth);
       }
       if (typeof parsed.sidebarVisible === 'boolean') out.sidebarVisible = parsed.sidebarVisible;
       if (typeof parsed.sidebarWidth === 'number' && Number.isFinite(parsed.sidebarWidth) && parsed.sidebarWidth > 0) {

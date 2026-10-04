@@ -100,7 +100,7 @@ const pmBridgeOk =
   /reset:\s*\(variant: string\)/.test(pmPreload);
 check('Y6', '独立 preload 暴露窄 bridge 且通道名正确（save/reset 带版本参数）', pmBridgeOk, null);
 
-const settingsMenu = /label:\s*'Settings'/.test(mainTs) && /label:\s*'修改提示词…'/.test(mainTs);
+const settingsMenu = /label:\s*'设置'/.test(mainTs) && /label:\s*'修改提示词…'/.test(mainTs);
 const gearInEditor = /id="btn-settings"/.test(html) && /el\.btnSettings\.addEventListener\('click'/.test(js);
 const gearOpensPanel = /bridge\.openPromptPanel\(\)/.test(js) && /openPromptPanel:\s*'ui:open-prompt-panel'/.test(preloadTs);
 check('Y7', '入口齐备：Settings 菜单行 + 编辑器齿轮（同一面板）', settingsMenu && gearInEditor && gearOpensPanel, {

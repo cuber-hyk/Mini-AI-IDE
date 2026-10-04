@@ -17,15 +17,19 @@ const CH = {
   showDiffInEditor: 'ui:show-diff-in-editor',
   activeDiff: 'preview:active-diff',
   appliedChange: 'preview:applied',
+  chromeState: 'ui:chrome-state',
 } as const;
 
 const bridge = {
   applyChange: (input: unknown) => ipcRenderer.invoke(CH.applyChange, input),
   undoSave: () => ipcRenderer.invoke(CH.undoSave),
-  setPreviewPanel: (height: number) => ipcRenderer.invoke(CH.setPreviewPanel, height),
+  setPreviewPanel: (width: number) => ipcRenderer.invoke(CH.setPreviewPanel, width),
   /** 请求在**编辑器内**显示该变更的 diff（与主流编辑器一致：先看 diff 再应用） */
   showDiffInEditor: (collectionId: string, index: number) =>
     ipcRenderer.invoke(CH.showDiffInEditor, collectionId, index),
+  onChromeState: (listener: (state: unknown) => void) => {
+    ipcRenderer.on(CH.chromeState, (_e, state) => listener(state));
+  },
   onPreviewData: (listener: (preview: unknown) => void) => {
     ipcRenderer.on(CH.previewData, (_e, preview) => listener(preview));
   },

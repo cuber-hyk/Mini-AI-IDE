@@ -40,18 +40,18 @@ export const CHANNELS = {
   applyChange: 'return:apply',
   /** 撤销一次应用（按快照恢复） */
   undoSave: 'return:undo',
-  /** 显示/隐藏右下角回程预览面板并设置高度 */
+  /** 显示/隐藏最右侧变更列并设置宽度 */
   setPreviewPanel: 'ui:set-preview-panel',
-  /** 主进程 → 右下角预览面板：推送待预览数据 */
+  /** 主进程 → 最右侧预览面板：推送待预览数据 */
   previewData: 'preview:data',
   /**
-   * 主进程 → 右下角预览面板：当前正在编辑器里预览的是第几个变更。
+   * 主进程 → 最右侧预览面板：当前正在编辑器里预览的是第几个变更。
    * 两个视图是独立渲染进程（ADR-0002），彼此不能调用，
    * 用「上一个 / 下一个」在编辑器里跳走后要靠它同步高亮。
    */
   activeDiff: 'preview:active-diff',
   /**
-   * 主进程 → 右下角预览面板：某个变更**已被应用**（或已撤销）。
+   * 主进程 → 最右侧预览面板：某个变更**已被应用**（或已撤销）。
    *
    * 为什么需要：应用有**两个入口** —— ① 预览面板自己的「应用」按钮；
    * ② 左侧编辑器内联预览工具条上的「应用此变更」。走 ② 时面板完全不知情，
@@ -69,7 +69,7 @@ export const CHANNELS = {
   setSidebarWidth: 'ui:set-sidebar-width',
   /** 编辑器 → 主进程：请求在**编辑器内**显示某个变更的 diff */
   showDiffInEditor: 'ui:show-diff-in-editor',
-  /** 编辑器 → 主进程：跳到批次内的上一个 / 下一个变更（并同步右下角面板高亮） */
+  /** 编辑器 → 主进程：跳到批次内的上一个 / 下一个变更（并同步最右侧面板高亮） */
   stepDiff: 'ui:step-diff',
   /**
    * 主进程 → 编辑器：**磁盘上的文件被回程链路改写了**。
@@ -356,17 +356,19 @@ export interface ApplyChangeResult {
  *  - `undone`：撤销了一次应用，对应的条目应恢复成「可应用」。
  *
  * 用 `index`（批次内唯一）而不是文件名：用户可能刚改过路径，按名字匹配会漏。
- * 撤销只报"最后一个被撤销的文件路径"，因为快照栈是全局的、不含 collectionId；
- * 面板按 filePath 反查条目，查不到就整表刷新为可应用（保守但绝不错标）。
+ * 快照携带 collectionId/index，撤销只复位对应批次的片段；旧批次通知不修改当前列表。
  */
 export interface AppliedChangeEvent {
   kind: 'applied' | 'undone';
+  collectionId?: string;
   index?: number;
   filePath?: string;
 }
 
 export interface UndoResult {
   ok: boolean;
+  collectionId?: string;
+  index?: number;
   filePath?: string;
   error?: string;
 }
@@ -525,8 +527,8 @@ export interface EditorBridge {
    * 用途：把整个文件作为**上下文**交给模型；仍由用户自己粘贴（零注入边界）。
    */
   copyWholeFile(relPath: string): Promise<CopyWholeFileResult>;
-  /** 显示/隐藏右下角回程预览面板（height <= 0 表示隐藏） */
-  setPreviewPanel(height: number): Promise<{ height: number; visible: boolean }>;
+  /** 显示/隐藏或调整最右侧变更列（width <= 0 表示隐藏） */
+  setPreviewPanel(width: number): Promise<{ width: number; visible: boolean }>;
   /** 显示/隐藏右侧 AI 网页视图 */
   setWebVisible(visible: boolean): Promise<{ visible: boolean }>;
   /** 显示/隐藏左侧目录树面板 */
@@ -542,7 +544,7 @@ export interface EditorBridge {
   openPromptPanel(): Promise<{ ok: boolean }>;
   /** 请求在编辑器内以 diff 视图显示某个变更 */
   showDiffInEditor(collectionId: string, index: number): Promise<{ ok: boolean; error?: string }>;
-  /** 跳到批次内相邻的变更；主进程会同时把右下角面板的高亮同步过去 */
+  /** 跳到批次内相邻的变更；主进程会同时把最右侧面板的高亮同步过去 */
   stepDiff(collectionId: string, index: number): Promise<{ ok: boolean; error?: string }>;
   /** 主进程 → 编辑器：进入（或退出）diff 视图 */
   onDiffData(listener: (data: EditorDiffPayload) => void): void;

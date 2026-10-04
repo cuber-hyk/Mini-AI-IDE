@@ -108,7 +108,7 @@ try {
 check('L9b', 'renderer.js 语法可解析', rendererParseError === null, { rendererParseError });
 
 const listsFiles = /pv-file-row/.test(previewJs) && /pv-file-name/.test(previewJs) && /showDiffInEditor/.test(previewJs);
-const hasFileCss = /\.pv-file-name/.test(previewCss) && /\.pv-file-apply/.test(previewCss);
+const hasFileCss = /\.pv-file-name/.test(previewCss) && /\.pv-detail-actions/.test(previewCss);
 const noInlineDiff = !/pv-line/.test(previewJs) && !/pv-hunk/.test(previewJs);
 check('L10', '预览面板只罗列文件且有对应样式', listsFiles && hasFileCss && noInlineDiff, {
   listsFiles,
@@ -164,7 +164,7 @@ check(
   /for \(let i = 0; i < blocks\.length; i \+= 1\)/.test(previewJs) &&
     /failed\.push/.test(previewJs) &&
     !/Promise\.all/.test(previewJs) &&
-    /pv-apply-all/.test(previewJs) &&
+    /applyAllBlocks/.test(previewJs) &&
     /pv-apply-all/.test(previewHtml),
   {},
 );
@@ -454,7 +454,7 @@ check('W2', '应用成功才广播、撤销后广播复位', w2a && w2b, {
 
 // 面板必须订阅并有处理函数（否则通道形同虚设）
 const w3a = /bridge\.onAppliedChange\(/.test(previewJs);
-const w3b = /function markAppliedIndex/.test(previewJs) && /function markUnapplied/.test(previewJs);
+const w3b = /model\.applyEvent/.test(previewJs);
 check('W3', '预览面板订阅广播并按 index/filePath 更新条目状态', w3a && w3b, {
   subscribed: w3a,
   handlers: w3b,

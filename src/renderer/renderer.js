@@ -36,9 +36,7 @@
     btnCopyPrompt: document.getElementById('btn-copy-prompt'),
     // 提示词版本双段开关（开=完整版 / 关=简洁版），状态持久化在主进程设置里
     variantSwitch: document.getElementById('variant-switch'),
-    // 回程预览已移到**右下角独立面板**（preview.html / preview.js）；
-    // 它的显隐开关也一并移到了网页区右上角（webbar.html），此处不再有触发按钮
-    btnCollect: document.getElementById('btn-collect'),
+    // 采集入口在 AI 网页顶部，变更列表在右侧独立视图。
     // 面板显示控制与 diff 视图
     sidebar: document.getElementById('sidebar'),
     sidebarResizer: document.getElementById('sidebar-resizer'),
@@ -75,6 +73,8 @@
       throw new Error(msg);
     }
   })();
+
+  const toolbar = window.setupEditorToolbar();
 
   const state = {
     root: null,
@@ -1011,7 +1011,7 @@
    * 注意：探针会**先把编辑器内容替换成 sample**（内联标记要求编辑器里就是原文），
    * 所以必须在没有打开真实文件时调用。
    */
-  window.__uiDiffProbe = function (original, modified) {
+  window.__uiDiffProbe = async function (original, modified) {
     try {
       const editor = state.editor;
       if (!editor) return { ok: false, error: '编辑器尚未创建' };
@@ -1019,7 +1019,7 @@
       // 内联标记画在**当前编辑器内容**上，因此先把它设成 original
       editor.setValue(original);
 
-      enterDiff({
+      await enterDiff({
         active: true,
         filePath: 'probe.ts',
         original: original,
@@ -1035,7 +1035,7 @@
       const expectedAdd = ops.filter(function (o) { return o.kind === 'add'; }).length;
       const zonesDrawn = state.diffZoneIds.length;
       const decorationsDrawn = state.diffDecorations
-        ? state.diffDecorations.getDecorations().length
+        ? state.diffDecorations.length
         : 0;
       const readOnlyNow = Boolean(editor.getOption(window.monaco.editor.EditorOption.readOnly));
       const actionsVisible = !el.diffActions.hidden;
@@ -1062,8 +1062,7 @@
 
   /* ---------------- 界面渲染 ---------------- */
   function renderRoot() {
-    el.rootLabel.textContent = state.root ?? '未打开目录';
-    el.rootLabel.title = state.root ?? '';
+    toolbar.renderRoot(state.root);
     el.treeNote.style.display = state.root ? 'none' : 'block';
   }
 
@@ -1636,28 +1635,6 @@
   }
   el.resizer.addEventListener('pointerup', endDrag);
   el.resizer.addEventListener('pointercancel', endDrag);
-
-  /**
-   * 「采集回复」：只读采集右侧最新回复并解析，结果显示在**右下角预览面板**。
-   * 本视图不渲染预览（面板是独立渲染进程），只负责触发与提示。
-   */
-  el.btnCollect.addEventListener('click', async function () {
-    el.btnCollect.disabled = true;
-    el.btnCollect.textContent = '采集中…';
-    try {
-      const preview = await bridge.collectReply();
-      if (preview && preview.ok && preview.noNewContent) {
-        setInfo('最新回复已采集过，无新内容 —— 详见右下角面板。若模型已重新生成，等页面输出完成后再采集');
-      } else if (preview && preview.ok) {
-        setInfo('已采集并解析：' + ((preview.blocks && preview.blocks.length) || 0) + ' 个待应用变更 —— 见右下角预览面板（含逐行 diff）');
-      } else {
-        setInfo('采集失败：' + ((preview && preview.error) || '未采集到回复') + ' —— 详见右下角面板的诊断信息', true);
-      }
-    } finally {
-      el.btnCollect.disabled = false;
-      el.btnCollect.textContent = '采集回复';
-    }
-  });
 
   // 双击分隔条：回到 45% 默认比例
   el.resizer.addEventListener('dblclick', function () {

@@ -37,6 +37,9 @@ function copyTree(from, to) {
 }
 
 copyTree(path.join(repoRoot, 'src', 'renderer'), path.join(dist, 'renderer'));
+const tokens = JSON.parse(fs.readFileSync(path.join(repoRoot, 'design-tokens.json'), 'utf8'));
+const tokenCss = Object.entries(tokens).map(([name, token]) => `  --${name}: ${token.$value};`).join('\n');
+fs.writeFileSync(path.join(dist, 'renderer', 'ui-tokens.css'), `/* Generated from design-tokens.json */\n:root {\n${tokenCss}\n}\n`);
 copyTree(path.join(repoRoot, 'node_modules', 'monaco-editor', 'min'), path.join(dist, 'renderer', 'vendor', 'monaco'));
 
 console.log(`[copy-static] 完成，共复制 ${fileCount} 个文件`);

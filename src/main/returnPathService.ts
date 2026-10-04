@@ -22,6 +22,8 @@ import type { FileService } from './fileService';
  * 代码本体与校验基线一律由主进程掌握。
  */
 export interface ResolvedApplyInput {
+  /** 变更列表的批次与片段身份，供撤销后只复位对应条目。 */
+  source?: { collectionId: string; index: number };
   /** 目标文件（相对根目录） */
   filePath: string;
   /** 代码块（含代码本体与行区间） */
@@ -33,6 +35,7 @@ export interface ResolvedApplyInput {
 }
 
 interface Snapshot {
+  source?: { collectionId: string; index: number };
   relPath: string;
   before: string;
   after: string;
@@ -95,6 +98,7 @@ export class ReturnPathService {
     if (!written.ok) return { ok: false, error: written.error };
 
     this.snapshots.push({
+      ...(input.source ? { source: { ...input.source } } : {}),
       relPath: input.filePath,
       before,
       after: computed.text,
@@ -117,7 +121,7 @@ export class ReturnPathService {
       this.snapshots.push(snap);
       return { ok: false, error: `撤销失败：${written.error ?? '未知错误'}` };
     }
-    return { ok: true, filePath: snap.relPath };
+    return { ok: true, filePath: snap.relPath, ...snap.source };
   }
 
   /** 供测试/诊断：当前快照摘要（不含文件内容） */

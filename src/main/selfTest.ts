@@ -27,6 +27,7 @@ import { buildSnippetText, buildWholeFileText, fenceFor } from '../shared/snippe
 import { createFixtures, type FixturePaths } from './fixtures';
 import type { FileService } from './fileService';
 import { SettingsStore, isUsableRoot, SELF_TEST_SETTINGS_FILE } from './settings';
+import { computeLayout, HANDLE_BAR_WIDTH } from './windowLayout';
 import { buildContextSummary } from './contextSummary';
 import { COLLECT_STRATEGIES, collectReply } from './replyCollector';
 import { ConsumptionStore, fingerprintOf, sessionKeyOf } from './consumptionStore';
@@ -346,7 +347,8 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     const html = fs.readFileSync(htmlPath, 'utf8');
     const editorJs = fs.readFileSync(jsPath, 'utf8');
     const composerJs = fs.readFileSync(path.join(rendererDir, 'promptComposer.js'), 'utf8');
-    const js = editorJs + '\n' + composerJs;
+    const toolbarJs = fs.readFileSync(path.join(rendererDir, 'editorToolbar.js'), 'utf8');
+    const js = editorJs + '\n' + composerJs + '\n' + toolbarJs;
     const css = fs.readFileSync(path.join(rendererDir, 'style.css'), 'utf8');
     /*
      * 主进程 / preload / 契约 / 设置 的**源码**（不是 __dirname 下的编译产物：那里只有 .js）。
@@ -414,6 +416,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     const htmlButtonIds = [...html.matchAll(/<button\s+id="([^"]+)"/g)].map((m) => m[1] as string);
     const toCamel = (s: string): string => s.replace(/-([a-z])/g, (_m, c: string) => c.toUpperCase());
     const unboundButtons = htmlButtonIds.filter((id) => {
+      if (id === 'btn-copy-context') return !/trigger\.addEventListener\('click'/.test(toolbarJs);
       const key = toCamel(id);
       const declared = elKeys.some((k) => k.key === key);
       const bound = new RegExp(`\\bel\\.${key}\\.addEventListener\\(`).test(js);
@@ -427,12 +430,12 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     // L6：采集回复这条链路必须首尾相连（按钮 → bridge → IPC 通道 → preload → 主进程处理器）
     // 注意：preload.js 里带 TS 类型注解残留（如 `collectReply: () =>` 或 `(x: string) =>`），
     // 因此匹配必须容忍参数列表，不能写死 `()`。
-    const preloadJs = fs.readFileSync(path.join(__dirname, 'preload.js'), 'utf8');
+    const preloadJs = fs.readFileSync(path.join(__dirname, 'webbarPreload.js'), 'utf8');
     const collectChain = {
-      buttonInHtml: /id="btn-collect"/.test(html),
-      inElStruct: elKeys.some((k) => k.key === 'btnCollect'),
-      bound: /el\.btnCollect\.addEventListener\(/.test(js),
-      callsBridge: /bridge\.collectReply\(/.test(js),
+      buttonInHtml: /id="btn-collect"/.test(webbarHtml),
+      inElStruct: /collect:\s*document\.getElementById\('btn-collect'\)/.test(webbarJs),
+      bound: /el\.collect\.addEventListener\(/.test(webbarJs),
+      callsBridge: /bridge\.collectReply\(/.test(webbarJs),
       channelInContract: Object.values(CHANNELS).includes('return:collect'),
       // 编译后渲染进程模块被重命名为 electron_1，因此用 [\w.]* 容忍别名前缀
       inPreload: /collectReply:\s*\([^)]*\)\s*=>\s*[\w.]*ipcRenderer\.invoke\(\s*CH\.collectReply\s*\)/.test(preloadJs),
@@ -520,7 +523,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
        * 差异一律内联渲染在左侧编辑器里（见 P 组），面板再画一份就成了重复呈现。
        */
       const listsFiles = /pv-file-row/.test(pvJs) && /pv-file-name/.test(pvJs) && /showDiffInEditor/.test(pvJs);
-      const hasFileCss = /\.pv-file-name/.test(pvCss) && /\.pv-file-apply/.test(pvCss);
+      const hasFileCss = /\.pv-file-name/.test(pvCss) && /\.pv-detail-actions/.test(pvCss);
       const noInlineDiff = !/pv-line/.test(pvJs) && !/pv-hunk/.test(pvJs);
       add('L10', '预览面板：只罗列文件（不渲染逐行 diff）且有对应样式', listsFiles && hasFileCss && noInlineDiff, {
         listsFiles,
@@ -574,7 +577,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       const wbBoundWeb = /el\.web\.addEventListener\(/.test(wbJs);
       const wbBoundPreview = /el\.preview\.addEventListener\(/.test(wbJs);
       const wbBoundRestore = /el\.restore\.addEventListener\(/.test(wbJs);
-      const wbHasIconCss = /\.icon-btn/.test(wbCss) && /\.icon-btn\.active/.test(wbCss);
+      const wbHasIconCss = /\.ui-icon/.test(wbCss) && /\.ui-icon\.active/.test(wbCss);
       add('N3', '网页区工具条：显隐按钮绑定了事件且有图标按钮样式', wbBoundWeb && wbBoundPreview && wbBoundRestore && wbHasIconCss, {
         boundWeb: wbBoundWeb,
         boundPreview: wbBoundPreview,
@@ -592,7 +595,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       });
 
       // N6：刚隐藏后要高亮提示 —— 否则 5px 窄条会被当成窗口边框忽略
-      const hasHint = /just-hidden/.test(wbJs) && /just-hidden/.test(wbCss) && /HINT_MS/.test(wbJs);
+      const hasHint = /just-hidden/.test(wbJs) && /just-hidden/.test(wbCss) && /3000/.test(wbJs);
       add('N6', '网页隐藏后有 3 秒高亮提示（just-hidden）', hasHint, { hasHint });
 
       // 独立 preload：窄接口 + 通道名与主进程一致
@@ -716,7 +719,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
        * 同时要求编辑器工具栏也有一枚齿轮（面板/菜单都不在编辑器进程里，
        * 齿轮是"我在编辑器里就能随手打开"的那条路）。
        */
-      const settingsMenu = /label:\s*'Settings'/.test(mainTs) && /label:\s*'修改提示词…'/.test(mainTs);
+      const settingsMenu = /label:\s*'设置'/.test(mainTs) && /label:\s*'修改提示词…'/.test(mainTs);
       const gearInEditor = /id="btn-settings"/.test(html) && /el\.btnSettings\.addEventListener\('click'/.test(js);
       const gearOpensPanel = /bridge\.openPromptPanel\(\)/.test(js) && /openPromptPanel:\s*'ui:open-prompt-panel'/.test(preloadTs);
       add('Y7', '入口齐备：Settings 菜单「修改提示词…」+ 编辑器工具栏齿轮（均通往同一面板）', settingsMenu && gearInEditor && gearOpensPanel, {
@@ -944,7 +947,9 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
      */
     const notAlwaysVisible = /webBarView\.setVisible\(webVisible\)/.test(mainJs);
     const alwaysVisible = /webBarView\.setVisible\(true\)/.test(mainJs);
-    const handleBounds = /webBarBounds:\s*\{\s*x:\s*width - HANDLE_BAR_WIDTH/.test(mainJs);
+    const hiddenLayout = computeLayout(1600, 900, 800, 300, false);
+    const handleBounds = hiddenLayout.webBarBounds.width === HANDLE_BAR_WIDTH &&
+      hiddenLayout.previewBounds.width === 300 && hiddenLayout.webBounds.width === 0;
     add('O6', '网页隐藏后工具条仍可见且把手几何有效（能再展开）', alwaysVisible && handleBounds && !notAlwaysVisible, {
       alwaysVisible,
       handleBounds,
@@ -1031,13 +1036,13 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       /onAppliedChange/.test(previewJs) &&
       /appliedChange/.test(previewPreloadJs) &&
       /CHANNELS\.appliedChange/.test(mainJs) &&
-      /markAppliedIndex/.test(previewJs) &&
-      /markUnapplied/.test(previewJs);
+      /model\.applyEvent/.test(previewJs) &&
+      /collectionId/.test(previewJs);
     add('P7', '应用/撤销状态在两个入口间同步（编辑器应用后面板同步标记）', appliedSync, {
       panelListens: /onAppliedChange/.test(previewJs),
       preloadExposes: /appliedChange/.test(previewPreloadJs),
       mainBroadcasts: /CHANNELS\.appliedChange/.test(mainJs),
-      panelHasHandlers: /markAppliedIndex/.test(previewJs) && /markUnapplied/.test(previewJs),
+      panelHasHandlers: /model\.applyEvent/.test(previewJs) && /collectionId/.test(previewJs),
     });
 
     /* ---------------- Q 组：应用后刷新 / 全部应用 / 选区浮层 / 输入框观感 ----------------
@@ -1073,7 +1078,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
      */
     const appliesSequentially = /for \(let i = 0; i < blocks\.length; i \+= 1\)/.test(previewJs);
     const toleratesFailure = /failed\.push/.test(previewJs) && !/Promise\.all/.test(previewJs);
-    const applyAllBound = /pv-apply-all/.test(previewJs) && /pv-apply-all/.test(previewHtml);
+    const applyAllBound = /applyAllBlocks/.test(previewJs) && /pv-apply-all/.test(previewHtml);
     add(
       'Q2',
       '「全部应用」存在且顺序执行、单条失败不中断（并发会破坏三向校验基线）',
@@ -2019,12 +2024,13 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   /* ---- G) 设置持久化（上次打开的目录）---- */
   if (input.settings) {
     const before = input.settings.get();
-    const written = input.settings.update({ lastRoot: fixtures.root });
+    const written = input.settings.update({ lastRoot: fixtures.root, previewWidth: 340 });
     add('G1', '设置可写入并读回（上次打开的目录）', written.lastRoot === fixtures.root, written);
     const reread = new SettingsStore(SELF_TEST_SETTINGS_FILE);
     add('G2', '设置可从磁盘重新加载（等价于重启后恢复）', reread.get().lastRoot === fixtures.root, reread.get());
+    add('G5', '变更列宽度从磁盘恢复，重启后不丢用户调整', reread.get().previewWidth === 340, reread.get().previewWidth);
     // 复原，避免自检污染设置
-    input.settings.update({ lastRoot: before.lastRoot, editorWidth: before.editorWidth });
+    input.settings.update({ lastRoot: before.lastRoot, editorWidth: before.editorWidth, previewWidth: before.previewWidth });
     const after = input.settings.get();
     add('G3', '自检结束后已复原原设置', after.lastRoot === before.lastRoot && after.editorWidth === before.editorWidth, after);
 

@@ -1,464 +1,295 @@
-/**
- * 右下角回程预览面板（渲染进程脚本）
- *
- * 职责：**只罗列被改动的文件**，不再渲染 diff。
- *
- * 为什么不再画逐行 diff（2026-10-03 调整）：用户要的是
- * 「diff 与原文件整合一起显示，而不是分两个板块」——
- * 差异一律内联渲染在左侧编辑器里（删除行标红删除线、新增行插在旁边）。
- * 本面板若继续画一份表格化diff，就等于把同一件事在界面上呈现两遍：
- * 既占空间，又让人误以为有两套"差异"在看。
- *
- * 所以每个条目只回答三件事：**改哪个文件、改哪一段、加了几行删了几行**；
- * 点它 → 左侧编辑器打开该文件并内联标记。应用 / 撤销仍留在这里。
- *
- * 边界：本面板**不能**读写文件、不能访问 Node、不能向网页写入任何内容；
- * 一切落盘都由主进程在收到 apply 请求后、**先做三向校验**再执行。
- */
+/* 右列变更树。仅显示本地数据并请求用户明确选择的操作，diff 留在编辑器。 */
 (function () {
   'use strict';
-
   const bridge = window.previewBridge;
-  const el = {
-    meta: document.getElementById('pv-meta'),
-    notes: document.getElementById('pv-notes'),
-    list: document.getElementById('pv-list'),
-    collapse: document.getElementById('pv-collapse'),
-    undo: document.getElementById('pv-undo'),
-    applyAll: document.getElementById('pv-apply-all'),
-  };
-  if (!bridge || !el.meta || !el.notes || !el.list) {
-    return;
+  const model = window.changeTree;
+  const el = {};
+  for (const name of ['meta', 'notes', 'list', 'collapse', 'undo', 'apply-all', 'filter', 'detail', 'resizer']) {
+    el[name] = document.getElementById('pv-' + name);
   }
+  if (!bridge || !model || Object.values(el).some(function (node) { return !node; })) return;
 
-  /** 最近一次采集结果（供应用时引用批次与序号） */
   let lastPreview = null;
+  let activeIndex = null;
+  let pathEditingIndex = null;
+  let busy = false;
+  const applied = new Set();
+  const paths = new Map();
+  const closed = new Set();
+  let previewWidth = window.innerWidth || 300;
 
-  function setNotes(lines) {
-    el.notes.textContent = (lines || []).filter(Boolean).join('\n');
+  function node(tag, className, text) {
+    const value = document.createElement(tag);
+    if (className) value.className = className;
+    if (text !== undefined) value.textContent = text;
+    return value;
   }
-
-  /** 把某个条目标为「正在编辑器里预览」 */
-  function setActive(index) {
-    const items = el.list.querySelectorAll('.pv-file');
-    for (let i = 0; i < items.length; i += 1) {
-      items[i].classList.toggle('active', index !== null && Number(items[i].dataset.index) === Number(index));
+  function setNotes(lines) { el.notes.textContent = (lines || []).filter(Boolean).join('\n'); }
+  function errorText(error) { return error && error.message ? error.message : String(error || '未知错误'); }
+  function stateOf(block) { return applied.has(block.index) ? '已应用' : block.applicable ? '待应用' : '阻塞'; }
+  function pathOf(block) { return paths.has(block.index) ? paths.get(block.index).trim() : block.filePath || ''; }
+  function updateButtons() {
+    el['apply-all'].disabled = busy || !lastPreview || !(lastPreview.blocks || []).some(function (b) { return b.applicable && !applied.has(b.index); });
+    el.undo.disabled = busy;
+  }
+  function stats(added, removed) {
+    const stat = node('span', 'pv-file-stat');
+    if (added) stat.appendChild(node('span', 'pv-stat-add', '+' + added));
+    if (removed) stat.appendChild(node('span', 'pv-stat-del', '−' + removed));
+    return stat;
+  }
+  function details(label, key, className) {
+    const box = node('details', className);
+    box.open = !closed.has(key);
+    const title = node('summary');
+    title.appendChild(node('span', 'pv-file-label', label));
+    const children = node('ul');
+    box.appendChild(title); box.appendChild(children);
+    box.addEventListener('toggle', function () { if (box.open) closed.delete(key); else closed.add(key); });
+    return { box, title, children };
+  }
+  function blockRow(block, label) {
+    const li = node('li', 'pv-file'); li.dataset.index = String(block.index);
+    li.classList.toggle('active', block.index === activeIndex);
+    li.classList.toggle('done', applied.has(block.index));
+    li.classList.toggle('blocked', !block.applicable);
+    const button = node('button', 'pv-select'); button.type = 'button';
+    button.dataset.focusKey = 'block:' + block.index;
+    button.title = block.filePath || '未指定文件';
+    button.setAttribute('aria-pressed', String(block.index === activeIndex));
+    const row = node('span', 'pv-file-row');
+    row.appendChild(node('span', 'pv-file-name', label));
+    row.appendChild(node('span', 'pv-state', stateOf(block)));
+    row.appendChild(stats(block.diff ? block.diff.added : 0, block.diff ? block.diff.removed : 0));
+    button.appendChild(row);
+    button.appendChild(node('span', 'pv-file-sub', model.rangeLabel(block)));
+    button.addEventListener('click', function () { void selectBlock(block); });
+    li.appendChild(button); return li;
+  }
+  function renderTree() {
+    el.list.textContent = '';
+    const blocks = lastPreview && lastPreview.ok ? lastPreview.blocks || [] : [];
+    const files = model.groupFiles(blocks, el.filter.value);
+    if (!files.length) {
+      const text = blocks.length ? '没有匹配的文件。' : lastPreview && lastPreview.noNewContent
+        ? '回复已采集过，等待新的回复。' : lastPreview && !lastPreview.ok
+          ? '采集失败，请查看诊断后重试。' : '采集 AI 回复后，变更会显示在这里。';
+      el.list.appendChild(node('li', 'pv-empty', text));
+      return;
+    }
+    const folders = new Map();
+    for (const file of files) {
+      const parts = file.path.split('/'); const name = parts.pop();
+      let parent = el.list; let prefix = '';
+      for (const part of parts) {
+        prefix += part + '/';
+        if (!folders.has(prefix)) {
+          const branch = details(part, 'dir:' + prefix, 'pv-folder');
+          const wrapper = node('li'); wrapper.appendChild(branch.box); parent.appendChild(wrapper);
+          folders.set(prefix, branch.children);
+        }
+        parent = folders.get(prefix);
+      }
+      if (file.blocks.length === 1) parent.appendChild(blockRow(file.blocks[0], name));
+      else {
+        const branch = details(name, 'file:' + file.path, 'pv-file-group');
+        branch.title.title = file.path;
+        branch.title.appendChild(node('span', 'pv-file-count', String(file.blocks.length) + ' 段'));
+        branch.title.appendChild(stats(file.added, file.removed));
+        file.blocks.forEach(function (block, i) { branch.children.appendChild(blockRow(block, '片段 ' + (i + 1))); });
+        const wrapper = node('li'); wrapper.appendChild(branch.box); parent.appendChild(wrapper);
+      }
     }
   }
-
-  /**
-   * 一个文件 = 一行。
-   *
-   * 交互分工：
-   *  - **单击整行** → 在左侧编辑器内联预览这个文件的 diff（不再有"在编辑器中对比"按钮）
-   *  - **右侧「应用」** → 直接落盘，跳过预览（批量快速应用时省一次点击）
-   *  - **改路径**   → 收在次级位置。模型偶尔给错路径，这是唯一的纠错入口不能丢，
-   *    但多数路径是对的，默认不该占视觉。
-   */
-  function renderBlock(block) {
-    const li = document.createElement('li');
-    li.className = 'pv-file' + (block.applicable ? '' : ' blocked');
-    li.dataset.index = String(block.index);
-
-    const path = block.filePath || '';
-    const row = document.createElement('div');
-    row.className = 'pv-file-row';
-
-    /* ---- 左侧：文件名 + 副标题（范围 / 增删）---- */
-    const main = document.createElement('div');
-    main.className = 'pv-file-main';
-
-    const name = document.createElement('span');
-    name.className = 'pv-file-name';
-    // 只显示文件名，完整路径放 title —— 面板窄，长路径会挤掉增删统计
-    name.textContent = path ? path.split(/[\\/]/).pop() : '（未指定文件）';
-    if (path) name.title = path;
-    main.appendChild(name);
-
-    const sub = document.createElement('span');
-    sub.className = 'pv-file-sub';
-    const bits = [];
-    bits.push(block.range ? ('行 ' + block.range.start + '-' + block.range.end) : '整文件');
-    if (block.diff) {
-      if (block.diff.added > 0) bits.push('+' + block.diff.added);
-      if (block.diff.removed > 0) bits.push('−' + block.diff.removed);
-    }
-    sub.textContent = bits.join(' · ');
-    main.appendChild(sub);
-
-    row.appendChild(main);
-
-    /* ---- 右侧：增删统计（正负分色）---- */
-    if (block.diff && (block.diff.added > 0 || block.diff.removed > 0)) {
-      const stat = document.createElement('span');
-      stat.className = 'pv-file-stat';
-      if (block.diff.added > 0) {
-        const a = document.createElement('span');
-        a.className = 'pv-stat-add';
-        a.textContent = '+' + block.diff.added;
-        stat.appendChild(a);
-      }
-      if (block.diff.removed > 0) {
-        const d = document.createElement('span');
-        d.className = 'pv-stat-del';
-        d.textContent = '−' + block.diff.removed;
-        stat.appendChild(d);
-      }
-      row.appendChild(stat);
-    }
-
-    /* ---- 应用按钮：不看预览直接落盘 ---- */
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'pv-file-apply';
-    btn.textContent = block.applicable ? '应用' : '不可用';
-    btn.disabled = !block.applicable;
-    if (!block.applicable) btn.dataset.blocked = '1';
-    btn.title = block.applicable ? '不看预览，直接把这个文件写入磁盘' : '不满足校验条件，无法应用';
-    btn.addEventListener('click', function (e) {
-      e.stopPropagation();
-      void applyBlock(block, path, btn);
-    });
-    row.appendChild(btn);
-
-    li.appendChild(row);
-
-    /* ---- 次级：路径修正 + 提示 / 阻塞原因 ---- */
-    const details = document.createElement('div');
-    details.className = 'pv-file-details';
-
+  function renderDetail() {
+    el.detail.textContent = '';
+    const block = lastPreview && (lastPreview.blocks || []).find(function (b) { return b.index === activeIndex; });
+    el.detail.hidden = !block;
+    if (!block) return;
+    el.detail.appendChild(node('div', 'pv-detail-title', block.filePath || '未指定文件'));
+    el.detail.appendChild(node('div', 'pv-detail-range', model.rangeLabel(block) + ' · ' + stateOf(block)));
     const hints = (block.hints || []).slice();
     if (block.blockedReason) hints.push('阻塞：' + block.blockedReason);
-    if (hints.length > 0) {
-      const hint = document.createElement('div');
-      hint.className = 'pv-hint';
-      hint.textContent = hints.join('；');
-      details.appendChild(hint);
-    }
-
-    if (block.applicable && path) {
-      const pathRow = document.createElement('div');
-      pathRow.className = 'pv-path-row';
-
-      const pathInput = document.createElement('input');
-      pathInput.className = 'pv-path';
-      pathInput.type = 'text';
-      pathInput.spellcheck = false;
-      pathInput.placeholder = '目标文件相对路径';
-      pathInput.value = path;
-      pathInput.hidden = true;
-      // 输入框要阻止冒泡，否则键盘事件会被整行的点击处理抢走
-      pathInput.addEventListener('click', function (e) {
-        e.stopPropagation();
-      });
-      pathInput.addEventListener('keydown', function (e) {
-        e.stopPropagation();
-        if (e.key === 'Enter') pathInput.hidden = true;
-        if (e.key === 'Escape') {
-          pathInput.value = path;
-          pathInput.hidden = true;
-        }
-      });
-      pathRow.appendChild(pathInput);
-
-      const editPath = document.createElement('button');
-      editPath.type = 'button';
-      editPath.className = 'pv-link';
-      editPath.textContent = '改路径';
-      editPath.title = '模型给出的路径不对时点这里改成正确的相对路径';
-      editPath.addEventListener('click', function (e) {
-        e.stopPropagation();
-        pathInput.hidden = !pathInput.hidden;
-        if (!pathInput.hidden) pathInput.focus();
-      });
-      details.appendChild(editPath);
-      details.appendChild(pathRow);
-
-      /* 应用时用输入框里的路径（可能已被人工修正） */
-      li.__pathInput = pathInput;
-    }
-
-    if (details.childNodes.length > 0) li.appendChild(details);
-
-    /* ---- 整行点击 = 在编辑器内联预览 ---- */
-    if (block.applicable) {
-      li.classList.add('clickable');
-      li.title = '点击在左侧编辑器里内联预览这个文件的变更';
-      li.addEventListener('click', function () {
-        setActive(block.index);
-        void bridge.showDiffInEditor(lastPreview.collectionId, block.index);
-      });
-    }
-
-    return li;
+    if (hints.length) el.detail.appendChild(node('div', 'pv-hint', hints.join('\n')));
+    if (!block.applicable) return;
+    const actions = node('div', 'pv-detail-actions');
+    const apply = node('button', 'ui-button primary', applied.has(block.index) ? '已应用' : '应用此片段');
+    apply.dataset.focusKey = 'apply:' + block.index;
+    apply.type = 'button'; apply.disabled = busy || applied.has(block.index);
+    apply.addEventListener('click', function () { void applyOne(block); }); actions.appendChild(apply);
+    const edit = node('button', 'ui-button', '改路径'); edit.type = 'button'; edit.disabled = busy || applied.has(block.index);
+    edit.dataset.focusKey = 'edit-path:' + block.index;
+    const input = node('input', 'pv-path'); input.type = 'text'; input.spellcheck = false;
+    input.dataset.focusKey = 'path:' + block.index;
+    input.value = pathOf(block); input.hidden = pathEditingIndex !== block.index; input.setAttribute('aria-label', '目标文件相对路径');
+    input.addEventListener('input', function () { paths.set(block.index, input.value); });
+    input.addEventListener('keydown', function (event) {
+      if (event.key === 'Enter') { pathEditingIndex = null; input.hidden = true; edit.focus(); }
+      if (event.key === 'Escape') { paths.delete(block.index); input.value = block.filePath || ''; pathEditingIndex = null; input.hidden = true; edit.focus(); }
+    });
+    edit.addEventListener('click', function () {
+      input.hidden = !input.hidden; pathEditingIndex = input.hidden ? null : block.index;
+      if (!input.hidden) input.focus();
+    });
+    actions.appendChild(edit); el.detail.appendChild(actions); el.detail.appendChild(input);
   }
-
+  function refresh() {
+    // 广播只更新显示；重建节点后恢复正在操作的同一控件与输入光标。
+    const focused = document.activeElement;
+    const focusKey = focused && focused.dataset ? focused.dataset.focusKey : null;
+    const selectionStart = focused && focused.selectionStart;
+    const selectionEnd = focused && focused.selectionEnd;
+    renderTree(); renderDetail(); updateButtons();
+    if (!focusKey) return;
+    const candidates = Array.from(el.list.querySelectorAll('[data-focus-key]'))
+      .concat(Array.from(el.detail.querySelectorAll('[data-focus-key]')));
+    const target = candidates.find(function (value) { return value.dataset.focusKey === focusKey; });
+    if (!target || target.hidden || target.disabled) return;
+    target.focus();
+    if (typeof selectionStart === 'number' && typeof selectionEnd === 'number' && typeof target.setSelectionRange === 'function') {
+      target.setSelectionRange(selectionStart, selectionEnd);
+    }
+  }
+  async function selectBlock(block) {
+    const preview = lastPreview;
+    activeIndex = block.index; refresh();
+    if (!block.applicable || applied.has(block.index)) return;
+    try {
+      const result = await bridge.showDiffInEditor(preview.collectionId, block.index);
+      if (lastPreview !== preview) return;
+      if (!result || !result.ok) setNotes(['预览失败：' + ((result && result.error) || '未知错误')]);
+    } catch (error) { if (lastPreview === preview) setNotes(['预览失败：' + errorText(error)]); }
+  }
   function render(preview) {
+    if (!lastPreview || !preview || lastPreview.collectionId !== preview.collectionId) {
+      applied.clear(); paths.clear(); closed.clear(); activeIndex = null; pathEditingIndex = null;
+    }
     lastPreview = preview;
-    el.list.textContent = '';
-
-    if (!preview || preview.ok !== true) {
-      el.meta.textContent = '采集失败';
-      setNotes([(preview && preview.error) || '未采集到回复'].concat((preview && preview.notes) || []));
-      const li = document.createElement('li');
-      li.className = 'pv-empty';
-      li.textContent = '没有可应用的变更。检查右侧是否已输出代码块，或点工具栏「采集回复」重试。';
-      el.list.appendChild(li);
-      return;
-    }
-
-    const blocks = preview.blocks || [];
-    if (preview.noNewContent) {
-      el.meta.textContent = '已采集过 · 无新内容 · 原文 ' + (preview.replyText || '').length + ' 字符';
-    } else {
-      el.meta.textContent =
-        '批次 ' + preview.collectionId + ' · ' + blocks.length + ' 个文件 · 原文 ' + (preview.replyText || '').length + ' 字符';
-    }
-
-    if (blocks.length === 0) {
-      setNotes(preview.notes || []);
-      const li = document.createElement('li');
-      li.className = 'pv-empty';
-      li.textContent = preview.noNewContent
-        ? '最新回复与上次采集相同，未产生新的待应用变更。若模型已重新生成，等页面输出完成后再次采集。'
-        : '解析出 0 个代码块 —— 见上方诊断信息。';
-      el.list.appendChild(li);
-      return;
-    }
-
-    blocks.forEach(function (block) {
-      el.list.appendChild(renderBlock(block));
-    });
-
-    setNotes(['点一个文件 → 左侧编辑器内联显示它的变更；确认无误再点「应用此变更」。']);
+    const blocks = preview && preview.ok ? preview.blocks || [] : [];
+    const count = model.groupFiles(blocks, '').length;
+    el.meta.textContent = preview && preview.ok ? count + ' 文件' : '采集失败';
+    el.meta.title = preview ? '批次 ' + preview.collectionId + ' · ' + blocks.length + ' 个片段' : '';
+    setNotes((preview && preview.error ? [preview.error] : []).concat((preview && preview.notes) || []));
+    refresh();
   }
-
-  async function applyBlock(block, filePath, btn) {
-    if (!lastPreview || !lastPreview.collectionId) return;
-    if (!filePath) {
-      setNotes(['请先填写目标文件路径再应用']);
-      return;
-    }
-    btn.disabled = true;
-    btn.textContent = '应用中…';
-    const result = await bridge.applyChange({
-      collectionId: lastPreview.collectionId,
-      index: block.index,
-      filePath: filePath,
-    });
-    if (result && result.ok) {
-      btn.textContent = '已应用 ✓';
-      btn.disabled = true;
-      btn.closest('.pv-file')?.classList.add('done');
-      setNotes(['已应用 ' + result.filePath + '（模式 ' + result.mode + '）—— 可点右上「撤销」回退']);
-      return;
-    }
-    btn.disabled = false;
-    btn.textContent = '应用';
-    setNotes(['应用失败：' + ((result && result.error) || '未知错误')]);
+  async function requestApply(preview, block) {
+    const path = pathOf(block);
+    if (!path) return { ok: false, error: '请先填写目标文件路径' };
+    try { return await bridge.applyChange({ collectionId: preview.collectionId, index: block.index, filePath: path }); }
+    catch (error) { return { ok: false, error: errorText(error) }; }
   }
-
-  /**
-   * 全部应用：把本批次里所有可用的变更依次写入。
-   *
-   * 为什么顺序执行而不是并发：每个变更都要**单独做三向校验**，
-   * 而校验基线是"读文件那一刻的原文"。并发应用会让两次写入基于同一份基线，
-   * 后一个可能覆盖前一个的结果 —— 顺序执行才能保证每一步都基于上一步之后的磁盘内容。
-   *
-   * 单个失败**不中断**整体：某个文件校验不过（文件已变、区间非法），
-   * 其余文件仍应能应用，最后统一汇总成功/失败与原因。
-   */
+  async function applyOne(block) {
+    if (busy || !lastPreview || !block.applicable || applied.has(block.index)) return;
+    const preview = lastPreview;
+    busy = true; refresh();
+    try {
+      const result = await requestApply(preview, block);
+      if (lastPreview !== preview) return;
+      if (result && result.ok) {
+        applied.add(block.index); setNotes(['已应用 ' + result.filePath + '，可撤销。']);
+      } else setNotes(['应用失败：' + ((result && result.error) || '未知错误')]);
+    } finally { busy = false; refresh(); }
+  }
   async function applyAllBlocks() {
-    if (!lastPreview || lastPreview.ok !== true) return;
-    const blocks = (lastPreview.blocks || []).filter(function (b) {
-      return b.applicable;
-    });
-    if (blocks.length === 0) {
-      /*
-       * 为什么这里必须把阻塞原因列出来（2026-10-04）：
-       * 原先只刷一行「没有可应用的变更」，把上一次采集的诊断信息**覆盖掉** ——
-       * 用户看到的就成了"采不到回复"，而真实原因常常是
-       * 「目标文件不在当前打开的目录下」「行区间越界」「未确定目标文件」，
-       * 这些理由采集时都已经算过（blockedReason），只是在这一步被丢掉了。
-       */
-      const all = lastPreview.blocks || [];
-      const reasons = [];
-      all.forEach(function (b) {
-        const name = b.filePath ? b.filePath.split(/[\\/]/).pop() : '(未指定文件)';
-        if (b.blockedReason) reasons.push(name + '：' + b.blockedReason);
-        else if (!b.applicable) reasons.push(name + '：不满足应用条件');
-      });
-      if (reasons.length === 0) {
-        setNotes([
-          '没有可应用的变更 —— 本批次没有条目：可能是回复里没有代码块（见上方首行/围栏诊断），' +
-            '或内容与上次采集完全相同。点工具栏「采集回复」可重新采集一次。',
-        ]);
-      } else {
-        setNotes(['没有可应用的变更，原因：'].concat(reasons));
-      }
+    if (busy || !lastPreview || !lastPreview.ok) return;
+    const preview = lastPreview;
+    const blocks = (preview.blocks || []).filter(function (b) { return b.applicable && !applied.has(b.index); });
+    if (!blocks.length) {
+      setNotes(['没有待应用片段。'].concat((preview.blocks || []).filter(function (b) { return !b.applicable; })
+        .map(function (b) { return (b.filePath || '未指定文件') + '：' + (b.blockedReason || '不满足应用条件'); })));
       return;
     }
-
-    const btn = el.applyAll;
-    btn.disabled = true;
-    const originalText = btn.textContent;
-
-    const applied = [];
-    const failed = [];
-    for (let i = 0; i < blocks.length; i += 1) {
-      const block = blocks[i];
-      const path = block.filePath || '';
-      btn.textContent = '应用中 ' + (i + 1) + '/' + blocks.length;
-      const result = await bridge.applyChange({
-        collectionId: lastPreview.collectionId,
-        index: block.index,
-        filePath: path,
-      });
-      if (result && result.ok) applied.push({ index: block.index, filePath: result.filePath || path });
-      else failed.push(path + '（' + ((result && result.error) || '未知错误') + '）');
-    }
-
-    btn.disabled = false;
-    btn.textContent = originalText;
-
-    const names = applied.map(function (a) {
-      return a.filePath;
-    });
-    const notes = ['已应用 ' + applied.length + ' / ' + blocks.length + ' 个文件'];
-    if (names.length > 0) notes.push('成功：' + names.join('、'));
-    if (failed.length > 0) notes.push('失败：' + failed.join('；'));
-    notes.push('可点右上「撤销」逐次回退');
-    setNotes(notes);
-
-    markApplied(applied);
-  }
-
-  /**
-   * 把已成功应用的条目标成「已应用 ✓」。
-   * 按 **block.index** 匹配（而不是文件名）—— 用户可能刚用「改路径」修正过路径，
-   * 按名字匹配会漏掉；而 index 是这一批里唯一的稳定标识。
-   */
-  function markApplied(applied) {
-    const idx = new Set(applied.map(function (a) {
-      return Number(a.index);
-    }));
-    const items = el.list.querySelectorAll('.pv-file');
-    for (let i = 0; i < items.length; i += 1) {
-      const node = items[i];
-      if (!idx.has(Number(node.dataset.index))) continue;
-      const btn = node.querySelector('.pv-file-apply');
-      if (btn) {
-        btn.textContent = '已应用 ✓';
-        btn.disabled = true;
+    busy = true; refresh(); const failed = []; let succeeded = 0;
+    try {
+      for (let i = 0; i < blocks.length; i += 1) {
+        // 采集已更换批次时停止，避免继续应用用户当前看不到的旧批次。
+        if (lastPreview !== preview) break;
+        const block = blocks[i];
+        if (applied.has(block.index)) continue;
+        el['apply-all'].textContent = '应用中 ' + (i + 1) + '/' + blocks.length;
+        const result = await requestApply(preview, block);
+        if (result && result.ok) { succeeded += 1; if (lastPreview === preview) applied.add(block.index); }
+        else failed.push((block.filePath || '未指定文件') + '：' + ((result && result.error) || '未知错误'));
       }
-      node.classList.add('done');
-    }
+      if (lastPreview === preview) setNotes(['已应用 ' + succeeded + ' / ' + blocks.length + ' 个片段。'].concat(failed));
+    } finally { busy = false; el['apply-all'].textContent = '全部应用'; refresh(); }
   }
-
-  el.applyAll.addEventListener('click', function () {
-    void applyAllBlocks();
+  el.filter.addEventListener('input', renderTree);
+  el['apply-all'].addEventListener('click', function () { void applyAllBlocks(); });
+  el.collapse.addEventListener('click', async function () {
+    try { await bridge.setPreviewPanel(0); } catch (error) { setNotes(['收起失败：' + errorText(error)]); }
+  });
+  el.undo.addEventListener('click', async function () {
+    if (busy) return; busy = true; refresh();
+    try {
+      const result = await bridge.undoSave();
+      if (result && result.ok) {
+        model.applyEvent(lastPreview, applied, { ...result, kind: 'undone' });
+        setNotes(['已撤销 ' + result.filePath + ' 的上一次应用。']);
+      } else setNotes(['撤销失败：' + ((result && result.error) || '没有可撤销的变更')]);
+    } catch (error) { setNotes(['撤销失败：' + errorText(error)]); }
+    finally { busy = false; refresh(); }
+  });
+  bridge.onPreviewData(render);
+  bridge.onAppliedChange(function (event) { if (model.applyEvent(lastPreview, applied, event)) refresh(); });
+  bridge.onActiveDiff(function (index) {
+    activeIndex = index === null || index === undefined ? null : Number(index);
+    if (lastPreview) {
+      const block = (lastPreview.blocks || []).find(function (b) { return b.index === activeIndex; });
+      if (block) {
+        let prefix = ''; const parts = (block.filePath || '').replace(/\\/g, '/').split('/'); parts.pop();
+        for (const part of parts) { prefix += part + '/'; closed.delete('dir:' + prefix); }
+        closed.delete('file:' + (block.filePath || '').replace(/\\/g, '/'));
+      }
+    }
+    refresh();
+  });
+  if (bridge.onChromeState) bridge.onChromeState(function (state) {
+    if (state && state.previewMaxWidth > 0) el.resizer.setAttribute('aria-valuemax', String(Math.round(state.previewMaxWidth)));
+    if (state && state.previewWidth > 0) {
+      previewWidth = state.previewWidth;
+      el.resizer.setAttribute('aria-valuenow', String(Math.round(previewWidth)));
+    }
   });
 
-  /**
-   * 把某个条目标成「已应用 ✓」（按 block.index 匹配）。
-   * 供**本面板自己的**应用按钮，以及主进程广播（编辑器入口应用成功）共用。
-   */
-  function markAppliedIndex(index) {
-    const items = el.list.querySelectorAll('.pv-file');
-    for (let i = 0; i < items.length; i += 1) {
-      const node = items[i];
-      if (Number(node.dataset.index) !== Number(index)) continue;
-      const btn = node.querySelector('.pv-file-apply');
-      if (btn) {
-        btn.textContent = '已应用 ✓';
-        btn.disabled = true;
-      }
-      node.classList.add('done');
-    }
-  }
-
-  /**
-   * 撤销后把条目**恢复成可应用**。
-   *
-   * 快照栈是主进程全局的、不含 collectionId，因此广播只知道 filePath。
-   * 先按路径反查条目；查不到（例如路径被改过）就**保守地把全部条目复位** ——
-   * 宁可多显示一次"可应用"，也不要让面板停留在"已应用 ✓"的假状态。
-   */
-  function markUnapplied(filePath) {
-    const items = el.list.querySelectorAll('.pv-file');
-    let matched = 0;
-    if (filePath) {
-      for (let i = 0; i < items.length; i += 1) {
-        const node = items[i];
-        const input = node.__pathInput;
-        const shown = (input && input.value) || '';
-        const full = node.querySelector('.pv-file-name');
-        const name = full ? full.title || full.textContent || '' : '';
-        if (shown === filePath || name === filePath || (name && filePath.indexOf(name) >= 0)) {
-          resetItem(node);
-          matched += 1;
+  // 串行合并拖动请求，最终宽度以主进程返回值为准。
+  let pendingWidth = null; let resizing = false;
+  async function requestWidth(width) {
+    pendingWidth = Math.max(260, width);
+    if (resizing) return;
+    resizing = true;
+    try {
+      while (pendingWidth !== null) {
+        const next = pendingWidth; pendingWidth = null;
+        const result = await bridge.setPreviewPanel(next);
+        if (result && result.width > 0) {
+          previewWidth = result.width; el.resizer.setAttribute('aria-valuenow', String(Math.round(previewWidth)));
         }
       }
-    }
-    if (matched === 0) {
-      for (let i = 0; i < items.length; i += 1) resetItem(items[i]);
-    }
+    } catch (error) { pendingWidth = null; setNotes(['调整宽度失败：' + errorText(error)]); }
+    finally { resizing = false; }
   }
-
-  /** 把一个条目复位成「可应用」 */
-  function resetItem(node) {
-    const btn = node.querySelector('.pv-file-apply');
-    if (btn && !btn.dataset.blocked) {
-      btn.textContent = '应用';
-      btn.disabled = false;
-    }
-    node.classList.remove('done');
+  let drag = null;
+  el.resizer.addEventListener('pointerdown', function (event) {
+    if (event.button !== 0) return;
+    drag = { id: event.pointerId, x: event.screenX, width: previewWidth };
+    el.resizer.setPointerCapture(event.pointerId); event.preventDefault();
+  });
+  el.resizer.addEventListener('pointermove', function (event) {
+    if (drag && drag.id === event.pointerId) void requestWidth(drag.width + drag.x - event.screenX);
+  });
+  function endDrag(event) {
+    if (!drag || drag.id !== event.pointerId) return;
+    if (event.type === 'pointerup') void requestWidth(drag.width + drag.x - event.screenX);
+    drag = null;
+    if (el.resizer.hasPointerCapture(event.pointerId)) el.resizer.releasePointerCapture(event.pointerId);
   }
-
-  el.collapse.addEventListener('click', function () {
-    void bridge.setPreviewPanel(0);
+  el.resizer.addEventListener('pointerup', endDrag);
+  el.resizer.addEventListener('pointercancel', endDrag);
+  el.resizer.addEventListener('lostpointercapture', function () { drag = null; });
+  el.resizer.addEventListener('keydown', function (event) {
+    if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+    event.preventDefault(); void requestWidth(previewWidth + (event.key === 'ArrowLeft' ? 20 : -20));
   });
-
-  el.undo.addEventListener('click', async function () {
-    const result = await bridge.undoSave();
-    setNotes([
-      result && result.ok
-        ? '已撤销对 ' + result.filePath + ' 的上一次应用'
-        : '撤销失败：' + ((result && result.error) || '没有可撤销的变更'),
-    ]);
-    // 主进程也会广播 appliedChange，这里主动复位一次，避免广播未到时的短暂假状态
-    if (result && result.ok) markUnapplied(result.filePath);
-  });
-
-  bridge.onPreviewData(function (preview) {
-    render(preview);
-  });
-
-  /**
-   * 主进程广播：某个变更已被应用 / 被撤销。
-   *
-   * 覆盖**编辑器入口**的应用（本面板不知情的那条路）与撤销，
-   * 让面板状态与磁盘保持一致（用户实测："在左侧编辑器中应用代码后，
-   * 右下角的采集应用状态没有同步更新"）。
-   */
-  bridge.onAppliedChange(function (event) {
-    if (!event || typeof event !== 'object') return;
-    if (event.kind === 'applied' && typeof event.index === 'number') {
-      markAppliedIndex(event.index);
-      return;
-    }
-    if (event.kind === 'undone') markUnapplied(event.filePath);
-  });
-
-  /**
-   * 同步"当前正在编辑器里预览的是哪个文件"的高亮。
-   *
-   * 编辑器与本面板是**两个独立渲染进程**（进程边界见 ADR-0002），彼此不能直接调用，
-   * 因此由主进程在编辑器切换 diff 目标时转发过来。
-   * 若没有这条通道，点文件后的高亮就只存在于本面板，
-   * 用「上一个/下一个」在编辑器里跳走之后就对不上了。
-   */
-  bridge.onActiveDiff(function (index) {
-    setActive(index === null || index === undefined ? null : Number(index));
-  });
+  updateButtons();
 })();

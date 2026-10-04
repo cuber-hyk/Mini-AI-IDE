@@ -8,6 +8,24 @@ import { FileService } from '../src/main/fileService';
 import { ReturnPathService } from '../src/main/returnPathService';
 import { parseModelReply } from '../src/shared/returnPath';
 
+it('同文件不同片段及不同批次的撤销返回精确身份', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mini-ai-ide-undo-identity-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.writeFile(path.join(root, 'a.txt'), 'original');
+  const files = new FileService();
+  files.setRoot(root);
+  const service = new ReturnPathService(files);
+  const sources = [{ collectionId: 'first', index: 0 }, { collectionId: 'first', index: 1 }, { collectionId: 'second', index: 0 }];
+  for (const source of sources) {
+    const block = parseModelReply(`### 文件：a.txt\n\`\`\`\`\n${source.collectionId}-${source.index}\n\`\`\`\``).blocks[0]!;
+    assert.equal((await service.applyChange({ filePath: 'a.txt', block, source })).ok, true);
+  }
+  for (const source of [...sources].reverse()) {
+    assert.deepEqual(await service.undoLast(), { ok: true, filePath: 'a.txt', ...source });
+  }
+  assert.equal(await fs.readFile(path.join(root, 'a.txt'), 'utf8'), 'original');
+});
+
 it('10-10 替换十行后读盘与计算一致，撤销恢复原文件', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mini-ai-ide-range-test-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

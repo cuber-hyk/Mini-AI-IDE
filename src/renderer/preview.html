@@ -2,29 +2,28 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
-    <meta
-      http-equiv="Content-Security-Policy"
-      content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'none'; img-src 'self' data:"
-    />
-    <title>回程预览</title>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'none'; img-src 'self' data:" />
+    <title>变更列表</title>
+    <link rel="stylesheet" href="./ui-tokens.css" />
+    <link rel="stylesheet" href="./ui.css" />
     <link rel="stylesheet" href="./preview.css" />
   </head>
   <body>
+    <div id="pv-resizer" role="separator" tabindex="0" aria-label="调整变更列宽度" aria-orientation="vertical" aria-valuemin="260" aria-valuemax="820" aria-valuenow="300" title="拖动调整宽度，方向键调整"></div>
     <header class="pv-head">
-      <span class="pv-title">回程预览</span>
+      <span class="pv-title">变更</span>
       <span id="pv-meta" class="pv-meta">尚未采集</span>
-      <span class="spacer"></span>
-      <button id="pv-apply-all" type="button" class="pv-apply-all" title="依次应用全部可用的变更（每个都会单独做三向校验，失败的跳过不影响其余）">全部应用</button>
-      <button id="pv-collapse" type="button" title="收起预览面板（把高度还给网页）">收起</button>
-      <button id="pv-undo" type="button">撤销</button>
+      <button id="pv-apply-all" type="button" class="ui-button primary" title="依次应用本批次全部待应用片段，包含筛选外的文件">全部应用</button>
+      <button id="pv-undo" type="button" class="ui-button ui-icon" title="撤销上一次应用" aria-label="撤销上一次应用">↶</button>
+      <button id="pv-collapse" type="button" class="ui-button ui-icon" title="收起变更列" aria-label="收起变更列">›</button>
     </header>
-
-    <div id="pv-notes" class="pv-notes"></div>
-
-    <ul id="pv-list" class="pv-list">
-      <li class="pv-empty">点工具栏「采集回复」：这里会列出被改动的文件，点某个文件就在左侧编辑器里看它的变更。</li>
+    <div class="pv-filter-wrap"><input id="pv-filter" class="pv-filter" type="search" placeholder="筛选文件…" aria-label="筛选变更文件" spellcheck="false" /></div>
+    <div id="pv-notes" class="pv-notes" role="status" aria-live="polite"></div>
+    <ul id="pv-list" class="pv-list" aria-label="变更文件">
+      <li class="pv-empty">采集 AI 回复后，变更会显示在这里。</li>
     </ul>
-
+    <section id="pv-detail" class="pv-detail" aria-label="当前片段" hidden></section>
+    <script src="./changeTree.js"></script>
     <script src="./preview.js"></script>
   </body>
 </html>

@@ -21,7 +21,7 @@
 | 回程解析 / 一键应用 / 输出格式 | `docs/capabilities/return-path-and-format-contract.md`、`docs/adr/2026-10-02-return-path-contract-and-trust-boundary.md` | 指纹与网络层细节 |
 | 指纹与环境特征 | `docs/adr/2026-10-02-honest-electron-identity.md`（ADR-0001）、`docs/adr/2026-10-02-zero-injection-and-automation-trace-baseline.md`（ADR-0003） | 实现细节代码（`src/shared/userAgent.ts` 为落地实现） |
 | 会话 / 登录持久化 | `docs/capabilities/session-persistence.md`（会话分区命名 ADR 为**候选未建项**，暂由该能力文档承载） | 计划文档 |
-| UI / 设计规则 | `docs/capabilities/app-shell.md` 的「布局规则」「左侧编辑器与目录树的当前行为」「底部需求输入区的当前行为」 | — |
+| UI / 设计规则 | `DESIGN.md`、`design-tokens.json`、`src/renderer/ui.css`、`docs/capabilities/app-shell.md` 的「布局规则」「左侧编辑器与目录树的当前行为」「底部需求输入区的当前行为」 | — |
 
 ## 过程证据（非默认上下文）
 
@@ -38,7 +38,7 @@
 | 决策记录 | `docs/adr/` |
 | 回程机制（一键同步） | `docs/capabilities/return-path-and-format-contract.md` |
 | 应用实现（P2 已落地） | `src/main/`、`src/renderer/`、`src/shared/`；脚本 `scripts/`；测试 `test/` |
-| 视图与入口对照（4 个 WebContentsView） | `src/renderer/index.html`（编辑器）、`preview.*`（回程预览面板）、`webbar.*`（网页区顶栏 / 网页隐藏时的右边缘把手）；preload 各自独立 |
+| 视图与入口对照（4 个 WebContentsView） | `src/renderer/index.html`（编辑器）、`preview.*`（回程预览面板）、`webbar.*`（网页区顶栏 / 网页隐藏时的恢复把手）；preload 各自独立 |
 | 需求输入与版本切换 | `src/renderer/promptComposer.js`；结构/样式 `index.html`、`style.css`，状态 IPC `src/main/index.ts`、`preload.ts` |
 | 自动化特征核验工具 | `tools/trace-verifier/` |
 | 可达性与会话实测工具 | `tools/reachability-probe/` |

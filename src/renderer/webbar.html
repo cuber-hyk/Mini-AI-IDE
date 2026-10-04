@@ -7,6 +7,8 @@
       content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'none'; img-src 'self' data:"
     />
     <title>网页区工具条</title>
+    <link rel="stylesheet" href="./ui-tokens.css" />
+    <link rel="stylesheet" href="./ui.css" />
     <link rel="stylesheet" href="./webbar.css" />
   </head>
   <body>
@@ -14,35 +16,36 @@
       网页区工具条：同一个视图的**两种形态**，由主进程的几何决定：
 
       1. 横条（网页可见）：贴在网页区顶部，两个显隐开关并排。
-      2. 竖把手（网页隐藏）：贴到窗口右边缘，静置是一条 5px 窄条，hover 展开成 28px，
+      2. 竖把手（网页隐藏）：位于编辑器与变更列之间，静置是一条 5px 窄条，hover 展开成 28px，
          上面只有「展开 AI 网页」一个按钮。
 
       为什么不能把工具条一起隐藏：它上面的按钮是"把网页叫回来"的唯一常驻入口。
       早期实现跟着网页一起隐藏，用户点完隐藏就再也回不来（本项目已犯过一次）。
     -->
     <div id="bar" class="webbar">
-      <!-- 横条形态：标题 + 两个开关 -->
+      <!-- 网页顶部只负责采集与板块显隐，变更操作在右侧列表。 -->
       <div class="bar-wide">
         <span class="webbar-title">AI 网页</span>
         <span class="spacer"></span>
-        <!-- 隐藏网页：编辑器占满全窗口，本视图变成右边缘把手 -->
-        <button id="btn-web" type="button" class="icon-btn active" title="隐藏 AI 网页（编辑器占满全窗口）· Ctrl+Shift+A">
+        <span id="collect-status" class="collect-status" role="status" aria-live="polite"></span>
+        <button id="btn-collect" type="button" class="ui-button primary" title="只读采集最新回复，结果显示在变更列表">采集回复</button>
+        <!-- 隐藏网页后本视图变为恢复把手，变更列表仍可见。 -->
+        <button id="btn-web" type="button" class="ui-icon active" aria-label="隐藏 AI 网页" title="隐藏 AI 网页 · Ctrl+Shift+A">
           <svg viewBox="0 0 16 16" aria-hidden="true">
             <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
             <path d="M9.5 2.5v11" />
           </svg>
         </button>
-        <!-- 显示/隐藏右下角回程预览面板 -->
-        <button id="btn-preview-toggle" type="button" class="icon-btn" title="显示右下角回程预览面板">
+        <button id="btn-preview-toggle" type="button" class="ui-icon" aria-label="显示变更列表" title="显示变更列表">
           <svg viewBox="0 0 16 16" aria-hidden="true">
             <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
-            <path d="M1.5 10h13" />
+            <path d="M10.5 2.5v11" />
           </svg>
         </button>
       </div>
 
       <!-- 竖把手形态：网页隐藏时唯一可见的东西（"把网页叫回来"的入口） -->
-      <button id="btn-restore" type="button" class="handle" title="显示 AI 网页 · Ctrl+Shift+A">
+      <button id="btn-restore" type="button" class="handle" aria-label="显示 AI 网页" title="显示 AI 网页 · Ctrl+Shift+A">
         <svg viewBox="0 0 16 16" aria-hidden="true">
           <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
           <path d="M9.5 2.5v11" />

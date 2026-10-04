@@ -1,284 +1,45 @@
-/* 右下角回程预览面板：与主界面同一套深色配色 */
-:root {
-  --bg: #14161b;
-  --bg-elevated: #1b1f27;
-  --border: #2a2f3a;
-  --text: #d7dce6;
-  --text-dim: #8b93a3;
-  --accent: #5b8def;
-  --add-bg: #16301f;
-  --add-text: #7ee2a8;
-  --del-bg: #33181c;
-  --del-text: #f08a94;
-}
-
-* {
-  box-sizing: border-box;
-}
-
-html,
-body {
-  margin: 0;
-  height: 100%;
-  background: var(--bg);
-  color: var(--text);
-  font: 12px/1.5 "Segoe UI", system-ui, "Microsoft YaHei", sans-serif;
-  overflow: hidden;
-}
-
-body {
-  display: flex;
-  flex-direction: column;
-}
-
-.pv-head {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 30px;
-  padding: 0 8px;
-  background: var(--bg-elevated);
-  border-bottom: 1px solid var(--border);
-}
-
-.pv-title {
-  font-weight: 600;
-  color: #cfd6e4;
-}
-
-.pv-meta {
-  color: var(--text-dim);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.spacer {
-  flex: 1;
-}
-
-.pv-head button {
-  flex: 0 0 auto;
-  white-space: nowrap;
-  background: #262a33;
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 2px 8px;
-  font: inherit;
-  cursor: pointer;
-}
-
-.pv-head button:hover {
-  border-color: var(--accent);
-}
-
-/* 「全部应用」：主操作，与「撤销」这类次要按钮区分开 */
-.pv-head button.pv-apply-all {
-  background: #2c5cc5;
-  border-color: #3f6fd8;
-  color: #fff;
-}
-
-.pv-head button.pv-apply-all:hover:enabled {
-  background: #3868d8;
-}
-
-.pv-head button.pv-apply-all:disabled {
-  opacity: 0.55;
-  cursor: default;
-}
-
-/* 已应用的条目：置灰并去掉 hover 反馈，明确"这个文件已经落盘了" */
-.pv-file.done {
-  opacity: 0.55;
-}
-
-.pv-file.done.clickable:hover {
-  background: none;
-  border-color: transparent;
-}
-
-.pv-notes {
-  flex: 0 0 auto;
-  max-height: 3.2em;
-  overflow-y: auto;
-  padding: 4px 8px;
-  color: #e8c07a;
-  border-bottom: 1px solid var(--border);
-  white-space: pre-wrap;
-}
-
-.pv-notes:empty {
-  display: none;
-}
-
-.pv-list {
-  flex: 1 1 auto;
-  min-height: 0;
-  list-style: none;
-  margin: 0;
-  padding: 4px 6px 8px;
-  overflow: auto;
-}
-
-.pv-empty {
-  color: var(--text-dim);
-  padding: 4px 0;
-}
-
-/* ---------------- 一个文件 = 一行 ----------------
- *
- * 本面板**不再渲染 diff**：差异一律内联显示在左侧编辑器里。
- * 每行只回答"改哪个文件、改哪一段、加了几行删了几行"，
- * 点整行 → 左侧编辑器打开该文件并内联标记。
- */
-
-.pv-file {
-  border: 1px solid transparent;
-  border-radius: 4px;
-  margin-bottom: 2px;
-  overflow: hidden;
-}
-
-.pv-file.blocked {
-  opacity: 0.62;
-}
-
-/* 可点击（有对应文件的可应用变更） */
-.pv-file.clickable {
-  cursor: pointer;
-}
-
-.pv-file.clickable:hover {
-  background: #1c2029;
-  border-color: var(--border);
-}
-
-/* 当前正在编辑器里预览的那一条 */
-.pv-file.active {
-  background: rgba(91, 141, 239, 0.16);
-  border-color: var(--accent);
-}
-
-.pv-file-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 7px;
-}
-
-.pv-file-main {
-  flex: 1 1 auto;
-  min-width: 0;
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-}
-
-.pv-file-name {
-  color: var(--text);
-  font-size: 12.5px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex: 0 1 auto;
-}
-
-.pv-file-sub {
-  color: var(--text-dim);
-  font-size: 11px;
-  white-space: nowrap;
-  flex: 0 0 auto;
-}
-
-/* 增删统计：正负分色，一眼看出改动量 */
-.pv-file-stat {
-  flex: 0 0 auto;
-  display: flex;
-  gap: 5px;
-  font-family: "Cascadia Code", Consolas, monospace;
-  font-size: 11px;
-}
-
-.pv-stat-add {
-  color: var(--add-text);
-}
-
-.pv-stat-del {
-  color: var(--del-text);
-}
-
-.pv-file-apply {
-  flex: 0 0 auto;
-  white-space: nowrap;
-  background: #2c5cc5;
-  border: 1px solid #3f6fd8;
-  color: #fff;
-  border-radius: 4px;
-  padding: 2px 10px;
-  font: inherit;
-  cursor: pointer;
-}
-
-.pv-file-apply:hover:enabled {
-  background: #3868d8;
-}
-
-.pv-file-apply:disabled {
-  background: #2a2d34;
-  border-color: var(--border);
-  color: var(--text-dim);
-  cursor: default;
-}
-
-/* ---------------- 次级：提示 / 改路径 ---------------- */
-
-.pv-file-details {
-  padding: 0 7px 5px;
-}
-
-.pv-file-details:empty {
-  display: none;
-}
-
-.pv-hint {
-  color: #e8c07a;
-  font-size: 11px;
-  padding: 2px 0;
-}
-
-/* 「改路径」是文字链形式：不主动占视觉，但必须可达（模型偶尔给错路径） */
-.pv-link {
-  background: none;
-  border: none;
-  padding: 0;
-  color: var(--text-dim);
-  font: inherit;
-  font-size: 11px;
-  text-decoration: underline;
-  cursor: pointer;
-}
-
-.pv-link:hover {
-  color: var(--accent);
-}
-
-.pv-path-row {
-  margin-top: 3px;
-}
-
-.pv-path {
-  width: 100%;
-  background: #10131a;
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 2px 6px;
-  font: inherit;
-}
-
-.pv-path[hidden] {
-  display: none;
-}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; }
+body { display: flex; flex-direction: column; background: var(--ui-bg); color: var(--ui-text); font: 12px/1.5 "Segoe UI", system-ui, "Microsoft YaHei", sans-serif; }
+[hidden] { display: none !important; }
+#pv-resizer { position: absolute; inset: 0 auto 0 0; width: 5px; z-index: 5; cursor: col-resize; touch-action: none; }
+#pv-resizer:hover, #pv-resizer:focus-visible { background: var(--ui-accent); outline: none; }
+.pv-head { flex: 0 0 auto; display: flex; align-items: center; gap: 4px; height: 40px; padding: 5px 8px 5px 10px; border-bottom: 1px solid var(--ui-border); }
+.pv-title { font-weight: 600; white-space: nowrap; }
+.pv-meta { flex: 1; min-width: 0; color: var(--ui-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pv-head .ui-button { flex: 0 0 auto; padding-inline: 7px; font-size: 12px; }
+.pv-head .ui-icon { width: 26px; padding: 0; font-size: 20px; }
+.pv-filter-wrap { padding: 10px 10px 6px; }
+.pv-filter, .pv-path { width: 100%; color: inherit; font: inherit; background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: var(--ui-radius); padding: 6px 9px; }
+.pv-filter:focus, .pv-path:focus { outline: 1px solid var(--ui-accent); }
+.pv-notes { flex: 0 0 auto; max-height: 7em; overflow: auto; padding: 6px 10px; color: #e0b876; border-bottom: 1px solid var(--ui-border); white-space: pre-wrap; overflow-wrap: anywhere; }
+.pv-notes:empty { display: none; }
+.pv-list { flex: 1; min-height: 0; overflow: auto; list-style: none; margin: 0; padding: 4px 8px 10px; }
+.pv-list ul { list-style: none; margin: 0 0 0 10px; padding: 0 0 0 7px; border-left: 1px solid var(--ui-border); }
+.pv-empty { padding: 12px 3px; color: var(--ui-muted); }
+.pv-folder > summary, .pv-file-group > summary { display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 3px 5px; cursor: pointer; border-radius: var(--ui-radius); }
+summary::-webkit-details-marker { display: none; }
+summary::before { content: '›'; color: var(--ui-muted); width: 10px; flex: 0 0 auto; }
+details[open] > summary::before { content: '⌄'; }
+.pv-file-label { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.pv-file-count { color: var(--ui-muted); font-size: 11px; }
+.pv-file { margin: 1px 0; }
+.pv-select { display: flex; flex-direction: column; width: 100%; text-align: left; background: transparent; border: 1px solid transparent; border-radius: var(--ui-radius); padding: 5px 6px; color: inherit; font: inherit; cursor: pointer; }
+.pv-select:hover, summary:hover { background: var(--ui-surface); }
+.pv-select:focus-visible, summary:focus-visible { outline: 1px solid var(--ui-accent); }
+.pv-file.active > .pv-select { background: rgba(91,141,239,.14); border-color: var(--ui-accent); }
+.pv-file-row { display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; }
+.pv-file-name { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.pv-file-sub { color: var(--ui-muted); font-size: 11px; overflow-wrap: anywhere; }
+.pv-file-stat { display: inline-flex; flex: 0 0 auto; gap: 4px; font: 11px "Cascadia Code", Consolas, monospace; }
+.pv-stat-add { color: #7ee2a8; }
+.pv-stat-del { color: #f08a94; }
+.pv-state { color: var(--ui-muted); font-size: 10px; white-space: nowrap; }
+.pv-file.done .pv-state { color: #7ee2a8; }
+.pv-file.blocked .pv-state { color: #e0b876; }
+.pv-detail { flex: 0 0 auto; max-height: 40%; overflow: auto; padding: 10px; border-top: 1px solid var(--ui-border); }
+.pv-detail-title { margin-bottom: 5px; font-weight: 600; overflow-wrap: anywhere; }
+.pv-detail-range { color: var(--ui-muted); font-size: 11px; }
+.pv-detail-actions { display: flex; gap: 6px; margin-top: 8px; }
+.pv-hint { margin-top: 6px; color: #e0b876; overflow-wrap: anywhere; white-space: pre-wrap; }
+.pv-path { margin-top: 8px; }

@@ -1,0 +1,17 @@
+/* 本地视图共用控件。基础值由 design-tokens.json 构建生成。 */
+.ui-button, .ui-icon {
+  height: var(--ui-control-height);
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius);
+  background: var(--ui-surface);
+  color: var(--ui-text);
+  font: inherit;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.ui-button { padding: 0 10px; }
+.ui-icon { width: var(--ui-control-height); padding: 0; }
+.ui-button.primary { background: var(--ui-accent); border-color: var(--ui-accent); color: #fff; }
+.ui-button:hover:not(:disabled), .ui-icon:hover:not(:disabled) { border-color: var(--ui-accent); }
+.ui-button:focus-visible, .ui-icon:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 2px; }
+.ui-button:disabled, .ui-icon:disabled { opacity: .45; cursor: default; }

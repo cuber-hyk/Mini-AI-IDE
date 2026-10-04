@@ -21,7 +21,7 @@ const root = path.resolve(import.meta.dirname, '..');
 const target = path.join(root, 'src/renderer/renderer.js');
 const out = path.join(root, 'tools/renderer-scope-report.json');
 
-const targets = [target, path.join(root, 'src/renderer/promptComposer.js')];
+const targets = [target, ...['promptComposer', 'editorToolbar', 'changeTree', 'preview', 'webbar'].map(name => path.join(root, `src/renderer/${name}.js`))];
 const host = ts.createCompilerHost({ allowJs: true, checkJs: true, noEmit: true });
 host.writeFile = () => {};
 
