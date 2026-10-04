@@ -39,6 +39,7 @@
 | 回程机制（一键同步） | `docs/capabilities/return-path-and-format-contract.md` |
 | 应用实现（P2 已落地） | `src/main/`、`src/renderer/`、`src/shared/`；脚本 `scripts/`；测试 `test/` |
 | 视图与入口对照（4 个 WebContentsView） | `src/renderer/index.html`（编辑器）、`preview.*`（回程预览面板）、`webbar.*`（网页区顶栏 / 网页隐藏时的右边缘把手）；preload 各自独立 |
+| 需求输入与版本切换 | `src/renderer/promptComposer.js`；结构/样式 `index.html`、`style.css`，状态 IPC `src/main/index.ts`、`preload.ts` |
 | 自动化特征核验工具 | `tools/trace-verifier/` |
 | 可达性与会话实测工具 | `tools/reachability-probe/` |
 

@@ -26,7 +26,8 @@ const mainTs = read('src/main/index.ts');
 const preloadTs = read('src/main/preload.ts');
 const settingsTs = read('src/main/settings.ts');
 const html = read('src/renderer/index.html');
-const js = read('src/renderer/renderer.js');
+const composerJs = read('src/renderer/promptComposer.js');
+const js = read('src/renderer/renderer.js') + '\n' + composerJs;
 const pmHtml = read(`${rendererDir}/prompt.html`);
 const pmJs = read(`${rendererDir}/prompt.js`);
 const pmCss = read(`${rendererDir}/prompt.css`);
@@ -170,9 +171,9 @@ const swHtml = /id="variant-switch"/.test(html) &&
   (html.match(/class="variant-opt"/g) ?? []).length === 2 &&
   /data-variant="short"/.test(html) &&
   /data-variant="full"/.test(html);
-const swJs = /setupVariantSwitch/.test(js) &&
+const swJs = /setupPromptComposer/.test(js) &&
   /bridge\.setFormatSpecVariant/.test(js) &&
-  /bridge\.getFormatSpecVariant/.test(js) &&
+  /bridge\.getPromptStatus/.test(js) &&
   // 键盘可切换
   /e\.key === ' '/.test(js);
 const swCss = /\.variant-switch\s*\{/.test(read('src/renderer/style.css')) &&
@@ -460,28 +461,30 @@ await (async () => {
   swEl.querySelectorAll = (sel) => (sel === '.variant-opt' ? [optShort, optFull] : []);
 
   const calls = [];
+  let variant = 'full';
   const bridge = {
-    async getFormatSpecVariant() { return 'full'; },
-    async setFormatSpecVariant(v) { calls.push(v); return v; },
+    async getPromptStatus() { return { variant, shortIsCustom: false, fullIsCustom: true }; },
+    onPromptStatus() {},
+    async setFormatSpecVariant(v) { calls.push(v); variant = v; return v; },
   };
-  // 只抽 setupVariantSwitch 那一段单独跑（整份 renderer.js 依赖太多）
-  const body = /\(function setupVariantSwitch\(\)\s*\{([\s\S]*?)\n  \}\)\(\);/.exec(js)?.[1] ?? '';
+  const nodes = {
+    'variant-switch': swEl,
+    'requirement': makeEl('requirement', { style: {}, clientWidth: 500, scrollHeight: 44 }),
+    'btn-copy-prompt': makeEl('btn-copy-prompt'),
+    'prompt-custom': makeEl('prompt-custom'),
+  };
   const ctx = {
-    window: { setTimeout: (fn) => { fn(); return 0; } },
-    document: { getElementById: (id) => (id === 'variant-switch' ? swEl : null) },
-    el: { variantSwitch: swEl },
-    bridge,
+    window: { requestAnimationFrame: (fn) => fn(), addEventListener() {} },
+    document: { getElementById: (id) => nodes[id] },
     console,
-    Array,
-    String,
   };
   vm.createContext(ctx);
   let ok = false;
   try {
-    new vm.Script('(function setupVariantSwitch() {' + body + '\n})()', { filename: 'sw.js' }).runInContext(ctx);
+    new vm.Script(composerJs, { filename: 'promptComposer.js' }).runInContext(ctx);
+    ctx.window.setupPromptComposer(bridge, () => {});
     ok = true;
   } catch (err) {
-    ok = false;
     console.log('        ' + String(err && err.message));
   }
   await flush();

@@ -13,7 +13,7 @@ const rendererDir = path.join(repo, 'src', 'renderer');
 const read = (...p) => fs.readFileSync(path.join(...p), 'utf8');
 
 const html = read(rendererDir, 'index.html');
-const js = read(rendererDir, 'renderer.js');
+const js = read(rendererDir, 'renderer.js') + '\n' + read(rendererDir, 'promptComposer.js');
 const previewJs = read(rendererDir, 'preview.js');
 const previewCss = read(rendererDir, 'preview.css');
 const styleCss = read(rendererDir, 'style.css');
@@ -265,12 +265,12 @@ const r6a = /flex:\s*0\s+1\s+auto/.test(r6block);
 const r6b = !/flex:\s*0\s+0\s+auto/.test(r6block);
 const r6barMin = Number(/min-height:\s*(\d+)px/.exec(r6block)?.[1] ?? 0);
 const r6reqMin = Number(/\.requirement\s*\{([\s\S]*?)\}/.exec(styleCss)?.[1]?.match(/min-height:\s*(\d+)px/)?.[1] ?? 0);
-const r6c = r6barMin >= 8 + 10 + r6reqMin + 10 + 10;
+const r6c = r6barMin >= 8 + 10 + r6reqMin + 8 + 32 + 10 + 10 + 3;
 check(
   'R6',
   '输入区 flex 可收缩且 min-height 不小于内容自然高度（不切自身内容）',
   r6a && r6b && r6c,
-  { shrinkable: r6a, noHardZero: r6b, barMinHeight: r6barMin, required: 8 + 10 + r6reqMin + 10 + 10 },
+  { shrinkable: r6a, noHardZero: r6b, barMinHeight: r6barMin, required: 8 + 10 + r6reqMin + 8 + 32 + 10 + 10 + 3 },
 );
 
 // R6b：外壳不得 overflow: hidden —— 它把"差几像素"变成"看得见的一条切边"。
@@ -283,12 +283,11 @@ check('R6b', '需求输入外壳不用 overflow:hidden（避免把高度差变�
 });
 
 // R6c：auto-grow 写回的高度必须含元素自身 padding。
-// scrollHeight 不含自身 padding，而 border-box 下 height 是含 padding 的总高 ——
-// 直接 height = scrollHeight 会矮一个 padding，正是"底部缺一条"的直接成因。
+// scrollHeight 已包含 padding；保留既有底部余量，避免文字贴到输入区边缘。
 const r6cGrow = /function grow\(\)\s*\{([\s\S]*?)\n    \}/.exec(js)?.[1] ?? '';
 check(
   'R6c',
-  'auto-grow 的高度把元素自身 padding 计入（scrollHeight 不含 padding）',
+  'auto-grow 保留既有底部余量与高度上限',
   /scrollHeight\s*\+\s*BOX_PAD/.test(r6cGrow) && /const BOX_PAD\s*=\s*\d+/.test(js),
   { addsPad: /scrollHeight\s*\+\s*BOX_PAD/.test(r6cGrow) },
 );
@@ -304,17 +303,14 @@ check(
   { hasResizeObserver: r7a, roGuard: r7b, firstMeasureInRaf: r7c },
 );
 
-// R8：新增的"提示词版本双段开关"不得撑高结尾区，否则 R6 的 min-height 预算会被打破。
-// 它是 .prompt-shell 里的一行内 flex 子项，高度必须 < .requirement 的最小高度（44px）。
+// 分段控件属于下方独立操作栏，不再与输入框共用一行。
 const swBlock = /\.variant-switch\s*\{([\s\S]*?)\n\}/.exec(styleCss)?.[1] ?? '';
 const swH = Number(/height:\s*(\d+)px/.exec(swBlock)?.[1] ?? 0);
-const reqMin2 = Number(/\.requirement\s*\{([\s\S]*?)\}/.exec(styleCss)?.[1]?.match(/min-height:\s*(\d+)px/)?.[1] ?? 0);
-check(
-  'R8',
-  '双段开关高度不超过输入框最小高度（不破坏结尾区的高度预算）',
-  swH > 0 && reqMin2 > 0 && swH < reqMin2,
-  { switchHeight: swH, requirementMinHeight: reqMin2 },
-);
+check('R8', '版本与复制控件在独立操作栏内，输入框独占上一行',
+  /flex-direction:\s*column/.test(r6bBlock) &&
+  /class="prompt-actions"[\s\S]*id="variant-switch"[\s\S]*id="btn-copy-prompt"/.test(html) &&
+  swH > 0 && swH <= 32,
+  { switchHeight: swH });
 
 // R8：缩放窗口必须重算高度，且不因输入框为空而跳过。
 // 收窄到 auto-grow 那个处理器：源码里有多个 resize 监听（浮层也挂了一个用来失效宽度缓存），

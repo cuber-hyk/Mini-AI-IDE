@@ -6,7 +6,11 @@ owner: 胡运宽
 source_of_truth:
   - docs/adr/2026-10-02-honest-electron-identity.md
   - docs/adr/2026-10-02-filesystem-permission-model.md
-  - docs/plans/2026-10-02-mini-ai-ide-poc.md
+  - src/main/index.ts
+  - src/renderer/index.html
+  - src/renderer/style.css
+  - src/renderer/promptComposer.js
+  - test/promptComposer.test.ts
 ---
 
 # 能力：应用外壳与进程架构
@@ -15,7 +19,7 @@ source_of_truth:
 > 自检命令：`npm run self-test`（构建 + `electron . --self-test`，不联网）。
 > 运行时探针：`npm run ui-probe`（编辑器状态 / 几何）、`npm run ui-probe:bubble`（选区浮层按钮是否真的出现）。
 > 断言条数以 `src/main/selfTest.ts` 中 `add(` 的调用数为准（以 grep 实际计数为准，勿硬编码）。
-> `npm run build` 会顺带跑 `tools/check-renderer-scope.mjs`，对 `renderer.js` 做真实作用域分析。
+> `npm run build` 会顺带跑 `tools/check-renderer-scope.mjs`，对 `renderer.js` 与 `promptComposer.js` 做真实作用域分析。
 
 ## 当前技术栈（已落地）
 
@@ -209,28 +213,26 @@ source_of_truth:
 
 | 项 | 取值 |
 |---|---|
-| 默认高度 | **4 行（88px）**——此前是 22px 单行，实测"太小且不自适应" |
-| 自适应 | JS 按`scrollHeight` 在 [2 行, 4 行] 伸缩；超出上限则滚动。`input` 与 `paste` 都触发 |
-| 为什么设上限 | 输入区是 `flex: 0 0 auto`，无限长会把编辑器顶到没内容可看|
-| 按钮 | **药丸形**「复制提示词」（此前 34px 圆形装不下五个字，必然折行） |
-| 版本开关 | **双段开关**（`.variant-switch`）：`[简洁\|完整]`，位置在**文本框与复制按钮之间**，滑动的高亮块（`.variant-thumb`）标出当前版本。点击任一段即切换；键盘 `Space` / `Enter` 切换。对应设置里的 `formatSpecVariant`，**状态持久化**（重启后保持上次选择），默认 `short` |
-| 开关改什么 | 改的是**复制提示词时用哪一套「输出格式要求」**：`简洁` = 6 个示例、`完整` = 8 个示例逐条详解。两版各自可被用户自定义覆盖，面板里分页编辑，互不影响 |
+| 布局 | 上方文本框占满宽度，下方独立操作栏；左侧版本切换、设置齿轮，右侧复制按钮 |
+| 外壳 | 单层低对比边框，聚焦时高亮，不叠加外圈描边 |
+| 高度 | 文本框最小 44px、最大 220px；输入、粘贴、拖入与宽度变化后重算，超出上限滚动 |
+| 高度预算 | `.prompt-bar` 可收缩，最小 125px，包含输入框、操作栏、间距、内边距与边框；优先让编辑区让出高度 |
+| 版本切换 | 「简洁 / 完整」分段控件，点击按钮或聚焦容器后按 Space / Enter 切换；主进程持久化 `formatSpecVariant`，重启后恢复 |
+| 开关改什么 | 复制提示词时使用的输出格式要求；简洁为 6 个示例，完整为 8 个示例逐条详解；两版自定义互不影响 |
+| 自定义标记 | 当前版本有非空自定义提示词时显示小圆点，悬停说明；主进程保存、清空、恢复默认与切换后广播布尔状态 |
+| 提示词设置 | 操作栏齿轮打开原有独立视图；菜单入口与 Ctrl+Shift+P 保留 |
+| 复制反馈 | 固定宽度的紧凑按钮，成功暂显「已复制」；失败提示原因并恢复可操作，需求为空时聚焦输入框 |
+| 状态一致性 | 启动读取真实状态；切换或复制期间阻止重复操作；切换失败保留实际版本，状态未知时禁止复制 |
 
-> **两套详略版本 + 拨动开关为什么放在这里**：完整版此前**没有任何界面入口**（菜单与 preload 都把 `'short'` 写死），
-> 等于"存在但用不到"。开关放在需求输入框内，是因为它改的正是"这份需求的输出格式要求"，
-> 属于**跟着它控制的那块板走**（同预览开关的归属原则），而不是塞进设置面板里再点两次。
-> 详见 `docs/capabilities/return-path-and-format-contract.md`。
->
-> **开关的尺寸约束容易被忽略**：`.prompt-bar` 是 `flex: 0 1 auto; min-height: 82px`，预算里
-> 需求输入区（`.requirement`）的 `min-height: 44px` 是那块"可被压缩的余量"。新开关高 26px
-> 必须小于 44px，否则窗口变窄时把 44px 的最小值顶破、输入框被压扁。自检 R8 直接断言这条。
-
+输入区行为由 `src/renderer/promptComposer.js` 唯一负责，`renderer.js` 初始化并接入信息栏。
+`ui:get-prompt-status` 查询版本及两版自定义布尔值，`ui:prompt-status` 推送相同结构；编辑器不读取提示词全文。
+复制仍由主进程组装并写入系统剪贴板，由用户自己粘贴到 AI 网页并发送。
 
 ## 代码入口
 
 - 主进程：`src/main/index.ts`、`src/main/fileService.ts`、`src/main/ipc.ts`、`src/main/selfTest.ts`
 - 预加载：`src/main/preload.ts`（编辑器）、`src/main/previewPreload.ts`（预览面板）、`src/main/webbarPreload.ts`（网页区工具条）
-- 渲染进程：`src/renderer/`（`index.html` 编辑器 / `preview.*` 预览面板 / `webbar.*` 网页区工具条）
+- 渲染进程：`src/renderer/`（`index.html` 编辑器 / `preview.*` 预览面板 / `webbar.*` 网页区工具条 / `promptComposer.js` 输入区行为）
 - 纯逻辑（可单测）：`src/shared/`
 - 脚本：`scripts/install-electron.mjs`、`scripts/copy-static.mjs`
 

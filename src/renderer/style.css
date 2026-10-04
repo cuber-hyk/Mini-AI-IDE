@@ -326,25 +326,10 @@ body {
   font-style: italic;
 }
 
-/* 需求输入区：参考右侧 DeepSeek 输入框的观感（圆角外壳 + 聚焦描边 + 圆形按钮） */
+/* 输入区与操作栏分别占一行；最小高度保证底部控件完整可见。 */
 .prompt-bar {
-  /*
-   * 纵向空间分配：谁来"挨饿"的顺序必须是**明确的**。
-   *
-   * 历史（两个相反的症状，都实测过）：
-   *  · 早期写 flex-shrink: 0 —— 视口紧张时本区**不缩**，把底部边框顶出可视范围
-   *    （"启动后输入框底部溢出，拖一下窗口就恢复"）；
-   *  · 改成 flex: 0 1 auto + min-height: 0 后又过头了 —— 本区被压到**低于自身内容高度**，
-   *    而 .prompt-shell 是 overflow: hidden，于是输入框下沿被**裁掉一条**
-   *    （"底部输入框溢出了一部分"，用户截图）。
-   *
-   * 正确做法：本区**可以缩，但不能缩到内容放不下**。
-   * 需要让出高度时优先去压 .layout（它 flex:1 + 各处 min-height:0，能一路压到 0），
-   * 本区只在连 .layout 都压没了之后才参与收缩 —— 即 min-height 取"内容自然高度"。
-   * 内容自然高度 = padding 8 + shell(10+44+10) + padding 10 = 82px（.requirement 最小 2 行）。
-   */
   flex: 0 1 auto;
-  min-height: 82px;
+  min-height: 125px;
   padding: 8px 10px 10px;
   background: var(--bg);
   border-top: 1px solid var(--border);
@@ -352,36 +337,32 @@ body {
 
 .prompt-shell {
   display: flex;
-  align-items: flex-end;
-  gap: 10px;
+  flex-direction: column;
+  gap: 8px;
   background: #1e222b;
   border: 1px solid #333a47;
-  border-radius: 14px;
-  padding: 10px 10px 10px 16px;
-  /*
-   * 【不要再给外壳加 overflow: hidden】
-   *
-   * 曾经写 overflow: hidden 是为了"收缩时不顶破圆角"，但它把**任何**几像素的高度差
-   * 都变成了**可见的切边**：输入框明明只差 4px，用户看到的就是"底部溢出了一部分"。
-   * 现在 .prompt-bar 的 min-height 已保证内容放得下，无需再靠裁切兜底；
-   * 万一将来又出现高度不足，宁可让内容正常溢出（可被发现），也不要静默切掉一条。
-   * 圆角由 background + border-radius 自身表现，不依赖裁切。
-   */
+  border-radius: 12px;
+  padding: 10px;
   min-height: 0;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: border-color 0.15s ease;
 }
 
-.prompt-shell:focus-within {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 2px rgba(91, 141, 239, 0.18);
-}
+.prompt-shell:focus-within { border-color: var(--accent); }
+.prompt-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.prompt-options { display: flex; align-items: center; gap: 8px; }
+.prompt-options .icon-btn { width: 28px; height: 28px; color: var(--text-dim); }
+.prompt-options .icon-btn:hover { color: var(--text); }
+.prompt-custom { width: 5px; height: 5px; border-radius: 50%; background: var(--accent); }
+.prompt-custom[hidden] { display: none; }
+.prompt-bar button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .requirement {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
+  width: 100%;
   /* 高度区间：内容少时收缩到 2 行，随粘贴/输入逐步撑开，到 10 行封顶后滚动。
      【不要把 min-height 和 max-height 写成同一个值】—— 两者相同时高度被钉死，
      JS 的 auto-grow（内联 height）会被 min/max 钳制住而永远失效，表现为「粘贴不撑开」。
-     这两个值必须与 renderer.js 里 setupRequirementAutoGrow 的 MIN_H / MAX_H 保持一致。 */
+     这两个值必须与 promptComposer.js 里 setupRequirementAutoGrow 的 MIN_H / MAX_H 保持一致。 */
   min-height: 44px;
   max-height: 220px;
   resize: none;
@@ -437,9 +418,7 @@ body {
  *   两个标签同时可见（简洁 / 完整），用户一眼知道有**两档**、当前在哪档；
  *   勾选框只能表达"开/关"，还得靠旁边的文字解释"开指什么"。
  *
- * 布局：它是 .prompt-shell 里的一个 flex 子项，**不改动行高** ——
- * 高度 26px 小于输入框最小高度 44px，所以 .prompt-bar 的 min-height: 82px
- * （= padding 8 + shell(10+44+10) + padding 10）依然成立。
+ * 布局：版本切换与设置一起位于输入框下方操作栏。
  */
 .variant-switch {
   position: relative;
@@ -509,19 +488,19 @@ body {
   box-shadow: 0 0 0 2px rgba(91, 141, 239, 0.45);
 }
 
-/* 主按钮：药丸形（此前是 34px 圆形，「复制 prompt」五个字必然折成两行） */
+/* 复制按钮保留固定宽度，成功反馈不导致操作栏跳动。 */
 .prompt-bar button.primary {
   flex: 0 0 auto;
-  /* 与输入框内容区高度对齐（4 行 ×22px），不再是一枚偏矮的小圆钮 */
-  height: 36px;
-  padding: 0 18px;
-  border-radius: 18px;
+  width: 108px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 8px;
   border: none;
   background: #4d6bfe;
   color: #fff;
   font-size: 13px;
   font-weight: 500;
-  line-height: 36px;
+  line-height: 32px;
   cursor: pointer;
   white-space: nowrap;
   transition: background 0.15s ease;

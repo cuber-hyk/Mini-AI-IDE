@@ -112,6 +112,8 @@ export const CHANNELS = {
    * 而开关要的是**状态**（当前是哪一版、切换后要持久化）。混在一起会让
    * "每拨一次开关就顺带复制一次"这种副作用出现。
    */
+  getPromptStatus: 'ui:get-prompt-status',
+  promptStatus: 'ui:prompt-status',
   getFormatSpecVariant: 'ui:get-format-spec-variant',
   setFormatSpecVariant: 'ui:set-format-spec-variant',
 } as const;
@@ -373,6 +375,13 @@ export interface UndoResult {
  * 提示词编辑面板（用户自定义"输出格式要求"）
  * ------------------------------------------------------------------ */
 
+/** 输入区只读取版本与自定义标记，不接收提示词全文。 */
+export interface PromptComposerStatus {
+  variant: FormatSpecVariant;
+  shortIsCustom: boolean;
+  fullIsCustom: boolean;
+}
+
 /**
  * 面板需要的全部状态。
  *
@@ -482,6 +491,9 @@ export interface EditorBridge {
   readFile(relPath: string): Promise<ReadFileResult>;
   sliceFile(relPath: string, startLine: number, endLine: number): Promise<SliceFileResult>;
   writeFile(relPath: string, text: string): Promise<WriteFileResult>;
+  /** 读取/订阅输入区当前设置（版本与自定义布尔状态）。 */
+  getPromptStatus(): Promise<PromptComposerStatus>;
+  onPromptStatus(listener: (status: PromptComposerStatus) => void): void;
   /** 上报期望的编辑器宽度（像素）；主进程会做最小宽度约束并回传实际值 */
   setSplit(editorWidth: number): Promise<SplitResult>;
   /**

@@ -92,6 +92,7 @@ export function registerFileIpc(getEditorWindow: () => BrowserWindow | null, ser
     CHANNELS.closePromptPanel,
     CHANNELS.openPromptPanel,
     // 提示词版本开关（底部双段开关的状态读写）
+    CHANNELS.getPromptStatus,
     CHANNELS.getFormatSpecVariant,
     CHANNELS.setFormatSpecVariant,
   ];

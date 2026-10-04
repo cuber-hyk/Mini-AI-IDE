@@ -271,6 +271,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   // 只在 contract.ts 里加常量是**不够**的 —— 自检会误报"未注册 ipcMain 处理器"。
   // 判断依据：代码里只有 `webContents.send(CHANNELS.x)`、没有 `ipcMain.handle(CHANNELS.x)`。
   const oneWayChannels: string[] = [
+    CHANNELS.promptStatus,
     CHANNELS.setRootInternal,
     CHANNELS.rootChanged,
     CHANNELS.rootStale,
@@ -343,7 +344,9 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   const jsPath = path.join(rendererDir, 'renderer.js');
   try {
     const html = fs.readFileSync(htmlPath, 'utf8');
-    const js = fs.readFileSync(jsPath, 'utf8');
+    const editorJs = fs.readFileSync(jsPath, 'utf8');
+    const composerJs = fs.readFileSync(path.join(rendererDir, 'promptComposer.js'), 'utf8');
+    const js = editorJs + '\n' + composerJs;
     const css = fs.readFileSync(path.join(rendererDir, 'style.css'), 'utf8');
     /*
      * 主进程 / preload / 契约 / 设置 的**源码**（不是 __dirname 下的编译产物：那里只有 .js）。
@@ -380,17 +383,17 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
      * 抛异常并**中断整个渲染脚本**（表现是编辑器与所有按钮全都不工作）。
      * 这里改为：把 `el = { ... }` 里的键与 `getElementById` 调用集合对齐检查。
      */
-    const elBlockMatch = /const el = \{([\s\S]*?)\n  \};/.exec(js);
-    const elKeys = elBlockMatch
-      ? [...(elBlockMatch[1] ?? '').matchAll(/(\w+):\s*document\.getElementById\('([^']+)'\)/g)].map((m) => ({
-          key: m[1] as string,
-          id: m[2] as string,
-        }))
-      : [];
-    // 渲染进程里以 `el.xxx` 形式被真正用到、但没在结构体里声明的键
-    const usedElProps = new Set([...js.matchAll(/\bel\.(\w+)\b/g)].map((m) => m[1] as string));
-    const declaredKeys = new Set(elKeys.map((k) => k.key));
-    const undeclaredElProps = [...usedElProps].filter((p) => !declaredKeys.has(p));
+    // 每个 owner 的局部 el 都要单独检查，不能用另一文件的绑定掩盖漏项。
+    const elMaps = [editorJs, composerJs].map((code) => {
+      const block = /const el = \{([\s\S]*?)\n  \};/.exec(code)?.[1] ?? '';
+      const keys = [...block.matchAll(/(\w+):\s*document\.getElementById\('([^']+)'\)/g)]
+        .map((m) => ({ key: m[1] as string, id: m[2] as string }));
+      const used = new Set([...code.matchAll(/\bel\.(\w+)\b/g)].map((m) => m[1] as string));
+      return { keys, used, missing: [...used].filter((key) => !keys.some((entry) => entry.key === key)) };
+    });
+    const elKeys = elMaps.flatMap((map) => map.keys);
+    const usedElProps = new Set(elMaps.flatMap((map) => [...map.used]));
+    const undeclaredElProps = elMaps.flatMap((map) => map.missing);
     add('L1b', 'el 结构体已声明渲染进程用到的全部元素（防 undefined.addEventListener 中断脚本）', undeclaredElProps.length === 0, {
       declaredCount: elKeys.length,
       usedCount: usedElProps.size,
@@ -826,9 +829,9 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
         /data-variant="short"/.test(html) &&
         /data-variant="full"/.test(html);
       const swJs =
-        /setupVariantSwitch/.test(js) &&
+        /setupPromptComposer/.test(js) &&
         /bridge\.setFormatSpecVariant/.test(js) &&
-        /bridge\.getFormatSpecVariant/.test(js) &&
+        /bridge\.getPromptStatus/.test(js) &&
         /e\.key === ' '/.test(js);
       const swCss = /\.variant-switch\s*\{/.test(editorCss) && /\.variant-thumb\s*\{/.test(editorCss);
       add('Y14', '底部双段开关：结构 + 持久化读写 + 键盘可达 + 样式', swHtml && swJs && swCss, {
@@ -903,17 +906,14 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       rows: rowsAttr ?? null,
     });
 
-    // O4：「复制提示词」按钮是药丸形且文案已更新（34px 圆形装不下五个字，必然折行）
-    //
-    // 判据不写死 17px/18px 这类具体数值 —— 调一次内边距或高度就会漂移。
-    // 真正要保证的是**药丸的几何定义：圆角半径 ≥ 高度的一半**。
+    // 复制按钮保持单行，反馈切换不改变宽度。
     const primaryRule = /\.prompt-bar button\.primary\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
     const btnH = Number(/height:\s*(\d+)px/.exec(primaryRule)?.[1] ?? 0);
     const radius = Number(/border-radius:\s*(\d+)px/.exec(primaryRule)?.[1] ?? 0);
-    const pillStyle = btnH > 0 && radius >= btnH / 2;
+    const compactStyle = btnH >= 28 && radius > 0 && /white-space:\s*nowrap/.test(primaryRule) && /width:\s*\d+px/.test(primaryRule);
     const copyBtnText = /id="btn-copy-prompt"[\s\S]{0,400}?>\s*([^<]+?)\s*</.exec(html)?.[1] ?? '';
-    add('O4', '「复制提示词」为药丸形按钮且文案正确', pillStyle && copyBtnText === '复制提示词', {
-      pillStyle,
+    add('O4', '「复制提示词」按钮保持紧凑且文案正确', compactStyle && copyBtnText === '复制提示词', {
+      compactStyle,
       height: btnH || null,
       borderRadius: radius || null,
       buttonText: copyBtnText,
@@ -1195,16 +1195,16 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     //    当时 .prompt-shell 还是 overflow: hidden，于是输入框下沿被裁掉一条
     //    （用户实测截图"底部输入框溢出了一部分"）。
     //
-    // 正解：flex 允许收缩，但 min-height 取**内容自然高度**（8 + (10+44+10) + 10 = 82），
+    // 正解：flex 允许收缩，但 min-height 取**内容自然高度**（输入框 + 操作栏 + 内外边距与边框），
     // 需要让高度时优先压 .layout（它能一路压到 0）。
     const promptBarBlock = /\.prompt-bar\s*\{([\s\S]*?)\}/.exec(css)?.[1] ?? '';
     const barShrinkable = /flex:\s*0\s+1\s+auto/.test(promptBarBlock);
     const barNotHardZero = !/flex:\s*0\s+0\s+auto/.test(promptBarBlock);
     const barMinHeight = /min-height:\s*(\d+)px/.exec(promptBarBlock)?.[1];
-    // shell 的内边距(10+10) + 输入框最小高(44) + bar 内边距(8+10) = 82
+    // 加入独立操作栏 32px、行间距 8px 和边框 3px。
     const reqMinForBar = /\.requirement\s*\{([\s\S]*?)\}/.exec(css)?.[1] ?? '';
     const reqMinPx = Number(/min-height:\s*(\d+)px/.exec(reqMinForBar)?.[1] ?? 0);
-    const expectedBarMin = 8 + 10 + reqMinPx + 10 + 10;
+    const expectedBarMin = 8 + 10 + reqMinPx + 8 + 32 + 10 + 10 + 3;
     const barMinFitsContent = Number(barMinHeight) >= expectedBarMin;
     add(
       'R6',
@@ -1230,14 +1230,13 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     );
 
     // R6c：auto-grow 写回的高度必须含元素自身 padding。
-    // `scrollHeight` 不含自身 padding，而 box-sizing: border-box 下 height 是含 padding 的
-    // 总高 —— 直接 height = scrollHeight 会矮一个 padding，正是"底部缺一条"的直接成因。
+    // scrollHeight 已包含 padding；保留既有底部余量，避免文字贴到输入区边缘。
     const growBodyForPad = /function grow\(\)\s*\{([\s\S]*?)\n    \}/.exec(js)?.[1] ?? '';
     const addsPad = /scrollHeight\s*\+\s*BOX_PAD/.test(growBodyForPad);
     const padDeclared = /const BOX_PAD\s*=\s*\d+/.test(js);
     add(
       'R6c',
-      'auto-grow 的高度把元素自身 padding 计入（scrollHeight 不含 padding）',
+      'auto-grow 保留既有底部余量与高度上限',
       addsPad && padDeclared,
       { addsPad, padDeclared },
     );

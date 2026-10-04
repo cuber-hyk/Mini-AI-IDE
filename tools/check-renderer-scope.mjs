@@ -1,5 +1,5 @@
 /**
- * 用 TypeScript 编译器对 `src/renderer/renderer.js` 做**真实作用域分析**，
+ * 用 TypeScript 编译器对编辑器与输入区 owner 脚本做**真实作用域分析**，
  * 找出所有"裸标识符找不到绑定"的位置（TS 诊断 2304 / 2552），
  * 结果写到 `tools/renderer-scope-report.json`，供自检 V6 读取。
  *
@@ -21,23 +21,12 @@ const root = path.resolve(import.meta.dirname, '..');
 const target = path.join(root, 'src/renderer/renderer.js');
 const out = path.join(root, 'tools/renderer-scope-report.json');
 
-const source = fs.readFileSync(target, 'utf8');
-
-// allowJs + checkJs 让 TS 真正做语义检查；noResolve 避免它去追外部依赖
+const targets = [target, path.join(root, 'src/renderer/promptComposer.js')];
 const host = ts.createCompilerHost({ allowJs: true, checkJs: true, noEmit: true });
-const originalGetSourceFile = host.getSourceFile.bind(host);
-host.getSourceFile = (fileName, languageVersion, ...rest) => {
-  if (path.resolve(fileName) === target) {
-    return ts.createSourceFile(fileName, source, languageVersion, true, ts.ScriptKind.JS);
-  }
-  return originalGetSourceFile(fileName, languageVersion, ...rest);
-};
 host.writeFile = () => {};
-host.fileExists = (f) => path.resolve(f) === target || fs.existsSync(f);
-host.readFile = (f) => (path.resolve(f) === target ? source : fs.readFileSync(f, 'utf8'));
 
 const program = ts.createProgram({
-  rootNames: [target],
+  rootNames: targets,
   options: {
     allowJs: true,
     checkJs: true,
@@ -55,7 +44,7 @@ const program = ts.createProgram({
 const diagnostics = [
   ...program.getSemanticDiagnostics(),
   ...program.getSyntacticDiagnostics(),
-].filter((d) => d.file && path.resolve(d.file.fileName) === target);
+].filter((d) => d.file && targets.includes(path.resolve(d.file.fileName)));
 
 /** 只关心"找不到名字"类诊断：2304 Cannot find name / 2552 Did you mean */
 const undefinedNames = [];
@@ -63,18 +52,18 @@ for (const d of diagnostics) {
   if (d.code !== 2304 && d.code !== 2552) continue;
   const pos = d.file.getLineAndCharacterOfPosition(d.start ?? 0);
   const text = ts.flattenDiagnosticMessageText(d.messageText, ' ');
-  undefinedNames.push(`L${pos.line + 1}:${pos.character + 1} ${text}`);
+  undefinedNames.push(`${path.basename(d.file.fileName)}:L${pos.line + 1}:${pos.character + 1} ${text}`);
 }
 
 const report = {
   generatedAt: new Date().toISOString(),
-  file: 'src/renderer/renderer.js',
+  files: targets.map((file) => path.relative(root, file)),
   undefinedNames,
   otherDiagnostics: diagnostics
     .filter((d) => d.code !== 2304 && d.code !== 2552)
     .map((d) => {
       const pos = d.file.getLineAndCharacterOfPosition(d.start ?? 0);
-      return `L${pos.line + 1} [${d.code}] ${ts.flattenDiagnosticMessageText(d.messageText, ' ')}`;
+      return `${path.basename(d.file.fileName)}:L${pos.line + 1} [${d.code}] ${ts.flattenDiagnosticMessageText(d.messageText, ' ')}`;
     }),
 };
 

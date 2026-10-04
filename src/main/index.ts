@@ -14,7 +14,7 @@
 import { app, BaseWindow, clipboard, ipcMain, Menu, session, WebContentsView } from 'electron';
 import * as path from 'node:path';
 
-import { CHANNELS, type ApplyChangeInput, type AppliedChangeEvent, type PromptPanelState, type PromptVariantState, type SavePromptSpecResult, type ReturnPreview, type RootInfo } from '../shared/contract';
+import { CHANNELS, type ApplyChangeInput, type AppliedChangeEvent, type PromptPanelState, type PromptComposerStatus, type PromptVariantState, type SavePromptSpecResult, type ReturnPreview, type RootInfo } from '../shared/contract';
 import { buildPrompt, getFormatSpec, resolveFormatSpec, normalizeVariant, MAX_CUSTOM_FORMAT_SPEC_LENGTH, type CustomFormatSpecs, type FormatSpecVariant } from '../shared/formatSpec';
 import { parseModelReply, computeApply, applySnippetRangeFallback, type ParsedCodeBlock, type SnippetRangeMemory } from '../shared/returnPath';
 import { buildSnippetText, buildWholeFileText } from '../shared/snippet';
@@ -444,6 +444,21 @@ async function bootstrap(): Promise<void> {
     };
   }
 
+  function promptStatus(): PromptComposerStatus {
+    const cur = settings.get();
+    return {
+      variant: cur.formatSpecVariant,
+      shortIsCustom: Boolean(cur.customFormatSpecShort?.trim()),
+      fullIsCustom: Boolean(cur.customFormatSpecFull?.trim()),
+    };
+  }
+
+  function broadcastPromptStatus(): void {
+    if (!editorView.webContents.isDestroyed()) {
+      editorView.webContents.send(CHANNELS.promptStatus, promptStatus());
+    }
+  }
+
   function showPromptPanel(): void {
     promptView.setBounds(promptPanelBounds());
     promptView.setVisible(true);
@@ -554,6 +569,7 @@ async function loadLocalView(
  *
  * 通用规则：**渲染进程可能在页面加载瞬间调用的 handler，都要在 `loadLocalView` 之前注册。**
  */
+  ipcMain.handle(CHANNELS.getPromptStatus, () => promptStatus());
   ipcMain.handle(CHANNELS.promptPanelState, (): PromptPanelState => promptPanelState());
 
   /** 编辑器工具栏的齿轮 / 快捷键：只负责"把面板显示出来"（三个入口汇聚到这里） */
@@ -579,10 +595,12 @@ async function loadLocalView(
       const key = v === 'full' ? 'customFormatSpecFull' : 'customFormatSpecShort';
       if (text.trim().length === 0) {
         settings.update({ [key]: null, customFormatSpecUpdatedAt: null });
+        broadcastPromptStatus();
         process.stdout.write(`[prompt] 自定义格式要求（${v}）已清空，回到内置默认\n`);
         return { ok: true, variant: v, state: promptPanelState(), resetToDefault: true };
       }
       settings.update({ [key]: text, customFormatSpecUpdatedAt: new Date().toISOString() });
+      broadcastPromptStatus();
       // 只记长度：格式要求是用户内容，不整段写日志
       process.stdout.write(`[prompt] 已保存自定义格式要求（${v}，${text.length} 字符）\n`);
       return { ok: true, variant: v, state: promptPanelState() };
@@ -593,6 +611,7 @@ async function loadLocalView(
     const v = normalizeVariant(variant);
     const key = v === 'full' ? 'customFormatSpecFull' : 'customFormatSpecShort';
     settings.update({ [key]: null, customFormatSpecUpdatedAt: null });
+    broadcastPromptStatus();
     process.stdout.write(`[prompt] 已恢复默认格式要求（${v}）\n`);
     return { ok: true, variant: v, state: promptPanelState(), resetToDefault: true };
   });
@@ -813,6 +832,7 @@ async function loadLocalView(
   ipcMain.handle(CHANNELS.setFormatSpecVariant, (_e, variant: unknown) => {
     const v = normalizeVariant(variant);
     settings.update({ formatSpecVariant: v });
+    broadcastPromptStatus();
     process.stdout.write(`[format] 提示词版本已切换为 ${v}\n`);
     return v;
   });
