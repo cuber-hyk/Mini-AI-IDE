@@ -396,6 +396,28 @@ describe('采集策略脚本（模拟目标站 DOM）', () => {
     assert.ok((texts[0] as string).includes('bubble_sort'), texts[0]);
   });
 
+  /* ---- 核心回归：路径线索支持空格与中文文件名（用户实测 2026-10-04） ----
+   * 真实文件名常见「BLIP 阅读笔记.md」形态；旧 pathRe 的 [^\s`]+ 不允许空格，
+   * 在「BLIP」后断掉 → 路径线索全丢 → 面板显示「未确定目标文件」。
+   */
+
+  it('路径线索：文件名含空格与中文也能取到，端到端解析出 filePath', async () => {
+    const r = makeReply('文件： BLIP 阅读笔记.md', [
+      { lang: 'markdown', text: '- **ITC（对比损失）**：把配图文本拉到表示空间相近。' },
+    ]);
+    link(r.container, fakeEl('div', 'ds-markdown-title', '范围：113-113'));
+    const raw = runScript(scriptOf('latest-reply-container'), pageOf([r]));
+    const replyText = normalizeStrategyOutput(raw)[0] as string;
+
+    assert.ok(replyText.includes('### 文件：BLIP 阅读笔记.md'), `路径线索必须被采集，实际：${replyText}`);
+
+    const { parseModelReply } = await import('../src/shared/returnPath');
+    const parsed = parseModelReply(replyText);
+    assert.equal(parsed.blocks.length, 1);
+    assert.equal(parsed.blocks[0]?.filePath, 'BLIP 阅读笔记.md', '端到端必须解析出中文空格文件名');
+    assert.deepEqual(parsed.blocks[0]?.range, { start: 113, end: 113 });
+  });
+
   /* ---- 结构性断言 ---- */
 
   it('策略表：id 唯一、每套都保持"最新"语义、空页面安全返回', () => {

@@ -125,6 +125,14 @@ describe('matchPathCommentLine', () => {
     assert.equal(matchPathCommentLine('const a = 1;'), null);
     assert.equal(matchPathCommentLine('import os'), null);
   });
+  it('文件名含空格与中文也能整段取出（用户实测：「BLIP 阅读笔记.md」）', () => {
+    assert.equal(matchPathCommentLine('# BLIP 阅读笔记.md'), 'BLIP 阅读笔记.md');
+    assert.equal(matchPathCommentLine('// Mini-Omni 阅读笔记.md'), 'Mini-Omni 阅读笔记.md');
+    assert.equal(matchPathCommentLine('<!-- CLIP 阅读笔记.md -->'), 'CLIP 阅读笔记.md');
+  });
+  it('注释行尾还有别的文字时不误取（行尾锚定）', () => {
+    assert.equal(matchPathCommentLine('# a.ts 这是标题说明'), null);
+  });
 });
 
 describe('matchHeadingLine', () => {
@@ -143,9 +151,32 @@ describe('matchHeadingLine', () => {
   it('整句中文里的路径不当作标题式路径', () => {
     assert.equal(matchHeadingLine('下面是修改后的 src/a.ts 的完整内容，请替换'), null);
   });
+  it('带标签 + 空格中文文件名（extractPathMentions 认不出时整体回退，用户实测 2026-10-04）', () => {
+    assert.equal(matchHeadingLine('### 文件：BLIP 阅读笔记.md'), 'BLIP 阅读笔记.md');
+    assert.equal(matchHeadingLine('文件： Mini-Omni 阅读笔记.md'), 'Mini-Omni 阅读笔记.md');
+  });
+  it('无标签的中文整句（即使以扩展名结尾）不回退', () => {
+    assert.equal(matchHeadingLine('这是说明文档.md'), null);
+  });
 });
 
 describe('parseModelReply —— 路径线索优先级', () => {
+  it('中文空格文件名 + 范围行：采集注入的「文件：」标题能解析出路径（用户实测 2026-10-04）', () => {
+    const reply = [
+      '### 文件：BLIP 阅读笔记.md',
+      '### 范围：113-113',
+      '',
+      '```markdown',
+      '- **ITC（对比损失）**：把配图文本拉到表示空间相近。',
+      '```',
+    ].join('\n');
+    const r = parseModelReply(reply);
+    assert.equal(r.blocks.length, 1);
+    assert.equal(r.blocks[0]?.filePath, 'BLIP 阅读笔记.md');
+    assert.equal(r.blocks[0]?.pathSource, 'preceding-heading');
+    assert.deepEqual(r.blocks[0]?.range, { start: 113, end: 113 });
+  });
+
   it('(a) 围栏内首行路径注释优先，且该行被剥离出代码', () => {    const reply = ['```ts', '// src/a.ts', 'const a = 1;', '```'].join('\n');
     const r = parseModelReply(reply);
     assert.equal(r.blocks.length, 1);

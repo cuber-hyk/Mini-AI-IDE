@@ -177,17 +177,25 @@ export function splitFences(text: string): RawFence[] {
  * 路径线索：围栏内首行注释
  * ------------------------------------------------------------------ */
 
+/**
+ * 路径捕获组：允许**空格与中文**文件名（2026-10-04 用户实测）。
+ * 旧版 `(\S+\.(?:ext))` 不允许空格 —— 真实文件名「BLIP 阅读笔记.md」在
+ * "BLIP" 后的空格处断掉，整条匹配失败。现改为排除式字符类（排除反引号、
+ * 引号、换行）+ 非贪婪扩展，配合各条自己的行尾结构锚定，停在第一个「.扩展名」。
+ */
+const PATH_CAPTURE = String.raw`([^\\\`"\n]+?\.(?:[A-Za-z0-9]+))`;
+
 const PATH_COMMENT_PATTERNS: RegExp[] = [
   // // path/to/x.ts   或   // file: path/to/x.ts
-  /^[ \t]*\/\/[ \t]*(?:file|filename|path|文件|路径)?[ \t]*[:：]?[ \t]*(\S+\.(?:[A-Za-z0-9]+))[ \t]*$/i,
+  new RegExp(`^[ \\t]*\\/\\/[ \\t]*(?:file|filename|path|文件|路径)?[ \\t]*[:：]?[ \\t]*${PATH_CAPTURE}[ \\t]*$`, 'i'),
   // # path/to/x.py （Python/Ruby/shell/配置）
-  /^[ \t]*#[ \t]*(?:file|filename|path|文件|路径)?[ \t]*[:：]?[ \t]*(\S+\.(?:[A-Za-z0-9]+))[ \t]*$/i,
+  new RegExp(`^[ \\t]*#[ \\t]*(?:file|filename|path|文件|路径)?[ \\t]*[:：]?[ \\t]*${PATH_CAPTURE}[ \\t]*$`, 'i'),
   // <!-- path/to/x.html -->
-  /^[ \t]*<!--[ \t]*(?:file|filename|path|文件|路径)?[ \t]*[:：]?[ \t]*(\S+\.(?:[A-Za-z0-9]+))[ \t]*-->[ \t]*$/i,
+  new RegExp(`^[ \\t]*<!--[ \\t]*(?:file|filename|path|文件|路径)?[ \\t]*[:：]?[ \\t]*${PATH_CAPTURE}[ \\t]*-->[ \\t]*$`, 'i'),
   // -- path/to/x.sql
-  /^[ \t]*--[ \t]*(?:file|filename|path|文件|路径)?[ \t]*[:：]?[ \t]*(\S+\.(?:[A-Za-z0-9]+))[ \t]*$/i,
+  new RegExp(`^[ \\t]*--[ \\t]*(?:file|filename|path|文件|路径)?[ \\t]*[:：]?[ \\t]*${PATH_CAPTURE}[ \\t]*$`, 'i'),
   // /* path/to/x.css */
-  /^[ \t]*\/\*[ \t]*(?:file|filename|path|文件|路径)?[ \t]*[:：]?[ \t]*(\S+\.(?:[A-Za-z0-9]+))[ \t]*\*\/[ \t]*$/i,
+  new RegExp(`^[ \\t]*\\/\\*[ \\t]*(?:file|filename|path|文件|路径)?[ \\t]*[:：]?[ \\t]*${PATH_CAPTURE}[ \\t]*\\*\\/[ \\t]*$`, 'i'),
 ];
 
 /** 判断首行是否是"路径注释"；是则返回路径与消费掉的字符数 */
@@ -230,7 +238,26 @@ export function matchHeadingLine(line: string): string | null {
 
   // 整行必须"基本就是"一个路径（避免把整句中文当路径）
   const mentions = extractPathMentions(unwrapped);
-  if (mentions.length === 0) return null;
+  if (mentions.length === 0) {
+    /*
+     * 回退（2026-10-04 用户实测）：带「文件：」标签的行，模型给出的路径可能是
+     * 「BLIP 阅读笔记.md」这种"英文+空格+中文"文件名 —— extractPathMentions 的
+     * 保守字符类（无空格、\w 不含中文）完全认不出来，整条 (b) 线索失灵，
+     * 块的 filePath 落为 null（用户看到"未确定目标文件"）。
+     * 这里对**带标签**的情形退一步：candidate 不含句子标点、以已知扩展名结尾、
+     * 长度合理 → 整体当作路径。模型显式写了「文件：」时其意图就是给路径；
+     * 即便给错，预览面板的「改路径」仍可人工纠正（宁可带核对提示，也不丢线索）。
+     * 不带标签的行**不适用**本回退 —— 那类情形维持原判（交给唯一候选线索）。
+     */
+    const candidateIsPathLike =
+      labeled &&
+      labeled[1] &&
+      unwrapped.length <= 200 &&
+      !/[，。；：！？、""''（）<>]/.test(unwrapped) &&
+      new RegExp(String.raw`\.(?:${EXT_ALTERNATION})$`, 'i').test(unwrapped);
+    if (!candidateIsPathLike) return null;
+    return unwrapped;
+  }
   const only = mentions[0] as string;
   const residue = unwrapped.replace(only, '').replace(/[\s:：,，。;；\-–—()（）[\]*`]/g, '');
   if (residue.length > 4) return null;
