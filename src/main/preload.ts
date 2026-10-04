@@ -20,6 +20,17 @@ import { contextBridge, ipcRenderer } from 'electron';
 /** 与 src/shared/contract.ts 的 CHANNELS 必须逐字一致（自检会校验） */
 const CH = {
   chooseRoot: 'fs:choose-root',
+  getRecentRoots: 'fs:recent-roots',
+  openRecentRoot: 'fs:open-recent-root',
+  closeRoot: 'fs:close-root',
+  createEntry: 'fs:create-entry',
+  renameEntry: 'fs:rename-entry',
+  trashEntry: 'fs:trash-entry',
+  entryChanged: 'fs:entry-changed',
+  confirmLeave: 'editor:confirm-leave',
+  editorState: 'editor:state',
+  editorRequest: 'editor:request',
+  editorReply: 'editor:reply',
   getRoot: 'fs:get-root',
   listDir: 'fs:list-dir',
   readFile: 'fs:read-file',
@@ -54,12 +65,23 @@ const CH = {
 } as const;
 const bridge = {
   chooseRoot: () => ipcRenderer.invoke(CH.chooseRoot),
+  getRecentRoots: () => ipcRenderer.invoke(CH.getRecentRoots),
+  openRecentRoot: (index: number) => ipcRenderer.invoke(CH.openRecentRoot, index),
+  closeRoot: () => ipcRenderer.invoke(CH.closeRoot),
+  createEntry: (parent: string, name: string, isDirectory: boolean, root: string) => ipcRenderer.invoke(CH.createEntry, parent, name, isDirectory, root),
+  renameEntry: (relPath: string, name: string, root: string) => ipcRenderer.invoke(CH.renameEntry, relPath, name, root),
+  trashEntry: (relPath: string, root: string) => ipcRenderer.invoke(CH.trashEntry, relPath, root),
+  confirmLeave: (path?: string, root?: string) => ipcRenderer.invoke(CH.confirmLeave, path, root),
+  reportEditorState: (state: unknown) => ipcRenderer.send(CH.editorState, state),
+  onEditorRequest: (listener: (request: { id: number; kind: 'save'; path: string }) => void) => ipcRenderer.on(CH.editorRequest, (_e, request) => listener(request)),
+  editorReply: (id: number, ok: boolean) => ipcRenderer.invoke(CH.editorReply, id, ok),
+  onEntryChanged: (listener: (event: unknown) => void) => ipcRenderer.on(CH.entryChanged, (_e, event) => listener(event)),
   getRoot: () => ipcRenderer.invoke(CH.getRoot),
   listDir: (relPath: string) => ipcRenderer.invoke(CH.listDir, relPath),
   readFile: (relPath: string) => ipcRenderer.invoke(CH.readFile, relPath),
   sliceFile: (relPath: string, startLine: number, endLine: number) =>
     ipcRenderer.invoke(CH.sliceFile, relPath, startLine, endLine),
-  writeFile: (relPath: string, text: string) => ipcRenderer.invoke(CH.writeFile, relPath, text),
+  writeFile: (relPath: string, text: string, root: string) => ipcRenderer.invoke(CH.writeFile, relPath, text, root),
   setSplit: (editorWidth: number) => ipcRenderer.invoke(CH.setSplit, editorWidth),
   // 不传版本 ⇒ 主进程用**当前开关状态**（不再硬编码 'short'；早期硬编码会让
   // 底部开关拨到"完整版"后，这条链路的实际行为与显示不一致）

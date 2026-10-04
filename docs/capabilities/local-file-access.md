@@ -1,19 +1,14 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-02
+updated: 2026-10-04
 owner: 胡运宽
-source_of_truth:
-  - docs/adr/2026-10-02-filesystem-permission-model.md
-  - docs/plans/2026-10-02-mini-ai-ide-poc.md
-  - src/main/fileService.ts
-  - src/shared/encoding.ts
-  - src/shared/pathGuard.ts
+source_of_truth: [docs/adr/2026-10-02-filesystem-permission-model.md, src/main/fileService.ts, src/main/fileManagement.ts, src/main/workspaceService.ts, src/main/workspaceController.ts, src/main/editorSession.ts, src/main/settings.ts, src/shared/contract.ts, src/main/preload.ts, src/renderer/editorWorkspace.js, src/renderer/editorTabs.js, src/renderer/fileExplorer.js, test/workspaceService.test.ts, test/fileManagement.test.ts, test/editorSession.test.ts, test/editorWorkspace.test.ts]
 ---
 
 # 能力：本地文件访问
 
-> 状态说明：**P2 已实现并通过单测（53 项）与启动自检**。本节记录当前事实。
+> 本节记录当前行为；测试数量与结果以当次运行报告为准。
 
 ## 职责
 
@@ -25,22 +20,52 @@ source_of_truth:
 
 - 文件系统访问**仅限主进程**（见 ADR-0002）。
 - 编辑器渲染进程通过 `contextBridge` 暴露的窄接口请求**纯文本结果**。
-- 主进程对每个请求做 `path.resolve` 归一化，并校验落在用户显式打开的根目录之内；越界直接拒绝。
+- 主进程对每个请求做 `path.resolve` 归一化，同时用 `realpath` 校验目标与根目录的真实路径；新建目标校验其父目录，阻止链接／junction 指向根目录外。
 - 网页视图**没有任何**文件 IPC 通道。
-- **唯一取得路径的入口**是系统目录选择对话框（`fs:choose-root`）；渲染进程不能自行指定任意根目录。
+- 新目录通过系统选择对话框取得；最近目录仅按主进程已有历史的索引打开，渲染进程不能自行指定任意根目录。
   `fs:set-root-internal` 仅供主进程内部/自检使用，**不暴露给 preload**（自检 D3 专门验证它被拒绝）。
 
-## IPC 契约（已冻结）
+## 目录生命周期
+
+- `WorkspaceService` 负责根目录验证、恢复和最近记录，`WorkspaceController` 是顶部按钮、文件菜单、最近目录及关闭目录的统一入口。
+- 启动仅恢复上次成功打开的目录；最近 5 项按成功打开时间排序、Windows 路径大小写不敏感去重。原目录失效时进入空白状态并提示重新选择；不恢复文件或光标。
+- 设置以临时文件写入后原子替换，成功后才更新内存和根目录。取消、目录验证失败或持久化失败不切换原目录；关闭目录清空恢复记录，保留历史。
+- 关闭标签检查该文件，切换／关闭目录和退出检查所有未保存标签，提供“保存／放弃／取消”。保存失败或取消保留缓冲；放弃只有在后续操作成功时才替换或清空缓冲。
+- 目录操作、文件操作和 AI 写盘串行执行；保存回执允许在离开确认等待期间完成。请求捕获根目录或版本，旧目录读写结果不得复用到新目录。
+- 切换目录清空 AI 批次、片段基线与撤销快照；改名／删除只使受影响路径及后代路径失效，其他记录保留。存在 AI 记录时，切换前明确提示影响。
+
+## 多文件编辑
+
+- 每个打开文件拥有独立 Monaco model；一个编辑器实例切换 model，保留草稿、撤销栈、光标与滚动位置。重复打开激活已有标签，Windows 路径键统一斜杠并忽略大小写。
+- 标签显示文件名、完整路径提示和未保存点，提供关闭、方向键／Home／End 切换及 Delete 关闭。关闭当前标签后激活相邻标签，最后一个关闭后显示空白页。
+- 保存请求明确指定文档路径；后台标签的保存不切换当前标签。保存失败或保存期间继续输入保留未保存状态。
+- AI 写盘检查所有打开文档中的目标草稿，拒绝覆盖未保存内容；成功写回刷新对应已保存模型，不切换当前标签。
+- 改名同步所有受影响标签的路径并保留草稿；删除关闭受影响标签，其余标签保留。目录切换释放旧模型；异步旧读写结果不可覆盖新目录。
+
+## IPC 契约
 
 | 通道 | 参数 | 返回 |
 |---|---|---|
-| `fs:choose-root` | 无 | `{ root }` |
-| `fs:get-root` | 无 | `{ root }` |
+| `fs:choose-root` | 无 | `{ root, recentRoots, revision, ok, canceled?, error? }` |
+| `fs:get-root` | 无 | `{ root, recentRoots, revision }` |
+| `fs:recent-roots` | 无 | 主进程保存的最近目录数组 |
+| `fs:open-recent-root` | `index: number` | 目录操作结果 |
+| `fs:close-root` | 无 | 目录操作结果 |
 | `fs:list-dir` | `relPath: string` | `{ ok, entries[], truncated, error? }` |
 | `fs:read-file` | `relPath: string` | `{ ok, text?, encoding?, fellBack?, meta?, tooLarge?, limit?, error? }` |
 | `fs:slice-file` | `relPath, startLine, endLine` | `{ ok, text?, startLine?, endLine?, totalLines?, error? }` |
-| `fs:write-file` | `relPath, text` | `{ ok, relPath?, byteLength?, error? }` |
-| `fs:root-changed` | （主进程 → 渲染进程） | `{ root }` |
+| `fs:write-file` | `relPath, text, root` | `{ ok, relPath?, byteLength?, error? }` |
+| `fs:create-entry` | `parent, name, isDirectory, root` | `{ ok, relPath?, isDirectory?, error? }` |
+| `fs:rename-entry` | `relPath, name, root` | 文件操作结果，成功含旧／新路径 |
+| `fs:trash-entry` | `relPath, root` | 文件操作结果，成功含旧路径 |
+| `fs:root-changed` | （主进程 → 编辑器） | 根目录、历史、版本 |
+| `fs:entry-changed` | （主进程 → 编辑器） | 改名／删除事件、路径、目录标记和版本 |
+| `editor:confirm-leave` | 可选 `path, root`（无参数检查所有文档） | `{ ok }`，是否允许离开 |
+| `editor:state` | （编辑器 → 主进程）`{ root, path, documents: [{ path, dirty }] }` | 单向编辑状态上报 |
+| `editor:request` / `editor:reply` | 保存请求 `{ id, kind: save, path }`／回执 ID 和成功布尔值 | 离开确认的保存回执 |
+| `ui:copy-numbered-snippet` | `{ root, relPath, text, startLine }` | 片段复制结果；目录或当前文件已变化则拒绝，不写入旧片段记忆 |
+
+写入和文件管理的 `root` 必须等于当前根目录。新增管理与编辑状态通道仅接受本地编辑器发送者；网页没有对应 preload。完整类型以 `src/shared/contract.ts` 为准。
 
 > **沙箱约束（重要）**：preload 在 `sandbox: true` 下**不能 `require` 相对路径模块**，因此
 > `src/main/preload.ts` 中的通道名是**内联字面量**。启动自检 E1/E2 会比对"契约通道 /
@@ -56,6 +81,12 @@ source_of_truth:
 | 分片 | 按行切片（1 起、闭区间、越界自动收敛） |
 | 目录列表 | 隐藏点文件、跳过 `node_modules`/`.git`/`dist` 等；目录在前按名称排序；单目录上限 500 条并标记 `truncated` |
 | 写入 | 仅 `write-file` 通道；同样过白名单与大小上限；**只由用户在编辑器里明确保存时触发** |
+| 新建 | 文件树顶部或右键入口；选中文件夹内创建、选中文件的父目录内创建、无选中或空白处右键则根目录内创建；排他创建，不覆盖已有目标 |
+| 名称 | 树内输入，Enter 确认、Esc 取消；拒绝 Windows 非法字符、保留名称、尾随点／空格、重名及过长名称 |
+| 改名 | F2 或右键；同步所有打开文件及文件夹后代文件的保存路径，保留草稿；不覆盖已存在目标 |
+| 删除 | 原生确认后仅调用 `shell.trashItem`，失败可见且不改为永久删除；成功后关闭受影响标签，其他标签保留 |
+| 管理边界 | 不允许改名／删除工作区根目录；链接条目提示用系统资源管理器管理 |
+| 刷新 | 手动刷新文件树，保留仍有效的展开、选中及焦点；无自动监听 |
 
 **实现说明**：GBK 解码使用 Node 自带的 `TextDecoder('gbk')`（本机 ICU 为 full），**不引入 iconv-lite** 等第三方依赖。
 
@@ -67,8 +98,17 @@ source_of_truth:
 | `test/pathGuard.test.ts` | `..` 穿越、绝对路径越界、前缀相似目录（`project` vs `project2`）、大小写不敏感、NUL、目录过滤与截断 |
 | `test/limits-and-ua.test.ts` | 元信息统计、上限判定、分片边界、文本扩展名判定、UA 规则 |
 | `test/fileService.test.ts` | 真实文件系统集成：列目录 / 读写 / 回退 / 拒绝 / 越界 / 超限 / 子目录 |
+| `test/workspaceService.test.ts` | 恢复、最近 5 项、关闭、失效目录、设置写入失败与测试隔离 |
+| `test/fileManagement.test.ts` | 新建、改名、大小写改名、重名不覆盖、回收站失败、外部 junction 与延迟根目录切换 |
+| `test/editorSession.test.ts`、`test/editorWorkspace.test.ts` | 多文件切换、后台保存及确认、失败保留缓冲、延迟读取、输入变化及所有标签改名删除 |
+| `test/fileExplorer.test.ts` | 空白处根菜单、键盘菜单、行菜单冒泡、延迟旧目录结果隔离 |
+| `src/main/workspaceProbe.ts` | `pnpm run verify:workspace`：隔离设置和临时文件，验证真实 Electron 本地交互、AI 跨目录失效及系统回收站，不操作官方网页 |
 
 ## 代码入口
 
-- `src/main/fileService.ts` — 主进程文件服务（唯一持有 `fs` 的模块）
+- `src/main/fileService.ts`、`src/main/fileManagement.ts` — 主进程内文件读写、条目管理与权限检查
+- `src/main/workspaceService.ts`、`src/main/workspaceController.ts`、`src/main/settings.ts` — 目录状态、交互入口与持久化
+- `src/main/editorSession.ts`、`src/renderer/editorWorkspace.js` — 离开确认、保存回执与编辑缓冲
+- `src/renderer/editorTabs.js` — 标签呈现、关闭入口与键盘导航
+- `src/renderer/fileExplorer.js` — 文件树、名称输入、右键菜单与最近目录
 - `src/shared/encoding.ts`、`src/shared/pathGuard.ts`、`src/shared/limits.ts` — 纯逻辑（可单测）

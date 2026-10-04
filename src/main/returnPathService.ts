@@ -35,6 +35,7 @@ export interface ResolvedApplyInput {
 }
 
 interface Snapshot {
+  root: string | null;
   source?: { collectionId: string; index: number };
   relPath: string;
   before: string;
@@ -55,14 +56,26 @@ export class ReturnPathService {
     return this.snapshots.length;
   }
 
+  clear(): void { this.snapshots.length = 0; }
+
+  invalidate(filePath: string, isDirectory: boolean): void {
+    const target = filePath.replace(/\\/g, '/').toLowerCase();
+    for (let i = this.snapshots.length - 1; i >= 0; i--) {
+      const candidate = this.snapshots[i]!.relPath.replace(/\\/g, '/').toLowerCase();
+      if (candidate === target || (isDirectory && candidate.startsWith(target + '/'))) this.snapshots.splice(i, 1);
+    }
+  }
+
   /**
    * 应用一个变更。
    * 步骤：读原文 → 计算新区间（含三向校验）→ 写回 → 存快照。
    * 校验失败时不写任何内容。
    */
   async applyChange(input: ResolvedApplyInput): Promise<ApplyChangeResult> {
+    const root = this.files.getRoot();
     const read = await this.files.readRawText(input.filePath);
     if (!read.ok) return { ok: false, error: read.error };
+    const filePath = read.relPath.replace(/\\/g, '/');
 
     const before = read.text;
     const block: ParsedCodeBlock = input.block;
@@ -94,12 +107,14 @@ export class ReturnPathService {
       return { ok: false, error: computed.detail, reason: computed.reason };
     }
 
-    const written = await this.files.writeFile(input.filePath, computed.text);
+    if (root !== this.files.getRoot()) return { ok: false, error: '目录已切换，请重新采集' };
+    const written = await this.files.writeFile(filePath, computed.text);
     if (!written.ok) return { ok: false, error: written.error };
 
     this.snapshots.push({
+      root,
       ...(input.source ? { source: { ...input.source } } : {}),
-      relPath: input.filePath,
+      relPath: filePath,
       before,
       after: computed.text,
       at: new Date().toISOString(),
@@ -107,13 +122,20 @@ export class ReturnPathService {
     });
     while (this.snapshots.length > MAX_SNAPSHOTS) this.snapshots.shift();
 
-    return { ok: true, filePath: input.filePath, mode: computed.mode, before, after: computed.text };
+    return { ok: true, filePath, mode: computed.mode, before, after: computed.text };
   }
 
   /** 撤销最近一次应用 */
   async undoLast(): Promise<UndoResult> {
     const snap = this.snapshots.pop();
     if (!snap) return { ok: false, error: '没有可撤销的变更' };
+    if (snap.root !== this.files.getRoot()) return { ok: false, error: '撤销记录属于其他目录，已失效' };
+
+    const current = await this.files.readRawText(snap.relPath);
+    if (!current.ok || current.text !== snap.after) {
+      this.snapshots.push(snap);
+      return { ok: false, error: '文件已在应用后修改，不能用旧记录覆盖当前内容' };
+    }
 
     const written = await this.files.writeFile(snap.relPath, snap.before);
     if (!written.ok) {

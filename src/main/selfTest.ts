@@ -272,6 +272,10 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   // 只在 contract.ts 里加常量是**不够**的 —— 自检会误报"未注册 ipcMain 处理器"。
   // 判断依据：代码里只有 `webContents.send(CHANNELS.x)`、没有 `ipcMain.handle(CHANNELS.x)`。
   const oneWayChannels: string[] = [
+    CHANNELS.entryChanged,
+    CHANNELS.editorState,
+    CHANNELS.editorRequest,
+    CHANNELS.invalidateChanges,
     CHANNELS.promptStatus,
     CHANNELS.setRootInternal,
     CHANNELS.rootChanged,
@@ -309,7 +313,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     const perFile: Record<string, string[]> = {};
     for (const f of preloadFiles) {
       const src = fs.readFileSync(path.join(__dirname, f), 'utf8');
-      const found = [...src.matchAll(/'((?:fs|ui|return|preview):[a-z-]+)'/g)].map((m) => m[1] as string);
+      const found = [...src.matchAll(/'((?:fs|ui|return|preview|editor):[a-z-]+)'/g)].map((m) => m[1] as string);
       perFile[f] = found;
       literals.push(...found);
     }
@@ -348,7 +352,10 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     const editorJs = fs.readFileSync(jsPath, 'utf8');
     const composerJs = fs.readFileSync(path.join(rendererDir, 'promptComposer.js'), 'utf8');
     const toolbarJs = fs.readFileSync(path.join(rendererDir, 'editorToolbar.js'), 'utf8');
-    const js = editorJs + '\n' + composerJs + '\n' + toolbarJs;
+    const explorerJs = fs.readFileSync(path.join(rendererDir, 'fileExplorer.js'), 'utf8');
+    const workspaceJs = fs.readFileSync(path.join(rendererDir, 'editorWorkspace.js'), 'utf8');
+    const tabsJs = fs.readFileSync(path.join(rendererDir, 'editorTabs.js'), 'utf8');
+    const js = [editorJs, composerJs, toolbarJs, explorerJs, workspaceJs, tabsJs].join('\n');
     const css = fs.readFileSync(path.join(rendererDir, 'style.css'), 'utf8');
     /*
      * 主进程 / preload / 契约 / 设置 的**源码**（不是 __dirname 下的编译产物：那里只有 .js）。
@@ -417,6 +424,8 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     const toCamel = (s: string): string => s.replace(/-([a-z])/g, (_m, c: string) => c.toUpperCase());
     const unboundButtons = htmlButtonIds.filter((id) => {
       if (id === 'btn-copy-context') return !/trigger\.addEventListener\('click'/.test(toolbarJs);
+      const explorerKey: Record<string, string> = { 'file-new': 'newFile', 'folder-new': 'newFolder', 'file-refresh': 'refresh' };
+      if (explorerKey[id]) return !new RegExp(`options\\.${explorerKey[id]}\\.addEventListener\\('click'`).test(explorerJs);
       const key = toCamel(id);
       const declared = elKeys.some((k) => k.key === key);
       const bound = new RegExp(`\\bel\\.${key}\\.addEventListener\\(`).test(js);

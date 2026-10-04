@@ -8,6 +8,47 @@ import { FileService } from '../src/main/fileService';
 import { ReturnPathService } from '../src/main/returnPathService';
 import { parseModelReply } from '../src/shared/returnPath';
 
+it('绝对路径应用按根目录内相对路径记录，改名失效不能漏掉撤销', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mini-undo-path-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const absolute = path.join(root, 'a.txt'); await fs.writeFile(absolute, 'original');
+  const files = new FileService(); files.setRoot(root); const service = new ReturnPathService(files);
+  const block = parseModelReply('### 文件：a.txt\n````\nAI\n````').blocks[0]!;
+  assert.equal((await service.applyChange({ filePath: absolute, block })).filePath, 'a.txt');
+  assert.deepEqual(service.describeSnapshots().map(s => s.relPath), ['a.txt']);
+  await fs.rename(absolute, path.join(root, 'renamed.txt')); service.invalidate('a.txt', false);
+  assert.equal(service.undoCount, 0); assert.equal((await service.undoLast()).ok, false);
+  assert.equal(await fs.readFile(path.join(root, 'renamed.txt'), 'utf8'), 'AI');
+});
+
+it('应用后又保存的用户内容不会被旧 AI 撤销覆盖', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mini-undo-edited-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.writeFile(path.join(root, 'a.txt'), 'original'); const files = new FileService(); files.setRoot(root);
+  const service = new ReturnPathService(files); const block = parseModelReply('### 文件：a.txt\n````\nAI\n````').blocks[0]!;
+  assert.equal((await service.applyChange({ filePath: 'a.txt', block })).ok, true);
+  await files.writeFile('a.txt', 'user saved'); assert.equal((await service.undoLast()).ok, false);
+  assert.equal(await fs.readFile(path.join(root, 'a.txt'), 'utf8'), 'user saved');
+});
+
+it('同名文件不能跨根目录撤销，失效清理只影响指定目录下的记录', async (t) => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mini-undo-workspace-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  await fs.mkdir(path.join(root, 'A')); await fs.mkdir(path.join(root, 'B')); await fs.mkdir(path.join(root, 'A/sub'));
+  await fs.writeFile(path.join(root, 'A/a.txt'), 'A'); await fs.writeFile(path.join(root, 'A/sub/b.txt'), 'A-sub');
+  await fs.writeFile(path.join(root, 'B/a.txt'), 'B');
+  const files = new FileService(); files.setRoot(path.join(root, 'A')); const service = new ReturnPathService(files);
+  for (const filePath of ['a.txt', 'sub/b.txt']) {
+    const block = parseModelReply(`### 文件：${filePath}\n\`\`\`\`\nupdated\n\`\`\`\``).blocks[0]!;
+    assert.equal((await service.applyChange({ filePath, block })).ok, true);
+  }
+  service.invalidate('sub', true); assert.equal(service.undoCount, 1);
+  assert.deepEqual(service.describeSnapshots().map((s) => s.relPath), ['a.txt']);
+  files.setRoot(path.join(root, 'B')); assert.equal((await service.undoLast()).ok, false);
+  assert.equal(await fs.readFile(path.join(root, 'B/a.txt'), 'utf8'), 'B');
+  service.clear(); assert.equal(service.undoCount, 0);
+});
+
 it('同文件不同片段及不同批次的撤销返回精确身份', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mini-ai-ide-undo-identity-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));

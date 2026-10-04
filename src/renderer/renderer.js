@@ -23,6 +23,7 @@
     dirty: document.getElementById('dirty-flag'),
     fileName: document.getElementById('file-name'),
     fileDot: document.getElementById('file-dot'),
+    editorTabs: document.getElementById('editor-tabs'),
     btnOpen: document.getElementById('btn-open'),
     btnSnippet: document.getElementById('btn-snippet'),
     btnWholeFile: document.getElementById('btn-whole-file'),
@@ -478,6 +479,9 @@
   };
 
   /* ---------------- Monaco 初始化 ---------------- */
+  let resolveMonacoReady;
+  const monacoReady = new Promise(function (resolve) { resolveMonacoReady = resolve; });
+  let emptyModel;
   function initMonaco() {
     if (typeof window.require === 'undefined') {
       el.monacoHost.textContent = 'Monaco 未加载（vendor/monaco 缺失）';
@@ -502,7 +506,9 @@
 
     window.require.config({ paths: { vs: './vendor/monaco/vs' } });
     window.require(['vs/editor/editor.main'], function () {
-      state.editor = window.monaco.editor.create(el.monacoHost, { value: '', ...EDITOR_OPTIONS });
+      // 显式持有空白模型；create(value) 的内置模型会在首次 setModel 时被 Monaco 释放。
+      emptyModel = window.monaco.editor.createModel('', 'plaintext');
+      state.editor = window.monaco.editor.create(el.monacoHost, { model: emptyModel, ...EDITOR_OPTIONS });
       state.editor.onDidChangeModelContent(function () {
         const text = state.editor.getValue();
         if (text !== state.currentText) {
@@ -516,6 +522,7 @@
       });
       // 选区浮层复制按钮必须等state.editor 就绪后才能建（见 setupSelectionCopyBubble 注释）
       setupSelectionCopyBubble();
+      resolveMonacoReady();
     });
   }
 
@@ -739,13 +746,16 @@
 
   /** 进入某个变更的预览（打开对应文件 + 叠加内联标记） */
   async function enterDiff(payload) {
+    const revision = workspaceRevision;
+    if (payload.workspaceRevision !== undefined && payload.workspaceRevision !== revision) return;
     /* renderInlineDiff 内部会先 clearInlineDiff（要清掉上一个文件的标记），
        而 clearInlineDiff 会把 diffNav 一起清掉。所以在**渲染之前**把导航上下文
        存到局部变量，渲染后再放回去 —— 否则同批次跳转能力会在每次预览时丢失。 */
     const keepNav = state.diffNav;
-    if (payload.filePath && state.currentPath !== payload.filePath) {
-      await openFile(payload.filePath, null);
+    if (payload.filePath) {
+      if (!await editorWorkspace.reload(payload.filePath, true, true)) return;
     }
+    if (revision !== workspaceRevision) return;
     renderInlineDiff(payload);
     state.diffTarget = {
       collectionId: payload.collectionId,
@@ -979,14 +989,13 @@
      * 落盘在主进程、编辑在另一个渲染进程，不主动刷新就一直显示旧内容
      * （用户实测：应用后仍是旧代码，关闭文件重开才对）。
      */
-    if (state.currentPath !== filePath) return;
 
     // 正在预览该文件的变更：标记已失效（original 不再等于磁盘内容），先退出
     if (state.diffTarget && state.diffTarget.filePath === filePath) {
       clearInlineDiff();
       setInfo('已应用变更，文件内容已刷新');
     }
-    await openFile(filePath, null);
+    await editorWorkspace.reload(filePath, false, false);
   });
 
   bridge.onSidebarChanged(function (s) {
@@ -1074,6 +1083,7 @@
     el.fileDot.hidden = !dirty;
     el.fileName.textContent = state.currentPath ?? '未打开文件';
     el.fileName.title = state.currentPath ?? '';
+    if (typeof editorWorkspace !== 'undefined') editorWorkspace.report();
   }
 
   function setInfo(text, warn) {
@@ -1081,169 +1091,43 @@
     el.info.classList.toggle('warn', Boolean(warn));
   }
 
-  /* ---------------- 目录树（可展开，展开状态保持） ----------------
-   * 与主流编辑器一致：点击文件夹=原地展开/收起，点击文件=打开。
-   * 展开状态按根目录分别记忆（Map: relPath -> isOpen），切换根目录时重置。
-   */
-  const expanded = new Set();
-
-  function renderTree(entries) {
-    el.tree.textContent = '';
-    for (const entry of entries) {
-      el.tree.appendChild(buildTreeItem(entry));
-    }
-  }
-
-  function buildTreeItem(entry) {
-    const li = document.createElement('li');
-    li.className = entry.isDirectory ? 'tree-dir' : entry.textLike === false ? 'tree-nontext' : 'tree-file';
-    li.dataset['relPath'] = entry.relPath;
-
-    const row = document.createElement('div');
-    row.className = 'tree-row';
-    row.title = entry.isDirectory ? '目录（点击展开/收起）' : entry.textLike === false ? '可能不是文本文件' : '文本文件';
-
-    const twisty = document.createElement('span');
-    twisty.className = 'tree-twisty';
-    twisty.textContent = entry.isDirectory ? '▸' : '';
-    row.appendChild(twisty);
-
-    const label = document.createElement('span');
-    label.className = 'tree-label';
-    label.textContent = entry.name;
-    row.appendChild(label);
-
-    li.appendChild(row);
-
-    if (!entry.isDirectory) {
-      row.addEventListener('click', function () {
-        void openFile(entry.relPath, row);
-      });
-      return li;
-    }
-
-    // 目录：子容器懒加载，展开状态保持
-    const children = document.createElement('ul');
-    children.className = 'tree-children';
-    li.appendChild(children);
-
-    const setOpen = function (open, load) {
-      if (open) {
-        expanded.add(entry.relPath);
-        li.classList.add('open');
-        twisty.textContent = '▾';
-        children.hidden = false;
-        if (load && children.childElementCount === 0) {
-          void loadChildren(entry.relPath, children);
-        }
-      } else {
-        expanded.delete(entry.relPath);
-        li.classList.remove('open');
-        twisty.textContent = '▸';
-        children.hidden = true;
+  /* 当前缓冲与文件树由独立 owner 管理，入口只适配 Monaco。 */
+  let recentRoots = [];
+  let workspaceRevision = null;
+  const editorWorkspace = window.createEditorWorkspace({
+    state, bridge, setInfo,
+    clearDiff: clearInlineDiff,
+    ready: function () { return monacoReady; },
+    createModel: function (path, text) { return window.monaco.editor.createModel(text, languageFor(path)); },
+    captureViewState: function () { return state.editor && state.editor.saveViewState(); },
+    showDocument: function (doc, focus) {
+      if (state.editor) {
+        state.editor.setModel(doc ? doc.model : emptyModel);
+        if (doc && doc.viewState) state.editor.restoreViewState(doc.viewState);
+        if (focus) state.editor.focus();
       }
-    };
-
-    row.addEventListener('click', function () {
-      setOpen(!li.classList.contains('open'), true);
-    });
-
-    // 初次渲染时按记忆恢复展开态（并懒加载其子项）
-    if (expanded.has(entry.relPath)) setOpen(true, true);
-
-    return li;
-  }
-
-  async function loadChildren(relPath, container) {
-    const result = await bridge.listDir(relPath);
-    if (!result.ok) {
-      setInfo('展开目录失败：' + (result.error ?? '未知错误'), true);
-      return;
-    }
-    container.textContent = '';
-    for (const child of result.entries) {
-      container.appendChild(buildTreeItem(child));
-    }
-    if (result.entries.length === 0) {
-      const empty = document.createElement('li');
-      empty.className = 'tree-empty';
-      empty.textContent = '（空目录）';
-      container.appendChild(empty);
-    }
-  }
-
-  /** 定位并高亮某个路径（便于打开文件后把树滚到它那里） */
-  function highlightTreeItem(relPath) {
-    document.querySelectorAll('#tree .tree-row.active').forEach((n) => n.classList.remove('active'));
-    const node = document.querySelector('#tree li[data-rel-path="' + CSS.escape(relPath) + '"] > .tree-row');
-    if (node) {
-      node.classList.add('active');
-      node.scrollIntoView({ block: 'nearest' });
-    }
-  }
-
-  /* ---------------- 数据操作（全部经 bridge） ---------------- */
-  /** 展开根目录第一层 */
-  async function loadTree() {
-    const result = await bridge.listDir('');
-    if (!result.ok) {
-      setInfo('列目录失败：' + (result.error ?? '未知错误'), true);
-      return;
-    }
-    renderTree(result.entries);
-    setInfo('目录：. · ' + result.entries.length + ' 项' + (result.truncated ? '（已截断）' : ''));
-  }
-
-  async function openFile(relPath, li) {
-    const result = await bridge.readFile(relPath);
-    if (!result.ok) {
-      setInfo('读取失败：' + (result.error ?? '未知错误'), true);
-      return;
-    }
-    if (result.tooLarge) {
-      const meta = result.meta;
-      setInfo(
-        '文件过大，未载入：' + (meta ? meta.charCount + ' 字符 / ' + meta.lineCount + ' 行' : '') + '（上限 ' + result.limit + '）',
-        true
-      );
-      return;
-    }
-
-    state.currentPath = relPath;
-    state.savedText = result.text ?? '';
-    state.currentText = state.savedText;
-
-    if (state.editor) {
-      const model = state.editor.getModel();
-      window.monaco.editor.setModelLanguage(model, languageFor(relPath));
-      state.editor.setValue(state.savedText);
-      state.editor.focus();
-    } else {
-      el.monacoHost.textContent = state.savedText.slice(0, 4000);
-    }
-
-    highlightTreeItem(relPath);
-
-    renderDirty();
-    const meta = result.meta;
-    const enc = result.encoding + (result.fellBack ? '（UTF-8 校验失败，已回退）' : '');
-    setInfo(
-      relPath + ' · ' + enc + ' · ' + (meta ? meta.charCount + ' 字符 / ' + meta.lineCount + ' 行' : '') + ' · 可直接编辑，Ctrl+S 保存'
-    );
-  }
-
-  async function save() {
-    if (!state.currentPath) return;
-    const result = await bridge.writeFile(state.currentPath, state.currentText);
-    if (!result.ok) {
-      setInfo('保存失败：' + (result.error ?? '未知错误'), true);
-      return;
-    }
-    state.savedText = state.currentText;
-    renderDirty();
-    setInfo('已保存 ' + state.currentPath + ' · ' + (result.byteLength ?? 0) + ' 字节');
-  }
-
+    },
+    replaceContent: function (doc, text) { doc.model.setValue(text); },
+    renameModel: function (doc) { window.monaco.editor.setModelLanguage(doc.model, languageFor(doc.path)); },
+    disposeModel: function (model) { model.dispose(); },
+    renderTabs: function (documents, activePath) { tabs.render(documents, activePath); },
+    changed: function () { renderDirty(); explorer.welcome(recentRoots); },
+    highlight: function (path) { explorer.highlight(path); },
+  });
+  const tabs = window.createEditorTabs(el.editorTabs, {
+    open: function (path) { return editorWorkspace.open(path); },
+    close: function (path) { return editorWorkspace.close(path); },
+  });
+  const explorer = window.createFileExplorer({
+    bridge, tree: el.tree, editor: el.monacoHost,
+    getRoot: function () { return state.root; }, currentPath: function () { return state.currentPath; },
+    newFile: document.getElementById('file-new'), newFolder: document.getElementById('folder-new'),
+    refresh: document.getElementById('file-refresh'), welcome: document.getElementById('workspace-welcome'),
+    setInfo, openFile: function (path) { return openFile(path, null); },
+  });
+  function loadTree() { return explorer.refresh(false); }
+  function openFile(relPath) { return editorWorkspace.open(relPath); }
+  function save() { return editorWorkspace.save(); }
   function languageFor(p) {
     const ext = (p.split('.').pop() || '').toLowerCase();
     const map = {
@@ -1284,11 +1168,7 @@
   /* ---------------- 事件绑定 ---------------- */
   el.btnOpen.addEventListener('click', async function () {
     const info = await bridge.chooseRoot();
-    if (info.root) {
-      state.root = info.root;
-      renderRoot();
-      await loadTree();
-    }
+    if (info.error) setInfo('打开目录失败：' + info.error, true);
   });
 
   /**
@@ -1363,6 +1243,7 @@
     }
 
     const result = await bridge.copyNumberedSnippet({
+      root: state.root,
       relPath: state.currentPath,
       text: text,
       startLine: startLine,
@@ -1641,20 +1522,24 @@
     void bridge.setSplit(Math.round(window.outerWidth * 0.45));
   });
 
-  bridge.onRootChanged(function (info) {
+  function updateRoot(info) {
+    const changed = state.root !== info.root || (workspaceRevision !== null && workspaceRevision !== info.revision);
     state.root = info.root;
-    expanded.clear();
-    renderRoot();
-    void loadTree();
+    workspaceRevision = info.revision;
+    recentRoots = info.recentRoots || recentRoots;
+    if (changed) editorWorkspace.clear();
+    renderRoot(); renderDirty(); explorer.welcome(recentRoots);
+    if (changed) void explorer.refresh(true);
+  }
+  bridge.onRootChanged(updateRoot);
+  bridge.onEntryChanged(function (event) {
+    if (event.revision !== workspaceRevision) return;
+    editorWorkspace.entryChanged(event); explorer.entryChanged(event);
+    setInfo('目标已' + (event.kind === 'renamed' ? '重命名' : '移入回收站') + '；相关 AI 变更和撤销记录已失效。');
   });
-
-  bridge.onRootStale(function () {
-    state.root = null;
-    state.currentPath = null;
-    expanded.clear();
-    renderRoot();
-    renderTree([]);
-    setInfo('上次打开的目录已不存在，已清除记忆 —— 请重新选择目录', true);
+  bridge.onRootStale(function (info) {
+    updateRoot({ root: null, recentRoots, revision: workspaceRevision });
+    setInfo('恢复目录失败：' + (info.error || '上次打开的目录不可用，请重新选择目录'), true);
   });
 
   /* ---------------- 启动 ---------------- */
@@ -1663,11 +1548,9 @@
     renderRoot();
     renderDirty();
     const info = await bridge.getRoot();
-    if (info.root) {
-      state.root = info.root;
-      renderRoot();
-      await loadTree();
-    }
+    recentRoots = info.recentRoots || await bridge.getRecentRoots();
+    updateRoot(info);
+    await loadTree();
   }
 
   void main();

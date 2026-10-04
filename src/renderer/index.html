@@ -29,7 +29,11 @@
 
     <main class="layout">
       <aside id="sidebar" class="sidebar">
-        <div class="sidebar-head">文件</div>
+        <div class="sidebar-head"><span>文件</span><span class="spacer"></span>
+          <button id="file-new" type="button" class="ui-icon" title="新建文件" aria-label="新建文件"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 1.5h6l3 3V8M3 1.5v13h4M9 1.5v3h3M11 9v6M8 12h6"/></svg></button>
+          <button id="folder-new" type="button" class="ui-icon" title="新建文件夹" aria-label="新建文件夹"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 13V3h5l2 2h6v3M10.5 9v6M7.5 12h6"/></svg></button>
+          <button id="file-refresh" type="button" class="ui-icon" title="刷新目录" aria-label="刷新目录"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M13.5 7a5.5 5.5 0 1 0-1.5 5M13.5 2v5h-5"/></svg></button>
+        </div>
         <ul id="tree" class="tree"></ul>
         <div id="tree-note" class="tree-note">使用「打开目录…」或菜单 File → 打开目录（Ctrl+O）</div>
       </aside>
@@ -71,7 +75,9 @@
         </div>
         <!-- 普通编辑视图。内联 diff 就画在这个编辑器上（decoration + view zone），
              **不再有第二个 Monaco 宿主**：用户看到的始终是同一个编辑器、同一份真实文件内容。 -->
+        <div id="editor-tabs" class="editor-tabs" role="tablist" aria-label="打开的文件" hidden></div>
         <div id="monaco" class="monaco"></div>
+        <div id="workspace-welcome" class="workspace-welcome" hidden></div>
         <div id="info" class="info">未打开文件</div>
       </section>
 
@@ -116,6 +122,9 @@
     <script src="./vendor/monaco/vs/loader.js"></script>
     <script src="./promptComposer.js"></script>
     <script src="./editorToolbar.js"></script>
+    <script src="./editorWorkspace.js"></script>
+    <script src="./editorTabs.js"></script>
+    <script src="./fileExplorer.js"></script>
     <script src="./renderer.js"></script>
   </body>
 </html>

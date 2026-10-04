@@ -15,9 +15,19 @@ source_of_truth:
   - test/returnPathService.test.ts
   - test/inlineDiff.test.ts
   - test/formatSpec.test.ts
+  - src/main/workspaceController.ts
+  - src/main/workspaceProbe.ts
 ---
 
 # 能力：回程解析与应用（输出格式由用户驱动）
+
+## 目录与路径生命周期
+
+- 采集、AI 应用、撤销和目录／条目操作通过 `WorkspaceController` 串行执行。批次与内联预览关联目录版本，切换或关闭目录前说明记录将清空，成功后清空批次、片段基线、预览和撤销快照。
+- 改名／删除使匹配路径以及目录后代路径的变更与快照失效；未受影响文件保持可用。自定义应用目标也记录相对根目录的路径，旧目标不可被延迟请求重新创建。
+- 编辑器目标有未保存内容时拒绝 AI 应用，要求先保存；路径比较归一化，因此绝对路径或大小写变体不能绕过检查。
+- 撤销快照只存内存，并关联根目录；撤销前要求当前磁盘原文等于该次 AI 应用结果，拒绝覆盖应用后用户再次保存或外部修改的内容。
+- `test/returnPathService.test.ts` 验证跨目录、路径失效和撤销保护；`pnpm run verify:workspace` 使用本地静态回复和临时 A/B 同名文件，验证真实采集→应用→改名／切换→失效链路。
 
 > 状态说明：**已完整实现**——纯逻辑 + 只读采集 + 内联 diff 标记 + 逐条应用/撤销。
 > 单测 178 项、启动自检 130+ 项。**唯一 open 项是 P3-5：采集策略尚未在真实页面上验证。**

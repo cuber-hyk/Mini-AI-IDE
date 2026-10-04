@@ -10,6 +10,18 @@ import type { FormatSpecVariant } from './formatSpec';
 export const CHANNELS = {
   /** 渲染进程请求系统目录选择对话框（唯一取得路径的合法入口） */
   chooseRoot: 'fs:choose-root',
+  getRecentRoots: 'fs:recent-roots',
+  openRecentRoot: 'fs:open-recent-root',
+  closeRoot: 'fs:close-root',
+  createEntry: 'fs:create-entry',
+  renameEntry: 'fs:rename-entry',
+  trashEntry: 'fs:trash-entry',
+  entryChanged: 'fs:entry-changed',
+  confirmLeave: 'editor:confirm-leave',
+  editorState: 'editor:state',
+  editorRequest: 'editor:request',
+  editorReply: 'editor:reply',
+  invalidateChanges: 'preview:invalidate',
   /** 查询当前已打开的根目录 */
   getRoot: 'fs:get-root',
   /** 设置根目录（仅供主进程内部/自检使用，渲染进程不暴露此能力） */
@@ -167,10 +179,35 @@ export interface WriteFileResult {
 export interface RootInfo {
   /** 用户可见的根目录绝对路径（仅用于界面显示） */
   root: string | null;
+  ok?: boolean;
+  canceled?: boolean;
+  error?: string;
+  recentRoots?: string[];
+  revision?: number;
   /** 是否来自"上次打开"的记忆（用于界面提示与失效告知） */
   restored?: boolean;
   /** 记忆的目录已不存在（已被删除/移动） */
   stale?: boolean;
+}
+
+export interface FileOperationResult {
+  ok: boolean;
+  relPath?: string;
+  oldRelPath?: string;
+  isDirectory?: boolean;
+  error?: string;
+}
+export interface EntryChangedEvent {
+  kind: 'renamed' | 'deleted';
+  oldRelPath: string;
+  relPath?: string;
+  isDirectory: boolean;
+  revision: number;
+}
+export interface EditorState {
+  root: string | null;
+  path: string | null;
+  documents: Array<{ path: string; dirty: boolean }>;
 }
 
 export interface SplitResult {
@@ -457,6 +494,7 @@ export interface PromptPanelBridge {
  * 因此不会出现「编辑器里显示了 diff、点应用却失败」。
  */
 export interface EditorDiffPayload {
+  workspaceRevision?: number;
   /** 退出 diff 视图时为 false */
   active: boolean;
   /** 目标文件（相对根目录） */
@@ -488,11 +526,22 @@ export interface EditorDiffSibling {
 /** preload 通过 contextBridge 暴露给渲染进程的唯一接口面 */
 export interface EditorBridge {
   chooseRoot(): Promise<RootInfo>;
+  getRecentRoots(): Promise<string[]>;
+  openRecentRoot(index: number): Promise<RootInfo>;
+  closeRoot(): Promise<RootInfo>;
+  createEntry(parent: string, name: string, isDirectory: boolean, root: string): Promise<FileOperationResult>;
+  renameEntry(relPath: string, name: string, root: string): Promise<FileOperationResult>;
+  trashEntry(relPath: string, root: string): Promise<FileOperationResult>;
+  confirmLeave(path?: string, root?: string): Promise<{ ok: boolean }>;
+  reportEditorState(state: EditorState): void;
+  onEditorRequest(listener: (request: { id: number; kind: 'save'; path: string }) => void): void;
+  editorReply(id: number, ok: boolean): Promise<{ ok: boolean }>;
+  onEntryChanged(listener: (event: EntryChangedEvent) => void): void;
   getRoot(): Promise<RootInfo>;
   listDir(relPath: string): Promise<ListDirResult>;
   readFile(relPath: string): Promise<ReadFileResult>;
   sliceFile(relPath: string, startLine: number, endLine: number): Promise<SliceFileResult>;
-  writeFile(relPath: string, text: string): Promise<WriteFileResult>;
+  writeFile(relPath: string, text: string, root: string): Promise<WriteFileResult>;
   /** 读取/订阅输入区当前设置（版本与自定义布尔状态）。 */
   getPromptStatus(): Promise<PromptComposerStatus>;
   onPromptStatus(listener: (status: PromptComposerStatus) => void): void;
@@ -521,7 +570,7 @@ export interface EditorBridge {
    * 把选中内容格式化为"带文件真实行号"的片段（附 `### 文件：` 与 `### 范围：` 头）写入剪贴板。
    * 用于**局部修改**：模型据此回显行区间，应用前会做三向校验。
    */
-  copyNumberedSnippet(input: NumberedSnippetInput): Promise<CopySnippetResult>;
+  copyNumberedSnippet(input: NumberedSnippetInput & { root: string }): Promise<CopySnippetResult>;
   /**
    * 把当前打开的**整个文件**（`这个文件是 <路径>` + 代码围栏 + 全文）写入剪贴板。
    * 用途：把整个文件作为**上下文**交给模型；仍由用户自己粘贴（零注入边界）。

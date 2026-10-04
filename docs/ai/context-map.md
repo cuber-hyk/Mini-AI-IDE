@@ -17,6 +17,7 @@
 | 外壳 / 进程架构 / IPC | `docs/capabilities/app-shell.md`、`docs/adr/` 下架构类决策 | 历史计划、审计归档 |
 | 构建 / 运行 / 自检 | `docs/capabilities/app-shell.md` 的「已知实现陷阱」「依赖安装注意」、`package.json` 的 scripts | 历史计划 |
 | 本地文件读取 / 编码 / 大小控制 | `docs/capabilities/local-file-access.md` | 无关能力文档 |
+| 目录恢复 / 最近目录 / 文件管理 / 多文件标签 / 未保存保护 | `docs/capabilities/local-file-access.md`、`src/main/workspaceService.ts`、`workspaceController.ts`、`fileManagement.ts`、`editorSession.ts`、`src/renderer/editorWorkspace.js`、`editorTabs.js`、`fileExplorer.js` | 历史计划、官方网页实现 |
 | 人机边界 / 出程（什么由人做） | `docs/capabilities/human-machine-boundary.md`、`docs/adr/2026-10-02-zero-injection-and-automation-trace-baseline.md`（ADR-0003） | 回程解析细节 |
 | 回程解析 / 一键应用 / 输出格式 | `docs/capabilities/return-path-and-format-contract.md`、`docs/adr/2026-10-02-return-path-contract-and-trust-boundary.md` | 指纹与网络层细节 |
 | 指纹与环境特征 | `docs/adr/2026-10-02-honest-electron-identity.md`（ADR-0001）、`docs/adr/2026-10-02-zero-injection-and-automation-trace-baseline.md`（ADR-0003） | 实现细节代码（`src/shared/userAgent.ts` 为落地实现） |
@@ -40,6 +41,7 @@
 | 应用实现（P2 已落地） | `src/main/`、`src/renderer/`、`src/shared/`；脚本 `scripts/`；测试 `test/` |
 | 视图与入口对照（4 个 WebContentsView） | `src/renderer/index.html`（编辑器）、`preview.*`（回程预览面板）、`webbar.*`（网页区顶栏 / 网页隐藏时的恢复把手）；preload 各自独立 |
 | 需求输入与版本切换 | `src/renderer/promptComposer.js`；结构/样式 `index.html`、`style.css`，状态 IPC `src/main/index.ts`、`preload.ts` |
+| 目录和文件管理 | `src/main/workspaceService.ts`（目录状态）、`workspaceController.ts`（统一入口）、`fileManagement.ts`（条目操作）、`editorSession.ts`（离开保护）；渲染 owner `src/renderer/fileExplorer.js`、`editorWorkspace.js`、`editorTabs.js` |
 | 自动化特征核验工具 | `tools/trace-verifier/` |
 | 可达性与会话实测工具 | `tools/reachability-probe/` |
 
@@ -54,6 +56,7 @@
 | 启动自检（不联网，115 项） | `npm run self-test` |
 | 会话/网络诊断（需先关闭应用） | `npm run diagnose` |
 | 界面运行时探针（读回 Monaco 实际选项） | `npm run ui-probe` |
+| 目录和文件管理验收（隔离临时数据、离线） | `pnpm run verify:workspace` |
 | 启动应用 | `npm start`（**需在普通 PowerShell，勿在 AI 沙箱内**） |
 | 会话是否仍需登录 | `pwsh -File tools\run-p0b-reachability.ps1 -ProbeOnly` |
 

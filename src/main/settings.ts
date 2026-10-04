@@ -12,12 +12,15 @@
 import { app } from 'electron';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { randomUUID } from 'node:crypto';
 
 import { MAX_CUSTOM_FORMAT_SPEC_LENGTH, normalizeVariant, type FormatSpecVariant } from '../shared/formatSpec';
 
 export interface Settings {
   /** 上次打开的根目录（绝对路径）；目录不存在时启动会忽略并清空 */
   lastRoot: string | null;
+  /** 最近成功打开的目录，按使用时间倒序，最多 5 项 */
+  recentRoots: string[];
   /** 编辑器面板宽度（像素） */
   editorWidth: number | null;
   /** 变更列宽度（像素）；显隐不改变已保存宽度 */
@@ -49,6 +52,7 @@ export interface Settings {
 
 const DEFAULTS: Settings = {
   lastRoot: null,
+  recentRoots: [],
   editorWidth: null,
   previewWidth: null,
   sidebarVisible: true,
@@ -70,12 +74,29 @@ const DEFAULTS: Settings = {
 export const PRODUCTION_SETTINGS_FILE = 'settings.json';
 export const SELF_TEST_SETTINGS_FILE = 'settings.selftest.json';
 
+/** Windows 路径按大小写不敏感去重；失效目录保留，打开时再报告错误。 */
+export function normalizeRecentRoots(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const roots: string[] = [];
+  const seen = new Set<string>();
+  for (const item of value) {
+    if (typeof item !== 'string' || !path.isAbsolute(item) || item.includes('\0')) continue;
+    const root = path.resolve(item);
+    const key = root.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    roots.push(root);
+    if (roots.length === 5) break;
+  }
+  return roots;
+}
+
 export class SettingsStore {
   private readonly file: string;
   private cache: Settings;
 
-  constructor(fileName = PRODUCTION_SETTINGS_FILE) {
-    this.file = path.join(app.getPath('userData'), fileName);
+  constructor(fileName = PRODUCTION_SETTINGS_FILE, userDataDir?: string) {
+    this.file = path.join(userDataDir ?? app.getPath('userData'), fileName);
     this.cache = this.load();
   }
 
@@ -84,23 +105,29 @@ export class SettingsStore {
   }
 
   get(): Settings {
-    return { ...this.cache };
+    return { ...this.cache, recentRoots: [...this.cache.recentRoots] };
   }
 
   /** 合并写入并落盘；返回写入后的完整设置 */
   update(patch: Partial<Settings>): Settings {
-    this.cache = { ...this.cache, ...patch };
-    this.save();
+    const next = {
+      ...this.cache,
+      ...patch,
+      recentRoots: normalizeRecentRoots(patch.recentRoots ?? this.cache.recentRoots),
+    };
+    this.save(next);
+    this.cache = next;
     return this.get();
   }
 
   private load(): Settings {
     try {
-      if (!fs.existsSync(this.file)) return { ...DEFAULTS };
+      if (!fs.existsSync(this.file)) return { ...DEFAULTS, recentRoots: [] };
       const raw = fs.readFileSync(this.file, 'utf8');
       const parsed = JSON.parse(raw) as Partial<Settings>;
-      const out: Settings = { ...DEFAULTS };
+      const out: Settings = { ...DEFAULTS, recentRoots: [] };
       if (typeof parsed.lastRoot === 'string' && parsed.lastRoot.length > 0) out.lastRoot = parsed.lastRoot;
+      out.recentRoots = normalizeRecentRoots(parsed.recentRoots);
       if (typeof parsed.editorWidth === 'number' && Number.isFinite(parsed.editorWidth) && parsed.editorWidth > 0) {
         out.editorWidth = Math.round(parsed.editorWidth);
       }
@@ -148,16 +175,19 @@ export class SettingsStore {
       process.stderr.write(
         `[settings] 读取失败，使用默认值：${err instanceof Error ? err.message : String(err)}\n`
       );
-      return { ...DEFAULTS };
+      return { ...DEFAULTS, recentRoots: [] };
     }
   }
 
-  private save(): void {
+  private save(next: Settings): void {
+    const temporary = `${this.file}.${randomUUID()}.tmp`;
     try {
       fs.mkdirSync(path.dirname(this.file), { recursive: true });
-      fs.writeFileSync(this.file, JSON.stringify(this.cache, null, 2), 'utf8');
+      fs.writeFileSync(temporary, JSON.stringify(next, null, 2), { encoding: 'utf8', flag: 'wx' });
+      fs.renameSync(temporary, this.file);
     } catch (err) {
-      process.stderr.write(`[settings] 写入失败：${err instanceof Error ? err.message : String(err)}\n`);
+      try { fs.unlinkSync(temporary); } catch { /* 未创建或已替换，无需清理 */ }
+      throw new Error(`设置保存失败：${err instanceof Error ? err.message : String(err)}`);
     }
   }
 }

@@ -21,6 +21,12 @@ source_of_truth:
   - src/renderer/style.css
   - src/renderer/promptComposer.js
   - test/promptComposer.test.ts
+  - src/main/workspaceController.ts
+  - src/main/workspaceProbe.ts
+  - src/renderer/fileExplorer.js
+  - src/renderer/editorTabs.js
+  - src/renderer/editorWorkspace.js
+  - test/editorWorkspace.test.ts
 ---
 
 # 能力：应用外壳与进程架构
@@ -28,8 +34,17 @@ source_of_truth:
 > 状态说明：P2 已实现；本节记录当前事实。检查数量以运行结果为准。
 > 自检命令：`npm run self-test`（构建 + `electron . --self-test`，不联网）。
 > 运行时探针：`npm run ui-probe`（编辑器状态 / 几何）、`npm run ui-probe:bubble`（选区浮层按钮是否真的出现）。
+> 目录管理验收：`pnpm run verify:workspace`（临时用户数据、临时目录、自有静态回复页面；不访问官方网页，不改正常目录历史）。
 > 断言条数以 `src/main/selfTest.ts` 中 `add(` 的调用数为准（以 grep 实际计数为准，勿硬编码）。
 > `npm run build` 会顺带跑 `tools/check-renderer-scope.mjs`，对编辑器、输入区、复制菜单、网页工具条及变更树脚本做真实作用域分析。
+
+## 目录与文件管理
+
+Monaco、AI 网页和变更列表保持三列布局。目录恢复与最近 5 项由主进程管理，顶部、菜单和空白编辑区的打开入口汇聚到 `WorkspaceController`；关闭目录后保留最近记录。启动不恢复编辑文件或光标。
+
+文件树顶部提供新建文件、新建文件夹和刷新；条目右键提供新建、改名、移入回收站；空白处右键提供根目录新建文件／文件夹与刷新，F2 改名，Enter／Esc 确认或取消名称输入。创建后的文件打开、文件夹展开；重名失败不覆盖。文件树由 `fileExplorer.js` 管理，各文件缓冲及模型生命周期由 `editorWorkspace.js` 管理，顶部标签由 `editorTabs.js` 管理；标签切换保留草稿、撤销栈和视图位置，重复打开激活已有标签。
+
+关闭未保存标签、切换／关闭目录和退出统一询问“保存／放弃／取消”；保存失败不能继续离开，改名保留草稿并更新保存路径。AI 写盘先检查所有标签中的目标未保存状态；目录切换清理原目录 AI 记录，文件改名／删除仅使相关路径失效。权限、契约及测试入口见 `local-file-access.md`。
 
 ## 当前技术栈（已落地）
 
@@ -170,12 +185,12 @@ Monaco 编辑与内联预览 │                        │  目录 → 文件 �
 
 | 项 | 取值 |
 |---|---|
-| 可编辑性 | **默认可编辑**（不设 `readOnly`）；Ctrl+S 或工具栏保存 |
+| 可编辑性 | **默认可编辑**（不设 `readOnly`）；Ctrl+S 保存 |
 | 未保存标记 | 文件头右侧**白点**（有改动才显示）+ 工具栏 `● 未保存` |
 | 自动换行 | `wordWrap: 'on'`（长行不再横向滚动） |
 | 字体 / 行高 | Cascadia Code → Consolas → 等宽回退；字号 14 / 行高 22 |
 | 可读性辅助 | 缩进参考线、括号配色、当前行高亮、行号宽度自适应、统一深色滚动条 |
-| 目录树交互 | 点击文件夹**原地展开/收起**（**不是**"进入该目录"）；展开状态按根目录记忆；点击文件打开并高亮 |
+| 目录树交互 | 点击文件夹原地展开／收起；手动刷新保留有效展开状态，切换根目录清空；点击文件打开或激活已有标签并高亮，切换保留草稿 |
 | 目录树显隐 | 编辑器顶部条左侧**图标按钮**（高亮=当前可见）+ `Ctrl+B` |
 | 变更列显隐 | 自身收起按钮关闭；网页工具条分栏图标与视图菜单恢复/切换 |
 

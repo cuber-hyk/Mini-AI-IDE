@@ -11,7 +11,7 @@
  *  - UA：移除 `Electron/<ver>` 与应用名标记，保留真实内核版本（ADR-0001）；
  *  - 会话分区：固定 `persist:postcheck`，复用 P0b 已登录会话（见 session-persistence 能力文档）。
  */
-import { app, BaseWindow, clipboard, ipcMain, Menu, session, WebContentsView } from 'electron';
+import { app, BaseWindow, clipboard, dialog, ipcMain, Menu, session, WebContentsView } from 'electron';
 import * as path from 'node:path';
 
 import { CHANNELS, type ApplyChangeInput, type AppliedChangeEvent, type PromptPanelState, type PromptComposerStatus, type PromptVariantState, type SavePromptSpecResult, type ReturnPreview, type RootInfo } from '../shared/contract';
@@ -25,13 +25,16 @@ import { registerFileIpc } from './ipc';
 import { createFixtures } from './fixtures';
 import { runSelfTest } from './selfTest';
 import { runDiagnose } from './diagnose';
-import { SettingsStore, isUsableRoot, PRODUCTION_SETTINGS_FILE, SELF_TEST_SETTINGS_FILE, type Settings } from './settings';
+import { SettingsStore, PRODUCTION_SETTINGS_FILE, SELF_TEST_SETTINGS_FILE, type Settings } from './settings';
 import { buildContextSummary } from './contextSummary';
 import { collectReply } from './replyCollector';
 import { ConsumptionStore, sessionKeyOf } from './consumptionStore';
 import { ReturnPathService } from './returnPathService';
 import { computeLayout, EDITOR_MIN_WIDTH, WEB_MIN_WIDTH, PREVIEW_MIN_WIDTH, PREVIEW_DEFAULT_WIDTH, HANDLE_BAR_WIDTH } from './windowLayout';
 import { runLayoutProbe } from './layoutProbe';
+import { WorkspaceService } from './workspaceService';
+import { WorkspaceController } from './workspaceController';
+import { configureWorkspaceProbe, runWorkspaceProbe } from './workspaceProbe';
 
 /* ------------------------------------------------------------------ *
  * 常量
@@ -58,8 +61,9 @@ const PROMPT_PANEL_MIN_HEIGHT = 420;
 const PROMPT_PANEL_MAX_HEIGHT = 900;
 
 const SELF_TEST = process.argv.includes('--self-test');
+const WORKSPACE_PROBE = process.argv.includes('--workspace-probe');
 /** 界面运行时探针：不联网，加载编辑器后读回 Monaco 实际选项并试改文本，然后退出 */
-const UI_PROBE = process.argv.includes('--ui-probe');
+const UI_PROBE = process.argv.includes('--ui-probe') || WORKSPACE_PROBE;
 /** 会话与网络诊断模式：加载目标站点并输出登录态与网络失败明细，然后退出 */
 const DIAGNOSE = process.argv.includes('--diagnose');
 
@@ -106,12 +110,14 @@ let webVisible = true;
 async function bootstrap(): Promise<void> {
   // Electron 的应用名会影响 userData 目录；显式设定以保证分区落盘位置可预期。
   app.setName('mini-ai-ide');
+  const workspaceProbeDirectory = WORKSPACE_PROBE ? configureWorkspaceProbe() : null;
 
   await app.whenReady();
 
   const fileService = new FileService();
   const settings = new SettingsStore(SELF_TEST ? SELF_TEST_SETTINGS_FILE : PRODUCTION_SETTINGS_FILE);
   const saved = settings.get();
+  const workspace = new WorkspaceService(fileService, settings);
   /** 左侧目录树宽度（编辑器内部布局；主进程负责持久化与约束） */
   let sidebarWidth = saved.sidebarWidth ?? SIDEBAR_DEFAULT_WIDTH;
   const targetSession = session.fromPartition(SESSION_PARTITION);
@@ -536,8 +542,6 @@ async function loadLocalView(
   await loadLocalView(promptView, 'prompt.html');
 
   /* ---------------- IPC ---------------- */
-  const getEditorWindow = () => null; // 目录选择不需要父窗口句柄；保留签名以便后续接入
-  const registeredChannels = registerFileIpc(getEditorWindow, fileService);
 
   // 分栏比例（由编辑器渲染进程在拖动分隔条时上报）
   ipcMain.handle(CHANNELS.setSplit, (_e, desiredWidth: unknown): { editorWidth: number } => {
@@ -660,12 +664,13 @@ async function loadLocalView(
     collectionId: string,
     index: number
   ): Promise<import('../shared/contract').EditorDiffPayload | null> {
+    const revision = workspace.getState().revision;
     const cached = collections.get(collectionId);
     const block = cached?.blocks[index];
-    if (!cached || !block || !block.filePath) return null;
+    if (!cached || cached.invalidated.has(index) || !block || !block.filePath) return null;
 
     const read = await fileService.readRawText(block.filePath);
-    if (!read.ok) return null;
+    if (!read.ok || workspace.getState().revision !== revision || cached.invalidated.has(index)) return null;
 
     const lines = read.text.split(/\r\n|\r|\n/);
     const mode: Parameters<typeof computeApply>[2] = block.range
@@ -687,13 +692,14 @@ async function loadLocalView(
      下 optional 字段不接受 null。 */
     const siblings: import('../shared/contract').EditorDiffSibling[] = [];
     cached.blocks.forEach((b, i) => {
-      if (typeof b.filePath === 'string') {
+      if (typeof b.filePath === 'string' && !cached.invalidated.has(i)) {
         siblings.push({ collectionId, index: i, filePath: b.filePath });
       }
     });
 
     return {
       active: true,
+      workspaceRevision: revision,
       filePath: read.relPath,
       original: read.text,
       modified: computed.text,
@@ -757,7 +763,7 @@ async function loadLocalView(
    *     抓取当前行内容，才能得到真正可用的校验基线。让渲染进程转手就做不到可信。
    * 只保留最近若干批，避免长期驻留。
    */
-  const collections = new Map<string, { blocks: ParsedCodeBlock[]; at: string; replyLength: number }>();
+  const collections = new Map<string, { blocks: ParsedCodeBlock[]; at: string; replyLength: number; invalidated: Set<number>; targets: Map<number, string>; invalidPaths: Array<{ path: string; directory: boolean }> }>();
   const MAX_COLLECTIONS = 5;
   let collectionSeq = 0;
 
@@ -784,13 +790,57 @@ async function loadLocalView(
    * 给全文不等于改全文，最近一次明确的片段选区仍然有效。
    */
   let lastSnippetRange: SnippetRangeMemory | null = null;
+  let announcedRevision = workspace.getState().revision;
+  const workspaceController = new WorkspaceController(win, editorView.webContents, fileService, workspace,
+    (info) => {
+      if (info.revision !== announcedRevision) {
+        announcedRevision = info.revision ?? announcedRevision;
+        collections.clear(); returnPath.clear(); consumption.clear(); lastSnippetRange = null;
+        editorView.webContents.send(CHANNELS.diffData, { active: false });
+        previewView.webContents.send(CHANNELS.invalidateChanges, { all: true });
+      }
+      notifyRootChanged(info); buildApplicationMenu();
+    },
+    (event) => {
+      const target = event.oldRelPath.toLowerCase();
+      const affected = (value: string | null | undefined) => {
+        const candidate = (value ?? '').replace(/\\/g, '/').toLowerCase();
+        return candidate === target || (event.isDirectory && candidate.startsWith(target + '/'));
+      };
+      for (const [id, collection] of collections) {
+        collection.invalidPaths.push({ path: event.oldRelPath, directory: event.isDirectory });
+        const indices: number[] = [];
+        collection.blocks.forEach((block, index) => {
+          if (affected(block.filePath) || affected(collection.targets.get(index))) {
+            collection.invalidated.add(index); indices.push(index);
+          }
+        });
+        previewView.webContents.send(CHANNELS.invalidateChanges, { collectionId: id, indices, oldRelPath: event.oldRelPath, isDirectory: event.isDirectory });
+      }
+      returnPath.invalidate(event.oldRelPath, event.isDirectory);
+      if (lastSnippetRange && affected(lastSnippetRange.relPath)) lastSnippetRange = null;
+      consumption.clear();
+      editorView.webContents.send(CHANNELS.entryChanged, event);
+    }, () => collections.size > 0 || returnPath.undoCount > 0);
+  const registeredChannels = [
+    ...registerFileIpc(fileService, {
+      chooseRoot: () => workspaceController.chooseRoot(), getState: () => workspace.getState(),
+      write: (relative, text) => workspaceController.write(relative, text),
+    }), ...workspaceController.register(),
+  ];
 
   /**
    * 从网页视图**只读**采集最新回复并解析为待预览变更。
    * 不落盘、不修改页面（ADR-0003/0004）。
    */
-  ipcMain.handle(CHANNELS.collectReply, async (): Promise<ReturnPreview> => {
+  ipcMain.handle(CHANNELS.collectReply, (): Promise<ReturnPreview> => {
+    const requestedRevision = workspace.getState().revision;
+    return workspaceController.run(async () => {
     const emptyId = `c${(collectionSeq += 1)}`;
+    if (workspace.getState().revision !== requestedRevision) return {
+      ok: false, collectionId: emptyId, strategyId: null, strategyDescription: null, attempts: [], replyText: '',
+      notes: [], blocks: [], error: '目录已切换，请在新目录重新采集',
+    };
     if (webView.webContents.isDestroyed()) {
       return {
         ok: false,
@@ -916,7 +966,7 @@ async function loadLocalView(
     ];
 
     const collectionId = emptyId;
-    collections.set(collectionId, { blocks: parsed.blocks, at: collected.collectedAt, replyLength: collected.replyText.length });
+    collections.set(collectionId, { blocks: parsed.blocks, at: collected.collectedAt, replyLength: collected.replyText.length, invalidated: new Set(), targets: new Map(), invalidPaths: [] });
     while (collections.size > MAX_COLLECTIONS) {
       const oldest = collections.keys().next();
       if (oldest.done) break;
@@ -1088,6 +1138,7 @@ async function loadLocalView(
       }
     }
     return previewResult;
+    });
   });
   /**
    * 应用一个变更。
@@ -1096,7 +1147,7 @@ async function loadLocalView(
    * 若是片段替换，主进程在**读文件的同一时刻**抓取该区间当前内容作为"复制时的原文"——
    * 这样三向校验才有可信基线；此后文件若被改动，校验必然失败并拒绝写入。
    */
-  ipcMain.handle(CHANNELS.applyChange, async (_e, input: unknown) => {
+  ipcMain.handle(CHANNELS.applyChange, (_e, input: unknown) => workspaceController.run(async () => {
     const raw = (input ?? {}) as Partial<ApplyChangeInput>;
     if (typeof raw.collectionId !== 'string' || typeof raw.index !== 'number' || typeof raw.filePath !== 'string') {
       return { ok: false, error: '参数不合法：需要 collectionId / index / filePath' };
@@ -1107,12 +1158,19 @@ async function loadLocalView(
       return { ok: false, error: '采集结果已过期（只保留最近几批），请重新点「采集回复」' };
     }
     const block = cached.blocks[raw.index];
+    if (cached.invalidated.has(raw.index)) return { ok: false, error: '目标已重命名或删除，请重新采集' };
     if (!block) {
       return { ok: false, error: `代码块序号 ${raw.index} 不存在于该批次中` };
     }
 
-    const filePath = raw.filePath.trim();
-    if (filePath.length === 0) return { ok: false, error: '目标文件路径为空' };
+    const requestedPath = raw.filePath.trim();
+    if (requestedPath.length === 0) return { ok: false, error: '目标文件路径为空' };
+    const filePath = path.relative(fileService.getRoot() ?? '', path.resolve(fileService.getRoot() ?? '', requestedPath)).replace(/\\/g, '/');
+    const normalizedTarget = filePath.toLowerCase();
+    if (cached.invalidPaths.some((entry) => normalizedTarget === entry.path.toLowerCase() || (entry.directory && normalizedTarget.startsWith(entry.path.toLowerCase() + '/')))) {
+      return { ok: false, error: '目标已重命名或删除，请重新采集' };
+    }
+    if (workspaceController.editor.isDirty(normalizedTarget)) return { ok: false, error: '目标文件有未保存的修改，请先保存再应用' };
 
     let expectedOriginal: string | undefined;
     let contextPrev: string | null = null;
@@ -1149,6 +1207,7 @@ async function loadLocalView(
       contextNext,
     });
     if (outcome.ok) {
+      cached.targets.set(raw.index, filePath);
       notifyFileChanged(filePath);
       /*
        * 同步最右侧预览面板：应用有**两个入口**（面板按钮 / 编辑器工具条），
@@ -1158,7 +1217,7 @@ async function loadLocalView(
       notifyChangeState({ kind: 'applied', collectionId: raw.collectionId, index: raw.index, filePath });
     }
     return outcome;
-  });
+  }));
 
   /** 通知编辑器：磁盘上的这个文件刚被改写了（成功落盘后才调用） */
   function notifyFileChanged(filePath: string) {
@@ -1174,7 +1233,8 @@ async function loadLocalView(
     }
   }
 
-  ipcMain.handle(CHANNELS.undoSave, async () => {
+  ipcMain.handle(CHANNELS.undoSave, () => workspaceController.run(async () => {
+    if (workspaceController.editor.hasDirty) return { ok: false, error: '请先保存未保存的编辑内容再撤销 AI 变更' };
     const result = await returnPath.undoLast();
     // 撤销也是改写磁盘，同样要通知编辑器刷新
     if (result.ok && result.filePath) {
@@ -1187,7 +1247,7 @@ async function loadLocalView(
       });
     }
     return result;
-  });
+  }));
 
   /**
    * 把编辑器里的选中内容格式化为"带文件真实行号"的片段并写入剪贴板。
@@ -1197,11 +1257,16 @@ async function loadLocalView(
    * 仍**只写剪贴板**，由用户自己粘贴（ADR-0003）。
    */
   ipcMain.handle(CHANNELS.copyNumberedSnippet, (_e, input: unknown) => {
-    const raw = (input ?? {}) as { relPath?: unknown; text?: unknown; startLine?: unknown };
+    const raw = (input ?? {}) as { root?: unknown; relPath?: unknown; text?: unknown; startLine?: unknown };
     const relPath = typeof raw.relPath === 'string' ? raw.relPath : '';
     const text = typeof raw.text === 'string' ? raw.text : '';
     const startLine =
       typeof raw.startLine === 'number' && Number.isFinite(raw.startLine) ? Math.max(1, Math.round(raw.startLine)) : 1;
+
+    if (typeof raw.root !== 'string' || raw.root !== fileService.getRoot() ||
+      relPath.replace(/\\/g, '/').toLowerCase() !== workspaceController.editor.current.path?.toLowerCase()) {
+      return { ok: false, snippet: '', length: 0, error: '目录或文件已变化，请重新复制片段' };
+    }
 
     if (relPath.length === 0) return { ok: false, snippet: '', length: 0, error: '未指定文件路径（请先打开一个文件）' };
     if (text.length === 0) return { ok: false, snippet: '', length: 0, error: '没有可复制的内容（请先选中代码或打开文件）' };
@@ -1284,12 +1349,8 @@ async function loadLocalView(
     }
   }
 
-  function setRootAndNotify(absPath: string): string {
-    const root = fileService.setRoot(absPath);
-    settings.update({ lastRoot: root });
-    notifyRootChanged({ root });
-    process.stdout.write(`[fs] 已打开目录：${root}\n`);
-    return root;
+  function showWorkspaceError(result: RootInfo): void {
+    if (result.error) void dialog.showMessageBox(win, { type: 'error', message: '目录操作失败', detail: result.error });
   }
 
   /* ---------------- 菜单 ----------------
@@ -1310,15 +1371,16 @@ async function loadLocalView(
               label: '打开目录…',
               accelerator: 'CmdOrCtrl+O',
               click: () => {
-                void (async () => {
-                  const { dialog } = await import('electron');
-                  const picked = await dialog.showOpenDialog(win, { properties: ['openDirectory'] });
-                  if (!picked.canceled && picked.filePaths[0]) {
-                    setRootAndNotify(picked.filePaths[0]);
-                  }
-                })();
+                void workspaceController.chooseRoot().then(showWorkspaceError);
               },
             },
+            {
+              label: '最近打开',
+              submenu: workspace.getState().recentRoots.length ? workspace.getState().recentRoots.map((root, index) => ({
+                label: root, click: () => { void workspaceController.openRecent(index).then(showWorkspaceError); },
+              })) : [{ label: '暂无最近目录', enabled: false }],
+            },
+            { label: '关闭目录', enabled: fileService.getRoot() !== null, click: () => { void workspaceController.closeRoot().then(showWorkspaceError); } },
             {
               label: '只复制输出格式要求（不含上下文）',
               click: () => {
@@ -1442,7 +1504,6 @@ async function loadLocalView(
       ])
     );
   }
-  buildApplicationMenu();
 
   /* ---------------- 先决定根目录，再加载页面 ----------------
    * 顺序很重要：渲染进程在页面加载完成时就会调用 `getRoot()`。
@@ -1452,20 +1513,21 @@ async function loadLocalView(
   const rootArg = process.argv.find((a) => a.startsWith('--root='))?.slice('--root='.length);
   let restoredRoot: string | null = null;
   let staleRoot: string | null = null;
+  let restorationError: string | undefined;
 
   if (rootArg) {
     restoredRoot = fileService.setRoot(rootArg);
     process.stdout.write(`[fs] 命令行指定根目录：${restoredRoot}\n`);
-  } else if (isUsableRoot(saved.lastRoot)) {
-    restoredRoot = fileService.setRoot(saved.lastRoot);
-    process.stdout.write(`[fs] 已恢复上次打开的目录：${restoredRoot}\n`);
-  } else if (saved.lastRoot) {
-    staleRoot = saved.lastRoot;
-    settings.update({ lastRoot: null });
-    process.stdout.write(`[fs] 上次打开的目录已不存在，已清除记忆：${staleRoot}\n`);
   } else {
-    process.stdout.write('[fs] 无历史目录记录\n');
+    const restoration = workspace.restore();
+    restoredRoot = restoration.root;
+    restorationError = restoration.error;
+    if (restoration.stale) staleRoot = saved.lastRoot;
+    if (!restoration.ok) process.stderr.write(`[fs] 恢复目录失败：${restoration.error}\n`);
+    else process.stdout.write(restoredRoot ? `[fs] 已恢复上次打开的目录：${restoredRoot}\n` : '[fs] 无历史目录记录\n');
   }
+  announcedRevision = workspace.getState().revision;
+  buildApplicationMenu();
 
   // 记下启动时的恢复结果：自检会把根目录改成临时样例目录，
   // 因此"恢复断言"必须比对**启动那一刻**的值（P2-12 的验证就靠它）。
@@ -1505,8 +1567,9 @@ async function loadLocalView(
   await loadLocalView(editorView, 'index.html');
 
   // 告知渲染进程：记忆的目录已失效（让界面明确提示，而不是"看似有目录、实际读不了"）
-  if (staleRoot && !editorView.webContents.isDestroyed()) {
-    editorView.webContents.send(CHANNELS.rootStale, { root: null, stale: true } satisfies RootInfo);
+  if ((staleRoot || restorationError) && !editorView.webContents.isDestroyed()) {
+    editorView.webContents.send(CHANNELS.rootStale, { root: null, stale: true,
+      ...(restorationError ? { error: restorationError } : {}) } satisfies RootInfo);
   }
 
   if (SELF_TEST) {
@@ -1528,6 +1591,17 @@ async function loadLocalView(
     return;
   }
 
+  if (workspaceProbeDirectory) {
+    const workspaceReport = await runWorkspaceProbe(editorView.webContents, webView.webContents, workspaceController, workspaceProbeDirectory);
+    const columns = await runLayoutProbe({
+      win, editor: editorView, webbar: webBarView, preview: previewView,
+      configure: (web, preview) => { webVisible = web; previewWidth = preview ? lastPreviewWidth : 0; relayout(); },
+    });
+    const report = { ...workspaceReport, columns, pass: workspaceReport.pass && columns.ok };
+    process.stdout.write(`\n===== 目录与文件管理探针 =====\n${JSON.stringify(report, null, 2)}\n`);
+    app.exit(report.pass ? 0 : 1);
+    return;
+  }
   if (UI_PROBE) {
     // 等待 Monaco 完成 AMD 加载（create 发生在 require 回调里），再读回**实际生效**的选项
     const deadline = Date.now() + 25000;
@@ -1688,7 +1762,20 @@ async function loadLocalView(
   // 早期实现用一个独立 WebContentsView 覆盖在边界上，但它不接收拖动事件，
   // 导致"分隔条看着能拖、实际不能"——已移除。
 
+  let closeApproved = false;
+  let closePending = false;
+  win.on('close', (event) => {
+    if (closeApproved || SELF_TEST || UI_PROBE || DIAGNOSE) return;
+    event.preventDefault();
+    if (closePending) return;
+    closePending = true;
+    void workspaceController.run(async () => {
+      try { if (await workspaceController.editor.canLeave()) { closeApproved = true; win.close(); } }
+      finally { closePending = false; }
+    });
+  });
   win.on('closed', () => {
+    workspaceController.editor.reset();
     app.quit();
   });
 }

@@ -12,6 +12,7 @@
     "self-test": "npm run build && electron . --self-test",
     "diagnose": "npm run build && electron . --diagnose",
     "ui-probe": "npm run build && electron . --ui-probe",
+    "verify:workspace": "npm run build && electron . --workspace-probe",
     "ui-probe:bubble": "npm run build && electron . --ui-probe --test-bubble",
     "ui-probe:findhover": "npm run build && electron . --ui-probe --test-findhover",
     "verify:range": "npm run build && node tools/verify-range-normalize.mjs && node tools/verify-bubble-selfrules-offline.mjs",

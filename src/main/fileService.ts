@@ -9,14 +9,19 @@ import * as path from 'node:path';
 
 import { decodeTextFile } from '../shared/encoding';
 import { checkSize, isProbablyTextFile, sliceLines, type TextMeta } from '../shared/limits';
-import { DEFAULT_LIST_POLICY, filterAndSortEntries, resolveWithinRoot, type DirEntryLike } from '../shared/pathGuard';
+import { DEFAULT_LIST_POLICY, filterAndSortEntries, isInsideRoot, resolveWithinRoot, type DirEntryLike } from '../shared/pathGuard';
 import type { DirEntry, ListDirResult, ReadFileResult, SliceFileResult, WriteFileResult } from '../shared/contract';
 
 /** 单次返回内容上限（字符数）。超限只返回元信息，要求用户显式确认后分片读取。 */
 export const DEFAULT_CHAR_LIMIT = 200_000;
 
+export type SafeFilePath =
+  | { ok: true; absolute: string; relative: string; rootRevision: number }
+  | { ok: false; error: string };
+
 export class FileService {
   private root: string | null = null;
+  private rootRevision = 0;
 
   constructor(private readonly charLimit: number = DEFAULT_CHAR_LIMIT) {}
 
@@ -27,7 +32,50 @@ export class FileService {
   /** 由主进程在用户通过系统对话框选择目录后调用 */
   setRoot(absoluteRoot: string): string {
     this.root = path.resolve(absoluteRoot);
+    this.rootRevision += 1;
     return this.root;
+  }
+
+  clearRoot(): void {
+    this.root = null;
+    this.rootRevision += 1;
+  }
+
+  isCurrentRoot(revision: number): boolean {
+    return revision === this.rootRevision;
+  }
+
+  /** 同时检查词法路径和真实路径；异步调用只能继续使用此次捕获的根目录。 */
+  async resolveSafePath(relPath: string, allowMissing = false): Promise<SafeFilePath> {
+    const r = this.requireRoot();
+    if (!r.ok) return r;
+    const rootRevision = this.rootRevision;
+    const verdict = resolveWithinRoot(r.root, relPath === '' ? '.' : relPath);
+    if (!verdict.ok) return { ok: false, error: verdict.detail };
+    try {
+      const realRoot = await fs.realpath(r.root);
+      let realTarget: string;
+      try {
+        realTarget = await fs.realpath(verdict.absolute);
+      } catch (err) {
+        if (!allowMissing || (err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+        // 悬空链接不是可创建目标，不能沿其指向写入根目录外。
+        try {
+          await fs.lstat(verdict.absolute);
+          return { ok: false, error: '目标是无法访问的链接' };
+        } catch (statErr) {
+          if ((statErr as NodeJS.ErrnoException).code !== 'ENOENT') throw statErr;
+        }
+        realTarget = path.join(await fs.realpath(path.dirname(verdict.absolute)), path.basename(verdict.absolute));
+      }
+      if (!isInsideRoot(realRoot, realTarget)) {
+        return { ok: false, error: '目标真实路径不在已打开的根目录内' };
+      }
+      if (!this.isCurrentRoot(rootRevision)) return { ok: false, error: '目录已切换，请重新操作' };
+      return { ok: true, absolute: verdict.absolute, relative: verdict.relative, rootRevision };
+    } catch (err) {
+      return { ok: false, error: `无法访问路径：${err instanceof Error ? err.message : String(err)}` };
+    }
   }
 
   private requireRoot(): { ok: true; root: string } | { ok: false; error: string } {
@@ -39,8 +87,8 @@ export class FileService {
     const r = this.requireRoot();
     if (!r.ok) return { ok: false, entries: [], truncated: false, error: r.error };
 
-    const verdict = resolveWithinRoot(r.root, relPath === '' ? '.' : relPath);
-    if (!verdict.ok) return { ok: false, entries: [], truncated: false, error: verdict.detail };
+    const verdict = await this.resolveSafePath(relPath);
+    if (!verdict.ok) return { ok: false, entries: [], truncated: false, error: verdict.error };
 
     let dirents;
     try {
@@ -52,17 +100,21 @@ export class FileService {
     const like: DirEntryLike[] = dirents.map((d) => ({ name: d.name, isDirectory: d.isDirectory() }));
     const { shown, truncated } = filterAndSortEntries(like, DEFAULT_LIST_POLICY);
 
-    const entries: DirEntry[] = shown.map((e) => {
+    const entries: DirEntry[] = [];
+    for (const e of shown) {
       const childAbs = path.join(verdict.absolute, e.name);
-      const childVerdict = resolveWithinRoot(r.root, childAbs);
-      const rel = childVerdict.ok ? childVerdict.relative.split(path.sep).join('/') : '';
-      return {
+      const childVerdict = await this.resolveSafePath(childAbs);
+      if (!childVerdict.ok) continue;
+      if (childVerdict.rootRevision !== verdict.rootRevision) return { ok: false, entries: [], truncated: false, error: '目录已切换，请重新操作' };
+      entries.push({
         name: e.name,
-        relPath: rel,
+        relPath: childVerdict.relative.split(path.sep).join('/'),
         isDirectory: e.isDirectory,
         textLike: e.isDirectory ? null : isProbablyTextFile(e.name),
-      };
-    });
+      });
+    }
+
+    if (!this.isCurrentRoot(verdict.rootRevision)) return { ok: false, entries: [], truncated: false, error: '目录已切换，请重新操作' };
 
     return { ok: true, entries, truncated };
   }
@@ -71,8 +123,8 @@ export class FileService {
     const r = this.requireRoot();
     if (!r.ok) return { ok: false, error: r.error };
 
-    const verdict = resolveWithinRoot(r.root, relPath);
-    if (!verdict.ok) return { ok: false, error: verdict.detail };
+    const verdict = await this.resolveSafePath(relPath);
+    if (!verdict.ok) return { ok: false, error: verdict.error };
 
     let buf: Buffer;
     try {
@@ -80,6 +132,8 @@ export class FileService {
     } catch (err) {
       return { ok: false, error: `无法读取文件：${err instanceof Error ? err.message : String(err)}` };
     }
+
+    if (!this.isCurrentRoot(verdict.rootRevision)) return { ok: false, error: '目录已切换，请重新操作' };
 
     const decoded = decodeTextFile(new Uint8Array(buf));
     if (!decoded.ok) {
@@ -119,8 +173,8 @@ export class FileService {
     const r = this.requireRoot();
     if (!r.ok) return { ok: false, error: r.error };
 
-    const verdict = resolveWithinRoot(r.root, relPath);
-    if (!verdict.ok) return { ok: false, error: verdict.detail };
+    const verdict = await this.resolveSafePath(relPath);
+    if (!verdict.ok) return { ok: false, error: verdict.error };
 
     let buf: Buffer;
     try {
@@ -128,6 +182,7 @@ export class FileService {
     } catch (err) {
       return { ok: false, error: `无法读取文件：${err instanceof Error ? err.message : String(err)}` };
     }
+    if (!this.isCurrentRoot(verdict.rootRevision)) return { ok: false, error: '目录已切换，请重新操作' };
     const decoded = decodeTextFile(new Uint8Array(buf));
     if (!decoded.ok) return { ok: false, error: decoded.detail };
     if (decoded.text.length > this.charLimit) {
@@ -151,14 +206,15 @@ export class FileService {
     if (!r.ok) return { ok: false, error: r.error };
     if (typeof text !== 'string') return { ok: false, error: '内容必须是字符串' };
 
-    const verdict = resolveWithinRoot(r.root, relPath);
-    if (!verdict.ok) return { ok: false, error: verdict.detail };
+    const verdict = await this.resolveSafePath(relPath, true);
+    if (!verdict.ok) return { ok: false, error: verdict.error };
 
     if (text.length > this.charLimit) {
       return { ok: false, error: `内容超出上限（${text.length} > ${this.charLimit} 字符）` };
     }
 
     try {
+      if (!this.isCurrentRoot(verdict.rootRevision)) return { ok: false, error: '目录已切换，请重新操作' };
       await fs.writeFile(verdict.absolute, text, 'utf8');
     } catch (err) {
       return { ok: false, error: `写入失败：${err instanceof Error ? err.message : String(err)}` };
@@ -171,8 +227,8 @@ export class FileService {
     const r = this.requireRoot();
     if (!r.ok) return { ok: false, error: r.error };
 
-    const verdict = resolveWithinRoot(r.root, relPath);
-    if (!verdict.ok) return { ok: false, error: verdict.detail };
+    const verdict = await this.resolveSafePath(relPath);
+    if (!verdict.ok) return { ok: false, error: verdict.error };
 
     let buf: Buffer;
     try {
@@ -180,6 +236,7 @@ export class FileService {
     } catch (err) {
       return { ok: false, error: `无法读取文件：${err instanceof Error ? err.message : String(err)}` };
     }
+    if (!this.isCurrentRoot(verdict.rootRevision)) return { ok: false, error: '目录已切换，请重新操作' };
     const decoded = decodeTextFile(new Uint8Array(buf));
     if (!decoded.ok) return { ok: false, error: decoded.detail };
 
@@ -189,4 +246,3 @@ export class FileService {
 }
 
 export type { TextMeta };
-

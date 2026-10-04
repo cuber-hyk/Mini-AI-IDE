@@ -17,10 +17,12 @@ const CH = {
   showDiffInEditor: 'ui:show-diff-in-editor',
   activeDiff: 'preview:active-diff',
   appliedChange: 'preview:applied',
+  invalidateChanges: 'preview:invalidate',
   chromeState: 'ui:chrome-state',
 } as const;
 
 const bridge = {
+  onInvalidateChanges: (listener: (event: unknown) => void) => ipcRenderer.on(CH.invalidateChanges, (_e, event) => listener(event)),
   applyChange: (input: unknown) => ipcRenderer.invoke(CH.applyChange, input),
   undoSave: () => ipcRenderer.invoke(CH.undoSave),
   setPreviewPanel: (width: number) => ipcRenderer.invoke(CH.setPreviewPanel, width),

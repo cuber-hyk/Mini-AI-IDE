@@ -4,7 +4,7 @@
  * ADR-0002：这是渲染进程**唯一**能触达文件系统的通道，参数是声明式的
  * （相对路径 / 行号），主进程负责解析与白名单校验。
  */
-import { BrowserWindow, dialog, ipcMain } from 'electron';
+import { ipcMain } from 'electron';
 
 import { CHANNELS, type ListDirResult, type ReadFileResult, type RootInfo, type SliceFileResult, type WriteFileResult } from '../shared/contract';
 import { FileService } from './fileService';
@@ -15,20 +15,11 @@ import { FileService } from './fileService';
  * 返回**实际注册的通道名列表** —— 供启动自检核对"契约通道"与"已注册通道"是否一致，
  * 避免出现"契约里写了但忘了注册"的静默失效。
  */
-export function registerFileIpc(getEditorWindow: () => BrowserWindow | null, service: FileService): string[] {
-  ipcMain.handle(CHANNELS.chooseRoot, async (): Promise<RootInfo> => {
-    const win = getEditorWindow();
-    const result = win
-      ? await dialog.showOpenDialog(win, { properties: ['openDirectory'], title: '选择要打开的目录' })
-      : await dialog.showOpenDialog({ properties: ['openDirectory'], title: '选择要打开的目录' });
-    if (result.canceled || result.filePaths.length === 0) {
-      return { root: service.getRoot() };
-    }
-    const root = service.setRoot(result.filePaths[0] as string);
-    return { root };
-  });
+export function registerFileIpc(service: FileService,
+  workspace: { chooseRoot(): Promise<RootInfo>; getState(): RootInfo; write(relPath: string, text: string): Promise<WriteFileResult> }): string[] {
+  ipcMain.handle(CHANNELS.chooseRoot, () => workspace.chooseRoot());
 
-  ipcMain.handle(CHANNELS.getRoot, async (): Promise<RootInfo> => ({ root: service.getRoot() }));
+  ipcMain.handle(CHANNELS.getRoot, async (): Promise<RootInfo> => workspace.getState());
 
   // 仅主进程内部使用（自检 / 命令行指定目录）。渲染进程的 preload **不暴露**此通道。
   ipcMain.handle(CHANNELS.setRootInternal, async (_e, absPath: unknown): Promise<RootInfo> => {
@@ -56,9 +47,10 @@ export function registerFileIpc(getEditorWindow: () => BrowserWindow | null, ser
     }
   );
 
-  ipcMain.handle(CHANNELS.writeFile, async (_e, relPath: unknown, text: unknown): Promise<WriteFileResult> => {
+  ipcMain.handle(CHANNELS.writeFile, async (_e, relPath: unknown, text: unknown, root: unknown): Promise<WriteFileResult> => {
     if (typeof relPath !== 'string' || typeof text !== 'string') return { ok: false, error: '参数不合法' };
-    return service.writeFile(relPath, text);
+    if (typeof root !== 'string' || root !== service.getRoot()) return { ok: false, error: '目录已切换，请重新保存' };
+    return workspace.write(relPath, text);
   });
 
   return [

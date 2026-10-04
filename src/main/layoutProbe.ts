@@ -24,7 +24,7 @@ export async function runLayoutProbe(input: {
         bar.x + bar.width === preview.x && preview.x + preview.width === w &&
         input.webbar.getVisible() && input.preview.getVisible() === previewVisible;
       const controls = await input.editor.webContents.executeJavaScript(`(() => {
-        const ids = ['btn-open', 'btn-copy-context', 'btn-copy-prompt'];
+        const ids = ['btn-open', 'btn-copy-context', 'btn-copy-prompt', 'file-new', 'folder-new', 'file-refresh'];
         const inView = id => { const r = document.getElementById(id).getBoundingClientRect();
           return r.width > 0 && r.left >= 0 && r.right <= innerWidth && r.bottom <= innerHeight; };
         return ids.every(inView);

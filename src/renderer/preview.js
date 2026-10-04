@@ -167,7 +167,7 @@
     lastPreview = preview;
     const blocks = preview && preview.ok ? preview.blocks || [] : [];
     const count = model.groupFiles(blocks, '').length;
-    el.meta.textContent = preview && preview.ok ? count + ' 文件' : '采集失败';
+    el.meta.textContent = preview && preview.ok ? count + ' 文件' : preview ? '采集失败' : '尚未采集';
     el.meta.title = preview ? '批次 ' + preview.collectionId + ' · ' + blocks.length + ' 个片段' : '';
     setNotes((preview && preview.error ? [preview.error] : []).concat((preview && preview.notes) || []));
     refresh();
@@ -231,6 +231,19 @@
     finally { busy = false; refresh(); }
   });
   bridge.onPreviewData(render);
+  if (bridge.onInvalidateChanges) bridge.onInvalidateChanges(function (event) {
+    if (event.all) { render(null); setNotes(['目录已切换，旧目录的变更和撤销记录已清空。']); return; }
+    if (!lastPreview || lastPreview.collectionId !== event.collectionId) return;
+    (lastPreview.blocks || []).forEach(function (block) {
+      const target = pathOf(block).replace(/\\/g, '/').toLowerCase();
+      const changedPath = (event.oldRelPath || '').replace(/\\/g, '/').toLowerCase();
+      if ((event.indices || []).includes(block.index) || (changedPath && (target === changedPath || (event.isDirectory && target.startsWith(changedPath + '/'))))) {
+        block.applicable = false; block.blockedReason = '目标已重命名或删除，请重新采集'; applied.delete(block.index);
+        if (activeIndex === block.index) activeIndex = null;
+      }
+    });
+    setNotes(['相关目标已变化，受影响的变更和撤销记录已失效，请重新采集。']); refresh();
+  });
   bridge.onAppliedChange(function (event) { if (model.applyEvent(lastPreview, applied, event)) refresh(); });
   bridge.onActiveDiff(function (index) {
     activeIndex = index === null || index === undefined ? null : Number(index);
