@@ -2,8 +2,16 @@
 node_modules/
 dist/
 out/
-build/
+# 打包产物（NSIS 安装包 / portable exe / 解包目录）
 release/
+release-*/
+dist-exe/
+# electron-builder 的构建资源目录（图标）。只跟踪我们**入库**的那两个文件，
+# 其余内容（win-unpacked、*.7z 等中间物）一律忽略 —— 所以忽略 `build/*` 而不是
+# `build/`：后者会让 Git 不再递归进目录，negation 就失效了。
+build/*
+!build/icon.ico
+!build/icon.png
 
 # 日志与临时文件
 *.log
