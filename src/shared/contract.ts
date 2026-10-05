@@ -6,8 +6,15 @@
  */
 import type { TextMeta } from './limits';
 import type { FormatSpecVariant } from './formatSpec';
+import type { ApplicationUpdateState } from './applicationUpdate';
 
 export const CHANNELS = {
+  getUpdateState: 'ui:get-update-state',
+  checkForUpdate: 'ui:check-for-update',
+  downloadUpdate: 'ui:download-update',
+  installUpdate: 'ui:install-update',
+  updateState: 'ui:update-state',
+  openUpdatePanel: 'ui:open-update-panel',
   /** 渲染进程请求系统目录选择对话框（唯一取得路径的合法入口） */
   chooseRoot: 'fs:choose-root',
   getRecentRoots: 'fs:recent-roots',
@@ -547,6 +554,12 @@ export interface EditorDiffSibling {
 
 /** preload 通过 contextBridge 暴露给渲染进程的唯一接口面 */
 export interface EditorBridge {
+  getUpdateState(): Promise<ApplicationUpdateState>;
+  checkForUpdate(): Promise<ApplicationUpdateState>;
+  downloadUpdate(): Promise<ApplicationUpdateState>;
+  installUpdate(): Promise<ApplicationUpdateState>;
+  onUpdateState(listener: (state: ApplicationUpdateState) => void): void;
+  onOpenUpdatePanel(listener: () => void): void;
   chooseRoot(): Promise<RootInfo>;
   getRecentRoots(): Promise<string[]>;
   openRecentRoot(index: number): Promise<RootInfo>;

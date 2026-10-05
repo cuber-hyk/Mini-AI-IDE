@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { it } from 'node:test';
 import { EditorSession } from '../src/main/editorSession';
-import { releaseNotesText, UpdateService, updateDisabledReason, type ReleaseInfo, type UpdateState } from '../src/main/updateService';
+import { releaseNotesText, UpdateService, updateDisabledReason } from '../src/main/updateService';
+import type { ReleaseInfo, UpdateState } from '../src/shared/applicationUpdate';
 
 const release: ReleaseInfo = { version: '0.2.0', notes: '修复保存问题' };
 const deferred = <T>() => {
@@ -10,8 +11,8 @@ const deferred = <T>() => {
   return { promise, resolve, reject };
 };
 function fixture(disabledReason: string | null = null) {
-  const calls = { check: 0, download: 0, install: 0, quit: 0, approve: 0, dispose: 0, available: 0, downloaded: 0, current: 0, errors: [] as string[], unsupported: [] as string[] };
-  const choices = { download: false, install: false, approve: true };
+  const calls = { check: 0, download: 0, install: 0, quit: 0, approve: 0, dispose: 0 };
+  const choices = { approve: true };
   const operations = { check: async (): Promise<ReleaseInfo | null> => release,
     download: async (): Promise<void> => {}, approve: async () => choices.approve, install: async (): Promise<void> => {} };
   const states: UpdateState[] = [];
@@ -19,21 +20,35 @@ function fixture(disabledReason: string | null = null) {
     check: async () => { calls.check++; return operations.check(); },
     download: async () => { calls.download++; await operations.download(); },
     install: async () => { calls.install++; await operations.install(); }, quit: () => { calls.quit++; }, dispose: () => { calls.dispose++; },
-  }, {
-    available: async () => { calls.available++; return choices.download; },
-    downloaded: async () => { calls.downloaded++; return choices.install; },
-    current: async () => { calls.current++; }, error: async error => { calls.errors.push(error); },
-    unsupported: async reason => { calls.unsupported.push(reason); },
   }, async () => { calls.approve++; return operations.approve(); }, state => { states.push(state); }, disabledReason);
   return { service, calls, choices, operations, states };
 }
 
-it('发现版本后选择稍后不会下载或触碰未保存文件；下载后稍后也不会安装', async () => {
+it('发现版本只更新状态，不自动下载或触碰未保存文件；下载完成也不自动安装', async () => {
   const f = fixture(); await f.service.check();
   assert.equal(f.calls.download, 0); assert.equal(f.calls.approve, 0); assert.equal(f.service.current.status, 'available');
   await f.service.download(); assert.equal(f.service.current.status, 'ready');
   assert.equal(f.calls.install, 0); assert.equal(f.calls.approve, 0);
   f.service.dispose(); assert.equal(f.calls.install, 0);
+});
+
+it('状态快照按 revision 递增，接收者修改快照不能改变服务中的版本', async () => {
+  const f = fixture(); assert.equal(f.service.current.checked, false); assert.equal(f.service.current.revision, 0);
+  await f.service.check(); assert.equal(f.service.current.checked, true);
+  assert.deepEqual(f.states.map(state => state.revision), [1, 2, 3, 4]);
+  const snapshot = f.service.current; snapshot.release!.version = 'unexpected'; snapshot.status = 'error';
+  assert.equal(f.service.current.release!.version, release.version); assert.equal(f.service.current.status, 'available');
+  await f.service.download();
+  assert.ok(f.states.every((state, index) => state.revision === index + 1));
+});
+
+it('查询在途时手动检查、下载和安装都不会启动第二个操作', async () => {
+  const f = fixture(); const pending = deferred<ReleaseInfo | null>(); f.operations.check = () => pending.promise;
+  const checking = f.service.check();
+  await f.service.check(); await f.service.download(); await f.service.install();
+  assert.equal(f.calls.check, 1); assert.equal(f.calls.download, 0); assert.equal(f.calls.approve, 0);
+  pending.resolve(release); await checking;
+  assert.equal(f.service.current.status, 'available'); assert.equal(f.service.current.busy, false);
 });
 
 it('只有下载已校验完成且用户选择安装，才确认未保存文件并启动安装一次', async () => {
@@ -46,22 +61,27 @@ it('只有下载已校验完成且用户选择安装，才确认未保存文件�
   await f.service.install(); assert.equal(f.calls.install, 1);
 });
 
-it('启动仅查一次；无更新或网络失败不打扰，手动检查有明确结果', async () => {
+it('启动仅查一次；后台与手动检查均通过状态给出最新版本或错误结果', async () => {
   const f = fixture(); const pending = deferred<ReleaseInfo | null>(); f.operations.check = () => pending.promise;
   f.service.start(); f.service.start(); assert.equal(f.calls.check, 1);
-  pending.resolve(null); await new Promise<void>(resolve => setImmediate(resolve)); assert.equal(f.calls.current, 0);
-  f.operations.check = async () => null; await f.service.check(); assert.equal(f.calls.current, 1);
+  pending.resolve(null); await new Promise<void>(resolve => setImmediate(resolve));
+  assert.equal(f.service.current.status, 'idle'); assert.equal(f.service.current.checked, true);
+  f.operations.check = async () => null; await f.service.check(); assert.equal(f.service.current.error, null);
   f.operations.check = async () => { throw new Error('network unreachable'); };
-  await f.service.check(false); assert.equal(f.calls.errors.length, 0);
-  await f.service.check(); assert.equal(f.calls.errors.length, 1);
+  await f.service.check(); assert.equal(f.service.current.status, 'error'); assert.match(f.service.current.error!, /network unreachable/);
+  await f.service.check(); assert.equal(f.service.current.status, 'error');
+  f.operations.check = async () => null; await f.service.check(); assert.equal(f.service.current.error, null);
+  assert.equal(f.calls.download, 0); assert.equal(f.calls.install, 0);
 });
 
-it('启动提醒确认下载后失败必须提示；不安装且可以重新下载', async () => {
-  const f = fixture(); f.choices.download = true;
+it('显式下载失败保留版本与错误供重试；重新下载成功清除错误，不自动安装', async () => {
+  const f = fixture();
   f.operations.download = async () => { throw new Error('SHA512 checksum mismatch'); };
-  await f.service.check(false); assert.equal(f.calls.errors.length, 1); assert.equal(f.service.current.status, 'error');
+  await f.service.check(); await f.service.download(); assert.match(f.service.current.error!, /SHA512/);
+  assert.equal(f.service.current.status, 'error'); assert.deepEqual(f.service.current.release, release);
   await f.service.install(); assert.equal(f.calls.approve, 0); assert.equal(f.calls.install, 0);
   f.operations.download = async () => {}; await f.service.download(); assert.equal(f.service.current.status, 'ready');
+  assert.equal(f.service.current.percent, 100); assert.equal(f.service.current.error, null); assert.equal(f.calls.install, 0);
 });
 
 it('下载期间重复查询与下载不产生第二条更新任务；失败清除进度', async () => {
@@ -98,23 +118,23 @@ it('安装 gate 期间重复点击不会重复确认；disposed 后 gate 的批�
 it('安装启动同步或异步失败均不退出，重新检查下载后可以再次安装', async () => {
   const f = fixture(); await f.service.check(); await f.service.download();
   f.operations.install = () => { throw new Error('installer unavailable'); };
-  await f.service.install(); assert.equal(f.service.current.status, 'error'); assert.equal(f.service.current.release, null); assert.equal(f.calls.errors.length, 1);
+  await f.service.install(); assert.equal(f.service.current.status, 'error'); assert.equal(f.service.current.release, null); assert.match(f.service.current.error!, /installer unavailable/);
   f.operations.install = async () => { throw new Error('spawn failed'); }; await f.service.check(); await f.service.download(); await f.service.install();
   assert.notEqual(f.service.current.status, 'installing'); assert.equal(f.calls.quit, 0);
-  assert.equal(f.calls.errors.length, 2);
+  assert.match(f.service.current.error!, /spawn failed/);
   assert.equal(f.service.current.release, null); await f.service.install(); assert.equal(f.calls.install, 2);
   f.operations.install = async () => {};
   await f.service.check(); await f.service.download(); await f.service.install(); assert.equal(f.calls.install, 3); assert.equal(f.calls.quit, 1);
 });
 
-it('关闭后在途查询、下载和进度不弹出对话框、不改变状态、不安装', async () => {
+it('关闭后在途查询、下载和进度不再广播状态或安装', async () => {
   const checking = fixture(); const check = deferred<ReleaseInfo | null>(); checking.operations.check = () => check.promise;
   const query = checking.service.check(); checking.service.dispose(); const queryStates = checking.states.length;
-  check.resolve(release); await query; assert.equal(checking.calls.available, 0); assert.equal(checking.states.length, queryStates);
+  check.resolve(release); await query; assert.equal(checking.states.length, queryStates);
   const downloading = fixture(); await downloading.service.check(); const download = deferred<void>(); downloading.operations.download = () => download.promise;
   const task = downloading.service.download(); downloading.service.dispose(); const downloadStates = downloading.states.length;
   downloading.service.progress(80); download.resolve(); await task;
-  assert.equal(downloading.calls.downloaded, 0); assert.equal(downloading.states.length, downloadStates);
+  assert.equal(downloading.states.length, downloadStates);
   assert.equal(downloading.calls.install, 0); downloading.service.dispose(); assert.equal(downloading.calls.dispose, 1);
 });
 
@@ -126,9 +146,9 @@ it('等待安装器进程启动时仍保持普通退出保护，并禁止重复�
   await f.service.install(); await f.service.check(); await f.service.download(); assert.equal(f.calls.approve, 1); assert.equal(f.calls.install, 1);
   pending.reject(new Error('ENOENT')); await installing;
   assert.equal(f.service.current.status, 'error'); assert.equal(f.service.current.release, null);
-  assert.equal(f.service.current.busy, false); assert.equal(f.calls.errors.length, 1);
+  assert.equal(f.service.current.busy, false);
   assert.equal(f.calls.quit, 0);
-  assert.match(f.calls.errors[0]!, /重新检查更新/);
+  assert.match(f.service.current.error!, /重新检查更新/);
 });
 
 it('安装器已成功创建后才标记安装并退出；期间关闭应用不再调用quit', async () => {
@@ -147,7 +167,8 @@ it('开发、诊断、Portable、非 Windows 与 win-unpacked 均禁止后台检
   for (const override of [{ packaged: false }, { platform: 'linux' }, { disabled: true }, { portable: true }, { installed: false }]) {
     const reason = updateDisabledReason({ ...installed, ...override }); assert.ok(reason);
     const f = fixture(reason); f.service.start(); await f.service.check(); await f.service.download(); await f.service.install();
-    assert.equal(f.calls.check, 0); assert.equal(f.calls.download, 0); assert.equal(f.calls.install, 0); assert.equal(f.calls.unsupported.length, 1);
+    assert.equal(f.calls.check, 0); assert.equal(f.calls.download, 0); assert.equal(f.calls.install, 0);
+    assert.equal(f.service.current.revision, 0); assert.equal(f.service.disabledReason, reason);
   }
 });
 

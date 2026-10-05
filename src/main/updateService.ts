@@ -1,20 +1,11 @@
-/** 应用更新的用户确认、下载和安装状态；不接触编辑器或网页。 */
-export interface ReleaseInfo { version: string; notes: string }
-export type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'confirming' | 'installing' | 'error';
-export interface UpdateState { status: UpdateStatus; release: ReleaseInfo | null; percent: number; busy: boolean }
+/** 应用更新的显式检查、下载和安装状态；不接触编辑器或网页。 */
+import type { ReleaseInfo, UpdateState } from '../shared/applicationUpdate';
 export interface UpdateBackend {
   check(): Promise<ReleaseInfo | null>;
   download(): Promise<void>;
   install(): Promise<void>;
   quit(): void;
   dispose(): void;
-}
-export interface UpdatePresenter {
-  available(info: ReleaseInfo): Promise<boolean>;
-  downloaded(info: ReleaseInfo): Promise<boolean>;
-  current(): Promise<void>;
-  error(message: string): Promise<void>;
-  unsupported(reason: string): Promise<void>;
 }
 
 export function updateDisabledReason(environment: { packaged: boolean; platform: string; disabled: boolean; portable: boolean; installed: boolean }): string | null {
@@ -26,7 +17,7 @@ export function updateDisabledReason(environment: { packaged: boolean; platform:
   return null;
 }
 
-/** 远程发布说明只作为原生对话框中的文本，不执行 HTML 或远程资源。 */
+/** 远程发布说明只作为普通文本，不执行 HTML 或远程资源。 */
 export function releaseNotesText(notes: string | Array<{ version: string; note: string | null }> | null | undefined): string {
   const value = Array.isArray(notes) ? notes.map(item => `${item.version}\n${item.note ?? ''}`).join('\n\n') : notes ?? '';
   return value.replace(/<[^>]*>/g, '').replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
@@ -35,11 +26,11 @@ export function releaseNotesText(notes: string | Array<{ version: string; note: 
 }
 
 export class UpdateService {
-  private state: UpdateState = { status: 'idle', release: null, percent: 0, busy: false };
+  private state: UpdateState = { status: 'idle', release: null, percent: 0, busy: false, error: null, checked: false, revision: 0 };
   private disposed = false;
   private started = false;
 
-  constructor(private readonly backend: UpdateBackend, private readonly presenter: UpdatePresenter,
+  constructor(private readonly backend: UpdateBackend,
     private readonly approveInstall: () => Promise<boolean>, private readonly changed: (state: UpdateState) => void,
     readonly disabledReason: string | null) {}
 
@@ -48,20 +39,17 @@ export class UpdateService {
   start(): void {
     if (this.started || this.disposed) return;
     this.started = true;
-    if (!this.disabledReason) void this.check(false);
+    if (!this.disabledReason) void this.check();
   }
 
-  async check(manual = true): Promise<void> {
-    if (this.state.status === 'ready' || this.state.status === 'installing') return;
+  async check(): Promise<void> {
+    if (this.disabledReason || this.state.status === 'ready' || this.state.status === 'installing') return;
     await this.run(async () => {
-      if (this.disabledReason) { if (manual) await this.presenter.unsupported(this.disabledReason); return; }
-      this.set({ status: 'checking', release: null, percent: 0 });
+      this.set({ status: 'checking', release: null, percent: 0, error: null });
       const release = await this.backend.check();
       if (this.disposed) return;
-      this.set({ status: release ? 'available' : 'idle', release });
-      if (!release) { if (manual) await this.presenter.current(); return; }
-      if (await this.presenter.available(release) && !this.disposed) await this.downloadRelease();
-    }, !manual);
+      this.set({ status: release ? 'available' : 'idle', release, checked: true });
+    });
   }
 
   async download(): Promise<void> {
@@ -87,18 +75,16 @@ export class UpdateService {
   }
 
   private async downloadRelease(): Promise<void> {
-    const release = this.state.release;
-    if (!release || this.disposed) return;
-    this.set({ status: 'downloading', percent: 0 });
+    if (!this.state.release || this.disposed) return;
+    this.set({ status: 'downloading', percent: 0, error: null });
     await this.backend.download();
     if (this.disposed) return;
-    this.set({ status: 'ready', percent: 0 });
-    if (await this.presenter.downloaded(release) && !this.disposed) await this.installRelease();
+    this.set({ status: 'ready', percent: 100 });
   }
 
   private async installRelease(): Promise<void> {
     if (this.disposed || this.state.status !== 'ready') return;
-    this.set({ status: 'confirming' });
+    this.set({ status: 'confirming', error: null });
     try {
       const approved = await this.approveInstall();
       if (this.disposed) return;
@@ -109,36 +95,32 @@ export class UpdateService {
       this.backend.quit();
     } catch (error) {
       if (this.disposed) return;
-      this.set({ status: 'error', release: null, percent: 0 });
-      await this.presenter.error(this.installErrorText(error));
+      this.set({ status: 'error', release: null, percent: 0, error: this.installErrorText(error) });
     }
   }
 
-  private async run(operation: () => Promise<void>, silent = false): Promise<void> {
+  private async run(operation: () => Promise<void>): Promise<void> {
     if (this.disposed || this.state.busy) return;
     this.set({ busy: true });
     try { await operation(); }
     catch (error) {
       if (!this.disposed) {
-        const downloadFailed = this.state.status === 'downloading';
-        this.set({ status: 'error', percent: 0 });
-        // 启动查询失败保持安静；用户确认后的下载失败必须明确提示。
-        if (!silent || downloadFailed) await this.presenter.error(this.errorText(error)).catch(() => undefined);
+        this.set({ status: 'error', percent: 0, checked: true, error: this.errorText(error) });
       }
     } finally { if (!this.disposed) this.set({ busy: false }); }
   }
 
   private set(next: Partial<UpdateState>): void {
     if (this.disposed) return;
-    this.state = { ...this.state, ...next };
+    this.state = { ...this.state, ...next, revision: this.state.revision + 1 };
     this.changed(this.current);
   }
 
   private errorText(error: unknown): string {
-    return `更新操作失败，请检查网络后重试。\n${releaseNotesText(error instanceof Error ? error.message : String(error)).slice(0, 600)}`;
+    return `更新操作失败，请检查网络后重试。\n${releaseNotesText(error instanceof Error ? error.message : String(error)).slice(0, 160)}`;
   }
 
   private installErrorText(error: unknown): string {
-    return `安装未能启动。请从帮助菜单重新检查更新，再下载并安装。\n${releaseNotesText(error instanceof Error ? error.message : String(error)).slice(0, 600)}`;
+    return `安装未能启动，请重新检查更新后下载并安装。\n${releaseNotesText(error instanceof Error ? error.message : String(error)).slice(0, 160)}`;
   }
 }

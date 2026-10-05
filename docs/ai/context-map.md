@@ -16,7 +16,7 @@
 |---|---|---|
 | 外壳 / 进程架构 / IPC | `docs/capabilities/app-shell.md`、`docs/adr/` 下架构类决策 | 历史计划、审计归档 |
 | 构建 / 运行 / 自检 | `docs/capabilities/app-shell.md` 的「已知实现陷阱」「依赖安装注意」、`package.json` 的 scripts | 历史计划 |
-| Windows 打包 / Release 发布 / 软件更新 | `docs/capabilities/windows-packaging.md`、`docs/capabilities/application-update.md`、`docs/adr/2026-10-05-application-update-source-and-boundary.md`、`electron-builder.config.cjs`、`src/main/appUpdater.ts`、`src/main/updateService.ts`、`src/main/updateInstaller.ts` | 历史计划、AI 网页采集实现 |
+| Windows 打包 / Release 发布 / 软件更新 | `docs/capabilities/windows-packaging.md`、`docs/capabilities/application-update.md`、`docs/adr/2026-10-05-application-update-source-and-boundary.md`、`electron-builder.config.cjs`、`src/main/appUpdater.ts`、`src/main/updateService.ts`、`src/main/applicationUpdateIpc.ts`、`src/main/updateInstaller.ts`、`src/renderer/applicationUpdate.js` | 历史计划、AI 网页采集实现 |
 | 本地文件读取 / 编码 / 大小控制 | `docs/capabilities/local-file-access.md` | 无关能力文档 |
 | 目录恢复 / 最近目录 / 文件管理 / 多文件标签 / 未保存保护 | `docs/capabilities/local-file-access.md`、`src/main/workspaceService.ts`、`workspaceController.ts`、`fileManagement.ts`、`editorSession.ts`、`src/renderer/editorWorkspace.js`、`editorTabs.js`、`fileExplorer.js` | 历史计划、官方网页实现 |
 | 人机边界 / 出程（什么由人做） | `docs/capabilities/human-machine-boundary.md`、`docs/adr/2026-10-02-zero-injection-and-automation-trace-baseline.md`（ADR-0003） | 回程解析细节 |

@@ -36,6 +36,7 @@ import { WorkspaceService } from './workspaceService';
 import { WorkspaceController } from './workspaceController';
 import { configureWorkspaceProbe, runWorkspaceProbe } from './workspaceProbe';
 import { createApplicationUpdater, type ApplicationUpdater } from './appUpdater';
+import { registerApplicationUpdateIpc } from './applicationUpdateIpc';
 
 /* ------------------------------------------------------------------ *
  * 常量
@@ -851,13 +852,23 @@ async function loadLocalView(
   updater = createApplicationUpdater({
     window: win,
     disabled: SELF_TEST || UI_PROBE || DIAGNOSE,
-    onStateChanged: () => buildApplicationMenu(),
+    onStateChanged: state => {
+      buildApplicationMenu();
+      if (!editorView.webContents.isDestroyed()) editorView.webContents.send(CHANNELS.updateState, state);
+    },
+    onOpenPanel: () => {
+      if (!editorView.webContents.isDestroyed()) {
+        editorView.webContents.focus();
+        editorView.webContents.send(CHANNELS.openUpdatePanel);
+      }
+    },
     approveInstall: () => workspaceController.run(async () => {
       if (win.isDestroyed() || closePending || !await workspaceController.editor.canLeave()) return false;
       return !win.isDestroyed();
     }),
   });
   const registeredChannels = [
+    ...registerApplicationUpdateIpc(ipcMain, editorView.webContents, updater),
     ...registerFileIpc(fileService, {
       chooseRoot: () => workspaceController.chooseRoot(), getState: () => workspace.getState(),
       write: (relative, text) => workspaceController.write(relative, text),

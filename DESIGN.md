@@ -36,12 +36,15 @@ token_source: design-tokens.json
 - 名称在树内输入：Enter 确认、Esc 取消；非法名称或重名保留输入并显示原因。文件创建后打开，文件夹创建后展开。
 - 未打开文件时，编辑区域展示打开目录、新建文件及最近目录入口；最近目录与文件菜单使用同一份记录。
 - 关闭未保存标签、切换／关闭目录或退出统一使用原生“保存／放弃／取消”确认；保存失败保留缓冲。删除经确认移入回收站，失败不转为永久删除。改名保留草稿并更新保存路径。
+- 软件更新入口放在编辑器顶部工具栏右侧，发现新版只点亮下载图标及提示点；点击或帮助菜单打开同一暗色浮层。版本、普通文本更新说明、下载进度与主操作分层呈现，完整说明默认折叠。关闭浮层不取消下载、不安装；Escape关闭并把焦点交回图标。浮层限制在编辑器视口内，窄列自适应，图标和进度提供可读名称。
 
 ## Sources
 
 精确基础值只维护在 `design-tokens.json`，`scripts/copy-static.mjs` 生成 `dist/renderer/ui-tokens.css`。共享按钮使用 `src/renderer/ui.css` 的 `.ui-button`、`.primary`、`.ui-icon`；页面负责局部排列。
 
 布局以 `src/main/windowLayout.ts` 为准；复制菜单由 `src/renderer/editorToolbar.js` 管理；变更数据树由 `src/renderer/changeTree.js` 管理，界面由 `src/renderer/preview.js` 管理；输入区交互由 `src/renderer/promptComposer.js` 管理。交互验收见对应 `test/` 测试与 `src/main/layoutProbe.ts` 的 Electron UI 探针。
+
+软件更新图标和浮层由 `src/renderer/applicationUpdate.js`、`src/renderer/applicationUpdate.css` 管理，复用共用控件与token；业务状态由主进程 `UpdateService` 单一广播，本地视图不持有更新网络或安装器路径。
 
 文件树、树内输入、右键菜单及空白编辑区域由 `src/renderer/fileExplorer.js` 管理；编辑缓冲及独立模型由 `src/renderer/editorWorkspace.js` 管理，标签呈现由 `src/renderer/editorTabs.js` 管理，原生确认由 `src/main/editorSession.ts` 与 `src/main/workspaceController.ts` 管理。验收入口为 `src/main/workspaceProbe.ts`（`pnpm run verify:workspace`）。
 

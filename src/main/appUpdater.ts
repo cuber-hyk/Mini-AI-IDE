@@ -1,19 +1,24 @@
-/** 更新网络与安装器仅存在于主进程，网页和编辑器无更新 IPC。 */
-import { app, dialog, type BaseWindow, type MenuItemConstructorOptions } from 'electron';
+/** 更新网络与安装器仅存在于主进程，编辑器只接收状态和显式操作。 */
+import { app, type BaseWindow, type MenuItemConstructorOptions } from 'electron';
 import { statSync } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
-import { releaseNotesText, UpdateService, updateDisabledReason, type UpdateBackend, type UpdatePresenter } from './updateService';
+import { releaseNotesText, UpdateService, updateDisabledReason, type UpdateBackend } from './updateService';
+import type { ApplicationUpdateState } from '../shared/applicationUpdate';
 import { launchUpdateInstaller } from './updateInstaller';
 
 export interface ApplicationUpdater {
   readonly installing: boolean;
+  getState(): ApplicationUpdateState;
+  check(): Promise<void>;
+  download(): Promise<void>;
+  install(): Promise<void>;
   menuItems(): MenuItemConstructorOptions[];
   start(): void;
   dispose(): void;
 }
 
 export function createApplicationUpdater(options: { window: BaseWindow; approveInstall: () => Promise<boolean>;
-  onStateChanged: () => void; disabled: boolean }): ApplicationUpdater {
+  onStateChanged: (state: ApplicationUpdateState) => void; onOpenPanel: () => void; disabled: boolean }): ApplicationUpdater {
   const window = options.window;
   // electron-builder v26 的 NSIS common.nsh / installer.nsh 将卸载器写入 $INSTDIR。
   // app.isPackaged 也包括 win-unpacked，所以单独判断安装目录中的卸载器。
@@ -26,21 +31,6 @@ export function createApplicationUpdater(options: { window: BaseWindow; approveI
   let cancellation: import('electron-updater').CancellationToken | null = null;
   let installerPath: string | null = null;
 
-  const show = async (settings: Electron.MessageBoxOptions): Promise<number> => {
-    if (disposed || window.isDestroyed()) return 1;
-    return (await dialog.showMessageBox(window, { noLink: true, ...settings })).response;
-  };
-  const presenter: UpdatePresenter = {
-    available: async info => await show({ type: 'info', title: '发现新版本',
-      message: `Mini-AI-IDE ${info.version} 已发布`, detail: `当前版本：${app.getVersion()}\n\n${info.notes || '此版本暂无更新说明。'}`,
-      buttons: ['下载更新', '稍后'], defaultId: 1, cancelId: 1 }) === 0,
-    downloaded: async info => await show({ type: 'info', title: '更新已下载', message: `Mini-AI-IDE ${info.version} 已准备好安装`,
-      detail: '重启前会确认未保存的文件。安装向导将更新当前应用，用户设置和网页登录数据会保留。',
-      buttons: ['重启并安装', '稍后'], defaultId: 1, cancelId: 1 }) === 0,
-    current: async () => { await show({ type: 'info', title: '检查更新', message: `当前版本 ${app.getVersion()} 已是最新版本。`, buttons: ['确定'] }); },
-    error: async message => { await show({ type: 'error', title: '更新失败', message, buttons: ['确定'] }); },
-    unsupported: async reason => { await show({ type: 'info', title: '检查更新', message: reason, buttons: ['确定'] }); },
-  };
   const onProgress = (progress: { percent: number }) => service.progress(progress.percent);
   const ignoreLateError = () => {};
   const resetUpdater = () => {
@@ -100,30 +90,20 @@ export function createApplicationUpdater(options: { window: BaseWindow; approveI
       // 旧实例的监听器不捕获 window/service，完成在途请求后可回收。
     },
   };
-  const service = new UpdateService(backend, presenter, options.approveInstall, state => {
+  const service = new UpdateService(backend, options.approveInstall, state => {
     if (disposed || window.isDestroyed()) return;
     window.setProgressBar(state.status === 'downloading' ? state.percent / 100 : -1);
-    options.onStateChanged();
+    options.onStateChanged({ ...state, currentVersion: app.getVersion(), disabledReason });
   }, disabledReason);
 
   return {
     get installing() { return !disposed && service.current.status === 'installing'; },
-    menuItems: () => {
-      const state = service.current;
-      const idle = !state.busy && !['ready', 'confirming', 'installing', 'downloading'].includes(state.status);
-      const items: MenuItemConstructorOptions[] = [{ label: `当前版本：${app.getVersion()}`, enabled: false },
-        { label: state.status === 'checking' ? '正在检查更新…' : '检查更新…',
-        enabled: !disposed && idle, click: () => { void service.check(); } }];
-      if (state.release) {
-        if (state.status === 'downloading') items.push({ label: `正在下载 ${state.release.version}：${state.percent}%`, enabled: false });
-        else if (['ready', 'confirming', 'installing'].includes(state.status)) items.push({
-          label: state.status === 'installing' ? '正在启动安装…' : `重启并安装 ${state.release.version}…`,
-          enabled: !disposed && !state.busy && state.status === 'ready', click: () => { void service.install(); } });
-        else items.push({ label: `${state.status === 'error' ? '重试下载' : '下载'}更新 ${state.release.version}…`,
-          enabled: !disposed && !state.busy, click: () => { void service.download(); } });
-      }
-      return items;
-    },
+    getState: () => ({ ...service.current, currentVersion: app.getVersion(), disabledReason }),
+    check: () => service.check(),
+    download: () => service.download(),
+    install: () => service.install(),
+    menuItems: () => [{ label: `当前版本：${app.getVersion()}`, enabled: false },
+      { label: '软件更新…', enabled: !disposed, click: () => options.onOpenPanel() }],
     start: () => service.start(),
     dispose: () => {
       if (disposed) return;

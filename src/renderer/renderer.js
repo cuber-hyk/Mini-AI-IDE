@@ -76,6 +76,7 @@
   })();
 
   const toolbar = window.setupEditorToolbar();
+  window.setupApplicationUpdate(bridge);
 
   const state = {
     root: null,

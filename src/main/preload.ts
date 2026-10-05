@@ -19,6 +19,12 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 /** 与 src/shared/contract.ts 的 CHANNELS 必须逐字一致（自检会校验） */
 const CH = {
+  getUpdateState: 'ui:get-update-state',
+  checkForUpdate: 'ui:check-for-update',
+  downloadUpdate: 'ui:download-update',
+  installUpdate: 'ui:install-update',
+  updateState: 'ui:update-state',
+  openUpdatePanel: 'ui:open-update-panel',
   chooseRoot: 'fs:choose-root',
   getRecentRoots: 'fs:recent-roots',
   openRecentRoot: 'fs:open-recent-root',
@@ -64,6 +70,12 @@ const CH = {
   setFormatSpecVariant: 'ui:set-format-spec-variant',
 } as const;
 const bridge = {
+  getUpdateState: () => ipcRenderer.invoke(CH.getUpdateState),
+  checkForUpdate: () => ipcRenderer.invoke(CH.checkForUpdate),
+  downloadUpdate: () => ipcRenderer.invoke(CH.downloadUpdate),
+  installUpdate: () => ipcRenderer.invoke(CH.installUpdate),
+  onUpdateState: (listener: (state: unknown) => void) => ipcRenderer.on(CH.updateState, (_e, state) => listener(state)),
+  onOpenUpdatePanel: (listener: () => void) => ipcRenderer.on(CH.openUpdatePanel, () => listener()),
   chooseRoot: () => ipcRenderer.invoke(CH.chooseRoot),
   getRecentRoots: () => ipcRenderer.invoke(CH.getRecentRoots),
   openRecentRoot: (index: number) => ipcRenderer.invoke(CH.openRecentRoot, index),

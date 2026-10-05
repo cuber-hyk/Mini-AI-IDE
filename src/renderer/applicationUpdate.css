@@ -1,0 +1,45 @@
+/* 更新浮层只覆盖本地编辑视图，不跨独立网页视图。 */
+.update-wrap { flex: 0 0 auto; }
+.update-trigger { position: relative; display: inline-flex; align-items: center; justify-content: center; color: var(--ui-muted); background: transparent; border-color: transparent; }
+.update-trigger svg, .update-close svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.update-dot { position: absolute; right: 2px; top: 2px; width: 5px; height: 5px; border-radius: 50%; background: var(--ui-accent); display: none; }
+.update-trigger.has-update { color: var(--ui-accent); background: color-mix(in srgb, var(--ui-accent) 12%, transparent); }
+.update-trigger.has-update .update-dot { display: block; }
+.update-ready-mark { display: none; }
+.update-trigger.is-ready .update-download-mark { display: none; }
+.update-trigger.is-ready .update-ready-mark { display: block; }
+.update-trigger.is-busy::before { content: ''; position: absolute; inset: 1px; border: 1px solid transparent; border-top-color: var(--ui-accent); border-right-color: var(--ui-accent); border-radius: 50%; animation: update-spin 1s linear infinite; }
+@keyframes update-spin { to { transform: rotate(360deg); } }
+.update-panel { position: fixed; z-index: 100; top: 44px; right: 10px; width: min(360px, calc(100vw - 20px)); max-height: calc(100vh - 54px); overflow: auto; padding: 18px; border: 1px solid var(--ui-border); border-radius: 12px; background: var(--ui-surface); box-shadow: 0 12px 36px #0006; }
+.update-panel[hidden], .update-panel [hidden] { display: none; }
+.update-panel:focus { outline: none; }
+.update-header { display: flex; align-items: center; justify-content: space-between; margin: -4px -4px 12px 0; }
+.update-eyebrow { font-size: 11px; color: var(--ui-muted); letter-spacing: .08em; }
+.update-close { display: inline-flex; align-items: center; justify-content: center; color: var(--ui-muted); background: transparent; border-color: transparent; }
+.update-panel h2 { margin: 0 0 8px; font-size: 19px; line-height: 1.4; font-weight: 600; color: var(--ui-text); }
+.update-versions { display: flex; align-items: center; gap: 8px; color: var(--ui-muted); font: 12px/1.5 "Cascadia Code", Consolas, monospace; }
+.update-versions .update-version { border: 1px solid var(--ui-border); border-radius: 5px; padding: 2px 7px; }
+.update-versions .update-version-new { color: var(--ui-accent); border-color: color-mix(in srgb, var(--ui-accent) 35%, transparent); background: color-mix(in srgb, var(--ui-accent) 8%, transparent); }
+.update-message { margin: 12px 0 0; color: var(--ui-muted); font-size: 12px; overflow-wrap: anywhere; }
+.update-message.is-error { color: var(--warn); }
+.update-notes-section { border-top: 1px solid var(--ui-border); margin-top: 16px; padding-top: 14px; }
+.update-notes-section h3 { margin: 0 0 8px; font-size: 12px; font-weight: 500; color: var(--ui-text); }
+.update-notes { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ui-muted); font-size: 12px; line-height: 1.7; }
+.update-notes.is-expanded { max-height: 220px; overflow: auto; }
+.update-notes::-webkit-scrollbar { width: 5px; background: transparent; }
+.update-notes::-webkit-scrollbar-track, .update-notes::-webkit-scrollbar-corner { background: transparent; }
+.update-notes::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+.update-notes::-webkit-scrollbar-thumb { border-radius: 3px; background: color-mix(in srgb, var(--ui-muted) 22%, transparent); }
+.update-notes:hover::-webkit-scrollbar-thumb, .update-notes:focus-within::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--ui-muted) 45%, transparent); }
+.update-notes::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, var(--ui-muted) 70%, transparent); }
+.update-text-button { padding: 0; margin: 8px 0 0; border: none; background: transparent; color: var(--ui-accent); font: inherit; font-size: 12px; cursor: pointer; }
+.update-text-button:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 3px; }
+.update-progress-wrap { margin-top: 18px; }
+.update-progress-label { display: flex; justify-content: space-between; font-size: 12px; color: var(--ui-muted); margin-bottom: 8px; }
+.update-progress-wrap progress { display: block; width: 100%; height: 5px; border: none; border-radius: 3px; overflow: hidden; background: var(--ui-border); accent-color: var(--ui-accent); }
+.update-progress-wrap progress::-webkit-progress-bar { background: var(--ui-border); }
+.update-progress-wrap progress::-webkit-progress-value { background: var(--ui-accent); border-radius: 3px; }
+.update-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--ui-border); margin-top: 18px; padding-top: 14px; }
+.update-hint { color: var(--ui-muted); font-size: 11px; }
+.update-footer .ui-button { flex: 0 0 auto; }
+@media (prefers-reduced-motion: reduce) { .update-trigger.is-busy::before { animation: none; } }

@@ -52,9 +52,6 @@ it('真实安装启动边界的失败不退出，成功之后才退出；保持�
       check: async () => ({ version: '0.2.0', notes: '' }), download: async () => {},
       install: () => { events.push('launch'); return launchUpdateInstaller(installerOptions, () => child); },
       quit: () => { events.push('quit'); }, dispose: () => {},
-    }, {
-      available: async () => false, downloaded: async () => false, current: async () => {}, unsupported: async () => {},
-      error: async () => { events.push('error'); },
     }, async () => { events.push('approve'); return true; }, () => {}, null);
     await service.check(); await service.download(); const installing = service.install();
     await Promise.resolve(); await Promise.resolve(); assert.deepEqual(events, ['approve', 'launch']);
@@ -62,8 +59,9 @@ it('真实安装启动边界的失败不退出，成功之后才退出；保持�
     if (success) child.emit('spawn');
     else child.emit('error', Object.assign(new Error('installer missing'), { code: 'ENOENT' }));
     await installing;
-    assert.deepEqual(events, success ? ['approve', 'launch', 'quit'] : ['approve', 'launch', 'error']);
+    assert.deepEqual(events, success ? ['approve', 'launch', 'quit'] : ['approve', 'launch']);
     assert.equal(service.current.status, success ? 'installing' : 'error');
+    if (!success) assert.match(service.current.error!, /安装未能启动/);
   };
   await exercise(false); await exercise(true);
 });
