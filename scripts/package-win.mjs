@@ -28,6 +28,10 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..');
 
 const passthrough = process.argv.slice(2);
+if (passthrough.some((arg) => arg.startsWith('--publish') || arg === '-p')) {
+  console.error('[package-win] 本地打包固定 --publish never；请勿通过此命令发布。');
+  process.exit(1);
+}
 
 /**
  * 镜像设置。
@@ -58,6 +62,7 @@ function run(command, args, label) {
   const result = spawnSync(command, args, {
     cwd: repoRoot,
     stdio: 'inherit',
+    env,
     shell: process.platform === 'win32',
   });
   if (result.error) {
@@ -181,6 +186,7 @@ if (fs.existsSync(path.join(localElectronDist, 'electron.exe'))) {
     '--win',
     '--x64',
     ...passthrough,
+    '--publish', 'never',
   ], 'electron-builder');
 } else {
   console.log('[package-win] 未找到本地 Electron 发行版，交给 electron-builder 自行下载');
@@ -190,6 +196,7 @@ if (fs.existsSync(path.join(localElectronDist, 'electron.exe'))) {
     '--win',
     '--x64',
     ...passthrough,
+    '--publish', 'never',
   ], 'electron-builder');
 }
 
@@ -210,7 +217,7 @@ if (!fs.existsSync(outDir)) {
   console.log('[package-win] 未发现 release/ 目录，请检查上一步日志');
   process.exit(0);
 }
-const artifacts = fs.readdirSync(outDir).filter((name) => name.endsWith('.exe') || name.endsWith('.blockmap'));
+const artifacts = fs.readdirSync(outDir).filter((name) => name.endsWith('.exe') || name.endsWith('.blockmap') || name === 'latest.yml');
 console.log('\n[package-win] 产物：');
 for (const name of artifacts) {
   const size = fs.statSync(path.join(outDir, name)).size;
@@ -218,4 +225,9 @@ for (const name of artifacts) {
 }
 if (artifacts.length === 0) {
   console.log('  （无 .exe 产物；若用了 --dir，解包目录在 release/win-unpacked/）');
+}
+
+/* 完整打包必须同时满足安装包、Portable 与更新清单一致；--dir 无发布产物。 */
+if (!passthrough.includes('--dir')) {
+  run(process.execPath, [path.join('scripts', 'prepare-release.mjs')], '校验发布产物');
 }

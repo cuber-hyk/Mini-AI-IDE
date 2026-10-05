@@ -40,7 +40,7 @@ Monaco、AI 网页和变更列表保持三列布局。目录恢复与最近 5 �
 
 | 进程 | 职责 | 硬性约束 |
 |---|---|---|
-| **main** | 窗口与分栏布局、IPC 路由、本地文件读取、会话分区配置、提示词设置的持久化、启动自检 |绝不发起或代理大模型相关网络请求；**绝不向网页写入任何内容** |
+| **main** | 窗口与分栏布局、IPC 路由、本地文件读取、会话分区配置、提示词设置的持久化、启动自检、安装版软件更新 |绝不发起或代理大模型相关网络请求；**绝不向网页写入任何内容**；更新模块专用网络例外见 `application-update.md` 与 ADR-0005 |
 | **editor renderer**（`persist:editor-ui`） | Monaco 渲染、文件树、编辑与保存、需求输入区 | `nodeIntegration:false`、`contextIsolation:true`、`sandbox:true`；无文件系统能力；CSP `connect-src 'none'` |
 | **webview renderer**（`persist:postcheck`） | 加载目标平台网页 | 顶级独立视图（`WebContentsView`）；程序**只读不写** |
 | **webbar renderer**（`persist:editor-ui`） | 网页区顶部 40px 工具条（网页可见）/ 恢复把手（网页隐藏）：只读采集与列显隐 | 只能请求只读采集和切换显隐；不能读写文件或向网页写入内容。**永不隐藏**——它是"把网页叫回来"的常驻入口 |

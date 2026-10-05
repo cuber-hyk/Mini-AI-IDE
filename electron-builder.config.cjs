@@ -7,10 +7,11 @@
  *
  * 本项目打包的几个非常规之处，逐条说明理由：
  *
- * 1) **运行时零依赖，但 `files` 里带了 `src/` 与 `test/fixtures/`**
- *    本应用在运行时不读 `node_modules`（Monaco 的 AMD 发行文件已由
- *    `scripts/copy-static.mjs` 复制进 `dist/renderer/vendor/monaco`），
- *    因此 asar 里本来只有 `dist/` 就够了。但 `src/main/selfTest.ts` 与
+ * 1) **生产依赖与现场自检文件均需随包分发**
+ *    主进程通过 electron-updater 检查和下载更新，通过 updateInstaller 启动安装；electron-builder
+ *    默认收集 production dependencies，不能排除 node_modules。
+ *    Monaco 的 AMD 发行文件由 `scripts/copy-static.mjs` 复制到
+ *    `dist/renderer/vendor/monaco`。另外 `src/main/selfTest.ts` 与
  *    `src/main/workspaceProbe.ts` 会去读**源码与测试样本**：
  *      - `__dirname/../../src/main`（index.ts / preload.ts 等 .ts 原文）
  *      - `__dirname/../../tools/renderer-scope-report.json`
@@ -26,9 +27,10 @@
  *    登录 DeepSeek —— 而分区名是固定的（见 index.ts `SESSION_PARTITION`），
  *    刻意保持稳定正是为了让登录态可复用。所以宁可留下数据也不要自动清空。
  *
- * 3) **不设 `publish`**
- *    本项目没有 CI 发布流程；显式置 `null` 以免 electron-builder 尝试探测
- *    GitHub / S3 凭据而失败。
+ * 3) **GitHub 更新源与发布动作分开**
+ *    `publish` 指定公开更新源，让 builder 生成 app-update.yml 和 latest.yml。
+ *    本地打包入口始终传 `--publish never`，不会因为本机有凭据就上传产物。
+ *    NSIS 生成更新清单；Portable 由 builder 排除，不参与原地更新。
  *
  * 4) **未配置代码签名**
  *    没有证书，因此产物是未签名 exe（Windows SmartScreen 会提示未知发布者）。
@@ -94,6 +96,10 @@ module.exports = {
     artifactName: '${productName}-Portable-${version}-${arch}.${ext}',
   },
 
-  /* 无 CI 发布流程，显式关闭凭据探测 */
-  publish: null,
+  /* 这里只声明更新源；发布动作须经用户确认，打包脚本始终 --publish never。 */
+  publish: {
+    provider: 'github',
+    owner: 'cuber-hyk',
+    repo: 'Mini-AI-IDE',
+  },
 };

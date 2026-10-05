@@ -13,6 +13,7 @@
 - **精确修改**：局部修改根据 SEARCH 原文唯一匹配定位，新增或删除内容后自动调整后文；新建与覆盖全文使用明确操作。
 - **写入保护**：拦截不匹配、重复匹配、重叠操作、未保存草稿和预览后的外部改动；AI 写入可在当前会话中撤销。
 - **可调整布局**：拖动分隔条，独立收起网页与变更列，记忆面板宽度。
+- **安装版更新**：启动检查稳定版更新，也可从“帮助”菜单手动检查；确认后下载并重启安装，安装前处理未保存文件。
 
 ## 使用 EXE
 
@@ -23,7 +24,15 @@
 | `Mini-AI-IDE-Setup-<版本>-x64.exe` | 双击安装，可选择安装目录；随后通过桌面或开始菜单快捷方式启动 |
 | `Mini-AI-IDE-Portable-<版本>-x64.exe` | 免安装，双击启动 |
 
-网页版登录与对话需要联网。当前打包配置未配置代码签名，Windows 可能显示未知发布者提示。这里未提供预设下载链接；自行打包时产物位于 `release/`。
+网页版登录与对话需要联网。安装版通过公开 [GitHub Releases](https://github.com/cuber-hyk/Mini-AI-IDE/releases) 获取更新；首次安装仍需下载安装包。当前打包配置未配置代码签名，Windows 可能显示未知发布者提示；自行打包时产物位于 `release/`。
+
+### 软件更新
+
+NSIS 安装版每次启动后台检查一次新版本；“帮助”菜单可手动检查和查看当前版本。发现更新后选择“下载更新”，下载进度显示在帮助菜单和任务栏；下载完成选择“重启并安装”，或者稍后再从帮助菜单安装。普通退出不会自动安装。
+
+重启安装前，所有未保存文件仍使用“保存／放弃／取消”确认；取消或保存失败时继续编辑。升级保留用户设置和网页登录数据。更新下载需要连接 GitHub；失败时可从帮助菜单重试，不影响编辑。
+
+Portable 免安装版、开发模式及解包目录不支持应用内升级。Portable 用户下载新版单文件后手动替换。此前没有更新功能的旧包需要手动安装一次包含更新功能的版本。
 
 ### 第一次使用
 
@@ -140,6 +149,7 @@ node scripts/package-win.mjs --dir
 | `pnpm run typecheck` | TypeScript 类型检查 |
 | `pnpm test` | 单元与临时文件集成测试 |
 | `pnpm run build` | 编译、复制静态资源并检查 renderer 作用域 |
+| `pnpm run prepare:release` | 离线核对发布附件、更新清单、安装包散列和 blockmap，不上传 |
 | `pnpm run self-test` | 离线启动自检 |
 | `pnpm run verify:workspace` | 临时目录与本地样例的真实桌面流程验证 |
 | `pnpm run verify:prompt` | 两版提示词、示例和设置面板验证 |
@@ -176,6 +186,7 @@ docs/                      当前能力说明、架构决策及开发过程记�
 
 - [CHANGELOG](CHANGELOG.md)：用户可见变更。
 - [Windows 打包](docs/capabilities/windows-packaging.md)：产物、配置要点与图标生成链路。
+- [软件更新](docs/capabilities/application-update.md)：更新范围、确认流程与发布源边界。
 - [本地文件访问](docs/capabilities/local-file-access.md)：目录、标签、保存和权限边界。
 - [回程协议](docs/capabilities/return-path-and-format-contract.md)：解析、预览、应用与撤销。
 - [应用外壳](docs/capabilities/app-shell.md)：进程与布局、运行和打包说明。

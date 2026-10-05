@@ -3,21 +3,23 @@ artifact_type: capability
 status: current
 updated: 2026-10-05
 owner: 胡运宽
-source_of_truth: [electron-builder.config.cjs, scripts/package-win.mjs, tools/gen-icon.mjs, tools/verify-icon.mjs, tools/verify-icon-embedded.mjs, assets/icon-source.png, package.json, .gitignore, src/main/index.ts, src/main/selfTest.ts]
+source_of_truth: [electron-builder.config.cjs, scripts/package-win.mjs, scripts/prepare-release.mjs, test/releaseArtifacts.test.ts, tools/gen-icon.mjs, tools/verify-icon.mjs, tools/verify-icon-embedded.mjs, assets/icon-source.png, package.json, pnpm-lock.yaml, .gitignore, src/main/index.ts, src/main/selfTest.ts]
 ---
 
 # 能力：Windows 打包与分发
 
 > 一句话：把仓库源码打成两个可直接双击的 Windows x64 产物 —— NSIS 安装程序与免安装单文件 exe。
-> 入口：`pnpm run package:win`（一条命令走完编译 → 类型检查 → 图标校验 → 打包）。
+> 入口：`pnpm run package:win`（编译 → 类型检查 → 图标校验 → 打包 → 发布产物一致性校验）。本地打包固定 `--publish never`，不会上传 GitHub。
 > 快速验证（只解包不压缩）：`pnpm run package:win --dir`。
 
 ## 产物
 
-| 文件 | 体积 | 用途 |
-|---|---|---|
-| `release/Mini-AI-IDE-Setup-0.1.0-x64.exe` | ~111 MB | NSIS 安装程序。允许自选安装目录，创建桌面与开始菜单快捷方式 |
-| `release/Mini-AI-IDE-Portable-0.1.0-x64.exe` | ~99 MB | 免安装单文件，双击即用，不写注册表 |
+| 文件 | 用途 |
+|---|---|
+| `release/Mini-AI-IDE-Setup-0.1.0-x64.exe` | NSIS 安装程序。允许自选安装目录，创建桌面与开始菜单快捷方式；安装版使用应用内更新 |
+| `release/Mini-AI-IDE-Setup-0.1.0-x64.exe.blockmap` | NSIS 差分下载分块清单，与安装包一起发布 |
+| `release/latest.yml` | 稳定版本更新元数据，只指向 NSIS 安装包，含版本、大小和 SHA-512 |
+| `release/Mini-AI-IDE-Portable-0.1.0-x64.exe` | 免安装单文件，双击即用，不写安装注册表；暂不支持原地更新 |
 
 解包目录 `release/win-unpacked/` 是安装包与 portable 的共同中间产物，可直接运行其中的 `Mini-AI-IDE.exe`。
 安装后占用约 300–400 MB（Electron 运行时本体约 235 MB，不可裁剪）。
@@ -29,10 +31,24 @@ Electron **44** 已删除 Windows ia32（32 位）发行版，arm64 需另出构
 ## 配置要点（`electron-builder.config.cjs`）
 
 1. **输出目录是 `release/`，不能改成 `dist/`。** `dist/` 是 tsc 的输出目录，builder 会把自己的中间产物放进去，再把 `dist/**` 当输出目录排除，最后报「入口文件不存在」。这个报错完全看不出是目录选错，配置注释里已记下。
-2. **`files` 里除 `dist/` 外还带 `src/`、`test/fixtures/`、`tools/renderer-scope-report.json`。** 因为 `selfTest.ts` 与 `workspaceProbe.ts` 会读源码原文与测试样本；打进 asar（不到 1 MB）就能让**打包版依然支持现场自检**：`Mini-AI-IDE.exe --self-test`。asar 内的相对路径与开发时一致，Electron 已 patch `fs`，`fs.readFileSync` 可直接读。
+2. **`files` 里除 `dist/` 外还带 `src/`、`test/fixtures/`、`tools/renderer-scope-report.json`。** 因为 `selfTest.ts` 与 `workspaceProbe.ts` 会读源码原文与测试样本；打进 asar（不到 1 MB）就能让**打包版依然支持现场自检**：`Mini-AI-IDE.exe --self-test`。asar 内的相对路径与开发时一致，Electron 已 patch `fs`，`fs.readFileSync` 可直接读。electron-builder 同时默认收集生产依赖；`electron-updater` 是生产依赖，Monaco 仍在构建期复制到 `dist/renderer/vendor/monaco`。
 3. **`deleteAppDataOnUninstall: false`。** NSIS 默认卸载时删掉整个 userData 目录，而那里放着用户设置（自定义格式要求、分栏宽度）和 `persist:postcheck` 分区里的**网页登录态**。删掉意味着重装必须重新登录；分区名刻意固定正是为了让登录态可复用。
 4. **未配置代码签名。** 产物是未签名 exe，Windows SmartScreen 会提示「未知发布者」。这是刻意的 —— 证书采购与保管是独立决策。拿到证书后在 `win.signtoolOptions` 补配置即可。
 5. **`asar: true`。** 单文件归档；配合 Electron 对 `fs` 的 asar 支持，第 2 条的路径假设才成立。
+6. **`publish` 固定为公开 GitHub 仓库 `cuber-hyk/Mini-AI-IDE`。** 此配置用于生成更新源配置 `resources/app-update.yml` 与发布清单 `latest.yml`；实际上传不由本地打包命令执行。electron-builder 的 Portable 目标不写更新元数据，NSIS 与 Portable 同时构建时仍只有 NSIS 进入更新清单。
+
+## 发布准备与更新源
+
+完整打包会自动执行 `pnpm run prepare:release`。也可以在上传前单独运行该命令；它只读取本地文件，验证以下规则：
+
+- package.json 版本与 latest.yml 版本一致，发布目录没有其他版本的 exe 或 blockmap。
+- latest.yml 的 `files` 仅包含当前版本 x64 NSIS 安装包，`path` 与之相同，不能混入 Portable。
+- 安装包实际大小与 SHA-512 同时匹配清单；blockmap 可以解压且分块覆盖整个安装包。
+- 安装包、blockmap、latest.yml 与 Portable 均为非空文件，输出四个文件的大小和 SHA-512 供发布前核对。
+
+GitHub 正式 Release 使用 `v<package.json版本>` 标签，附件为上述四个文件；不上传 `win-unpacked/` 或 builder 调试文件。标签关联的源码必须包含该版本更新实现，与产物对应，不能把新产物绑定到旧源码标签。发布后应用使用公开 GitHub Releases 获取稳定版本，无需内嵌 token。
+
+已有旧 0.1.0 包没有更新代码，仍需手动安装一次含更新能力的新包；之后使用软件内更新。Portable 可以作为额外下载项，但不参与安装版更新。当前未签名，SHA-512 校验表示下载文件与清单一致，不代表发布者身份认证。
 
 ## 图标
 
@@ -62,12 +78,16 @@ Electron **44** 已删除 Windows ia32（32 位）发行版，arm64 需另出构
 2. **复用本地 Electron 发行版**（`--config.electronDist=node_modules/electron/dist`）。默认行为是重新下载 151 MB 的 zip 再解压，而 `scripts/install-electron.mjs` 已经把发行版装好了。复用后既不下载也不触发清理动作。
 3. **输出目录先清空。** builder 每次会自己清 `release/`，但在 Windows 上文件被占用时失败，报错却指向某个中间文件（如 `LICENSE.electron.txt`），看不出真实原因。脚本改为**先自己清一遍**，失败时给出「关闭正在运行的程序后重试」这类可执行提示。删除前会检查目录内容是否「长得像打包产物」，避免 `directories.output` 被误配到仓库其他位置时误删。
 
-## 验证状态
+## 验证记录与待验范围
+
+更新发布配置新增的离线产物校验测试已通过（5 项，无跳过）。以下为加入更新能力前的打包记录；新产物还必须核对生产依赖与更新清单，并在真实 Windows 桌面完成两版本升级、用户数据与登录态保留验证后才能发布：
 
 - ✅ `--dir` 解包成功；asar 内容已逐项核对（入口、4 个 preload、Monaco 150 个文件、`src/` 源码、测试样本、作用域报告均在）
 - ✅ 主进程在打包版正常启动，UA 自洽检查输出 `UA自洽=true 移除标记=[Electron/44.5.1, mini-ai-ide/0.1.0]`，证明 asar 内路径假设成立
 - ✅ 图标文件结构校验通过（7 档，含 256×256）
-- ⛔ **GUI 冒烟未完成**：本开发沙箱无显示设备，Electron GPU 进程以 `exit_code=-1073741819` 崩溃并 `GPU process isn't usable`。已确认**开发版在同一沙箱内同样崩溃在同一处**，故为环境限制而非打包缺陷。首次在真实桌面上运行时应补一次：`release/win-unpacked/Mini-AI-IDE.exe --self-test`
+- ✅ 更新版 v0.1.0 完整 NSIS 与 Portable 构建通过；`latest.yml` 只指向 NSIS，文件大小、SHA-512 与 blockmap 校验通过。asar 内四个主进程更新入口的源码和编译结果与本地逐字节一致，生产依赖与无 token 的公开更新源配置存在。
+- ✅ 更新版打包程序在隔离 user-data-dir 下运行 `--self-test`：160 项通过、失败 0；类型检查、构建及 329 项测试通过，无跳过。
+- 发布前仍须验证两个 NSIS 版本之间的真实更新、未保存文件交互、设置和网页登录态保留，以及用户网络下的 GitHub 下载。启动自检不能替代这些更新验收。
 
 ## 现场排障
 

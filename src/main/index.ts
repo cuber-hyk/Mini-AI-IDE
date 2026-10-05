@@ -35,6 +35,7 @@ import { runLayoutProbe } from './layoutProbe';
 import { WorkspaceService } from './workspaceService';
 import { WorkspaceController } from './workspaceController';
 import { configureWorkspaceProbe, runWorkspaceProbe } from './workspaceProbe';
+import { createApplicationUpdater, type ApplicationUpdater } from './appUpdater';
 
 /* ------------------------------------------------------------------ *
  * 常量
@@ -149,6 +150,9 @@ async function bootstrap(): Promise<void> {
 
   /* ---------------- 窗口与两个视图 ---------------- */
   const win = new BaseWindow({ width: 1600, height: 960, minWidth: 1080, minHeight: 600, show: !SELF_TEST, title: 'Mini-AI-IDE' });
+  let updater: ApplicationUpdater | null = null;
+  let closeApproved = false;
+  let closePending = false;
   const size = win.getContentSize();
   const winW = size[0] ?? 1440;
   const winH = size[1] ?? 900;
@@ -844,6 +848,15 @@ async function loadLocalView(
       consumption.clear();
       editorView.webContents.send(CHANNELS.entryChanged, event);
     }, () => collections.size > 0 || returnPath.undoCount > 0);
+  updater = createApplicationUpdater({
+    window: win,
+    disabled: SELF_TEST || UI_PROBE || DIAGNOSE,
+    onStateChanged: () => buildApplicationMenu(),
+    approveInstall: () => workspaceController.run(async () => {
+      if (win.isDestroyed() || closePending || !await workspaceController.editor.canLeave()) return false;
+      return !win.isDestroyed();
+    }),
+  });
   const registeredChannels = [
     ...registerFileIpc(fileService, {
       chooseRoot: () => workspaceController.chooseRoot(), getState: () => workspace.getState(),
@@ -1380,6 +1393,7 @@ async function loadLocalView(
             },
           ],
         },
+        { label: '帮助', submenu: updater?.menuItems() ?? [] },
       ])
     );
   }
@@ -1624,6 +1638,25 @@ async function loadLocalView(
     return;
   }
 
+  // 退出保护和软件更新不等待 AI 网页联网成功。
+  win.on('close', (event) => {
+    // 仅安装进行中复用更新器的离开批准；安装失败恢复普通退出保护。
+    if (closeApproved || updater?.installing || SELF_TEST || UI_PROBE || DIAGNOSE) return;
+    event.preventDefault();
+    if (closePending) return;
+    closePending = true;
+    void workspaceController.run(async () => {
+      try { if (await workspaceController.editor.canLeave()) { closeApproved = true; win.close(); } }
+      finally { closePending = false; }
+    });
+  });
+  win.on('closed', () => {
+    updater?.dispose();
+    workspaceController.editor.reset();
+    app.quit();
+  });
+  updater.start();
+
   // 正常启动：右侧加载目标平台（**只读**，程序不向页面写入任何内容）
   webView.webContents.on('did-finish-load', () => {
     process.stdout.write(`[web] 已加载：${webView.webContents.getURL()}\n`);
@@ -1641,22 +1674,6 @@ async function loadLocalView(
   // 早期实现用一个独立 WebContentsView 覆盖在边界上，但它不接收拖动事件，
   // 导致"分隔条看着能拖、实际不能"——已移除。
 
-  let closeApproved = false;
-  let closePending = false;
-  win.on('close', (event) => {
-    if (closeApproved || SELF_TEST || UI_PROBE || DIAGNOSE) return;
-    event.preventDefault();
-    if (closePending) return;
-    closePending = true;
-    void workspaceController.run(async () => {
-      try { if (await workspaceController.editor.canLeave()) { closeApproved = true; win.close(); } }
-      finally { closePending = false; }
-    });
-  });
-  win.on('closed', () => {
-    workspaceController.editor.reset();
-    app.quit();
-  });
 }
 
 /* ------------------------------------------------------------------ *

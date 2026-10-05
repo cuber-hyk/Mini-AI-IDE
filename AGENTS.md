@@ -50,7 +50,7 @@ Mini-AI-IDE 是一个 **Windows 桌面工具**：左侧用 Monaco 编辑本地�
 - **进程边界**：编辑器与网页视图必须在**不同渲染进程**；右侧不得用 `<iframe>`。
 - **渲染进程权限**：编辑器渲染进程 `nodeIntegration: false` + `contextIsolation: true`，**不得直接访问文件系统**；一切文件读写经主进程 IPC，且路径必须过白名单。
 - **网页层零磁盘访问**：网页视图不读本地文件、不上传附件；进模型的只有文本。
-- **网络出口**：不得引入 Node.js 包装的 HTTP 请求；不得在渲染进程发起业务网络调用。
+- **网络出口**：不得引入 Node.js 包装的 HTTP 请求；不得在渲染进程发起业务网络调用。唯一例外是主进程的软件更新模块通过 `electron-updater` 检查和下载公开仓库 `cuber-hyk/Mini-AI-IDE` 的 GitHub Release 及其分发资源；不得复用该模块访问 AI 平台、上传文件或提供任意 URL 代理。见软件更新 ADR。
 - **零注入（硬边界）**：程序**不向网页写入任何内容**。禁止 `SendInput`、`sendInputEvent`、合成事件、DOM 赋值、模拟回车或点击、代写剪贴板。对网页的接触**只有读取**。
 - **无自动化特征**：不得暴露 CDP 调试端口；不得引入 Selenium / Puppeteer / Playwright 及其默认驱动模式；不得设置 `navigator.webdriver` 等自动化标记。
 - **会话**：固定且中性的 `persist:` 分区名，禁止每次启动随机生成分区（会被判定为异常登录）。
@@ -62,6 +62,8 @@ Mini-AI-IDE 是一个 **Windows 桌面工具**：左侧用 Monaco 编辑本地�
 **允许**：如实暴露宿主真实属性与内核真实能力；**移除自我声明标记**（UA 中的 `Electron/<ver>`、应用名）；移除**非浏览器原生**的 Node 注入痕迹（`window.require`、`process` 等）以保持环境自洽；不引入任何自动化框架。
 
 **禁止**：patch / fork Chromium 构建；伪造或篡改 `window.chrome.*`、`userAgentData`、Canvas/WebGL、字体列表、CPU/内存/时区、TLS 等任何身份或指纹属性；把 UA 版本号改成非真实内核版本；伪装成 Chrome；使用 Selenium/Puppeteer/Playwright 驱动；**任何向网页写入的手段**（键盘注入、DOM 修改、合成事件、模拟发送、代写剪贴板）；把大模型流量改走 Node。
+
+**软件更新**：NSIS 安装版从公开 GitHub Releases 检查稳定版本，下载和重启安装分别经用户确认；不得在普通退出时自动安装，安装前必须处理未保存文件。Portable、开发模式和自检/探针不走自动安装。发布更新必须同时提供构建生成的 NSIS 安装包、`latest.yml` 和对应 `.blockmap`，不得把 GitHub 凭据打入客户端。
 
 **边界判定**：改动前先问两句——
 1. 这是在**消除自动化特征**（允许），还是在**伪造身份/指纹**（禁止）？

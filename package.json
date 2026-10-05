@@ -21,16 +21,21 @@
     "setup:electron": "node scripts/install-electron.mjs",
     "gen-icon": "node tools/gen-icon.mjs",
     "package:win": "node scripts/package-win.mjs",
-    "package:win:dir": "npm run build && electron-builder --win --x64 --dir",
+    "package:win:dir": "node scripts/package-win.mjs --dir",
+    "prepare:release": "node scripts/prepare-release.mjs",
     "postinstall": "patch-package"
   },
   "devDependencies": {
     "@types/node": "22.10.2",
     "electron": "44.5.1",
     "electron-builder": "^26.15.3",
+    "js-yaml": "4.3.2",
     "monaco-editor": "0.57.0",
     "patch-package": "8.0.0",
     "tsx": "4.23.15",
     "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "electron-updater": "6.8.9"
   }
 }

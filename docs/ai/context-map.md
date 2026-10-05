@@ -16,6 +16,7 @@
 |---|---|---|
 | 外壳 / 进程架构 / IPC | `docs/capabilities/app-shell.md`、`docs/adr/` 下架构类决策 | 历史计划、审计归档 |
 | 构建 / 运行 / 自检 | `docs/capabilities/app-shell.md` 的「已知实现陷阱」「依赖安装注意」、`package.json` 的 scripts | 历史计划 |
+| Windows 打包 / Release 发布 / 软件更新 | `docs/capabilities/windows-packaging.md`、`docs/capabilities/application-update.md`、`docs/adr/2026-10-05-application-update-source-and-boundary.md`、`electron-builder.config.cjs`、`src/main/appUpdater.ts`、`src/main/updateService.ts`、`src/main/updateInstaller.ts` | 历史计划、AI 网页采集实现 |
 | 本地文件读取 / 编码 / 大小控制 | `docs/capabilities/local-file-access.md` | 无关能力文档 |
 | 目录恢复 / 最近目录 / 文件管理 / 多文件标签 / 未保存保护 | `docs/capabilities/local-file-access.md`、`src/main/workspaceService.ts`、`workspaceController.ts`、`fileManagement.ts`、`editorSession.ts`、`src/renderer/editorWorkspace.js`、`editorTabs.js`、`fileExplorer.js` | 历史计划、官方网页实现 |
 | 人机边界 / 出程（什么由人做） | `docs/capabilities/human-machine-boundary.md`、`docs/adr/2026-10-02-zero-injection-and-automation-trace-baseline.md`（ADR-0003） | 回程解析细节 |
@@ -59,6 +60,7 @@
 | 界面运行时探针（读回 Monaco 实际选项） | `npm run ui-probe` |
 | 目录和文件管理验收（隔离临时数据、离线） | `pnpm run verify:workspace` |
 | 启动应用 | `npm start`（**需在普通 PowerShell，勿在 AI 沙箱内**） |
+| 打包与发布准备 | `pnpm run package:win`，随后 `pnpm run prepare:release`（离线校验，不上传） |
 | 会话是否仍需登录 | `pwsh -File tools\run-p0b-reachability.ps1 -ProbeOnly` |
 
 > ⚠️ **AI 沙箱内跑不了 `self-test` 与 `start`**：`GPU process isn't usable. Goodbye.`
