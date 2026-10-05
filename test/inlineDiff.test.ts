@@ -8,6 +8,25 @@ import { it } from 'node:test';
 const source = fs.readFileSync(path.join(__dirname, '../src/renderer/renderer.js'), 'utf8');
 const previewCode = source.slice(source.indexOf('function lineMap('), source.indexOf('async function enterDiff('));
 
+it('覆盖全文预览被拒绝后仍保留明确操作按钮，用户可核对并重试', async () => {
+  let applyClick: (() => Promise<void>) | undefined;
+  const enterCode = source.slice(source.indexOf('async function enterDiff('), source.indexOf('function exitDiff('));
+  const applyCode = source.slice(source.indexOf("el.btnDiffApply.addEventListener('click'"), source.indexOf('/* ---------------- 目录树与编辑器之间的拖拽'));
+  const button = { disabled: false, textContent: '', addEventListener(_name: string, fn: () => Promise<void>) { applyClick = fn; } };
+  const info: string[] = [];
+  const sandbox = { state: { diffNav: null, diffTarget: null }, workspaceRevision: 1,
+    editorWorkspace: { reload: async () => true }, el: { btnDiffApply: button },
+    renderInlineDiff: () => { button.textContent = '覆盖全文'; }, clearInlineDiff: () => {},
+    setInfo: (message: string) => info.push(message),
+    bridge: { applyChange: async () => ({ ok: false, error: '目标文件有未保存的修改' }) } };
+  vm.createContext(sandbox);
+  vm.runInContext(enterCode + '\n' + applyCode, sandbox);
+  await vm.runInContext('enterDiff({collectionId:"batch", index:0, filePath:"a.ts", operation:"overwrite", workspaceRevision:1})', sandbox);
+  assert.equal(button.textContent, '覆盖全文'); assert.ok(applyClick); await applyClick();
+  assert.equal(button.textContent, '覆盖全文'); assert.equal(button.disabled, false);
+  assert.match(info.at(-1)!, /应用失败.*未保存/);
+});
+
 function render(original: string, modified: string, newFile = false) {
   const zones: Array<{ afterLineNumber: number }> = [];
   const editor = {

@@ -16,6 +16,7 @@
   let diagnosticLines = [];
   const applied = new Set();
   const paths = new Map();
+  const unpreviewedPaths = new Set();
   const closed = new Set();
   let previewWidth = window.innerWidth || 300;
 
@@ -37,7 +38,7 @@
   function stateOf(block) { return block.kind === 'other' ? '只读' : applied.has(block.index) ? '已应用' : block.applicable ? '待应用' : '阻塞'; }
   function pathOf(block) { return paths.has(block.index) ? paths.get(block.index).trim() : block.filePath || ''; }
   function updateButtons() {
-    el['apply-all'].disabled = busy || !lastPreview || !(lastPreview.blocks || []).some(function (b) { return b.applicable && !applied.has(b.index); });
+    el['apply-all'].disabled = busy || pathEditingIndex !== null || unpreviewedPaths.size > 0 || !lastPreview || !(lastPreview.blocks || []).some(function (b) { return b.applicable && !applied.has(b.index); });
     el.undo.disabled = busy;
   }
   function stats(added, removed) {
@@ -124,6 +125,10 @@
     el.detail.appendChild(node('div', 'pv-detail-title', block.kind === 'other' ? '其他内容（只读）' : block.filePath || '未指定文件'));
     el.detail.appendChild(node('div', 'pv-detail-range', model.rangeLabel(block) + ' · ' + stateOf(block)));
     const hints = applied.has(block.index) ? [] : (block.hints || []).slice();
+    if (block.locations && block.locations.length > 1) block.locations.forEach(function (location, index) {
+      const from = location.oldRange; const to = location.newRange;
+      hints.push('替换 ' + (index + 1) + '：原 ' + (from ? from.start + '–' + from.end : '无') + ' → 新 ' + (to ? to.start + '–' + to.end : '删除'));
+    });
     if (block.blockedReason && !applied.has(block.index)) hints.push('阻塞：' + block.blockedReason);
     if (hints.length) el.detail.appendChild(node('div', 'pv-hint', hints.join('\n')));
     if (block.kind === 'other') {
@@ -132,23 +137,31 @@
     }
     if (!block.applicable) return;
     const actions = node('div', 'pv-detail-actions');
-    const apply = node('button', 'ui-button primary', applied.has(block.index) ? '已应用' : block.fileExists === false && block.filePath ? '创建文件' : '应用此片段');
+    const apply = node('button', 'ui-button primary', applied.has(block.index) ? '已应用' : block.operation === 'create' ? '创建文件' : block.operation === 'overwrite' ? '覆盖全文' : '应用此片段');
     apply.dataset.focusKey = 'apply:' + block.index;
-    apply.type = 'button'; apply.disabled = busy || applied.has(block.index);
+    apply.type = 'button'; apply.disabled = busy || applied.has(block.index) || pathEditingIndex === block.index || unpreviewedPaths.has(block.index);
     apply.addEventListener('click', function () { void applyOne(block); }); actions.appendChild(apply);
     const edit = node('button', 'ui-button', '改路径'); edit.type = 'button'; edit.disabled = busy || applied.has(block.index);
     edit.dataset.focusKey = 'edit-path:' + block.index;
     const input = node('input', 'pv-path'); input.type = 'text'; input.spellcheck = false;
     input.dataset.focusKey = 'path:' + block.index;
     input.value = pathOf(block); input.hidden = pathEditingIndex !== block.index; input.setAttribute('aria-label', '目标文件相对路径');
-    input.addEventListener('input', function () { paths.set(block.index, input.value); });
+    input.addEventListener('input', function () {
+      paths.set(block.index, input.value); unpreviewedPaths.add(block.index); updateButtons();
+    });
     input.addEventListener('keydown', function (event) {
-      if (event.key === 'Enter') { pathEditingIndex = null; input.hidden = true; edit.focus(); }
-      if (event.key === 'Escape') { paths.delete(block.index); input.value = block.filePath || ''; pathEditingIndex = null; input.hidden = true; edit.focus(); }
+      if (event.key === 'Enter') { pathEditingIndex = null; input.hidden = true; edit.focus(); void selectBlock(block); }
+      if (event.key === 'Escape') {
+        paths.delete(block.index); unpreviewedPaths.delete(block.index); input.value = block.filePath || '';
+        pathEditingIndex = null; input.hidden = true; updateButtons();
+        apply.disabled = busy || applied.has(block.index); edit.focus();
+      }
     });
     edit.addEventListener('click', function () {
       input.hidden = !input.hidden; pathEditingIndex = input.hidden ? null : block.index;
       if (!input.hidden) input.focus();
+      else void selectBlock(block);
+      updateButtons(); apply.disabled = busy || applied.has(block.index) || !input.hidden || unpreviewedPaths.has(block.index);
     });
     actions.appendChild(edit); el.detail.appendChild(actions); el.detail.appendChild(input);
   }
@@ -173,15 +186,20 @@
     const preview = lastPreview;
     activeIndex = block.index; refresh();
     if (!block.applicable || applied.has(block.index)) return;
+    const target = pathOf(block);
     try {
-      const result = await bridge.showDiffInEditor(preview.collectionId, block.index);
-      if (lastPreview !== preview) return;
+      const result = await bridge.showDiffInEditor(preview.collectionId, block.index, target);
+      if (lastPreview !== preview || pathOf(block) !== target) return;
       if (!result || !result.ok) setNotes(['预览失败：' + ((result && result.error) || '未知错误')]);
-    } catch (error) { if (lastPreview === preview) setNotes(['预览失败：' + errorText(error)]); }
+      else if (pathOf(block) === target) { unpreviewedPaths.delete(block.index); refresh(); }
+    } catch (error) { if (lastPreview === preview && pathOf(block) === target) setNotes(['预览失败：' + errorText(error)]); }
   }
   function render(preview) {
     if (!lastPreview || !preview || lastPreview.collectionId !== preview.collectionId) {
-      applied.clear(); paths.clear(); closed.clear(); closed.add('other'); el.diagnostics.open = false; activeIndex = null; pathEditingIndex = null;
+      applied.clear(); paths.clear(); unpreviewedPaths.clear(); closed.clear(); closed.add('other'); el.diagnostics.open = false; activeIndex = null; pathEditingIndex = null;
+    }
+    if (lastPreview && preview && lastPreview.collectionId === preview.collectionId) {
+      Object.assign(lastPreview, preview); preview = lastPreview;
     }
     lastPreview = preview;
     const blocks = preview && preview.ok ? preview.blocks || [] : [];
@@ -201,7 +219,7 @@
     catch (error) { return { ok: false, error: errorText(error) }; }
   }
   async function applyOne(block) {
-    if (busy || !lastPreview || !block.applicable || applied.has(block.index)) return;
+    if (busy || !lastPreview || !block.applicable || applied.has(block.index) || pathEditingIndex === block.index || unpreviewedPaths.has(block.index)) return;
     const preview = lastPreview;
     busy = true; refresh();
     try {
@@ -213,7 +231,7 @@
     } finally { busy = false; refresh(); }
   }
   async function applyAllBlocks() {
-    if (busy || !lastPreview || !lastPreview.ok) return;
+    if (busy || !lastPreview || !lastPreview.ok || pathEditingIndex !== null || unpreviewedPaths.size > 0) return;
     const preview = lastPreview;
     const blocks = (preview.blocks || []).filter(function (b) { return b.applicable && !applied.has(b.index); });
     if (!blocks.length) {
@@ -226,8 +244,10 @@
       for (let i = 0; i < blocks.length; i += 1) {
         // 采集已更换批次时停止，避免继续应用用户当前看不到的旧批次。
         if (lastPreview !== preview) break;
-        const block = blocks[i];
-        if (applied.has(block.index)) continue;
+        const queued = blocks[i];
+        const block = (preview.blocks || []).find(function (item) { return item.index === queued.index; });
+        if (!block || applied.has(block.index)) continue;
+        if (!block.applicable) { failed.push((block.filePath || '未指定文件') + '：' + (block.blockedReason || '不满足应用条件')); continue; }
         el['apply-all'].textContent = '应用中 ' + (i + 1) + '/' + blocks.length;
         const result = await requestApply(preview, block);
         if (result && result.ok) { succeeded += 1; if (lastPreview === preview) applied.add(block.index); }

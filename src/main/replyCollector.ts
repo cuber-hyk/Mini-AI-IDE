@@ -26,7 +26,7 @@
  * ------------------------------------------------------------------
  * 最新回复若是 ````markdown 包裹、内容里内嵌 ```python，采集脚本若用写死的三反引号
  * 外围栏，解析器 splitFences 会把**内层的闭合行**误判为外层闭合 → 截断/多出空块。
- * 因此外围栏长度必须按内容自适应：**比内容中最长的连续反引号序列多 1，最少 3**
+ * 因此外围栏长度必须按内容自适应：**比内容中最长的连续反引号序列多 1，最少 4**
  * （与提示词组装侧 src/shared/snippet.ts 的 fenceFor 同一规则）。
  */
 
@@ -46,7 +46,7 @@ export interface CollectStrategy {
  * 里面的实现必须与 src/shared/snippet.ts 的 `fenceFor` 规则一致。
  */
 const COLLECT_HELPERS = `
-  // 围栏自适应：比内容中最长的连续反引号多 1，最少 3（与 snippet.ts 的 fenceFor 同规则）
+  // 围栏自适应：比内容中最长的连续反引号多 1，最少 4（与 snippet.ts 的 fenceFor 同规则）
   var fenceFor = function (content) {
     var longest = 0;
     var re = /\\\`+/g;
@@ -54,7 +54,7 @@ const COLLECT_HELPERS = `
     while ((m = re.exec(content)) !== null) {
       if (m[0].length > longest) longest = m[0].length;
     }
-    var n = Math.max(3, longest + 1);
+    var n = Math.max(4, longest + 1);
     return new Array(n + 1).join('\\\`');
   };
   // 用自适应围栏把一段纯文本包成代码块
@@ -71,50 +71,36 @@ const COLLECT_HELPERS = `
       return m && m[1] ? m[1] : '';
     } catch (e) { return ''; }
   };
-  // 清理 pre/容器文本的**结构性首尾空行**（"<pre>\\n ... \\n</pre>" 标签带来的换行）。
-  // ⚠️ 绝不能 trim：trim 会把**首行的合法缩进**一并吃掉 —— 模型按选区回显的
-  //    代码块常从缩进行开始（比如选区落在函数体内部，首行 "    n = len(arr)"），
-  //    实测被 trim 吃掉后应用回文件就与源码错位（2026-10-03：n 顶格了、for 还缩进着，
-  //    其余行都在字符串中间不受影响，diff 里表现为"只有首行缩进丢失"）。
-  //    因此只做两次精确剥除：开头「一行纯空白 + 换行」、结尾「换行 + 纯空白」各一次，
-  //    首行缩进与中间行一概不动；内容自带的空行（结构性空行之后的首/尾空行）保留。
+  // 正文用于元数据读取时可以清理展示性空白；代码正文必须逐字保留。
   var cleanText = function (s) {
-    var t = String(s || '').replace(/^[ \\t]*\\r?\\n/, '').replace(/\\r?\\n[ \\t]*$/, '');
-    return t.trim().length === 0 ? '' : t; // 判空可以用 trim，**返回值**绝不用 trim 后的
+    return String(s || '').trim();
   };
-  // 从 pre 内的 code 取内容（没有 code 才用 pre），排除代码框控件；innerText 为空则读 textContent；
-  // 两者都只做上面的结构性清理 —— 内层围栏行、空行与缩进一律保留。
+  // code 的 textContent 是实际代码文本；pre 包裹在 code 外的结构换行与控件自然排除。
+  // 没有 code 时无法证明首尾空行是结构性空行，因此原样保留 pre 内容。
   var textOf = function (pre) {
     try {
       var code = pre.querySelector('code');
       var source = code || pre;
-      return cleanText(source.innerText) || cleanText(source.textContent);
-    } catch (e) { return ''; }
+      return typeof source.textContent === 'string' ? source.textContent : String(source.innerText || '');
+    } catch (e) { throw new Error('无法读取代码框正文'); }
   };
-  // markdown 语义容器：按**文档序取最后一个** —— 这就是"最新一条回复"
-  //
-  // ⚠️ 两个必须处理的现实情况（都靠仿真测试暴露，不排除就恒定采不到）：
-  //  1) 代码块类名形如 language-markdown，而 [class*="markdown"] 是**子串匹配** →
-  //     会把 <code class="language-markdown"> 也当成"markdown 容器"，
-  //     且它在容器更深处、文档序更靠后，"取最后一个"会选中它（内部没有 pre）。
-  //  2) 回复内部还有 <div class="ds-markdown-title"> 这类**子块**同样命中选择器，
-  //     它是新回复里文档序最后的一个 —— 但它内部也没有 pre。
-  // 因此：**优先取"最后一个内部含 pre 的候选"**；都含 pre 时取文档序最后那个。
-  // 取不到含 pre 的候选时（纯文本回复），退回"最后一个非 pre/code 候选"。
-  var lastMarkdownNode = function (requirePre) {
+  // 最新 markdown 根语义容器，排除 code 语言类名和回复内嵌套标题。
+  // 最新回复没有 pre 时不能回到历史回复；缺失代码框应留给解析器明确诊断。
+  var lastMarkdownNode = function () {
     var nodes = document.querySelectorAll('[class*="markdown"]');
-    var fallback = null;
     for (var i = nodes.length - 1; i >= 0; i -= 1) {
       var el = nodes[i];
       var tag = (el.tagName || '').toUpperCase();
       if (tag === 'PRE' || tag === 'CODE') continue;
-      if (fallback === null) fallback = el;
-      if (!requirePre) return el;
-      var hasPre = false;
-      try { hasPre = el.querySelectorAll('pre').length > 0; } catch (e) { hasPre = false; }
-      if (hasPre) return el;
+      var nested = false;
+      var parent = el.parentElement;
+      while (parent) {
+        if (/markdown/.test(String(parent.className || ''))) { nested = true; break; }
+        parent = parent.parentElement;
+      }
+      if (!nested) return el;
     }
-    return requirePre ? fallback : fallback;
+    return null;
   };
   // 按 DOM 顺序保留正文与每个 pre 之前的标题，不能用整条回复最后的线索回填。
   // 非语义代码框控件（语言标签、复制、下载）不参与正文；pre 内只读 code 内容。
@@ -124,21 +110,25 @@ const COLLECT_HELPERS = `
       var tag = String(node.tagName || '').toUpperCase();
       if (tag === 'PRE') {
         var src = textOf(node);
-        parts.push({ pre: node, text: src ? fenced(langOf(node), src) : '' });
+        parts.push({ pre: node, text: fenced(langOf(node), src) });
         return;
       }
       if (/^(BUTTON|SCRIPT|STYLE|INPUT|TEXTAREA|SELECT)$/.test(tag)) return;
       if (tag === 'HR') { parts.push({ text: '---' }); return; }
       var hasPre = false;
       try { hasPre = node.querySelectorAll('pre').length > 0; } catch (e) { hasPre = false; }
-      if (hasPre) {
-        var children = node.children || [];
+      var children = node.children || [];
+      var semantic = /^(H[1-6]|P|LI|BLOCKQUOTE|DT|DD)$/.test(tag);
+      var blockChildren = Array.from(children).some(function (child) {
+        return !/^(SPAN|STRONG|EM|B|I|A|CODE|BR)$/.test(String(child.tagName || '').toUpperCase());
+      });
+      if (hasPre || (!semantic && blockChildren)) {
         for (var i = 0; i < children.length; i += 1) walk(children[i]);
         return;
       }
       var text = cleanText(node.innerText) || cleanText(node.textContent);
       if (!text) return;
-      var metadata = /^(?:#{1,6}\\s*)?(?:文件|文件名|路径|file|filename|path|范围|行号|lines?|range)\\s*[:：]/i.test(text.trim());
+      var metadata = /^(?:#{1,6}\\s*)?(?:文件|文件名|路径|file|filename|path|操作|operation|上下文文件|上下文|context\\s+file|context|范围|行号|lines?|range)\\s*[:：]/i.test(text.trim());
       var heading = /^H([1-6])$/.exec(tag);
       if (metadata) {
         // 渲染后的标题没有 Markdown #；统一恢复标题，路径不受扩展名或空格限制。
@@ -171,7 +161,7 @@ export const COLLECT_STRATEGIES: CollectStrategy[] = [
     description: '最新一条回复容器（文档序最后一个 markdown 容器）内的代码块 + 按文档顺序保留的逐块标题',
     script: `(() => {
       ${COLLECT_HELPERS}
-      var node = lastMarkdownNode(true);
+      var node = lastMarkdownNode();
       if (!node) return [];
 
       var parts = replyParts(node);
@@ -184,15 +174,18 @@ export const COLLECT_STRATEGIES: CollectStrategy[] = [
     description: '最新一条回复容器的整体文本（容器内没有 <pre> 时用：纯文本回复）',
     script: `(() => {
       ${COLLECT_HELPERS}
-      var node = lastMarkdownNode(false);
+      var node = lastMarkdownNode();
       if (!node) return [];
-      // 容器整体文本同样只做结构性清理（首行缩进保护，与 textOf 同一教训）
-      var t = cleanText(node.innerText) || cleanText(node.textContent);
-      if (!t) return [];
-      // 整体文本里已经带围栏（模型把 markdown 原样输出）时直接返回；
-      // 没有围栏就包一层自适应围栏，保证解析器能识别。
+      var parts = replyParts(node);
+      if (parts.some(function (part) { return part.pre; })) {
+        return [parts.map(function (part) { return part.text; }).filter(Boolean).join('\\n\\n')];
+      }
+      // 原样输出的围栏与正文不删首尾空白。没有代码框就不能凭空添加围栏，
+      // 否则「只有文件/操作标题」会被伪造成可写入的代码块。
+      var t = typeof node.textContent === 'string' ? node.textContent : String(node.innerText || '');
       if (t.indexOf('\\\`\\\`\\\`') !== -1) return [t];
-      return [fenced('', t)];
+      if (parts.length > 0) return [parts.map(function (part) { return part.text; }).filter(Boolean).join('\\n\\n')];
+      return t.trim().length > 0 ? [t] : [];
     })()`,
   },
   {
@@ -203,9 +196,12 @@ export const COLLECT_STRATEGIES: CollectStrategy[] = [
       var pres = document.querySelectorAll('pre');
       if (pres.length === 0) return [];
       var last = pres[pres.length - 1];
-      var src = textOf(last);
-      if (!src) return [];
-      // 只保留上一代码块之后、目标代码块之前的上下文，不能跨块借用路径或范围。
+      var latest = lastMarkdownNode();
+      if (latest) {
+        var latestPres = latest.querySelectorAll('pre');
+        if (latestPres.length === 0 || latestPres[latestPres.length - 1] !== last) return [];
+      }
+      // 只保留上一代码块之后、目标代码块之前的上下文，不能跨块借用路径或操作。
       var holder = null;
       try { holder = last.closest('[class*="markdown"]'); } catch (e) { holder = null; }
       var parts = replyParts(holder || last);

@@ -1,22 +1,6 @@
-/**
- * 提示词片段组装单测
- *
- * 核心契约（用户确定）：**输入与输出结构完全对称** ——
- * 程序发出去的片段与提示词要求模型输出的形态逐字一致：
- *
- *   ### 文件：<相对路径>
- *   ### 范围：<起始行>-<结束行>
- *   ````<语言标注>
- *   <内容，不含行号>
- *   ````
- *
- * 两条不变量（改了就是 bug）：
- *  1. 围栏内容里**不得出现行号前缀**（行号只由 `### 范围` 表达）；
- *  2. 围栏**至少四个反引号**，内容含四个及以上时再加长。
- */
+/** 上下文复制必须无损，不承载写入操作或 AI 定位行号。 */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-
 import { buildSnippetText, buildWholeFileText, fenceFor, languageHintFor } from '../src/shared/snippet';
 
 describe('fenceFor', () => {
@@ -68,121 +52,48 @@ describe('languageHintFor', () => {
   });
 });
 
-describe('buildSnippetText —— 局部修改片段', () => {
-  it('四部件骨架：### 文件 + ### 范围 + 四反引号围栏 + 无行号内容', () => {
+describe('buildSnippetText 原文片段上下文', () => {
+  it('明确只读上下文头，行数仅用于本地反馈', () => {
     const r = buildSnippetText({ relPath: 'src/a.py', text: 'def f():\n    pass', startLine: 80 });
-    assert.equal(r.startLine, 80);
-    assert.equal(r.endLine, 81);
-    assert.equal(r.fence, '````');
-    assert.equal(
-      r.text,
-      ['### 文件：src/a.py', '### 范围：80-81', '````python', 'def f():', '    pass', '````'].join('\n')
-    );
+    assert.equal(r.startLine, 80); assert.equal(r.endLine, 81);
+    assert.equal(r.text, ['### 上下文文件：src/a.py', '### 上下文：原文片段', '````python', 'def f():', '    pass', '````'].join('\n'));
+    assert.doesNotMatch(r.text, /### (?:文件|范围|操作)：|^\s*\d+\|/m);
   });
-
-  it('围栏内不得出现行号前缀（行号只由 ### 范围 表达）', () => {
-    const r = buildSnippetText({ relPath: 'src/a.py', text: 'def f():\n    pass', startLine: 80 });
-    assert.ok(!/^\s*\d+\|/m.test(r.text), '不应出现 ` 80| ` 形式的前缀：\n' + r.text);
+  it('缩进、空格、Tab、CRLF 和尾部空行逐字保留', () => {
+    for (const body of ['\n\t  a  \r\n\r\n', 'hello\n\n\n', '   ', '\t', '']) {
+      const r = buildSnippetText({ relPath: 'a.txt', text: body, startLine: 5 });
+      assert.equal(r.text, ['### 上下文文件：a.txt', '### 上下文：原文片段', '````', body, '````'].join('\n'));
+      assert.equal(r.endLine, 5 + Math.max(0, (body ? body.split(/\r\n|\r|\n/).length : 0) - 1));
+    }
   });
-
-  it('内容与输入原文逐字一致（不加工、不补行号）', () => {
-    const body = 'def f():\n    pass';
-    const r = buildSnippetText({ relPath: 'src/a.py', text: body, startLine: 80 });
-    const inner = r.text.split('\n').slice(3, -1).join('\n');
-    assert.equal(inner, body);
+  it('内嵌围栏不加工，外层自适应长度', () => {
+    const body = '冒泡排序：\n````python\ndef bubble_sort(arr):\n    pass\n````\n';
+    const r = buildSnippetText({ relPath: 'notes.md', text: body, startLine: 1 });
+    assert.equal(r.fence, '`````'); assert.ok(r.text.includes(body));
   });
-
-  it('内容含围栏时外层围栏自动变长（不会提前闭合）', () => {
-    const content = '冒泡排序：\n```python\ndef bubble_sort(arr):\n    pass\n```';
-    const r = buildSnippetText({ relPath: 'Mini-AI-IDE-test.md', text: content, startLine: 1 });
-    assert.equal(r.fence, '````');
-    // 外层四反引号，内层三反引号保持原样
-    assert.ok(r.text.startsWith('### 文件：Mini-AI-IDE-test.md\n### 范围：1-5\n````markdown\n'));
-    assert.ok(r.text.endsWith('\n````'));
-    assert.ok(r.text.includes('```python'));
-  });
-
-  it('路径被 trim，行号小于 1 时收敛为 1', () => {
-    const r = buildSnippetText({ relPath: '  src/a.ts  ', text: 'x', startLine: 0 });
-    assert.equal(r.relPath, 'src/a.ts');
-    assert.equal(r.startLine, 1);
-    assert.equal(r.endLine, 1);
-  });
-
-  it('空文本时行区间为单行（不产生负区间）', () => {
-    const r = buildSnippetText({ relPath: 'a.py', text: '', startLine: 5 });
-    assert.equal(r.endLine, 5);
+  it('路径 trim 与本地起始行下限保持既有 API', () => {
+    const r = buildSnippetText({ relPath: '  a.ts  ', text: 'x', startLine: 0 });
+    assert.equal(r.relPath, 'a.ts'); assert.equal(r.startLine, 1); assert.equal(r.endLine, 1);
   });
 });
-
-describe('buildWholeFileText —— 整文件片段', () => {
-  it('与局部片段同骨架：### 文件 + ### 范围：1-N + 围栏', () => {
-    const r = buildWholeFileText('src/a.ts', 'export const a = 1;');
-    assert.equal(
-      r.text,
-      ['### 文件：src/a.ts', '### 范围：1-1', '````typescript', 'export const a = 1;', '````'].join('\n')
-    );
-    assert.equal(r.lineCount, 1);
-    assert.equal(r.startLine, 1);
-    assert.equal(r.endLine, 1);
+describe('buildWholeFileText 完整原文上下文', () => {
+  it('完整上下文不暗示覆盖全文或写入操作', () => {
+    const r = buildWholeFileText('a.ts', 'const a = 1;');
+    assert.equal(r.text, ['### 上下文文件：a.ts', '### 上下文：完整原文', '````typescript', 'const a = 1;', '````'].join('\n'));
+    assert.doesNotMatch(r.text, /### (?:文件|范围|操作)：/);
+    assert.equal(r.lineCount, 1); assert.equal(r.startLine, 1); assert.equal(r.endLine, 1);
   });
-
-  it('不再使用「这个文件是」头部（与提示词的 ### 文件 锚点统一）', () => {
-    const r = buildWholeFileText('src/a.ts', 'const x = 1;');
-    assert.ok(!r.text.includes('这个文件是'), r.text);
-    assert.ok(r.text.startsWith('### 文件：src/a.ts\n### 范围：1-1\n'));
+  it('全文尾空行与空文件保持原样', () => {
+    for (const body of ['hello\n\n\n', '\r\n\t  \r\n', '']) {
+      const r = buildWholeFileText('a.txt', body);
+      assert.equal(r.text, ['### 上下文文件：a.txt', '### 上下文：完整原文', '````', body, '````'].join('\n'));
+      assert.equal(r.lineCount, body ? body.split(/\r\n|\r|\n/).length : 0);
+      assert.equal(r.endLine, Math.max(1, r.lineCount));
+    }
   });
-
-  it('整体输出的范围是该文件完整行范围（1 到末行）', () => {
-    const r = buildWholeFileText('src/a.ts', 'a\nb\nc');
-    assert.equal(r.lineCount, 3);
-    assert.ok(r.text.includes('### 范围：1-3'));
-  });
-
-  it('围栏内不含行号前缀', () => {
-    const r = buildWholeFileText('src/a.ts', 'const x = 1;\nconst y = 2;');
-    assert.ok(!/^\s*\d+\|/m.test(r.text), r.text);
-  });
-
-  it('含围栏的 markdown 文件自动加长外层围栏', () => {
-    const content = '# 标题\n\n```python\nprint(1)\n```';
-    const r = buildWholeFileText('notes.md', content);
-    assert.equal(r.fence, '````');
-    assert.ok(r.text.includes('````markdown'));
-    assert.ok(r.text.includes('```python'));
-  });
-
-  it('去掉内容末尾多余空行，保持片段紧凑', () => {
-    const r = buildWholeFileText('a.txt', 'hello\n\n\n');
-    assert.ok(r.text.endsWith('hello\n````'), JSON.stringify(r.text));
-    assert.equal(r.lineCount, 1);
-  });
-
-  it('空文件也能生成合法片段（范围收敛为 1-1）', () => {
-    const r = buildWholeFileText('empty.txt', '');
-    assert.equal(r.lineCount, 0);
-    assert.equal(r.text, ['### 文件：empty.txt', '### 范围：1-1', '````', '', '````'].join('\n'));
-  });
-});
-
-describe('输入输出对称性（不可回退）', () => {
-  it('两种片段的骨架逐字同构，只差路径/范围/内容', () => {
-    const local = buildSnippetText({ relPath: 'a.py', text: 'x', startLine: 1 }).text.split('\n');
-    const whole = buildWholeFileText('a.py', 'x').text.split('\n');
-    // 行数相同、结构位相同（路径行 / 范围行 / 开围栏 / 内容 / 闭围栏）
-    assert.equal(local.length, whole.length);
-    assert.equal(local.length, 5);
-    assert.ok(local[0].startsWith('### 文件：'));
-    assert.ok(whole[0].startsWith('### 文件：'));
-    assert.ok(local[1].startsWith('### 范围：'));
-    assert.ok(whole[1].startsWith('### 范围：'));
-    assert.equal(local[2], whole[2]);
-    assert.equal(local[4], whole[4]);
-  });
-
-  it('骨架正是解析器能识别的形态（### 文件 命中标题线索）', () => {
-    const r = buildSnippetText({ relPath: 'src/a.ts', text: 'const a = 1;', startLine: 10 });
-    assert.match(r.text, /^### 文件：src\/a\.ts$/m);
-    assert.match(r.text, /^### 范围：10-10$/m);
+  it('Markdown 原文里的围栏与协议标记作为正文保留', () => {
+    const body = '# 示例\n### 操作：新建\n````text\n内容\n````\n';
+    const r = buildWholeFileText('notes.md', body);
+    assert.equal(r.fence, '`````'); assert.ok(r.text.includes(body));
   });
 });

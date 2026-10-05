@@ -42,13 +42,13 @@ export const CHANNELS = {
   copyPrompt: 'ui:copy-prompt',
   /** 取"工作环境摘要"（绝对路径 + 目录树 + 运行环境），供界面预览 */
   getContext: 'ui:get-context',
-  /** 把编辑器里的选中内容格式化为"带文件真实行号"的片段并写入剪贴板 */
+  /** 把选中原文组装为只读上下文并写入剪贴板 */
   copyNumberedSnippet: 'ui:copy-numbered-snippet',
   /** 把当前打开的**整个文件**（含路径声明与代码围栏）写入剪贴板，作为上下文交给模型 */
   copyWholeFile: 'ui:copy-whole-file',
   /** 从网页视图**只读**采集最新回复并解析为待应用变更（返回预览，不落盘） */
   collectReply: 'return:collect',
-  /** 应用一个已选定的变更（先做三向校验；落盘前保留撤销快照） */
+  /** 应用一个已选定的变更（先做预览基线复核；落盘前保留撤销快照） */
   applyChange: 'return:apply',
   /** 撤销一次应用（按快照恢复） */
   undoSave: 'return:undo',
@@ -250,7 +250,7 @@ export interface NumberedSnippetInput {
 
 export interface CopySnippetResult {
   ok: boolean;
-  /** 写入剪贴板的内容（含 `### 文件：` 与 `### 范围：` 头） */
+  /** 写入剪贴板的内容（只读上下文头与原文） */
   snippet: string;
   length: number;
   startLine?: number;
@@ -260,7 +260,7 @@ export interface CopySnippetResult {
 
 export interface CopyWholeFileResult {
   ok: boolean;
-  /** 写入剪贴板的内容（`这个文件是 <路径>` + 代码围栏 + 全文） */
+  /** 写入剪贴板的内容（只读上下文头 + 代码围栏 + 全文） */
   snippet: string;
   length: number;
   relPath?: string;
@@ -268,6 +268,12 @@ export interface CopyWholeFileResult {
   /** 使用的围栏（内容含反引号时会自动加长） */
   fence?: string;
   error?: string;
+}
+
+export interface CopyWholeFileInput {
+  root: string;
+  relPath: string;
+  text: string;
 }
 
 /* ------------------------------------------------------------------ *
@@ -280,13 +286,16 @@ export interface ReturnPreviewBlock {
   index: number;
   /** 无文件修改线索的围栏只读展示，不参与文件应用。 */
   kind?: 'other';
+  /** AI 明确声明的操作，范围仅由 IDE 计算用于显示。 */
+  operation?: 'replace' | 'create' | 'overwrite';
+  locations?: Array<{ oldRange: { start: number; end: number } | null; newRange: { start: number; end: number } | null; lineDelta: number }>;
   /** 仅其他内容块携带完整只读文本。 */
   contentText?: string;
   /** 目标文件（相对根目录）；null 表示缺少明确路径 */
   filePath: string | null;
   /** 路径线索来源 */
   pathSource: 'fence-comment' | 'preceding-heading' | 'none';
-  /** 原文件替换区间；新建文件完整写入，已有文件缺少区间时阻塞 */
+  /** IDE 计算的首个原文显示区间；不作为 AI 输入或写盘坐标。 */
   range: { start: number; end: number } | null;
   /** 代码块行数 */
   codeLines: number;
@@ -302,7 +311,7 @@ export interface ReturnPreviewBlock {
   /**
    * 逐行差异（与主流编辑器一致的 hunk 形式）。
    * 由主进程用 `computeApply` 算出"应用后的完整文本"再与原文对比得到；
-   * **三向校验不通过时为 null**，且该块会被标为阻塞（不给用户"可以应用"的错觉）。
+   * **预览基线复核不通过时为 null**，且该块会被标为阻塞（不给用户"可以应用"的错觉）。
    */
   diff: {
     hunks: Array<{
@@ -500,10 +509,11 @@ export interface PromptPanelBridge {
  * 而不是另开一块对比面板 —— 用户明确要求「diff 与原文件整合一起显示，而不是分两个板块」。
  * 也不使用 Monaco 的 DiffEditor：那会变成左边「当前文件」、右边「应用后」两栏并排。
  *
- * `original` / `modified` 是两侧完整文本，由主进程算出并**已通过三向校验**，
+ * `original` / `modified` 是两侧完整文本，由主进程算出并**已通过预览基线复核**，
  * 因此不会出现「编辑器里显示了 diff、点应用却失败」。
  */
 export interface EditorDiffPayload {
+  operation?: 'replace' | 'create' | 'overwrite';
   /** 新增预览使用空原文，预览本身不创建文件。 */
   newFile?: boolean;
   workspaceRevision?: number;
@@ -579,15 +589,15 @@ export interface EditorBridge {
    */
   copyPrompt(requirement: string, targetFiles: string[]): Promise<CopyPromptResult>;
   /**
-   * 把选中内容格式化为"带文件真实行号"的片段（附 `### 文件：` 与 `### 范围：` 头）写入剪贴板。
-   * 用于**局部修改**：模型据此回显行区间，应用前会做三向校验。
+   * 把选中原文与只读上下文头写入剪贴板，行号仅供本地反馈。
+   * 用于提供原文上下文：模型以 SEARCH/REPLACE 表达修改，应用前复核完整预览原文。
    */
   copyNumberedSnippet(input: NumberedSnippetInput & { root: string }): Promise<CopySnippetResult>;
   /**
    * 把当前打开的**整个文件**（`这个文件是 <路径>` + 代码围栏 + 全文）写入剪贴板。
    * 用途：把整个文件作为**上下文**交给模型；仍由用户自己粘贴（零注入边界）。
    */
-  copyWholeFile(relPath: string): Promise<CopyWholeFileResult>;
+  copyWholeFile(input: CopyWholeFileInput): Promise<CopyWholeFileResult>;
   /** 显示/隐藏或调整最右侧变更列（width <= 0 表示隐藏） */
   setPreviewPanel(width: number): Promise<{ width: number; visible: boolean }>;
   /** 显示/隐藏右侧 AI 网页视图 */
@@ -604,7 +614,7 @@ export interface EditorBridge {
    */
   openPromptPanel(): Promise<{ ok: boolean }>;
   /** 请求在编辑器内以 diff 视图显示某个变更 */
-  showDiffInEditor(collectionId: string, index: number): Promise<{ ok: boolean; error?: string }>;
+  showDiffInEditor(collectionId: string, index: number, filePath?: string): Promise<{ ok: boolean; error?: string }>;
   /** 跳到批次内相邻的变更；主进程会同时把最右侧面板的高亮同步过去 */
   stepDiff(collectionId: string, index: number): Promise<{ ok: boolean; error?: string }>;
   /** 主进程 → 编辑器：进入（或退出）diff 视图 */
@@ -624,7 +634,7 @@ export interface EditorBridge {
    */
   collectReply(): Promise<ReturnPreview>;
   /**
-   * 应用一个变更。主进程会先做三向校验，并**保留撤销快照**；
+   * 应用一个变更。主进程会先做预览基线复核，并**保留撤销快照**；
    * 默认路径下不可能静默覆盖（校验失败即拒绝）。
    */
   applyChange(input: ApplyChangeInput): Promise<ApplyChangeResult>;

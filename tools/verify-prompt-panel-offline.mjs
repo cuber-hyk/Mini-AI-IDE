@@ -140,31 +140,17 @@ check(
   { handlerLine: regLine + 1, loadLine: loadLine + 1 }
 );
 
-// Y12：读状态失败时要有默认文本兜底 + 重试（不留空白框）
-//
-// 兜底副本必须与内置默认**逐字一致**（早期只比对首行，默认模板升级后副本会悄悄过期 ——
-// 那种情况下 panel 在失败分支会显示一份过时要求，比空白更糟）。
-const distShort = require(path.join(root, 'dist/shared/formatSpec.js')).FORMAT_SPEC_SHORT;
-const hasFallback = /FALLBACK_SPEC/.test(pmJs) && /el\.editor\.value\s*=/.test(pmJs);
-const fallbackBlock = /const FALLBACK_SPEC = \[([\s\S]*?)\]\.join\('\\n'\)/.exec(pmJs)?.[1] ?? '';
-// 把数组字面量里的字符串逐条取出后拼回文本，与内置默认比对
-const fallbackText = (fallbackBlock.match(/"(?:[^"\\]|\\.)*"/g) ?? [])
-  .map((s) => JSON.parse(s))
-  .join('\n');
-const fallbackMatchesDefault = fallbackText === distShort;
+// Y12：本地兜底由权威模板构建生成，两版逐字一致，状态失败仍可读。
+const defaultsSource = fs.readFileSync(path.join(root, 'dist/renderer/formatSpecDefaults.js'), 'utf8');
+const defaultsContext = { window: {} }; vm.createContext(defaultsContext);
+new vm.Script(defaultsSource).runInContext(defaultsContext);
+const distSpecs = require(path.join(root, 'dist/shared/formatSpec.js'));
+const hasFallback = /window\.formatSpecDefaults/.test(pmJs) && !/const FALLBACK_SPEC/.test(pmJs) && /formatSpecDefaults\.js/.test(pmHtml);
+const fallbackMatchesDefault = defaultsContext.window.formatSpecDefaults.short === distSpecs.FORMAT_SPEC_SHORT &&
+  defaultsContext.window.formatSpecDefaults.full === distSpecs.FORMAT_SPEC_FULL;
 const hasRetry = /const LOAD_RETRIES/.test(pmJs) && /load\(tries \+ 1\)/.test(pmJs);
-check(
-  'Y12',
-  '读状态失败时有默认文本兜底（与内置默认逐字一致）+ 重试（不留空白框）',
-  hasFallback && fallbackMatchesDefault && hasRetry,
-  {
-    hasFallback,
-    fallbackMatchesDefault,
-    hasRetry,
-    fallbackLines: fallbackText.split('\n').length,
-    defaultLines: distShort.split('\n').length,
-  }
-);
+check('Y12', '状态失败时有构建生成的两版默认文本兜底 + 重试',
+  hasFallback && fallbackMatchesDefault && hasRetry, { hasFallback, fallbackMatchesDefault, hasRetry });
 
 // Y14：底部双段开关（简洁/完整）—— 结构、持久化、三条交互路径
 const swHtml = /id="variant-switch"/.test(html) &&
@@ -264,27 +250,27 @@ check(
   '组装后的 prompt 真的带上了自定义内容（且固定骨架不变）',
   assembled.includes(customShort) &&
     // 用自定义时，内置默认的那句开场白不得残留
-    !assembled.includes('你我会用**同一条骨架**来交换内容') &&
+    !assembled.includes(getFormatSpec('short')) &&
     // 用默认时，内置默认标题必须在
     assembledDefault.includes('【输入/输出格式要求】') &&
     /## 用户需求/.test(assembled) &&
     /## 工作环境/.test(assembled),
   {
     hasCustom: assembled.includes(customShort),
-    hasDefaultInCustomRun: assembled.includes('你我会用**同一条骨架**来交换内容'),
+    hasDefaultInCustomRun: assembled.includes(getFormatSpec('short')),
     hasDefaultTitle: assembledDefault.includes('【输入/输出格式要求】'),
   }
 );
 
-// Z3b：切到完整版后，组装出的 prompt 用的是 FULL（8 示例），而不是 SHORT
+// Z3b：切到完整版后，组装出的 prompt 用的是 FULL（13 示例），而不是 SHORT
 const fullExampleCount = (getFormatSpec('full').match(/示例 \d+｜/g) ?? []).length;
 const shortExampleCount = (getFormatSpec('short').match(/示例 \d+｜/g) ?? []).length;
 check(
   'Z3b',
-  '切换版本后组装结果确实换了一版（FULL 8 示例 / SHORT 6 示例）',
+  '切换版本后组装结果确实换了一版（FULL 13 示例 / SHORT 6 示例）',
   assembledFull.includes(getFormatSpec('full')) &&
     assembledDefault.includes(getFormatSpec('short')) &&
-    fullExampleCount === 8 &&
+    fullExampleCount === 13 &&
     shortExampleCount === 6,
   { fullExampleCount, shortExampleCount }
 );
@@ -381,6 +367,7 @@ function runPanel(initialState, initialVariant) {
     JSON,
   };
   vm.createContext(ctx);
+  new vm.Script(defaultsSource, { filename: 'formatSpecDefaults.js' }).runInContext(ctx);
   new vm.Script(pmJs, { filename: 'prompt.js' }).runInContext(ctx);
   return { els, tabEls, saves, state, bridge };
 }

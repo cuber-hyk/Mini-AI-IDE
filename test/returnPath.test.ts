@@ -1,741 +1,433 @@
-/**
- * 回程解析器单测
- *
- * 重点：每段只采用自身明确元数据，正文提及和其他块不会补足缺失的路径或范围。
- */
+/** 明确操作协议：匹配与写入纯计算只采用可验证的原文。 */
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
-
 import {
-  computeApply,
-  extractPathMentions,
-  formatNumberedSnippet,
-  matchHeadingLine,
-  matchPathCommentLine,
-  matchRangeDirective,
-  normalizeRelPath,
-  parseModelReply,
-  splitFences,
-  stripNumberedPrefix,
+  computeApply, extractPathMentions, getLineRange, matchHeadingLine,
+  matchPathCommentLine, matchRangeDirective, normalizeRelPath, parseModelReply, splitFences,
+  type ParsedCodeBlock, type TextEdit,
 } from '../src/shared/returnPath';
 
-describe('splitFences', () => {
-  it('识别 ``` 围栏并保留语言标注', () => {
-    const text = '说明\n```ts\nconst a = 1;\n```\n结束';
-    const fences = splitFences(text);
-    assert.equal(fences.length, 1);
-    assert.equal(fences[0]?.info, 'ts');
-    assert.equal(fences[0]?.body, 'const a = 1;\n');
-  });
-
-  it('识别 ~~~ 围栏', () => {
-    const fences = splitFences('~~~python\nprint(1)\n~~~');
-    assert.equal(fences.length, 1);
-    assert.equal(fences[0]?.language ?? fences[0]?.info, 'python');
-    assert.equal(fences[0]?.body, 'print(1)\n');
-  });
-
-  it('识别多个围栏', () => {
-    const text = '```ts\na\n```\n中间\n```py\nb\n```';
-    assert.equal(splitFences(text).length, 2);
-  });
-
-  it('没有围栏时返回空数组', () => {
-    assert.deepEqual(splitFences('只有文字，没有代码块'), []);
-  });
-
-  it('未闭合围栏被视为「延续到文本结尾」（目标站点只渲染开头围栏）', () => {
-    // 实测形态：DeepSeek 把开头 ``` 渲染成文本，结尾围栏是装饰元素、不在 innerText 里。
-    // 若坚持"围栏必须成对"，整段回复会被判定为"没有围栏" → 解析出 0 个代码块。
-    const collected = ['冒泡排序:', '```python', 'def bubble_sort(arr):', '    return arr'].join('\n');
-    const fences = splitFences(collected);
-    assert.equal(fences.length, 1);
-    assert.equal(fences[0]?.info, 'python');
-    assert.equal(fences[0]?.body, 'def bubble_sort(arr):\n    return arr');
-  });
-
-  it('未闭合围栏经完整解析可得到路径与代码', () => {
-    const collected = [
-      '冒泡排序:',
-      '文件： Mini-AI-IDE-test.md',
-      '```python',
-      'def bubble_sort(arr):',
-      '    return arr',
-    ].join('\n');
-    const r = parseModelReply(collected);
-    assert.equal(r.blocks.length, 1);
-    assert.equal(r.blocks[0]?.filePath, 'Mini-AI-IDE-test.md');
-    assert.equal(r.blocks[0]?.language, 'python');
-    assert.equal(r.blocks[0]?.code, 'def bubble_sort(arr):\n    return arr');
-  });
-
-  it('成对围栏与未闭合围栏混在一段文本里都能识别', () => {
-    const text = ['```ts', 'const a = 1;', '```', '', '```py', 'print(1)'].join('\n');
-    const fences = splitFences(text);
-    assert.equal(fences.length, 2);
-    assert.equal(fences[0]?.body, 'const a = 1;\n');
-    assert.equal(fences[1]?.info, 'py');
-    assert.equal(fences[1]?.body, 'print(1)');
-  });
-
-  it('未闭合围栏不重复计入已闭合块内部', () => {
-    assert.equal(splitFences(['```ts', 'const a = 1;', '```'].join('\n')).length, 1);
-  });
-});
-
-describe('normalizeRelPath / extractPathMentions', () => {
-  it('去掉 ./ 前缀并统一斜杠', () => {
-    assert.equal(normalizeRelPath('.\\src\\a.ts'), 'src/a.ts');
-    assert.equal(normalizeRelPath('./src/a.ts'), 'src/a.ts');
-  });
-
-  it('含 .. 的路径不作为建议路径（交由白名单拒绝）', () => {
-    assert.equal(normalizeRelPath('../../etc/passwd.md'), null);
-  });
-
-  it('从正文抽取路径并按出现顺序去重', () => {
-    const mentions = extractPathMentions('改 `src/a.ts`，再看 src/b.py，最后回到 src/a.ts');
-    assert.deepEqual(mentions, ['src/a.ts', 'src/b.py']);
-  });
-
-  it('不把普通单词当路径', () => {
-    assert.deepEqual(extractPathMentions('这是一个普通句子，没有文件。'), []);
-  });
-});
-
-describe('matchPathCommentLine', () => {
-  it('识别 // 注释路径', () => {
-    assert.equal(matchPathCommentLine('// src/main/index.ts'), 'src/main/index.ts');
-  });
-  it('识别带 file: 前缀的注释', () => {
-    assert.equal(matchPathCommentLine('// file: src/a.ts'), 'src/a.ts');
-  });
-  it('识别 # 注释路径（Python）', () => {
-    assert.equal(matchPathCommentLine('# train_caption.py'), 'train_caption.py');
-  });
-  it('识别 <!-- --> 路径（HTML）', () => {
-    assert.equal(matchPathCommentLine('<!-- index.html -->'), 'index.html');
-  });
-  it('识别 -- 路径（SQL）', () => {
-    assert.equal(matchPathCommentLine('-- schema.sql'), 'schema.sql');
-  });
-  it('普通代码行不被误判为路径注释', () => {
-    assert.equal(matchPathCommentLine('const a = 1;'), null);
-    assert.equal(matchPathCommentLine('import os'), null);
-  });
-  it('文件名含空格与中文也能整段取出（用户实测：「BLIP 阅读笔记.md」）', () => {
-    assert.equal(matchPathCommentLine('# BLIP 阅读笔记.md'), 'BLIP 阅读笔记.md');
-    assert.equal(matchPathCommentLine('// Mini-Omni 阅读笔记.md'), 'Mini-Omni 阅读笔记.md');
-    assert.equal(matchPathCommentLine('<!-- CLIP 阅读笔记.md -->'), 'CLIP 阅读笔记.md');
-  });
-  it('注释行尾还有别的文字时不误取（行尾锚定）', () => {
-    assert.equal(matchPathCommentLine('# a.ts 这是标题说明'), null);
-  });
-});
-
-describe('matchHeadingLine', () => {
-  it('识别 ### 标题里的路径', () => {
-    assert.equal(matchHeadingLine('### src/utils/io.ts'), 'src/utils/io.ts');
-  });
-  it('识别加粗路径', () => {
-    assert.equal(matchHeadingLine('**src/a.ts**'), 'src/a.ts');
-  });
-  it('识别"文件名："式指引', () => {
-    assert.equal(matchHeadingLine('文件名：train_caption.py'), 'train_caption.py');
-  });
-  it('识别有序列表项里的路径', () => {
-    assert.equal(matchHeadingLine('1. `src/a.ts`'), 'src/a.ts');
-  });
-  it('整句中文里的路径不当作标题式路径', () => {
-    assert.equal(matchHeadingLine('下面是修改后的 src/a.ts 的完整内容，请替换'), null);
-    assert.equal(matchHeadingLine('### 请修改 src/a.ts'), null);
-  });
-  it('带标签 + 空格中文文件名（extractPathMentions 认不出时整体回退，用户实测 2026-10-04）', () => {
-    assert.equal(matchHeadingLine('### 文件：BLIP 阅读笔记.md'), 'BLIP 阅读笔记.md');
-    assert.equal(matchHeadingLine('文件： Mini-Omni 阅读笔记.md'), 'Mini-Omni 阅读笔记.md');
-  });
-  it('无标签的中文整句（即使以扩展名结尾）不回退', () => {
-    assert.equal(matchHeadingLine('这是说明文档.md'), null);
-  });
-});
-
-describe('parseModelReply —— 路径线索优先级', () => {
-  it('中文空格文件名 + 范围行：采集注入的「文件：」标题能解析出路径（用户实测 2026-10-04）', () => {
-    const reply = [
-      '### 文件：BLIP 阅读笔记.md',
-      '### 范围：113-113',
-      '',
-      '```markdown',
-      '- **ITC（对比损失）**：把配图文本拉到表示空间相近。',
-      '```',
-    ].join('\n');
-    const r = parseModelReply(reply);
-    assert.equal(r.blocks.length, 1);
-    assert.equal(r.blocks[0]?.filePath, 'BLIP 阅读笔记.md');
-    assert.equal(r.blocks[0]?.pathSource, 'preceding-heading');
-    assert.deepEqual(r.blocks[0]?.range, { start: 113, end: 113 });
-  });
-
-  it('(a) 围栏内首行路径注释优先，且该行被剥离出代码', () => {    const reply = ['```ts', '// src/a.ts', 'const a = 1;', '```'].join('\n');
-    const r = parseModelReply(reply);
-    assert.equal(r.blocks.length, 1);
-    const b = r.blocks[0];
-    assert.equal(b?.filePath, 'src/a.ts');
-    assert.equal(b?.pathSource, 'fence-comment');
-    assert.equal(b?.code, 'const a = 1;');
-    assert.equal(b?.strippedPathLine, '// src/a.ts');
-  });
-
-  it('(b) 围栏上方标题提供路径（模型不写注释的常见形态）', () => {
-    const reply = ['### src/b.ts', '', '```ts', 'export const b = 2;', '```'].join('\n');
-    const r = parseModelReply(reply);
-    assert.equal(r.blocks[0]?.filePath, 'src/b.ts');
-    assert.equal(r.blocks[0]?.pathSource, 'preceding-heading');
-    assert.equal(r.blocks[0]?.code, 'export const b = 2;');
-  });
-
-  it('正文唯一候选不用于自动指定目标文件', () => {
-    const reply = ['请把 `src/c.ts` 改成：', '```ts', 'export const c = 3;', '```'].join('\n');
-    const r = parseModelReply(reply);
-    assert.equal(r.blocks[0]?.filePath, null);
-    assert.equal(r.blocks[0]?.pathSource, 'none');
-    assert.equal(r.blocks[0]?.kind, 'other');
-    assert.equal(r.hasUnresolved, false);
-  });
-
-  it('(c) 全文有多个候选时**不猜**，交给预览', () => {
-    const reply = ['涉及 `src/a.ts` 与 `src/b.ts`：', '```ts', 'export const x = 1;', '```'].join('\n');
-    const r = parseModelReply(reply);
-    assert.equal(r.blocks[0]?.filePath, null);
-    assert.equal(r.blocks[0]?.pathSource, 'none');
-    assert.equal(r.blocks[0]?.kind, 'other');
-    assert.equal(r.hasUnresolved, false);
-  });
-
-  it('(d) 无任何线索时**不猜测**：即使编辑器里打开了文件也不兜底（用户明确要求）', () => {
-    const reply = ['```ts', 'const y = 1;', '```'].join('\n');
-    const r = parseModelReply(reply);
-    assert.equal(r.blocks[0]?.filePath, null);
-    assert.equal(r.blocks[0]?.pathSource, 'none');
-    assert.equal(r.blocks[0]?.kind, 'other');
-    assert.equal(r.hasUnresolved, false);
-  });
-
-  it('正文里提到多个路径时不自动匹配（防止误写到示例路径）', () => {
-    const reply = [
-      '这次改动涉及 `src/main/index.ts` 与 `src/shared/contract.ts`：',
-      '```ts',
-      'export const x = 1;',
-      '```',
-    ].join('\n');
-    const r = parseModelReply(reply);
-    assert.equal(r.mentionedPaths.length, 2);
-    assert.equal(r.blocks[0]?.filePath, null, JSON.stringify(r.mentionedPaths));
-  });
-
-  it('正文中的文件标签示例不能当作真实目标', () => {
-    const reply = ['例如写成 `### 文件：src/main/index.ts` 这样。下面是代码：', '```ts', 'export const x = 1;', '```'].join('\n');
-    const r = parseModelReply(reply);
-    assert.equal(r.blocks[0]?.filePath, null);
-    assert.equal(r.blocks[0]?.kind, 'other');
-    assert.equal(r.hasUnresolved, false);
-  });
-
-  it('多围栏各自就近匹配自己的标题', () => {
-    const reply = [
-      '### src/a.ts',
-      '```ts',
-      'export const a = 1;',
-      '```',
-      '',
-      '### src/b.ts',
-      '```ts',
-      'export const b = 2;',
-      '```',
-    ].join('\n');
-    const r = parseModelReply(reply);
-    assert.equal(r.blocks.length, 2);
-    assert.equal(r.blocks[0]?.filePath, 'src/a.ts');
-    assert.equal(r.blocks[1]?.filePath, 'src/b.ts');
-  });
-
-  it('带行号的代码块（模型常见输出）也能解析', () => {
-    const reply = ['```python', '# train_caption.py', '1  import os', '2  import json', '```'].join('\n');
-    const r = parseModelReply(reply);
-    assert.equal(r.blocks[0]?.filePath, 'train_caption.py');
-    assert.ok(r.blocks[0]?.code.includes('import os'));
-  });
-
-  it('语言标注被归一化且不参与路径判断', () => {
-    const reply = '```TypeScript {highlight}\nconst a = 1;\n```';
-    const r = parseModelReply(reply);
-    assert.equal(r.blocks[0]?.language, 'typescript');
-  });
-
-  it('无围栏时给出明确备注且不报错', () => {
-    const r = parseModelReply('这段回复没有任何代码块。');
-    assert.equal(r.blocks.length, 0);
-    assert.ok(r.notes.some((n) => n.includes('未找到代码围栏')));
-  });
-
-  it('空输入不抛异常', () => {
-    const r = parseModelReply('');
-    assert.equal(r.blocks.length, 0);
-  });
-});
-
-describe('computeApply', () => {
-  const block = {
-    code: 'NEW',
-    language: 'ts',
-    filePath: 'src/a.ts',
-    pathSource: 'fence-comment' as const,
-    range: null,
-    start: 0,
-    end: 0,
-    strippedPathLine: null,
-  };
-
-  it('插入光标处时按需补换行', () => {
-    const r = computeApply('line1\nline2', block, { kind: 'insert-at-cursor', cursorOffset: 6 });
-    assert.equal(r.ok, true);
-    if (!r.ok) return;
-    assert.equal(r.mode, 'insert-at-cursor');
-    assert.equal(r.text, 'line1\nNEW\nline2');
-  });
-
-  it('光标在行尾（非行首）时先补换行，使代码从新行开始', () => {
-    const r = computeApply('abc', block, { kind: 'insert-at-cursor', cursorOffset: 3 });
-    assert.equal(r.ok, true);
-    if (!r.ok) return;
-    assert.equal(r.text, 'abc\nNEW');
-  });
-
-  it('光标紧跟在换行之后时不补前导换行', () => {
-    const r = computeApply('abc\n', block, { kind: 'insert-at-cursor', cursorOffset: 4 });
-    assert.equal(r.ok, true);
-    if (!r.ok) return;
-    assert.equal(r.text, 'abc\nNEW');
-  });
-
-  it('替换字节区间并返回被替换内容（供撤销）', () => {
-    const r = computeApply('AAA BBB CCC', block, { kind: 'replace-fence-region', start: 4, end: 7 });
-    assert.equal(r.ok, true);
-    if (!r.ok) return;
-    assert.equal(r.text, 'AAA NEW CCC');
-    assert.equal(r.replaced, 'BBB');
-  });
-
-  it('整文件替换时 replaced 为原文', () => {
-    const r = computeApply('old content', block, { kind: 'replace-whole-file' });
-    assert.equal(r.ok, true);
-    if (!r.ok) return;
-    assert.equal(r.text, 'NEW');
-    assert.equal(r.replaced, 'old content');
-  });
-
-  it('越界的光标与区间被安全收敛', () => {
-    const a = computeApply('abc', block, { kind: 'insert-at-cursor', cursorOffset: 999 });
-    assert.equal(a.ok && a.text, 'abc\nNEW');
-    const b = computeApply('abc', block, { kind: 'replace-fence-region', start: 99, end: 200 });
-    assert.equal(b.ok && b.text, 'abcNEW');
-  });
-});
-
-describe('行区间指令与片段替换（三向校验）', () => {
-  const fileText = ['l1', 'l2', 'l3', 'l4', 'l5'].join('\n');
-  const mkBlock = (code: string) => ({
-    code,
-    language: 'ts',
-    filePath: 'src/a.ts',
-    pathSource: 'preceding-heading' as const,
-    range: { start: 2, end: 3 },
-    start: 0,
-    end: 0,
-    strippedPathLine: null,
-  });
-
-  it('matchRangeDirective 识别多种写法', () => {
-    assert.deepEqual(matchRangeDirective('### 范围：80-92'), { start: 80, end: 92 });
-    assert.deepEqual(matchRangeDirective('### 行：7-9'), { start: 7, end: 9 });
-    assert.deepEqual(matchRangeDirective('### lines: 7-9'), { start: 7, end: 9 });
-    assert.deepEqual(matchRangeDirective('### 位置：替换第 12-14 行'), { start: 12, end: 14 });
-    assert.deepEqual(matchRangeDirective('### 范围：80'), { start: 80, end: 80 });
-    assert.deepEqual(matchRangeDirective('### 范围：92-80'), { start: 80, end: 92 });
-    assert.equal(matchRangeDirective('### 文件：src/a.ts'), null);
-    assert.equal(matchRangeDirective('这是一句普通说明'), null);
-  });
-
-  it('解析器从围栏上方的「范围」指令得到行区间', () => {
-    const r = parseModelReply(['### 文件：src/a.ts', '### 范围：2-3', '```ts', 'NEW', '```'].join('\n'));
-    assert.deepEqual(r.blocks[0]?.range, { start: 2, end: 3 });
-    assert.ok(r.notes.some((n) => n.includes('三向校验')));
-  });
-
-  it('片段里若带行号前缀会被剥离', () => {
-    const r = parseModelReply(['### 文件：src/a.ts', '### 范围：1-2', '```py', '  1| import os', '  2| import sys', '```'].join('\n'));
-    assert.equal(r.blocks[0]?.code, 'import os\nimport sys');
-  });
-
-  it('三向校验全部通过时按行替换', () => {
-    const r = computeApply(fileText, mkBlock('X2\nX3'), {
-      kind: 'replace-lines',
-      start: 2,
-      end: 3,
-      expectedOriginal: 'l2\nl3',
-      contextPrev: 'l1',
-      contextNext: 'l4',
-    });
-    assert.equal(r.ok, true);
-    if (!r.ok) return;
-    assert.equal(r.text, ['l1', 'X2', 'X3', 'l4', 'l5'].join('\n'));
-    assert.equal(r.replaced, 'l2\nl3');
-  });
-
-  it('原内容不匹配 → 拒绝（防行号漂移）', () => {
-    const r = computeApply(fileText, mkBlock('X'), {
-      kind: 'replace-lines',
-      start: 2,
-      end: 3,
-      expectedOriginal: 'DIFFERENT',
-    });
-    assert.equal(r.ok, false);
-    if (r.ok) return;
-    assert.equal(r.reason, 'content-mismatch');
-    assert.match(r.detail, /不一致/);
-  });
-
-  it('区间越界 → 拒绝', () => {
-    const r = computeApply(fileText, mkBlock('X'), { kind: 'replace-lines', start: 4, end: 99, expectedOriginal: 'l4\nl5' });
-    assert.equal(r.ok, false);
-    if (r.ok) return;
-    assert.equal(r.reason, 'range-invalid');
-  });
-
-  it('上下文（区间上一行）不匹配 → 拒绝', () => {
-    const r = computeApply(fileText, mkBlock('X'), {
-      kind: 'replace-lines',
-      start: 2,
-      end: 3,
-      expectedOriginal: 'l2\nl3',
-      contextPrev: 'WRONG',
-    });
-    assert.equal(r.ok, false);
-    if (r.ok) return;
-    assert.equal(r.reason, 'context-mismatch');
-  });
-
-  it('替换整文件末尾若干行时不产生多余换行', () => {
-    const r = computeApply(fileText, mkBlock('Z4\nZ5'), {
-      kind: 'replace-lines',
-      start: 4,
-      end: 5,
-      expectedOriginal: 'l4\nl5',
-      contextPrev: 'l3',
-      contextNext: null,
-    });
-    assert.equal(r.ok, true);
-    if (!r.ok) return;
-    assert.equal(r.text, ['l1', 'l2', 'l3', 'Z4', 'Z5'].join('\n'));
-  });
-
-  it('新内容比原区间多 1 行：替换区间、后续行整体下移，起始行之前保持原样', () => {
-    // 模拟实测场景：原文件 10 行，选中 2-10（9 行），模型返回 10 行新内容
-    const orig = ['H1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7', 'a8', 'a9', 'a10'].join('\n');
-    const block = mkBlock('n1\nn2\nn3\nn4\nn5\nn6\nn7\nn8\nn9\nn10');
-    const r = computeApply(orig, block, {
-      kind: 'replace-lines',
-      start: 2,
-      end: 10,
-      expectedOriginal: orig.split('\n').slice(1).join('\n'),
-      contextPrev: 'H1',
-      contextNext: null,
-    });
-    assert.equal(r.ok, true);
-    if (!r.ok) return;
-    assert.equal(
-      r.text,
-      ['H1', 'n1', 'n2', 'n3', 'n4', 'n5', 'n6', 'n7', 'n8', 'n9', 'n10'].join('\n'),
-      '第 1 行必须原样保留，其余为 10 行新内容（共 11 行）'
-    );
-  });
-
-  it('新内容比原区间少：删除原区间剩余行，后续行整体上移', () => {
-    // 原区间 2-4 共 3 行，新内容只有 1 行 → 原 l4 被删，l5 上移
-    const r = computeApply(fileText, mkBlock('X2'), {
-      kind: 'replace-lines',
-      start: 2,
-      end: 4,
-      expectedOriginal: 'l2\nl3\nl4',
-      contextPrev: 'l1',
-      contextNext: 'l5',
-    });
-    assert.equal(r.ok, true);
-    if (!r.ok) return;
-    assert.equal(r.text, ['l1', 'X2', 'l5'].join('\n'));
-  });
-
-  it('10-10 替换为十行：相同括号和空行也不能吞掉区间外原文', () => {
-    const lines = Array.from({ length: 25 }, (_, i) => `原第 ${i + 1} 行`);
-    lines[10] = '}';
-    lines[11] = '';
-    const added = [...Array.from({ length: 7 }, (_, i) => `新增 ${i + 1}`), '}', '', '最后一行'];
-    const block = parseModelReply([
-      '### 文件：a.txt', '### 范围：10-10', '````', ...added, '````',
-    ].join('\n')).blocks[0]!;
-    const result = computeApply(lines.join('\n'), block, {
-      kind: 'replace-lines', start: 10, end: 10,
-      expectedOriginal: lines[9]!, contextPrev: lines[8], contextNext: lines[10],
-    });
-    assert.equal(result.ok, true);
-    if (!result.ok) return;
-    const after = result.text.split('\n');
-    assert.equal(after.length, 34);
-    assert.deepEqual(after.slice(0, 9), lines.slice(0, 9));
-    assert.deepEqual(after.slice(9, 19), added, '新内容应占第 10-19 行');
-    assert.deepEqual(after.slice(19), lines.slice(10), '原第 11 行起须完整保留并后移 9 行');
-    assert.equal(result.replaced, lines[9]);
-  });
-
-  it('缩短区间时新内容恰好等于下一行，也必须保留原下一行', () => {
-    const result = computeApply(fileText, mkBlock('l5'), {
-      kind: 'replace-lines', start: 2, end: 4,
-      expectedOriginal: 'l2\nl3\nl4', contextPrev: 'l1', contextNext: 'l5',
-    });
-    assert.equal(result.ok, true);
-    if (!result.ok) return;
-    assert.equal(result.text, 'l1\nl5\nl5');
-    assert.equal(result.replaced, 'l2\nl3\nl4');
-  });
-});
-
-describe('带行号片段的格式化与还原', () => {
-  it('formatNumberedSnippet 使用文件真实行号并右对齐', () => {
-    assert.equal(formatNumberedSnippet('a\nb', 8), '  8| a\n  9| b');
-    assert.equal(formatNumberedSnippet('a', 1234), '1234| a');
-  });
-
-  it('stripNumberedPrefix 还原纯文本与起始行号', () => {
-    const s = stripNumberedPrefix('  8| a\n  9| b');
-    assert.equal(s.text, 'a\nb');
-    assert.equal(s.startLine, 8);
-  });
-
-  it('无行号前缀时原样返回，startLine 为 null', () => {
-    const s = stripNumberedPrefix('a\nb');
-    assert.equal(s.text, 'a\nb');
-    assert.equal(s.startLine, null);
-  });
-
-  it('往返一致（格式化后还原）', () => {
-    const original = 'def train():\n    pass';
-    const round = stripNumberedPrefix(formatNumberedSnippet(original, 80));
-    assert.equal(round.text, original);
-    assert.equal(round.startLine, 80);
-  });
-});
-
-describe('逐块关联与格式诊断', () => {
-  it('真实 backend 回复识别五个文件与一段只读附属内容，路径和范围不串块', () => {
-    const reply = readFileSync(path.join(process.cwd(), 'test/fixtures/backend-foundation-reply.md'), 'utf8');
-    const result = parseModelReply(reply);
-    assert.equal(result.blocks.length, 6);
-    assert.deepEqual(result.blocks.map((block) => block.filePath), [
-      'ecommerce-demo/backend/package.json',
-      'ecommerce-demo/backend/tsconfig.json',
-      'ecommerce-demo/backend/.env',
-      'ecommerce-demo/backend/prisma/schema.prisma',
-      'ecommerce-demo/backend/seed.ts',
-      null,
-    ]);
-    assert.deepEqual(result.blocks.map((block) => block.code.split('\n').length), [35, 18, 4, 109, 84, 5]);
-    assert.deepEqual(result.blocks.slice(0, 5).map((block) => block.range), [
-      { start: 1, end: 46 }, { start: 1, end: 23 }, { start: 1, end: 4 },
-      { start: 1, end: 82 }, { start: 1, end: 96 },
-    ]);
-    assert.equal(result.blocks[5]?.kind, 'other');
-    assert.equal(result.hasUnresolved, false);
-    assert.ok(result.blocks.every((block) => !block.validationError));
-  });
-
-  it('Windows CRLF 回复保持多个围栏边界，不把下一个文件吞进前一个块', () => {
-    const result = parseModelReply('### 文件：a.ts\r\n### 范围：1-1\r\n```ts\r\nA\r\n```\r\n\r\n### 文件：b.ts\r\n### 范围：2-2\r\n```ts\r\nB\r\n```');
-    assert.equal(result.blocks.length, 2);
-    assert.equal(result.blocks[0]?.filePath, 'a.ts');
-    assert.equal(result.blocks[0]?.code, 'A');
-    assert.equal(result.blocks[1]?.filePath, 'b.ts');
-    assert.equal(result.blocks[1]?.code, 'B');
-    assert.deepEqual(result.blocks[1]?.range, { start: 2, end: 2 });
-  });
-
-  it('标题之间有空行仍关联同一代码块，原范围不限制新代码行数', () => {
-    const result = parseModelReply('### 文件：src/a.ts\n\n### 范围：10-10\n\n```ts\nA\nB\nC\n```');
-    assert.equal(result.blocks[0]?.filePath, 'src/a.ts');
-    assert.deepEqual(result.blocks[0]?.range, { start: 10, end: 10 });
-    assert.equal(result.blocks[0]?.code, 'A\nB\nC');
-  });
-
-  it('下一代码块缺失文件或范围时不继承上一块', () => {
-    const result = parseModelReply('### 文件：a.ts\n### 范围：1-2\n```ts\nA\n```\n\n```ts\nB\n```');
-    assert.equal(result.blocks[1]?.filePath, null);
-    assert.equal(result.blocks[1]?.range, null);
-    assert.equal(result.blocks[1]?.kind, 'other');
-    assert.equal(result.hasUnresolved, false);
-  });
-
-  it('正文形成边界，不能把早先路径绑定到后续示例', () => {
-    const result = parseModelReply('### 文件：a.ts\n\n这段是另一个示例。\n\n```ts\nB\n```');
-    assert.equal(result.blocks[0]?.filePath, null);
-  });
-
-  it('重复的冲突路径或范围只阻塞当前块，不默选最近值', () => {
-    const result = parseModelReply('### 文件：a.ts\n### 文件：b.ts\n```ts\nA\n```\n### 文件：c.ts\n### 范围：1-1\n### 范围：2-2\n```ts\nC\n```');
-    assert.equal(result.blocks[0]?.filePath, null);
-    assert.match(result.blocks[0]?.validationError ?? '', /路径相互冲突/);
-    assert.equal(result.blocks[1]?.filePath, 'c.ts');
-    assert.equal(result.blocks[1]?.range, null);
-    assert.match(result.blocks[1]?.validationError ?? '', /区间相互冲突/);
-  });
-
-  it('相同标题重复不制造冲突，Windows 路径大小写一致性保留', () => {
-    const result = parseModelReply('### 文件：SRC/a.ts\n### 文件：src/A.ts\n### 范围：1-2\n### 范围：1-2\n```ts\nA\n```');
-    assert.equal(result.blocks[0]?.filePath, 'SRC/a.ts');
-    assert.equal(result.blocks[0]?.validationError, undefined);
-    assert.deepEqual(result.blocks[0]?.range, { start: 1, end: 2 });
-  });
-
-  it('标题路径与代码首行路径冲突时拒绝，不优先选其一', () => {
-    const result = parseModelReply('### 文件：a.ts\n```ts\n// b.ts\nB\n```');
-    assert.equal(result.blocks[0]?.filePath, null);
-    assert.match(result.blocks[0]?.validationError ?? '', /路径相互冲突/);
-  });
-
-  it('缺失范围保持缺失，格式错误和单标题多路径明确诊断', () => {
-    const missing = parseModelReply('### 文件：a.ts\n```ts\nA\n```').blocks[0];
-    assert.equal(missing?.range, null);
-    const malformed = parseModelReply('### 文件：a.ts\n### 范围：1-x\n```ts\nA\n```').blocks[0];
-    assert.match(malformed?.validationError ?? '', /范围格式无效/);
-    const ambiguous = parseModelReply('### 文件：a.ts、b.ts\n```ts\nA\n```').blocks[0];
-    assert.equal(ambiguous?.filePath, null);
-    assert.match(ambiguous?.validationError ?? '', /文件路径格式无效/);
-  });
-
-  it('无路径 shell 是附属内容，有明确路径的 shell 文件仍参与文件校验', () => {
-    const result = parseModelReply('```bash\nnpm install\n```\n### 文件：scripts/setup.sh\n### 范围：1-1\n```bash\necho hello\n```');
-    assert.equal(result.blocks[0]?.kind, 'other');
-    assert.equal(result.blocks[1]?.kind, undefined);
-    assert.equal(result.blocks[1]?.filePath, 'scripts/setup.sh');
-    assert.equal(result.hasUnresolved, false);
-  });
-
-  it('shell 块有无效文件标签时不能归为附属内容而隐藏错误', () => {
-    const block = parseModelReply('### 文件：a.sh、b.sh\n```bash\necho hello\n```').blocks[0];
-    assert.equal(block?.kind, undefined);
-    assert.match(block?.validationError ?? '', /文件路径格式无效/);
-  });
-
-  it('显式标签支持点文件、自定义扩展名和无扩展名', () => {
-    assert.equal(matchHeadingLine('### 文件：backend/.env'), 'backend/.env');
-    assert.equal(matchHeadingLine('### 文件：backend/schema.prisma'), 'backend/schema.prisma');
-    assert.equal(matchHeadingLine('### 文件：Dockerfile'), 'Dockerfile');
-    assert.equal(matchHeadingLine('### 文件：local.custom-ext'), 'local.custom-ext');
-  });
-});
-
-describe('路径注释的歧义与格式错误', () => {
-  it('无标题的双路径注释阻塞自身，下一有效块仍有明确目标', () => {
-    const result = parseModelReply('```ts\n// src/a.ts src/b.ts\nA\n```\n### 文件：src/c.ts\n### 范围：1-1\n```ts\nC\n```');
-    assert.equal(result.blocks[0]?.filePath, null);
-    assert.match(result.blocks[0]?.validationError ?? '', /路径注释包含多个/);
-    assert.equal(result.blocks[1]?.filePath, 'src/c.ts');
-    assert.equal(result.blocks[1]?.validationError, undefined);
-    assert.equal(matchPathCommentLine('// src/a.ts src/b.ts'), null);
-  });
-
-  it('明确标题不能覆盖首行注释的多路径歧义', () => {
-    const block = parseModelReply('### 文件：src/a.ts\n### 范围：1-1\n```ts\n// src/a.ts src/b.ts\nA\n```').blocks[0];
-    assert.equal(block?.filePath, 'src/a.ts');
-    assert.match(block?.validationError ?? '', /路径注释包含多个/);
-  });
-
-  it('shell 双路径注释不能归为附属内容并掩盖格式错误', () => {
-    const block = parseModelReply('```bash\n# scripts/a.sh scripts/b.sh\necho hello\n```').blocks[0];
-    assert.equal(block?.filePath, null);
-    assert.equal(block?.kind, undefined);
-    assert.match(block?.validationError ?? '', /路径注释包含多个/);
-  });
-
-  it('无效显式文件标签阻塞，合法含空格中文文件名仍被接受', () => {
-    for (const line of ['# file:', '# path: ../a.sh', '# 文件：a.sh、b.sh', '# file: "a.sh"']) {
-      const block = parseModelReply('```bash\n' + line + '\necho hello\n```').blocks[0];
-      assert.equal(block?.kind, undefined, line);
-      assert.equal(block?.filePath, null, line);
-      assert.ok(block?.validationError, line);
+function pair(oldText: string, newText: string): string {
+  return `<<<<<<< SEARCH\n${oldText}\n=======\n${newText}\n>>>>>>> REPLACE`;
+}
+function reply(operation: string, body: string, path = 'src/a.ts', fence = '````'): string {
+  return `### 文件：${path}\n\n### 操作：${operation}\n\n${fence}typescript\n${body}\n${fence}`;
+}
+function block(operation: string, body: string, path = 'src/a.ts'): ParsedCodeBlock {
+  return parseModelReply(reply(operation, body, path)).blocks[0]!;
+}
+function apply(original: string, edits: TextEdit[]) {
+  return computeApply(original, block('替换', edits.map((edit) => pair(edit.oldText, edit.newText)).join('\n\n')));
+}
+
+describe('路径入口', () => {
+  it('相对路径标准化，保留绝对路径供白名单拒绝，上跳不是建议路径', () => {
+    assert.equal(normalizeRelPath('./src\\a.ts'), 'src/a.ts');
+    assert.equal(normalizeRelPath('../a.ts'), null);
+    assert.equal(normalizeRelPath('C:\\test\\a.ts'), 'C:/test/a.ts');
+    assert.equal(normalizeRelPath(''), null);
+  });
+  it('正文路径候选只供诊断并按Windows语义去重', () => {
+    assert.deepEqual(extractPathMentions('src/a.ts SRC/A.ts src/b.prisma'), ['src/a.ts', 'src/b.prisma']);
+    assert.deepEqual(extractPathMentions('普通正文'), []);
+  });
+  it('显式文件标签支持点文件、中文空格和无扩展名', () => {
+    for (const file of ['backend/.env', 'BLIP 阅读笔记.md', 'Dockerfile', 'src/schema.prisma', 'my.custom-ext']) {
+      assert.equal(matchHeadingLine(`### 文件：${file}`), file);
     }
-    assert.equal(matchPathCommentLine('// 文件：BLIP 阅读笔记.md'), 'BLIP 阅读笔记.md');
+    assert.equal(matchHeadingLine('### src/a.ts'), 'src/a.ts');
+    assert.equal(matchHeadingLine('1. `src/a.ts`'), 'src/a.ts');
+    assert.equal(matchHeadingLine('请修改 src/a.ts'), null);
+    assert.equal(matchHeadingLine('### 请修改 src/a.ts'), null);
+    assert.equal(matchHeadingLine('### 文件：a.ts、b.ts'), null);
+  });
+  it('独立路径注释入口识别单文件但不接受双目标', () => {
+    for (const line of ['// src/a.ts', '# src/a.ts', '<!-- src/a.ts -->', '-- src/a.ts', '/* src/a.ts */']) {
+      assert.equal(matchPathCommentLine(line), 'src/a.ts');
+    }
+    assert.equal(matchPathCommentLine('// BLIP 阅读笔记.md'), 'BLIP 阅读笔记.md');
     assert.equal(matchPathCommentLine('// src/my file.ts'), 'src/my file.ts');
-    assert.equal(matchPathCommentLine('# file: Dockerfile'), 'Dockerfile');
+    assert.equal(matchPathCommentLine('// src/a.ts src/b.ts'), null);
+    assert.equal(matchPathCommentLine('# file:'), null);
+  });
+  it('旧范围入口只读取显示诊断，不影响原文定位', () => {
+    assert.deepEqual(matchRangeDirective('### 范围：10-19'), { start: 10, end: 19 });
+    assert.equal(matchRangeDirective('普通正文'), null);
+    assert.deepEqual(getLineRange('a\r\nb\rc', 2, 3), ['b', 'c']);
   });
 });
 
-describe('只读附属内容的分类边界', () => {
-  it('没有修改元数据时，各种语言与无语言围栏统一只读，不报缺路径', () => {
-    const result = parseModelReply([
-      '```bash', 'npm install', '```',
-      '```text', '+-----+', '| IDE |', '+-----+', '```',
-      '```mermaid', 'flowchart LR', 'A --> B', '```',
-      '```ts', 'const example = 1;', '```',
-      '```', 'cd backend', 'npm install', 'npm run db:generate', 'npm run db:push', 'npm run seed', '```',
-    ].join('\n'));
-    assert.equal(result.blocks.length, 5);
-    assert.ok(result.blocks.every((block) => block.kind === 'other' && block.filePath === null));
-    assert.deepEqual(result.blocks.map((block) => block.language), ['bash', 'text', 'mermaid', 'ts', '']);
-    assert.equal(result.hasUnresolved, false);
-    assert.ok(result.notes.some((note) => note.includes('5 段附属内容只读展示')));
-    assert.ok(result.notes.every((note) => !note.includes('请 AI 补充')));
-    assert.equal(result.blocks[4]?.code.split('\n').length, 5);
+describe('完整围栏与无损正文', () => {
+  it('四反引号围栏保留首尾空行、空格、Tab和文本偏移', () => {
+    const source = reply('新建', '\n\t a  \n\n');
+    const fences = splitFences(source);
+    assert.equal(fences.length, 1);
+    assert.equal(fences[0]?.closed, true);
+    assert.equal(fences[0]?.fenceLength, 4);
+    assert.equal(fences[0]?.body, '\n\t a  \n\n');
+    assert.equal(source.slice(fences[0]!.bodyStart, fences[0]!.bodyStart + fences[0]!.body.length), fences[0]!.body);
   });
-
-  it('有范围但缺路径的 shell 仍是待修改块，必须提示补充路径', () => {
-    const result = parseModelReply('### 范围：10-10\n```bash\necho hello\n```');
-    const block = result.blocks[0];
-    assert.equal(block?.kind, undefined);
-    assert.equal(block?.filePath, null);
-    assert.deepEqual(block?.range, { start: 10, end: 10 });
-    assert.equal(result.hasUnresolved, true);
-    assert.ok(result.notes.some((note) => note.includes('请 AI 补充')));
+  it('空的新建或覆盖有实际完整围栏，正文是真正空字符串', () => {
+    for (const operation of ['新建', '覆盖全文']) {
+      const parsed = block(operation, '');
+      assert.equal(parsed.code, '');
+      assert.equal(parsed.validationError, undefined);
+    }
   });
-
-  it('无效范围与冲突路径不归为附属内容，已有元数据错误必须保留', () => {
-    const result = parseModelReply([
-      '### 范围：1-x', '```mermaid', 'A --> B', '```',
-      '### 文件：a.ts', '### 文件：b.ts', '```text', 'code', '```',
-      '### 文件：', '```', 'content', '```',
-    ].join('\n'));
-    assert.equal(result.blocks.length, 3);
-    assert.ok(result.blocks.every((block) => block.kind === undefined && block.validationError));
-    assert.equal(result.hasUnresolved, true);
+  it('Windows CRLF/CR 多块仍有清晰边界且不清理正文空白', () => {
+    for (const eol of ['\r\n', '\r']) {
+      const source = (reply('新建', 'A', 'a.ts') + '\n\n' + reply('新建', 'B', 'b.ts')).replace(/\n/g, eol);
+      const parsed = parseModelReply(source);
+      assert.equal(parsed.blocks.length, 2);
+      assert.deepEqual(parsed.blocks.map((item) => item.filePath), ['a.ts', 'b.ts']);
+      assert.deepEqual(parsed.blocks.map((item) => item.code), ['A', 'B']);
+    }
   });
-
-  it('有明确文件路径的流程图或普通文本仍是文件变更，分类与语言无关', () => {
-    const result = parseModelReply([
-      '### 文件：docs/flow.mmd', '### 范围：1-2', '```mermaid', 'flowchart LR', 'A --> B', '```',
-      '### 文件：scripts/setup.sh', '### 范围：1-1', '```bash', 'echo hello', '```',
-    ].join('\n'));
-    assert.ok(result.blocks.every((block) => block.kind === undefined));
-    assert.deepEqual(result.blocks.map((block) => block.filePath), ['docs/flow.mmd', 'scripts/setup.sh']);
-    assert.equal(result.hasUnresolved, false);
+  it('嵌套较短围栏按内容保留，不成为第二个文件块', () => {
+    const body = '# 文档\n```ts\nconst example = 1;\n```\n';
+    const parsed = block('新建', body, 'docs/example.md',);
+    assert.equal(parsed.code, body);
+    assert.equal(parsed.validationError, undefined);
   });
+  it('更长关闭围栏可以闭合，较短关闭不能闭合', () => {
+    assert.equal(splitFences('````text\na\n`````')[0]?.closed, true);
+    assert.equal(splitFences('`````text\na\n````')[0]?.closed, false);
+  });
+  it('残缺围栏保留可见正文并阻塞，不容忍为可写文本', () => {
+    const parsed = parseModelReply('### 文件：a.ts\n### 操作：新建\n````ts\nconst a = 1;\n').blocks[0]!;
+    assert.equal(parsed.code, 'const a = 1;\n');
+    assert.match(parsed.validationError ?? '', /未闭合/);
+    assert.equal(computeApply('', parsed).ok, false);
+  });
+  it('修改必须使用四反引号，普通只读示例可保留Markdown三围栏', () => {
+    assert.match(block('新建', 'A', 'a.ts',).validationError ?? '', /^$/);
+    const short = parseModelReply(reply('新建', 'A', 'a.ts', '```')).blocks[0]!;
+    assert.match(short.validationError ?? '', /四个反引号/);
+    const readonly = parseModelReply('```ts\nconst example = 1;\n```').blocks[0]!;
+    assert.equal(readonly.kind, 'other');
+  });
+  it('缺少围栏不能被当成空文件，缺正文元数据也保持诊断', () => {
+    for (const source of ['### 文件：a.ts\n### 操作：新建', '### 文件：a.ts\n### 操作：覆盖全文\ncontent']) {
+      const parsed = parseModelReply(source);
+      assert.equal(parsed.blocks.length, 1);
+      assert.match(parsed.blocks[0]?.validationError ?? '', /缺少完整代码围栏/);
+      assert.equal(parsed.hasUnresolved, true);
+    }
+    assert.equal(parseModelReply('普通说明').blocks.length, 0);
+    assert.equal(parseModelReply('').blocks.length, 0);
+  });
+});
 
-  it('同批文件变更与附属内容独立分类，不从正文或前块猜路径', () => {
-    const result = parseModelReply('### 文件：a.ts\n### 范围：1-1\n```ts\nA\n```\n例如另一个 `a.ts` 示例：\n```ts\nB\n```');
-    assert.equal(result.blocks[0]?.kind, undefined);
-    assert.equal(result.blocks[0]?.filePath, 'a.ts');
-    assert.equal(result.blocks[1]?.kind, 'other');
-    assert.equal(result.blocks[1]?.filePath, null);
-    assert.equal(result.blocks[1]?.range, null);
-    assert.equal(result.hasUnresolved, false);
+describe('明确操作和独立元数据', () => {
+  it('三种操作有明确枚举，语言不推断操作', () => {
+    assert.equal(block('替换', pair('old', 'new')).operation, 'replace');
+    assert.equal(block('新建', 'text').operation, 'create');
+    assert.equal(block('覆盖全文', 'text').operation, 'overwrite');
+    assert.equal(block('新建', 'text').language, 'typescript');
+  });
+  it('新建和覆盖的SEARCH样本文字按字面写入，不再二次解释', () => {
+    const body = '// src/another.ts\n' + pair('', 'literal marker') + '\n';
+    for (const operation of ['新建', '覆盖全文']) {
+      const parsed = block(operation, body);
+      assert.equal(parsed.code, body);
+      assert.equal(parsed.edits, undefined);
+      assert.equal(parsed.strippedPathLine, null);
+      const result = computeApply('before', parsed);
+      assert.equal(result.ok && result.text, body);
+    }
+  });
+  it('SEARCH/REPLACE正文首行路径注释是实际匹配文本，绝不剥除', () => {
+    const oldText = '// src/another.ts\nconst value = 1;';
+    const parsed = block('替换', pair(oldText, '// src/another.ts\nconst value = 2;'));
+    assert.equal(parsed.edits?.[0]?.oldText, oldText);
+    assert.equal(parsed.filePath, 'src/a.ts');
+    assert.equal(parsed.strippedPathLine, null);
+    assert.equal(computeApply(oldText, parsed).ok, true);
+  });
+  it('文件/操作标题之间的空行合法，正文形成元数据边界', () => {
+    const parsed = block('新建', 'A');
+    assert.equal(parsed.filePath, 'src/a.ts');
+    const separated = parseModelReply('### 文件：a.ts\n说明是一个示例\n````ts\nA\n````').blocks[0]!;
+    assert.equal(separated.filePath, null);
+    assert.equal(separated.kind, undefined);
+    assert.match(separated.validationError ?? '', /缺少完整代码围栏/);
+    assert.equal(parseModelReply('### 文件：a.ts\n说明是一个示例\n````ts\nA\n````').blocks[1]?.kind, 'other');
+  });
+  it('缺操作、未知操作、缺文件路径不会自动推断', () => {
+    for (const source of [
+      '### 文件：a.ts\n````ts\nA\n````',
+      reply('update', 'A'),
+      reply('toString', 'A'),
+      reply('__proto__', 'A'),
+      '### 操作：新建\n````ts\nA\n````',
+    ]) {
+      const parsed = parseModelReply(source);
+      assert.equal(parsed.hasUnresolved, true);
+      assert.ok(parsed.blocks[0]?.validationError);
+      assert.equal(parsed.blocks[0]?.kind, undefined);
+      assert.equal(computeApply('', parsed.blocks[0]!).ok, false);
+    }
+  });
+  it('文件/操作重复冲突阻塞本块，下个文件仍有独立合法操作', () => {
+    const source = '### 文件：a.ts\n### 文件：b.ts\n### 操作：新建\n### 操作：覆盖全文\n````ts\nA\n````\n' + reply('新建', 'C', 'c.ts');
+    const parsed = parseModelReply(source);
+    assert.match(parsed.blocks[0]?.validationError ?? '', /路径相互冲突/);
+    assert.match(parsed.blocks[0]?.validationError ?? '', /操作相互冲突/);
+    assert.equal(parsed.blocks[1]?.filePath, 'c.ts');
+    assert.equal(parsed.blocks[1]?.validationError, undefined);
+  });
+  it('相同文件大小写和相同操作重复不构造歧义', () => {
+    const parsed = parseModelReply('### 文件：SRC/a.ts\n### 文件：src/A.ts\n### 操作：新建\n### 操作：新建\n````ts\nA\n````').blocks[0]!;
+    assert.equal(parsed.filePath, 'SRC/a.ts');
+    assert.equal(parsed.validationError, undefined);
+  });
+  it('旧范围不能与新协议混写，旧范围独自也不能落盘', () => {
+    for (const source of [
+      '### 文件：a.ts\n### 范围：10-10\n````ts\nA\n````',
+      '### 文件：a.ts\n### 操作：替换\n### 范围：1-1\n````ts\n' + pair('A', 'B') + '\n````',
+      '### 范围：1-x\n````bash\necho hello\n````',
+    ]) {
+      const parsed = parseModelReply(source).blocks[0]!;
+      assert.equal(parsed.range, null);
+      assert.match(parsed.validationError ?? '', /旧行号/);
+      assert.equal(parsed.kind, undefined);
+      assert.equal(computeApply('A', parsed).ok, false);
+    }
+  });
+  it('正文路径唯一提及和上个块的文件都不能补足下个块', () => {
+    const source = reply('新建', 'A') + '\n请把 `src/a.ts` 修改：\n````ts\n' + pair('A', 'B') + '\n````';
+    const parsed = parseModelReply(source);
+    assert.equal(parsed.blocks[1]?.filePath, null);
+    assert.match(parsed.blocks[1]?.validationError ?? '', /缺少明确文件/);
+    assert.equal(parsed.blocks[1]?.kind, undefined);
+  });
+  it('旧首行路径注释只有诊断含义，不再提供新协议写入能力', () => {
+    for (const line of ['// a.ts', '// a.ts b.ts', '# file:']) {
+      const parsed = parseModelReply('````ts\n' + line + '\nA\n````').blocks[0]!;
+      assert.ok(parsed.validationError);
+      assert.equal(parsed.kind, undefined);
+      assert.equal(parsed.code, line + '\nA');
+    }
+  });
+});
+
+describe('只读上下文与附属内容', () => {
+  it('上下文头部允许原文含协议示例，仍只读且不解释为修改', () => {
+    const source = '### 上下文文件：src/a.ts\n### 上下文：完整原文\n````ts\n' + pair('A', 'B') + '\n````';
+    const parsed = parseModelReply(source);
+    assert.equal(parsed.blocks[0]?.kind, 'other');
+    assert.equal(parsed.hasUnresolved, false);
+    assert.equal(parsed.blocks[0]?.edits, undefined);
+    assert.equal(computeApply('', parsed.blocks[0]!).ok, false);
+  });
+  it('上下文与操作混用明确阻塞，不能被只读归类隐藏', () => {
+    const parsed = parseModelReply('### 上下文文件：a.ts\n### 文件：a.ts\n### 操作：新建\n````ts\nA\n````').blocks[0]!;
+    assert.equal(parsed.kind, undefined);
+    assert.match(parsed.validationError ?? '', /不能混用/);
+  });
+  it('无修改线索的命令/流程图/ASCII/代码示例和无语言内容只读', () => {
+    for (const language of ['bash', 'mermaid', 'text', 'ts', '']) {
+      const parsed = parseModelReply(`\`\`\`\`${language}\nplain text\n\`\`\`\``);
+      assert.equal(parsed.blocks[0]?.kind, 'other');
+      assert.equal(parsed.hasUnresolved, false);
+    }
+  });
+  it('无路径但有SEARCH标记属于待补充修改，不是普通只读内容', () => {
+    const parsed = parseModelReply('````text\n' + pair('A', 'B') + '\n````');
+    assert.equal(parsed.blocks[0]?.kind, undefined);
+    assert.equal(parsed.hasUnresolved, true);
+    assert.match(parsed.blocks[0]?.validationError ?? '', /缺少明确文件/);
+  });
+});
+
+describe('SEARCH/REPLACE结构', () => {
+  it('单个与多个替换对保留原文和新文中的首尾空白', () => {
+    const parsed = block('替换', pair('\n\t old  \n', '\n\t new  \n\n') + '\n\n' + pair('tail', 'end'));
+    assert.deepEqual(parsed.edits, [
+      { oldText: '\n\t old  \n', newText: '\n\t new  \n\n' },
+      { oldText: 'tail', newText: 'end' },
+    ]);
+    assert.equal(parsed.validationError, undefined);
+  });
+  it('空SEARCH拒绝，空REPLACE用于删除', () => {
+    assert.match(block('替换', pair('', 'A')).validationError ?? '', /不能为空/);
+    assert.deepEqual(block('替换', pair('A', '')).edits, [{ oldText: 'A', newText: '' }]);
+  });
+  it('残缺对、结构外文本及标记行冲突拒绝，不猜分隔位置', () => {
+    for (const body of [
+      '<<<<<<< SEARCH\nA\n=======\nB',
+      'A', pair('A', 'B') + '\nextra',
+      pair('A\n<<<<<<< SEARCH\nC', 'B'),
+      pair('A\n=======\nC', 'B'),
+      pair('A', 'B\n>>>>>>> REPLACE\nC'),
+      '<<<<<<< SEARCH\nA\n>>>>>>> REPLACE',
+    ]) assert.ok(block('替换', body).validationError, body);
+  });
+  it('1|等行号文本按字面保留，不能清理为可匹配的其他代码', () => {
+    const parsed = block('替换', pair('  1| old  ', '  1| new  '));
+    assert.equal(parsed.edits?.[0]?.oldText, '  1| old  ');
+    assert.equal(computeApply('old', parsed).ok, false);
+    assert.equal(computeApply('  1| old  ', parsed).ok, true);
+  });
+});
+
+describe('唯一精确匹配与原子计算', () => {
+  it('行内删除与包含末尾换行的替换按真实换行数报告增量', () => {
+    const inline = apply('foo old bar', [{ oldText: 'old', newText: '' }]);
+    assert.equal(inline.ok, true); if (!inline.ok) return;
+    assert.equal(inline.text, 'foo  bar'); assert.equal(inline.locations[0]!.lineDelta, 0);
+    assert.equal(inline.locations[0]!.newRange, null);
+    const join = apply('foo\r\nbar', [{ oldText: 'foo\n', newText: 'NEW' }]);
+    assert.equal(join.ok, true); if (!join.ok) return;
+    assert.equal(join.text, 'NEWbar'); assert.equal(join.locations[0]!.lineDelta, -1);
+    assert.deepEqual(join.locations[0]!.oldRange, { start: 1, end: 1 });
+    assert.deepEqual(join.locations[0]!.newRange, { start: 1, end: 1 });
+  });
+  it('行内替换不补换行，区间外文本完整保留', () => {
+    const result = apply('before old after', [{ oldText: 'old', newText: 'NEW' }]);
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.text, 'before NEW after');
+    assert.equal(result.mode, 'replace');
+    assert.equal(result.replaced, 'old');
+    assert.deepEqual(result.locations, [{ start: 7, end: 10, oldRange: { start: 1, end: 1 }, newRange: { start: 1, end: 1 }, lineDelta: 0 }]);
+  });
+  it('10行位置替换为十行新内容，后续原文只按结果偏移', () => {
+    const lines = Array.from({ length: 25 }, (_, i) => `原第 ${i + 1} 行`);
+    const added = Array.from({ length: 10 }, (_, i) => `新第 ${i + 1} 行`).join('\n');
+    const result = apply(lines.join('\n'), [{ oldText: lines[9]!, newText: added }]);
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.deepEqual(result.text.split('\n').slice(19), lines.slice(10));
+    assert.deepEqual(result.locations[0]?.oldRange, { start: 10, end: 10 });
+    assert.deepEqual(result.locations[0]?.newRange, { start: 10, end: 19 });
+  });
+  it('没有匹配和重复匹配均拒绝，包含重叠出现的重复也不能默选', () => {
+    const no = apply('old', [{ oldText: 'OLD', newText: 'new' }]);
+    assert.equal(!no.ok && no.reason, 'search-not-found');
+    const repeated = apply('old old', [{ oldText: 'old', newText: 'new' }]);
+    assert.equal(!repeated.ok && repeated.reason, 'search-ambiguous');
+    const overlapping = apply('aaa', [{ oldText: 'aa', newText: 'b' }]);
+    assert.equal(!overlapping.ok && overlapping.reason, 'search-ambiguous');
+  });
+  it('缩进、Tab和尾部空格必须精确，不因空白清理获得错误匹配', () => {
+    for (const search of ['old', ' old', '  old', '\told']) {
+      const result = apply('  old  ', [{ oldText: search, newText: 'new' }]);
+      // 子串本来精确存在时允许；多/少空白不能被“扩大”替换范围。
+      if (search !== '\told') {
+        assert.equal(result.ok, true);
+        if (result.ok) assert.equal(result.replaced, search);
+      } else assert.equal(!result.ok && result.reason, 'search-not-found');
+    }
+    assert.equal(apply('old', [{ oldText: 'old ', newText: 'new' }]).ok, false);
+  });
+  it('多对先在原基线定位，不让前对的新内容成为后对SEARCH', () => {
+    const result = apply('old tail', [{ oldText: 'old', newText: 'brandnew' }, { oldText: 'brandnew', newText: 'BAD' }]);
+    assert.equal(!result.ok && result.reason, 'search-not-found');
+  });
+  it('多对按原文位置计算，返回位置仍与输入对顺序一致', () => {
+    const result = apply('first\nsecond\nthird', [
+      { oldText: 'third', newText: 'T' }, { oldText: 'first', newText: 'F\nF2' },
+    ]);
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.text, 'F\nF2\nsecond\nT');
+    assert.deepEqual(result.locations[0]?.oldRange, { start: 3, end: 3 });
+    assert.deepEqual(result.locations[0]?.newRange, { start: 4, end: 4 });
+    assert.deepEqual(result.locations[1]?.newRange, { start: 1, end: 2 });
+  });
+  it('重叠SEARCH拒绝整块，相邻SEARCH不重叠', () => {
+    const overlap = apply('abcdef', [{ oldText: 'abc', newText: 'X' }, { oldText: 'cde', newText: 'Y' }]);
+    assert.equal(!overlap.ok && overlap.reason, 'overlap');
+    const adjacent = apply('abcdef', [{ oldText: 'abc', newText: 'X' }, { oldText: 'def', newText: 'Y' }]);
+    assert.equal(adjacent.ok && adjacent.text, 'XY');
+  });
+  it('插入保留真实上下文，删除可删除全部或最后一行且不留额外换行', () => {
+    const inserted = apply('head\ntail', [{ oldText: 'head', newText: 'head\ninserted' }]);
+    assert.equal(inserted.ok && inserted.text, 'head\ninserted\ntail');
+    const all = apply('all', [{ oldText: 'all', newText: '' }]);
+    assert.equal(all.ok && all.text, '');
+    if (all.ok) assert.equal(all.locations[0]?.newRange, null);
+    assert.equal(apply('head\ntail', [{ oldText: '\ntail', newText: '' }]).ok, true);
+    const last = apply('head\ntail', [{ oldText: '\ntail', newText: '' }]);
+    assert.equal(last.ok && last.text, 'head');
+  });
+  it('无末尾换行、首尾空白与Unicode逐字保留', () => {
+    const result = apply('\n\t你好😀  \nend ', [{ oldText: '你好😀', newText: '世界🌍' }]);
+    assert.equal(result.ok && result.text, '\n\t世界🌍  \nend ');
+  });
+  it('新文代码围栏作为普通字符计算，不二次解析', () => {
+    const parsed = parseModelReply(reply('替换', pair('old', '```ts\nconst value = 1;\n```'), 'a.md', '`````')).blocks[0]!;
+    const result = computeApply('old', parsed);
+    assert.equal(result.ok && result.text, '```ts\nconst value = 1;\n```');
+  });
+  it('手工构造的空SEARCH也由计算入口拒绝', () => {
+    const parsed = block('替换', pair('A', 'B'));
+    parsed.edits = [{ oldText: '', newText: 'B' }];
+    const result = computeApply('A', parsed);
+    assert.equal(!result.ok && result.reason, 'empty-search');
+  });
+});
+
+describe('换行映射与全文操作', () => {
+  it('LF原文可匹配CRLF SEARCH，新增换行继承原文件风格', () => {
+    const result = apply('head\nold\ntail', [{ oldText: 'old\r\ntail', newText: 'NEW\r\nTAIL' }]);
+    assert.equal(result.ok && result.text, 'head\nNEW\nTAIL');
+  });
+  it('CRLF文件返回原字符偏移，并正确显示以换行结尾的原区域', () => {
+    const result = apply('head\r\nold\r\ntail', [{ oldText: 'old\n', newText: 'NEW\nEXTRA\n' }]);
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.text, 'head\r\nNEW\r\nEXTRA\r\ntail');
+    assert.deepEqual(result.locations[0], { start: 6, end: 11, oldRange: { start: 2, end: 2 }, newRange: { start: 2, end: 3 }, lineDelta: 1 });
+    assert.equal(result.replaced, 'old\r\n');
+  });
+  it('CR文件与混合换行仅规范匹配，区间外原字符保持不变', () => {
+    const cr = apply('head\rold\rtail', [{ oldText: 'old\ntail', newText: 'NEW\nTAIL' }]);
+    assert.equal(cr.ok && cr.text, 'head\rNEW\rTAIL');
+    const mixed = apply('head\r\nold\rtail\nend', [{ oldText: 'old', newText: 'NEW\nMORE' }]);
+    assert.equal(mixed.ok && mixed.text, 'head\r\nNEW\r\nMORE\rtail\nend');
+  });
+  it('新建按全文字面计算，覆盖全文继承原文件换行，空覆盖结果为空', () => {
+    const create = computeApply('', block('新建', '\n a  \r\n\t\n'));
+    assert.equal(create.ok && create.text, '\n a  \r\n\t\n');
+    if (create.ok) assert.equal(create.locations[0]?.oldRange, null);
+    const overwrite = computeApply('before\r\nend', block('覆盖全文', '\nnew\n'));
+    assert.equal(overwrite.ok && overwrite.text, '\r\nnew\r\n');
+    const empty = computeApply('before', block('覆盖全文', ''));
+    assert.equal(empty.ok && empty.text, '');
+    if (empty.ok) assert.equal(empty.locations[0]?.newRange, null);
+  });
+  it('只读、缺操作、旧range和解析失败的对象不能绕过计算入口', () => {
+    const valid = block('新建', 'A');
+    for (const unsafe of [
+      { ...valid, kind: 'other' as const }, { ...valid, operation: undefined },
+      { ...valid, range: { start: 1, end: 1 } }, { ...valid, validationError: 'invalid' },
+      { ...valid, filePath: null },
+    ]) assert.equal(computeApply('before', unsafe).ok, false);
+  });
+});
+
+describe('元数据及非法标记不被只读归类隐藏', () => {
+  it('同回复中漏围栏文件单独显示错误，后续合法文件可正常处理', () => {
+    const source = '### 文件：missing.ts\n### 操作：新建\n缺少代码框\n\n' + reply('新建', 'C', 'c.ts');
+    const parsed = parseModelReply(source);
+    assert.equal(parsed.blocks.length, 2);
+    assert.match(parsed.blocks[0]?.validationError ?? '', /缺少完整代码围栏/);
+    assert.equal(parsed.blocks[1]?.filePath, 'c.ts');
+    assert.equal(parsed.blocks[1]?.validationError, undefined);
+  });
+  it('旧的裸文件标题仅作路径诊断，不自动兼容新协议写入', () => {
+    const parsed = parseModelReply('### a.ts\n### 操作：新建\n````ts\nA\n````').blocks[0]!;
+    assert.equal(parsed.filePath, 'a.ts');
+    assert.match(parsed.validationError ?? '', /显式声明/);
+    assert.equal(computeApply('', parsed).ok, false);
+  });
+  it('无标题但有非法SEARCH标记的块仍需补充新协议', () => {
+    for (const content of [' <<<<<<< SEARCH\nA', '<<<<<<<< SEARCH\nA', '========\nA', '>>>>>>>  REPLACE']) {
+      const parsed = parseModelReply('````text\n' + content + '\n````').blocks[0]!;
+      assert.equal(parsed.kind, undefined);
+      assert.ok(parsed.validationError);
+    }
   });
 });

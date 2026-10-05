@@ -18,12 +18,15 @@
   }
   function rangeLabel(block) {
     if (block.kind === 'other') return '只读内容 · ' + block.codeLines + ' 行（只读）';
-    if (block.fileExists === false && block.applicable && block.filePath) return '新增文件 · ' + block.codeLines + ' 行';
-    if (!block.range) return '未指定范围 · ' + block.codeLines + ' 行';
-    const old = block.range;
-    const delta = block.codeLines - (old.end - old.start + 1);
-    const next = block.codeLines > 0 ? old.start + '–' + (old.start + block.codeLines - 1) : '删除该区域';
-    return '原 ' + old.start + '–' + old.end + ' → 新 ' + next +
+    if (block.operation === 'create') return '新增文件 · ' + block.codeLines + ' 行';
+    if (block.operation === 'overwrite') return '覆盖全文 · ' + block.codeLines + ' 行';
+    const locations = block.locations || [];
+    if (!locations.length) return '信息待补充 · ' + block.codeLines + ' 行';
+    if (locations.length > 1) return locations.length + ' 处精确替换';
+    const old = locations[0].oldRange; const next = locations[0].newRange;
+    if (!old) return '信息待补充 · ' + block.codeLines + ' 行';
+    const delta = locations[0].lineDelta;
+    return '原 ' + old.start + '–' + old.end + ' → 新 ' + (next ? next.start + '–' + next.end : '删除该区域') +
       '（' + (delta > 0 ? '+' : '') + delta + ' 行）';
   }
   function applyEvent(preview, applied, event) {

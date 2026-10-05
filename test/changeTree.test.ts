@@ -36,7 +36,8 @@ class Element {
   }
 }
 function block(index: number, filePath = 'src/a.ts', applicable = true) {
-  return { index, filePath, range: { start: 10, end: 10 }, codeLines: 10, applicable,
+  return { index, filePath, operation: 'replace', range: null,
+    locations: [{ start: 100, end: 103, oldRange: { start: 10, end: 10 }, newRange: { start: 10, end: 19 }, lineDelta: 9 }], codeLines: 10, applicable,
     blockedReason: applicable ? undefined : '内容不匹配', hints: [], diff: { added: 10, removed: 1 } };
 }
 function setup(overrides: Record<string, unknown> = {}) {
@@ -79,17 +80,22 @@ it('树按目录文件聚合；筛选后预览仍使用原批次的片段 index'
   ui.nodes.filter.value = 'README'; await ui.nodes.filter.fire('input');
   assert.equal(ui.rows().length, 1); assert.equal(ui.rows()[0].dataset.index, '21');
   await ui.rows()[0].children[0].fire('click');
-  assert.deepEqual(Array.from(ui.shown[0]), ['batch', 21]);
+  assert.deepEqual(Array.from(ui.shown[0]), ['batch', 21, 'docs/readme.md']);
 });
 it('一行替换为十行的范围和增量符合用户的行号预期', () => {
   const ui = setup(); assert.equal(ui.model.rangeLabel(block(4)), '原 10–10 → 新 10–19（+9 行）');
-  assert.equal(ui.model.rangeLabel({ ...block(4), codeLines: 1 }), '原 10–10 → 新 10–10（0 行）');
+  assert.equal(ui.model.rangeLabel({ ...block(4), codeLines: 1, locations: [{ oldRange: { start: 10, end: 10 }, newRange: { start: 10, end: 10 }, lineDelta: 0 }] }), '原 10–10 → 新 10–10（0 行）');
 });
-it('明确路径的新增文件带范围也使用创建入口，缺失元数据保持阻塞', async () => {
-  const ui = setup(); const created = { ...block(4, 'new/a.ts'), range: { start: 1, end: 99 }, fileExists: false, hints: ['目标文件不存在，应用时将创建新文件'] };
+it('触及相同行号也可减少换行，行内删除不能虚报减少一行', () => {
+  const ui = setup();
+  assert.equal(ui.model.rangeLabel({ ...block(4), locations: [{ oldRange: { start: 1, end: 1 }, newRange: { start: 1, end: 1 }, lineDelta: -1 }] }), '原 1–1 → 新 1–1（-1 行）');
+  assert.equal(ui.model.rangeLabel({ ...block(4), locations: [{ oldRange: { start: 1, end: 1 }, newRange: null, lineDelta: 0 }] }), '原 1–1 → 新 删除该区域（0 行）');
+});
+it('明确新建操作使用创建入口，缺失元数据保持阻塞', async () => {
+  const ui = setup(); const created = { ...block(4, 'new/a.ts'), operation: 'create', range: null, locations: [], fileExists: false, hints: ['目标文件不存在，应用时将创建新文件'] };
   assert.equal(ui.model.rangeLabel(created), '新增文件 · 10 行');
-  assert.equal(ui.model.rangeLabel({ ...created, filePath: '', range: null }), '未指定范围 · 10 行');
-  assert.equal(ui.model.rangeLabel({ ...created, applicable: false, range: null }), '未指定范围 · 10 行');
+  assert.equal(ui.model.rangeLabel({ ...created, operation: undefined, filePath: '' }), '信息待补充 · 10 行');
+  assert.equal(ui.model.rangeLabel({ ...created, operation: undefined, applicable: false }), '信息待补充 · 10 行');
   ui.preview([created, { ...block(9, 'missing.ts', false), fileExists: false }]);
   await ui.rows()[0].children[0].fire('click'); assert.ok(ui.detailButton('创建文件'));
   await ui.detailButton('创建文件').fire('click'); assert.equal(ui.writes.length, 1);
@@ -112,6 +118,10 @@ it('集中详情保留改路径；批量应用采用改后路径且跳过已应�
   await ui.detailButton('改路径').fire('click');
   const input = ui.nodes.detail.all(e => e.className === 'pv-path')[0];
   input.value = 'src/correct.ts'; await input.fire('input');
+  assert.equal(ui.nodes['apply-all'].disabled, true);
+  await input.fire('keydown', { key: 'Enter' });
+  assert.deepEqual(Array.from(ui.shown.at(-1)), ['batch', 9, 'src/correct.ts']);
+  assert.equal(ui.nodes['apply-all'].disabled, false);
   ui.publish({ kind: 'applied', collectionId: 'batch', index: 4 });
   await ui.nodes['apply-all'].fire('click');
   assert.equal(ui.writes.length, 1); assert.equal(ui.writes[0].index, 9); assert.equal(ui.writes[0].filePath, 'src/correct.ts');
@@ -227,4 +237,96 @@ it('常驻采集说明移入默认关闭的诊断入口，应用错误仍有可�
   assert.equal(ui.nodes.diagnostics.open, true);
   ui.preview([block(4)], 'next');
   assert.equal(ui.nodes.diagnostics.open, false); assert.equal(ui.nodes.status.hidden, true);
+});
+
+it('覆盖全文有明确入口，实际范围由服务计算数据显示而不读取AI范围', async () => {
+  const ui = setup();
+  const overwrite = { ...block(4), operation: 'overwrite', codeLines: 3,
+    locations: [{ start: 0, end: 20, oldRange: { start: 1, end: 5 }, newRange: { start: 1, end: 3 } }] };
+  assert.equal(ui.model.rangeLabel(overwrite), '覆盖全文 · 3 行');
+  ui.preview([overwrite]); await ui.rows()[0].children[0].fire('click');
+  assert.ok(ui.detailButton('覆盖全文')); assert.equal(ui.detailButton('应用此片段'), undefined);
+  await ui.detailButton('覆盖全文').fire('click');
+  assert.deepEqual(ui.writes.map(input => [input.collectionId, input.index, input.filePath]), [['batch', 4, 'src/a.ts']]);
+});
+
+it('改路径必须结束编辑并等待新目标预览成功，期间单条和全部应用均不会写盘', async () => {
+  let finishPreview: (value: any) => void = () => {};
+  const targets: any[] = [];
+  const ui = setup({ showDiffInEditor: (...args: any[]) => {
+    targets.push(args);
+    return args[2] === 'src/new.ts' ? new Promise(resolve => { finishPreview = resolve; }) : Promise.resolve({ ok: true });
+  } });
+  ui.preview([block(4)]); await ui.rows()[0].children[0].fire('click');
+  await ui.detailButton('改路径').fire('click');
+  const input = ui.nodes.detail.all(e => e.className === 'pv-path')[0];
+  input.value = 'src/new.ts'; await input.fire('input');
+  assert.equal(ui.detailButton('应用此片段').disabled, true);
+  await ui.nodes['apply-all'].fire('click'); assert.equal(ui.writes.length, 0);
+  await input.fire('keydown', { key: 'Enter' });
+  assert.deepEqual(targets.at(-1), ['batch', 4, 'src/new.ts']);
+  assert.equal(ui.detailButton('应用此片段').disabled, true);
+  assert.equal(ui.nodes['apply-all'].disabled, true);
+  await ui.detailButton('应用此片段').fire('click');
+  await ui.nodes['apply-all'].fire('click'); assert.equal(ui.writes.length, 0);
+  finishPreview({ ok: true }); await flush();
+  assert.equal(ui.detailButton('应用此片段').disabled, false);
+  assert.equal(ui.nodes['apply-all'].disabled, false);
+  assert.equal(ui.focused(), ui.detailButton('改路径'));
+  await ui.detailButton('应用此片段').fire('click');
+  assert.equal(ui.writes[0]?.filePath, 'src/new.ts');
+});
+
+it('改路径预览失败后保持不可应用，Escape取消草稿并恢复原目标按钮与焦点', async () => {
+  const ui = setup({ showDiffInEditor: async (_collection: string, _index: number, target: string) =>
+    target === 'src/bad.ts' ? { ok: false, error: '新目标原文不匹配' } : { ok: true } });
+  ui.preview([block(4)]); await ui.rows()[0].children[0].fire('click');
+  await ui.detailButton('改路径').fire('click');
+  let input = ui.nodes.detail.all(e => e.className === 'pv-path')[0];
+  input.value = 'src/bad.ts'; await input.fire('input'); await input.fire('keydown', { key: 'Enter' });
+  assert.equal(ui.detailButton('应用此片段').disabled, true);
+  assert.equal(ui.nodes['apply-all'].disabled, true);
+  assert.match(ui.nodes.status.textContent, /新目标原文不匹配/);
+  await ui.detailButton('改路径').fire('click');
+  input = ui.nodes.detail.all(e => e.className === 'pv-path')[0];
+  await input.fire('keydown', { key: 'Escape' });
+  assert.equal(input.hidden, true); assert.equal(input.value, 'src/a.ts');
+  assert.equal(ui.detailButton('应用此片段').disabled, false);
+  assert.equal(ui.nodes['apply-all'].disabled, false);
+  assert.equal(ui.focused(), ui.detailButton('改路径'));
+  await ui.detailButton('应用此片段').fire('click');
+  assert.equal(ui.writes[0]?.filePath, 'src/a.ts');
+});
+
+it('同批次后端重算刷新期间全部应用继续串行，读取当前条目并保留已应用状态', async () => {
+  const attempts: number[] = []; let pending = 0; let max = 0;
+  let ui: ReturnType<typeof setup>;
+  ui = setup({ applyChange: async (input: any) => {
+    pending++; max = Math.max(max, pending); attempts.push(input.index);
+    await Promise.resolve();
+    if (input.index === 4) {
+      ui.preview([block(4), { ...block(9), locations: [{ start: 120, end: 123, oldRange: { start: 19, end: 19 }, newRange: { start: 19, end: 28 } }] }]);
+      ui.publish({ kind: 'applied', collectionId: 'batch', index: 4 });
+    }
+    pending--; return { ok: true, filePath: input.filePath };
+  } });
+  ui.preview(); await ui.nodes['apply-all'].fire('click');
+  assert.deepEqual(attempts, [4, 9]); assert.equal(max, 1);
+  assert.ok(ui.rows().every(row => row.className.includes('done')));
+  assert.match(ui.nodes.status.textContent, /已应用 2 \/ 2/);
+  assert.equal(ui.nodes['apply-all'].textContent, '全部应用');
+});
+
+it('后端重算使剩余SEARCH阻塞时不提交旧条目，独立文件继续应用且显示具体原因', async () => {
+  const attempts: number[] = []; let ui: ReturnType<typeof setup>;
+  ui = setup({ applyChange: async (input: any) => {
+    attempts.push(input.index);
+    if (input.index === 4) ui.preview([block(4), { ...block(9, 'src/a.ts', false), blockedReason: 'SEARCH 匹配多次' }, block(21, 'docs/c.ts')]);
+    return { ok: true, filePath: input.filePath };
+  } });
+  ui.preview([block(4), block(9), block(21, 'docs/c.ts')]);
+  await ui.nodes['apply-all'].fire('click');
+  assert.deepEqual(attempts, [4, 21]);
+  assert.match(ui.nodes.status.title, /SEARCH 匹配多次/);
+  assert.match(ui.nodes.status.textContent, /已应用 2 \/ 3/);
 });

@@ -38,6 +38,7 @@
 | 活跃计划 | `docs/plans/2026-10-02-mini-ai-ide-poc.md` |
 | 决策记录 | `docs/adr/` |
 | 回程机制（一键同步） | `docs/capabilities/return-path-and-format-contract.md` |
+| 明确编辑协议与复制上下文 | `src/shared/returnPath.ts`、`snippet.ts`、`formatSpec.ts`；应用与基线 owner `src/main/returnPathService.ts`；默认面板资源由 `scripts/copy-static.mjs` 生成 |
 | 应用实现（P2 已落地） | `src/main/`、`src/renderer/`、`src/shared/`；脚本 `scripts/`；测试 `test/` |
 | 视图与入口对照（4 个 WebContentsView） | `src/renderer/index.html`（编辑器）、`preview.*`（回程预览面板）、`webbar.*`（网页区顶栏 / 网页隐藏时的恢复把手）；preload 各自独立 |
 | 需求输入与版本切换 | `src/renderer/promptComposer.js`；结构/样式 `index.html`、`style.css`，状态 IPC `src/main/index.ts`、`preload.ts` |

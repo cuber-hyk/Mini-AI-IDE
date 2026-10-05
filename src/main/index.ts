@@ -29,7 +29,7 @@ import { SettingsStore, PRODUCTION_SETTINGS_FILE, SELF_TEST_SETTINGS_FILE, type 
 import { buildContextSummary } from './contextSummary';
 import { collectReply } from './replyCollector';
 import { ConsumptionStore, sessionKeyOf } from './consumptionStore';
-import { ReturnPathService } from './returnPathService';
+import { ReturnPathService, type PreparedChange } from './returnPathService';
 import { computeLayout, EDITOR_MIN_WIDTH, WEB_MIN_WIDTH, PREVIEW_MIN_WIDTH, PREVIEW_DEFAULT_WIDTH, HANDLE_BAR_WIDTH } from './windowLayout';
 import { runLayoutProbe } from './layoutProbe';
 import { WorkspaceService } from './workspaceService';
@@ -588,12 +588,21 @@ async function loadLocalView(
    * 在**编辑器内**以内联标记显示某个变更（删除行标红、新增行插在旁边）。
    * 主进程负责算出两侧完整文本，编辑器只负责渲染。
    */
-  ipcMain.handle(CHANNELS.showDiffInEditor, async (_e, collectionId: unknown, index: unknown) => {
-    if (typeof collectionId !== 'string' || typeof index !== 'number') {
+  ipcMain.handle(CHANNELS.showDiffInEditor, (_e, collectionId: unknown, index: unknown, target: unknown) => workspaceController.run(async () => {
+    if (typeof collectionId !== 'string' || typeof index !== 'number' || (target !== undefined && typeof target !== 'string')) {
       return { ok: false, error: '参数不合法' };
     }
-    const payload = await buildEditorDiff(collectionId, index);
-    if (!payload) return { ok: false, error: '采集结果已过期或该变更不存在，请重新采集' };
+    const payload = await buildEditorDiff(collectionId, index, typeof target === 'string' ? target : undefined);
+    if (!payload) {
+      const cached = collections.get(collectionId);
+      const block = cached?.blocks[index];
+      if (cached && block && !cached.invalidated.has(index) && !returnPath.isApplied(block)) {
+        const prepared = await returnPath.prepareChange(block, typeof target === 'string' ? target : cached.previewTargets.get(index)?.path ?? block.filePath);
+        await refreshPreview(collectionId);
+        if (!prepared.ok) return { ok: false, error: prepared.error };
+      }
+      return { ok: false, error: '采集结果已过期或该变更不存在，请重新采集' };
+    }
     if (!editorView.webContents.isDestroyed()) {
       editorView.webContents.send(CHANNELS.diffData, payload);
     }
@@ -605,8 +614,9 @@ async function loadLocalView(
     if (!previewView.webContents.isDestroyed()) {
       previewView.webContents.send(CHANNELS.activeDiff, index);
     }
+    await refreshPreview(collectionId);
     return { ok: true };
-  });
+  }));
 
   /**
    * 编辑器内的「上一个 / 下一个」跳转（由 renderer 在切到相邻变更时调用）。
@@ -651,10 +661,49 @@ async function loadLocalView(
     }
   }
 
+  function previewBlock(block: ParsedCodeBlock, prepared: PreparedChange, index: number): ReturnPreview['blocks'][number] {
+    const locations = prepared.ok ? prepared.locations.map(({ oldRange, newRange, lineDelta }) => ({ oldRange, newRange, lineDelta })) : [];
+    const newParts = block.operation === 'replace' ? (block.edits || []).map(edit => edit.newText) : [block.code];
+    const firstLines = newParts.flatMap((part, partIndex) => part.length
+      ? part.split(/\r\n|\r|\n/).map((text, offset) => ({ lineNo: (locations[partIndex]?.newRange?.start ?? 1) + offset, text })) : []);
+    const hints = block.kind === 'other' ? ['其他内容仅供只读查看，不参与应用；文件修改需明确路径和操作'] : [];
+    if (prepared.ok) hints.push(prepared.mode === 'create' ? '新增文件：预览不写盘，应用时创建文件及缺失父目录' :
+      prepared.mode === 'overwrite' ? '覆盖全文：请核对整个文件差异，预览后文件变化会拒绝写入' : '精确替换：SEARCH 唯一匹配，预览后文件变化会拒绝写入');
+    return { index, ...(block.kind ? { kind: block.kind, contentText: block.code } : {}),
+      ...(block.operation ? { operation: block.operation } : {}), filePath: prepared.ok ? prepared.filePath : block.filePath,
+      pathSource: block.pathSource, range: locations[0]?.oldRange ?? null, locations,
+      codeLines: firstLines.length, codeChars: newParts.reduce((size, part) => size + part.length, 0),
+      firstLines: firstLines.slice(0, 6),
+      moreLines: Math.max(0, firstLines.length - 6), diff: prepared.ok ? diffTexts(prepared.before, prepared.after) : null,
+      fileExists: prepared.ok ? prepared.fileExists : prepared.fileExists === true,
+      fileLines: prepared.ok && prepared.fileExists ? prepared.before.split(/\r\n|\r|\n/).length : null,
+      applicable: prepared.ok && !returnPath.isApplied(block),
+      ...(!prepared.ok && block.kind !== 'other' ? { blockedReason: prepared.error } : {}), hints };
+  }
+
+  async function refreshPreview(collectionId: string): Promise<void> {
+    const cached = collections.get(collectionId);
+    if (!cached?.preview) return;
+    const blocks = [];
+    for (let index = 0; index < cached.blocks.length; index += 1) {
+      const block = cached.blocks[index]!;
+      if (cached.invalidated.has(index)) {
+        blocks.push(previewBlock(block, { ok: false, error: '目标已重命名或删除，请重新采集' }, index));
+        continue;
+      }
+      const target = cached.targets.get(index) ?? cached.previewTargets.get(index)?.path ?? block.filePath;
+      const prepared = returnPath.isApplied(block) && target ? returnPath.getPrepared(block, target) :
+        await returnPath.prepareChange(block, target);
+      blocks.push(previewBlock(block, prepared ?? { ok: false, error: '预览已失效，请重新采集' }, index));
+    }
+    cached.preview = { ...cached.preview, blocks };
+    pushPreviewToPanel(cached.preview);
+  }
+
   /**
    * 构造"编辑器内联 diff"所需的两侧完整文本。
    *
-   * 与预览面板共用同一份三向校验：算不出（或校验不过）就返回 null，
+   * 与预览面板共用同一份预览基线复核：算不出（或校验不过）就返回 null，
    * 由调用方报错——**不会出现"显示了 diff 但应用会失败"**的情况。
    *
    * 附带 `siblings` / `position`：编辑器的「上一个 / 下一个」需要在批次内跳转，
@@ -662,30 +711,32 @@ async function loadLocalView(
    */
   async function buildEditorDiff(
     collectionId: string,
-    index: number
+    index: number, target?: string
   ): Promise<import('../shared/contract').EditorDiffPayload | null> {
     const revision = workspace.getState().revision;
     const cached = collections.get(collectionId);
     const block = cached?.blocks[index];
-    if (!cached || cached.invalidated.has(index) || !block || !block.filePath) return null;
+    if (!cached || cached.invalidated.has(index) || !block || !block.filePath || returnPath.isApplied(block)) return null;
 
-    const read = await returnPath.prepareChange(block);
+    const read = await returnPath.prepareChange(block, target ?? cached.previewTargets.get(index)?.path ?? block.filePath);
     if (!read.ok || workspace.getState().revision !== revision || cached.invalidated.has(index)) return null;
     const expected = cached.previewTargets.get(index);
-    if (expected && expected.exists !== read.fileExists) return null;
+    if (expected && expected.path === read.filePath.toLowerCase() && expected.exists !== read.fileExists) return null;
+    cached.previewTargets.set(index, { path: read.filePath.toLowerCase(), exists: read.fileExists });
 
     /* 同批次内可导航的变更（供编辑器「上一个 / 下一个」）。
      必须在 map 之后按类型收窄：`filePath` 可能是 null，而 `exactOptionalPropertyTypes`
      下 optional 字段不接受 null。 */
     const siblings: import('../shared/contract').EditorDiffSibling[] = [];
     cached.blocks.forEach((b, i) => {
-      if (typeof b.filePath === 'string' && cached.previewTargets.has(i) && !cached.invalidated.has(i)) {
+      if (typeof b.filePath === 'string' && cached.previewTargets.has(i) && !cached.invalidated.has(i) && !returnPath.isApplied(b)) {
         siblings.push({ collectionId, index: i, filePath: b.filePath });
       }
     });
 
     return {
       active: true,
+      operation: read.mode,
       workspaceRevision: revision,
       filePath: read.filePath,
       original: read.before,
@@ -747,11 +798,10 @@ async function loadLocalView(
    *
    * 为什么放主进程而不是回传渲染进程：
    *  1. 渲染进程不需要（也不应该）经手大块代码文本；
-   *  2. **片段替换的三向校验需要应用准备时的原文** —— 只有主进程在读文件的同一时刻
-   *     抓取当前行内容，才能得到真正可用的校验基线。让渲染进程转手就做不到可信。
+   *  2. 预览基线由主进程冻结完整原文，应用时复核；渲染进程不能传入或重建旧基线。
    * 只保留最近若干批，避免长期驻留。
    */
-  const collections = new Map<string, { blocks: ParsedCodeBlock[]; at: string; replyLength: number; invalidated: Set<number>; targets: Map<number, string>; previewTargets: Map<number, { path: string; exists: boolean }>; invalidPaths: Array<{ path: string; directory: boolean }> }>();
+  const collections = new Map<string, { blocks: ParsedCodeBlock[]; at: string; replyLength: number; invalidated: Set<number>; targets: Map<number, string>; previewTargets: Map<number, { path: string; exists: boolean }>; preview?: ReturnPreview; invalidPaths: Array<{ path: string; directory: boolean }> }>();
   const MAX_COLLECTIONS = 5;
   let collectionSeq = 0;
 
@@ -784,7 +834,7 @@ async function loadLocalView(
         collection.invalidPaths.push({ path: event.oldRelPath, directory: event.isDirectory });
         const indices: number[] = [];
         collection.blocks.forEach((block, index) => {
-          if (affected(block.filePath) || affected(collection.targets.get(index))) {
+          if (affected(block.filePath) || affected(collection.targets.get(index)) || affected(collection.previewTargets.get(index)?.path)) {
             collection.invalidated.add(index); indices.push(index);
           }
         });
@@ -933,60 +983,16 @@ async function loadLocalView(
     while (collections.size > MAX_COLLECTIONS) {
       const oldest = collections.keys().next();
       if (oldest.done) break;
+      returnPath.forget(collections.get(oldest.value)!.blocks);
       collections.delete(oldest.value);
     }
 
-    const blocks: ReturnPreview['blocks'] = [];
-
-    for (let i = 0; i < parsed.blocks.length; i += 1) {
-      const b = parsed.blocks[i] as ParsedCodeBlock;
-      const hints: string[] = [];
-      if (b.kind === 'other') hints.push('其他内容仅供只读查看，不参与文件应用，也不会执行；如需修改文件，请让 AI 补充文件路径和范围后重新采集');
-      else if (!b.filePath) hints.push('缺少明确文件路径，请让 AI 补充对应代码块的文件标题');
-
-      const prepared = await returnPath.prepareChange(b);
-      const fileExists = prepared.ok ? prepared.fileExists : prepared.fileExists === true;
-      const fileLines = prepared.ok && prepared.fileExists ? prepared.before.split(/\r\n|\r|\n/).length : null;
-      const applicable = prepared.ok;
-      const blockedReason = prepared.ok || b.kind === 'other' ? undefined : prepared.error;
-      if (prepared.ok) {
-        collections.get(collectionId)!.previewTargets.set(i, { path: prepared.filePath.toLowerCase(), exists: prepared.fileExists });
-        if (!prepared.fileExists) hints.push('新增文件：点击应用将创建文件及缺失的父目录；预览不会写盘');
-        else if (b.range) hints.push('片段替换：应用时会用当前行内容做三向校验，不一致将被拒绝');
-      }
-
-      // 行号预览：新建文件从第 1 行起算；已有文件替换用范围起始行，
-      // 这样用户看到的就是**应用后会落在文件里的真实行号**。
-      const previewStart = prepared.ok && prepared.fileExists && b.range ? b.range.start : 1;
-      const allCodeLines = b.code.length === 0 ? [] : b.code.split(/\r\n|\r|\n/);
-      if (prepared.ok && !prepared.fileExists) {
-        if (!b.range) hints.push('新建文件缺少范围标记；将完整写入代码，请让 AI 保持三段式格式');
-        else if (b.range.start !== 1 || b.range.end !== allCodeLines.length) hints.push('新建文件的范围标记与实际内容不同；将完整写入 ' + allCodeLines.length + ' 行，不按范围截断');
-      }
-      const PREVIEW_LINES = 6;
-      const firstLines = allCodeLines.slice(0, PREVIEW_LINES).map((text, k) => ({ lineNo: previewStart + k, text }));
-
-      const diff = prepared.ok ? diffTexts(prepared.before, prepared.after) : null;
-      if (diff && diff.identical && fileExists) hints.push('应用后内容与当前文件完全相同，无需改动');
-
-      blocks.push({
-        index: i,
-        ...(b.kind ? { kind: b.kind, contentText: b.code } : {}),
-        filePath: b.filePath,
-        pathSource: b.pathSource,
-        range: b.range,
-        codeLines: allCodeLines.length,
-        codeChars: b.code.length,
-        firstLines,
-        moreLines: Math.max(0, allCodeLines.length - firstLines.length),
-        diff,
-        fileExists,
-        fileLines,
-        applicable,
-        ...(blockedReason ? { blockedReason } : {}),
-        hints,
-      });
-    }
+    const preparedBatch = await returnPath.prepareBatch(parsed.blocks);
+    const blocks = parsed.blocks.map((block, index) => {
+      const prepared = preparedBatch[index]!;
+      if (prepared.ok) collections.get(collectionId)!.previewTargets.set(index, { path: prepared.filePath.toLowerCase(), exists: prepared.fileExists });
+      return previewBlock(block, prepared, index);
+    });
 
     const previewResult: ReturnPreview = {
       ok: true,
@@ -998,6 +1004,7 @@ async function loadLocalView(
       notes: parseNotes,
       blocks,
     };
+    collections.get(collectionId)!.preview = previewResult;
     // 排查基建：每个块的路径/区间/可应用性一行写清——"采集到了但全被阻塞"的场景
     //（典型：切换目录后模型回显的文件在新根目录下不存在）从此在终端直接可读。
     const applicableCount = blocks.filter((b) => b.applicable).length;
@@ -1025,7 +1032,7 @@ async function loadLocalView(
      * 等于要求用户先看面板、再点一次按钮，才看得到 diff。主流编辑器的行为是
      * "变更出现在哪就在哪看"，所以这里在采集返回时直接进编辑器。
      *
-     * 仍然复用 `buildEditorDiff`：它带同一份三向校验，
+     * 仍然复用 `buildEditorDiff`：它带同一份预览基线复核，
      * 因此**不会出现"编辑器里显示了 diff、点应用却失败"**的情况。
      * 校验不过（文件已变 / 区间非法）就跳过自动打开，理由留给面板显示。
      */
@@ -1043,8 +1050,8 @@ async function loadLocalView(
    * 应用一个变更。
    *
    * 由 `collectionId` + `index` 引用主进程缓存里的代码块（渲染进程不转手代码文本）。
-   * 若是片段替换，主进程在**应用准备时**抓取该区间当前内容作为校验基线——
-   * 这样三向校验才有可信基线；此后文件若被改动，校验必然失败并拒绝写入。
+   * 主进程在首次预览时冻结完整原文及目录版本——
+   * 这样预览基线复核才有可信基线；此后文件若被改动，校验必然失败并拒绝写入。
    */
   ipcMain.handle(CHANNELS.applyChange, (_e, input: unknown) => workspaceController.run(async () => {
     const raw = (input ?? {}) as Partial<ApplyChangeInput>;
@@ -1071,46 +1078,8 @@ async function loadLocalView(
     }
     if (workspaceController.editor.isDirty(normalizedTarget)) return { ok: false, error: '目标文件有未保存的修改，请先保存再应用' };
 
-    let expectedOriginal: string | undefined;
-    let contextPrev: string | null = null;
-    let contextNext: string | null = null;
-
-    const prepared = await returnPath.prepareChange(block, filePath);
-    const previewTarget = cached.previewTargets.get(raw.index);
-    if (previewTarget && (!previewTarget.exists || previewTarget.path === normalizedTarget) &&
-        prepared.fileExists !== undefined && prepared.fileExists !== previewTarget.exists) return {
-      ok: false, reason: 'target-changed', error: '目标文件的存在状态已在预览后改变，请重新采集核对',
-    };
-    if (!prepared.ok) return { ok: false, error: prepared.error, reason: prepared.reason };
-    if (prepared.fileExists && block.range) {
-      const lines = prepared.before.split(/\r\n|\r|\n/);
-      if (block.range.start < 1 || block.range.end > lines.length) {
-        return {
-          ok: false,
-          reason: 'range-invalid',
-          error: `行区间 ${block.range.start}-${block.range.end} 超出文件范围（文件共 ${lines.length} 行），已拒绝写入`,
-        };
-      }
-      expectedOriginal = lines.slice(block.range.start - 1, block.range.end).join('\n');
-      contextPrev = block.range.start - 2 >= 0 ? (lines[block.range.start - 2] ?? null) : null;
-      contextNext = block.range.end < lines.length ? (lines[block.range.end] ?? null) : null;
-    }
-
-    /*
-     * 落盘成功后**必须广播给编辑器**，否则它一直显示旧内容。
-     * 用户实测："应用后没有及时刷新文件，显示仍然是旧代码，
-     * 只有关闭文件重新打开才会显示应用后的代码" ——
-     * 因为落盘在主进程，而编辑器是另一个渲染进程，不会自动察觉磁盘变化。
-     */
     const outcome = await returnPath.applyChange({
-      source: { collectionId: raw.collectionId, index: raw.index },
-      filePath,
-      block,
-      ...(cached.previewTargets.has(raw.index) && (!cached.previewTargets.get(raw.index)!.exists || cached.previewTargets.get(raw.index)!.path === normalizedTarget)
-        ? { expectedFileExists: cached.previewTargets.get(raw.index)!.exists } : {}),
-      ...(expectedOriginal !== undefined ? { expectedOriginal } : {}),
-      contextPrev,
-      contextNext,
+      source: { collectionId: raw.collectionId, index: raw.index }, filePath, block,
     });
     if (outcome.ok) {
       cached.targets.set(raw.index, filePath);
@@ -1122,6 +1091,8 @@ async function loadLocalView(
        */
       notifyChangeState({ kind: 'applied', collectionId: raw.collectionId, index: raw.index, filePath });
     }
+    if (!outcome.ok) consumption.clear();
+    await refreshPreview(raw.collectionId);
     return outcome;
   }));
 
@@ -1142,6 +1113,9 @@ async function loadLocalView(
   ipcMain.handle(CHANNELS.undoSave, () => workspaceController.run(async () => {
     if (workspaceController.editor.hasDirty) return { ok: false, error: '请先保存未保存的编辑内容再撤销 AI 变更' };
     const result = await returnPath.undoLast();
+    if (result.ok && result.collectionId !== undefined && result.index !== undefined) {
+      collections.get(result.collectionId)?.targets.delete(result.index);
+    }
     // 撤销也是改写磁盘，同样要通知编辑器刷新
     if (result.ok && result.filePath) {
       notifyFileChanged(result.filePath, result.deleted ? 'deleted' : 'updated');
@@ -1152,13 +1126,14 @@ async function loadLocalView(
         ...(result.index !== undefined ? { index: result.index } : {}),
       });
     }
+    if (result.ok && result.collectionId) await refreshPreview(result.collectionId);
     return result;
   }));
 
   /**
-   * 把编辑器里的选中内容格式化为"带文件真实行号"的片段并写入剪贴板。
+   * 把编辑器选中原文组装为只读上下文并写入剪贴板。
    *
-   * 用于**局部修改**：片段头部带 `### 文件：` 与 `### 范围：N-M`，正文带行号前缀。
+   * 上下文头声明路径与原文片段；不添加行号或操作指令。
    * 围栏长度按内容自适应（内容含 ``` 时自动加长，避免提前闭合）。
    * 仍**只写剪贴板**，由用户自己粘贴（ADR-0003）。
    */
@@ -1189,18 +1164,19 @@ async function loadLocalView(
   /**
    * 把当前打开的**整个文件**写入剪贴板，作为**上下文**交给模型。
    *
-   * 格式：`这个文件是 <相对路径>` + 代码围栏 + 全文。
-   * 刻意**不使用 `### ` 标题行** —— 那是"待应用变更"的标记，而这里给的是上下文，
-   * 不该被回程解析器当成一个待写入的代码块。
+   * 格式：只读上下文文件与完整原文头 + 代码围栏 + Monaco 全文。
+   * 只读上下文标记与修改操作分开，
+   * 回程解析器只读呈现，不作为待写入块。
    */
-  ipcMain.handle(CHANNELS.copyWholeFile, async (_e, relPath: unknown) => {
-    const rel = typeof relPath === 'string' ? relPath.trim() : '';
+  ipcMain.handle(CHANNELS.copyWholeFile, async (_e, input: unknown) => {
+    const raw = input as { root?: unknown; relPath?: unknown; text?: unknown } | null;
+    const rel = typeof raw?.relPath === 'string' ? raw.relPath.trim() : '';
     if (rel.length === 0) return { ok: false, snippet: '', length: 0, error: '未指定文件路径（请先打开一个文件）' };
-
-    const read = await fileService.readRawText(rel);
-    if (!read.ok) return { ok: false, snippet: '', length: 0, error: read.error };
-
-    const parts = buildWholeFileText(read.relPath, read.text);
+    if (raw?.root !== fileService.getRoot() || typeof raw?.text !== 'string' ||
+      rel.replace(/\\/g, '/').toLowerCase() !== workspaceController.editor.current.path?.toLowerCase()) {
+      return { ok: false, snippet: '', length: 0, error: '目录或文件已变化，请重新复制全文' };
+    }
+    const parts = buildWholeFileText(rel, raw.text);
     try {
       clipboard.writeText(parts.text);
       return {

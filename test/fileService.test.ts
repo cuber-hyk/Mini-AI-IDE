@@ -13,6 +13,21 @@ import { FileService } from '../src/main/fileService';
 
 let root: string;
 
+it('预期原文保护写入：匹配可增删全文，旧基线与消失目标不能覆盖或重建', async t => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'mini-guarded-write-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const files = new FileService(); files.setRoot(directory);
+  const target = path.join(directory, 'a.txt'); fs.writeFileSync(target, 'old');
+  assert.equal((await files.writeFile('a.txt', '中文\nlonger', 'old')).ok, true);
+  assert.equal(fs.readFileSync(target, 'utf8'), '中文\nlonger');
+  assert.equal((await files.writeFile('a.txt', 'unsafe', 'old')).ok, false);
+  assert.equal(fs.readFileSync(target, 'utf8'), '中文\nlonger');
+  assert.equal((await files.writeFile('a.txt', '', '中文\nlonger')).ok, true);
+  assert.equal(fs.readFileSync(target, 'utf8'), ''); fs.unlinkSync(target);
+  assert.equal((await files.writeFile('a.txt', 'unsafe', '')).ok, false);
+  assert.equal(fs.existsSync(target), false);
+});
+
 before(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'mini-ai-ide-fs-test-'));
   fs.writeFileSync(path.join(root, 'a.ts'), 'export const a = 1;\n', 'utf8');

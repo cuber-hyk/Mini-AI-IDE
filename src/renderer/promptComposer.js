@@ -100,6 +100,8 @@ window.setupPromptComposer = function (bridge, setInfo) {
       b.setAttribute('aria-pressed', String(b.dataset.variant === next.variant));
     });
     el.custom.hidden = !(next.variant === 'full' ? next.fullIsCustom : next.shortIsCustom);
+    el.custom.title = '当前使用自定义原文，请在提示词设置中检查是否满足明确操作的新协议；旧行号格式不可应用';
+    el.custom.setAttribute('aria-label', '使用自定义提示词，请检查新协议');
     updateBusy();
   }
 

@@ -27,8 +27,8 @@ const bridge = {
   undoSave: () => ipcRenderer.invoke(CH.undoSave),
   setPreviewPanel: (width: number) => ipcRenderer.invoke(CH.setPreviewPanel, width),
   /** 请求在**编辑器内**显示该变更的 diff（与主流编辑器一致：先看 diff 再应用） */
-  showDiffInEditor: (collectionId: string, index: number) =>
-    ipcRenderer.invoke(CH.showDiffInEditor, collectionId, index),
+  showDiffInEditor: (collectionId: string, index: number, filePath?: string) =>
+    ipcRenderer.invoke(CH.showDiffInEditor, collectionId, index, filePath),
   onChromeState: (listener: (state: unknown) => void) => {
     ipcRenderer.on(CH.chromeState, (_e, state) => listener(state));
   },

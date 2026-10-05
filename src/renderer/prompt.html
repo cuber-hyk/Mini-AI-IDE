@@ -14,7 +14,7 @@
       提示词编辑面板（独立浮层视图，由主进程居中放置在窗口上层）。
 
       它改的是**系统提示词里的「输出格式要求」那一段** —— 也就是让"一键同步"
-      能成立的那份约定（### 文件：路径、### 范围：N-M、围栏怎么写）。
+      能成立的那份约定（文件、明确操作与精确原文替换）。
       提示词的其余部分（用户需求 / 工作环境 / 目录结构）由程序生成，用户不需要也不该改。
 
       交互设计要点：
@@ -37,14 +37,14 @@
           <div class="pm-side-title">内置默认要求什么</div>
           <ul class="pm-side-list">
             <li><b>写清目标文件</b>：代码块上方一行 <code>### 文件：相对路径</code></li>
-            <li><b>写清替换范围</b>：局部改动加一行 <code>### 范围：起始行-结束行</code></li>
-            <li><b>一个文件一个块</b>：块内只有该文件内容，不带行号、不用省略号</li>
-            <li><b>围栏照抄输入片段</b>：语言标注与围栏行都跟着你给的片段走</li>
+            <li><b>声明操作</b>：<code>### 操作：替换／新建／覆盖全文</code></li>
+            <li><b>替换精确原文</b>：SEARCH／REPLACE，SEARCH 非空且唯一匹配，不带定位行号、不用省略号</li>
+            <li><b>新建／覆盖给全文</b>：新建目标不存在，覆盖目标存在；复制上下文不暗示覆盖</li>
             <li><b>围栏必须成对闭合</b>，长度按内容自适应（内容含反引号时外层加长）</li>
           </ul>
           <div class="pm-side-note">
-            这几条是解析器能认出「改了哪个文件的哪几行」的前提。<br />
-            改动它们之前，先确认你的模型输出仍然满足上面的形式，否则回程无法自动识别。
+            当前只接受明确操作的新协议，旧行号格式不可应用。<br />
+            自定义原文会保留，请检查后继续使用，或载入默认并保存；已有网页对话需手动粘贴新版格式。
           </div>
         </aside>
 
@@ -61,7 +61,7 @@
             </button>
             <button type="button" class="pm-tab" role="tab" data-variant="full" aria-selected="false">
               完整版
-              <span class="pm-tab-sub">8 个示例 · 逐条详解</span>
+              <span class="pm-tab-sub">13 个示例 · 逐条详解</span>
             </button>
             <span class="pm-tab-spacer"></span>
             <span id="pm-tab-using" class="pm-tab-using" title="底部双段开关当前选中的版本就是它"></span>
@@ -96,6 +96,7 @@
         <button id="pm-save" type="button" class="pm-btn primary">保存</button>
       </footer>
     </div>
+    <script src="./formatSpecDefaults.js"></script>
     <script src="./prompt.js"></script>
   </body>
 </html>

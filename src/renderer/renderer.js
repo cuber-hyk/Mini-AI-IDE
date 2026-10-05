@@ -636,7 +636,7 @@
    * 在**当前已打开的编辑器**上叠加内联标记。
    *
    * 关键前提：主进程 buildEditorDiff 返回的 original 必须就是编辑器里现在这份内容
-   * （三向校验保证「显示得出来就一定应用得成功」）。若不一致（用户中途改过文件），
+   * 应用前还会再次复核原文。若显示时不一致（用户中途改过文件），
    * 宁可不画 —— 画错位置的标记比不画更糟。
    */
   function renderInlineDiff(payload) {
@@ -735,9 +735,9 @@
     /* ---- 3) 进入预览态：只读 + 操作条 ---- */
     editor.updateOptions({ readOnly: true });
     el.diffActions.hidden = false;
-    el.btnDiffApply.textContent = payload.newFile ? '创建文件' : '应用此变更';
+    el.btnDiffApply.textContent = payload.newFile ? '创建文件' : payload.operation === 'overwrite' ? '覆盖全文' : '应用此变更';
     el.diffLabel.textContent =
-      (payload.filePath || '') + (payload.newFile ? '（新增文件）' : payload.identical ? '（无差异，应用后内容与当前文件相同）' : '');
+      (payload.filePath || '') + (payload.newFile ? '（新增文件）' : payload.operation === 'overwrite' ? '（覆盖全文）' : payload.identical ? '（无差异，应用后内容与当前文件相同）' : '');
 
     // 滚到第一处变更，避免「标记画了但没看见」
     const firstDel = ops.find(function (op) { return op.kind === 'del'; });
@@ -767,6 +767,7 @@
       index: payload.index,
       filePath: payload.filePath,
       newFile: Boolean(payload.newFile),
+      operation: payload.operation,
     };
     if (keepNav) {
       state.diffNav = keepNav;
@@ -826,7 +827,7 @@
       filePath: target.filePath,
     });
     el.btnDiffApply.disabled = false;
-    el.btnDiffApply.textContent = target.newFile ? '创建文件' : '应用此变更';
+    el.btnDiffApply.textContent = target.newFile ? '创建文件' : target.operation === 'overwrite' ? '覆盖全文' : '应用此变更';
     if (!result.ok) {
       setInfo('应用失败：' + (result.error || '未知错误'), true);
       return;
@@ -1188,53 +1189,36 @@
     if (info.error) setInfo('打开目录失败：' + info.error, true);
   });
 
-  /**
-   * 「复制整个文件」：把当前打开的整个文件（`这个文件是 <路径>` + 围栏 + 全文）
-   * 写入剪贴板，作为**上下文**交给模型。
-   *
-   * 与「复制选中片段」的分工：
-   *   - 整个文件 → 上下文/大改（不带行号，不带行区间）
-   *   - 选中片段 → 局部修改（带真实行号 + 行区间，应用前三向校验）
-   */
-  el.btnWholeFile.addEventListener('click', async function () {
-    if (!state.currentPath) {
+  /** 复制当前 Monaco 全文作为只读上下文，包含未保存草稿，不暗示覆盖操作。 */
+  async function copyWholeFileContext() {
+    if (!state.currentPath || state.previewOnly) {
       setInfo('请先打开一个文件，再复制', true);
-      return;
+      return false;
     }
-    const result = await bridge.copyWholeFile(state.currentPath);
+    const model = state.editor && state.editor.getModel();
+    if (!model) { setInfo('编辑器尚未就绪，无法复制全文', true); return false; }
+    const result = await bridge.copyWholeFile({ root: state.root, relPath: state.currentPath, text: model.getValue() });
     if (!result.ok) {
       setInfo('复制整个文件失败：' + (result.error ?? '未知错误'), true);
-      return;
+      return false;
     }
     setInfo(
       '已复制整个文件（' + state.currentPath + ' · ' + (result.lineCount ?? 0) + ' 行 · ' + result.length +
-        ' 字符 · 围栏 ' + (result.fence ?? '```') + '）—— 到右侧粘贴即可'
+        ' 字符）—— 粘贴给模型作为完整原文上下文'
     );
     el.btnWholeFile.textContent = '已复制 ✓';
     setTimeout(function () {
       el.btnWholeFile.textContent = '复制整个文件';
     }, 1800);
-  });
+    return true;
+  }
+  el.btnWholeFile.addEventListener('click', function () { void copyWholeFileContext(); });
 
-  /**
-   * 「复制选中片段」：把当前选中的代码格式化为**带文件真实行号**的片段，
-   * 头部自动附 `### 文件：` 与 `### 范围：N-M`，写入剪贴板。
-   *
-   * 用途：局部修改。模型回显同一行区间后，应用前会做三向校验
-   * （区间有效 / 原内容匹配 / 上下文匹配），不一致即拒绝，不会因行号漂移改错地方。
-   */
-/**
-   * 复制「带真实行号的片段」到剪贴板。
-   *
-   * 有选区就取选区，没有就取整个文件。**只写剪贴板**，由用户自己粘贴给模型
-   *（ADR-0003 零注入：程序不向网页写入任何内容）。
-   *
-   * @param fallbackToWholeFile 无选区时是否退回整文件。
-   *   顶部按钮传 true（保留原行为）；选区浮层按钮传 false —— 没有选区时它根本不该出现。
-   * @returns 是否成功复制
+  /** 无损复制选区原文上下文；本地行数反馈不作为 AI 定位指令。
+   * 顶部按钮无选区时保留取全文的既有行为；浮动按钮必须有选区。
    */
   async function copyNumberedSelection(fallbackToWholeFile) {
-    if (!state.currentPath) {
+    if (!state.currentPath || state.previewOnly) {
       setInfo('请先打开一个文件，再选中要交给模型修改的代码', true);
       return false;
     }
@@ -1250,11 +1234,12 @@
     if (!hasSelection && !fallbackToWholeFile) {
       return false;
     }
+    if (!hasSelection) return copyWholeFileContext();
 
-    const text = hasSelection ? model.getValueInRange(selection) : model.getValue();
-    const startLine = hasSelection ? selection.startLineNumber : 1;
+    const text = model.getValueInRange(selection);
+    const startLine = selection.startLineNumber;
 
-    if (text.trim().length === 0) {
+    if (text.length === 0) {
       setInfo('选中内容为空，没有可复制的片段', true);
       return false;
     }
@@ -1270,7 +1255,7 @@
       return false;
     }
     setInfo(
-      '已复制片段（' + result.startLine + '-' + result.endLine + ' 行，' + result.length + ' 字符，含### 文件： 与 ### 范围： 头）—— 到右侧粘贴给模型，它会按同一行区间回显'
+      '已复制原文片段（' + result.startLine + '-' + result.endLine + ' 行，' + result.length + ' 字符）—— 粘贴给模型作为上下文，修改以 SEARCH／REPLACE 精确匹配'
     );
     return true;
   }
@@ -1287,7 +1272,7 @@
   /* ---------------- 选区右上角的浮动复制按钮 ----------------
    *
    * 用户建议（比顶部常驻按钮更顺手）：选中代码后，在**选区右上角**冒一个小按钮，
-   * 点它即复制带真实行号的片段。
+   * 点它即无损复制选中的原文上下文。
    *
    * 用绝对定位贴在选区右端行的右上角（跟随选区、随滚动移动）；
    * 没有选区时隐藏 —— 没有选区可复制，出现就是误导。
@@ -1337,7 +1322,7 @@
      * 浮层又随选区/滚动不断重定位，会表现为 hover 提示一闪一闪。
      * 用 `aria-label`：不产生原生 tooltip，语义与无障碍信息仍保留。
      */
-    bubble.setAttribute('aria-label', '复制这段（带真实行号）');
+    bubble.setAttribute('aria-label', '复制这段原文上下文');
     bubble.textContent = '复制';
 
     /**

@@ -32,201 +32,9 @@
     return;
   }
 
-  /**
-   * 内置默认格式要求的**兜底副本**（仅简洁版）。
-   *
-   * 为什么面板自己也要存一份：`getState()` 是向主进程**主动拉取**的，
-   * 一旦这次调用失败（用户实测：handler 注册时机不对，报
-   * `No handler registered for 'ui:prompt-panel-state'`），
-   * 面板就会变成"一片空白 + 底部一行红字"—— 用户既看不到默认要求、也无从下手。
-   * 兜底副本保证**任何情况下编辑框都有内容可看可改**，失败时最多是"少了状态回显"。
-   *
-   * ⚠️ 它是**副本，不是权威**：只要 `getState()` 成功，一律以主进程返回的为准，
-   * 免得这份副本与内置模板升级后不同步。自检 Y11 断言它与 `FORMAT_SPEC_SHORT` 一致。
-   */
-  const FALLBACK_SPEC = [
-    "【输入/输出格式要求】",
-    "",
-    "你我会用**同一条骨架**来交换内容 —— 我给你什么结构，你就按同样的结构写回来：",
-    "",
-    "### 文件：相对路径",
-    "### 范围：起始行-结束行",
-    "````语言标注",
-    "（内容，不含行号）",
-    "````",
-    "",
-    "═══ 一、结构与规则 ═══",
-    "",
-    "1. 每个文件上方单独一行写：### 文件：相对路径",
-    "   例：### 文件：src/main/index.ts",
-    "   路径用相对路径、以 / 分隔，须与我的目录结构一致。",
-    "",
-    "2. 紧接下一行写：### 范围：起始行-结束行（用我给你的行号）",
-    "   例：### 范围：80-92",
-    "   - 局部修改 → 范围是原文件被替换的行，内容只放替换后的片段（不要给我整个文件）；",
-    "   - 整体修改 → 范围是原文件的完整行范围（1 到原末行），内容放修改后的全文。",
-    "   新内容行数可增减，范围保持原文件行号；范围之外的内容保留，后续行自动移动。",
-    "   ### 范围 是**替换哪几行**的唯一依据，**必须写**。",
-    "",
-    "3. 围栏内**只放内容本身**：",
-    "   - **绝不在行首写行号**（不要写成 ` 80| xxx`）——行号已经由 ### 范围 表达了；",
-    "   - 不要省略号（...）、不要\"以下是……\"之类的前后缀。",
-    "",
-    "4. 一次涉及多个文件时，每个文件都按上面三段式各写一遍，一个文件一块。",
-    "",
-    "5. **围栏固定用四个反引号**（不是三个）：开头 = 四个反引号 + 语言标注，",
-    "   结尾 = 同样四个反引号，**必须成对闭合**。语言标注按目标文件扩展名给：",
-    "   扩展名          语言标注        扩展名          语言标注",
-    "   .md / .markdown  markdown        .ts / .tsx      typescript",
-    "   .js / .jsx       javascript      .py             python",
-    "   .json / .jsonc   json            .yaml / .yml    yaml",
-    "   .sh / .bash      bash            .html / .htm    html",
-    "   .css / .scss     css             .sql            sql",
-    "   .c / .h          c               .cpp / .hpp     cpp",
-    "   .java            java            .go             go",
-    "   .rs              rust            .rb             ruby",
-    "   .txt / 无扩展名 / 其它不认识 → **不写语言标注**（四个反引号后直接换行）",
-    "",
-    "6. 内容里若出现四个及以上**连续**反引号，外层就比它再多一个（内层四个 → 外层五个）；",
-    "   内容里的三反引号（如 .md 内嵌代码块）**原样保留**，外面有四个就不会被提前闭合。",
-    "",
-    "7. 锚点（### 文件 / ### 范围）一律写在围栏**外面**，不得出现在围栏内容里。",
-    "",
-    "═══ 二、示例（输入 → 输出） ═══",
-    "",
-    "下面每段都用五反引号包着，**只是示范，不是你要输出的内容**。",
-    "注意看【我给你的】与【你该给我的】之间的差别 —— 结构完全相同，只有内容变了。",
-    "",
-    "示例 1｜.md 里内嵌代码块 —— 内层三反引号原样保留",
-    "这是最容易出错的一种：内容里本来就有三反引号，外层仍用四个，不会被提前闭合。",
-    "【我给你的】",
-    "`````",
-    "### 文件：docs/notes.md",
-    "### 范围：2-8",
-    "````markdown",
-    "# 说明",
-    "",
-    "```python",
-    "def foo():",
-    "    pass",
-    "```",
-    "````",
-    "`````",
-    "【你该给我的】",
-    "`````",
-    "### 文件：docs/notes.md",
-    "### 范围：2-8",
-    "````markdown",
-    "# 说明",
-    "",
-    "```python",
-    "def foo():",
-    "    return 1",
-    "```",
-    "````",
-    "`````",
-    "",
-    "示例 2｜.ts 局部替换几行 —— 只给那几行，不给整个文件",
-    "范围表示原文件要替换的行，保持 10-10；新内容有 10 行，应用后占 10-19，原第 11 行起后移 9 行。",
-    "【我给你的】",
-    "`````",
-    "### 文件：src/counter.ts",
-    "### 范围：10-10",
-    "````typescript",
-    "let n = 0;",
-    "````",
-    "`````",
-    "【你该给我的】",
-    "`````",
-    "### 文件：src/counter.ts",
-    "### 范围：10-10",
-    "````typescript",
-    "let n = 0;",
-    "export function inc() {",
-    "  n += 2;",
-    "  return n;",
-    "}",
-    "",
-    "export function reset() {",
-    "  n = 0;",
-    "  return n;",
-    "}",
-    "````",
-    "`````",
-    "",
-    "示例 3｜整文件重写 —— 范围写成 1 到末行",
-    "整体输出与局部输出**写法完全一样**；范围仍覆盖原文件 1-2，输出增加到 3 行也不改范围。",
-    "【我给你的】",
-    "`````",
-    "### 文件：src/config.ts",
-    "### 范围：1-2",
-    "````typescript",
-    "export const A = 1;",
-    "export const B = 2;",
-    "````",
-    "`````",
-    "【你该给我的】",
-    "`````",
-    "### 文件：src/config.ts",
-    "### 范围：1-2",
-    "````typescript",
-    "export const A = 1;",
-    "export const B = 2;",
-    "export const C = 3;",
-    "````",
-    "`````",
-    "",
-    "示例 4｜纯文本文件（.txt / 无扩展名）—— 四个反引号后不写语言标注",
-    "纯文本没有语言可标：开头就是四个反引号，紧接着换行。",
-    "【我给你的】",
-    "`````",
-    "### 文件：docs/summary.txt",
-    "### 范围：1-2",
-    "````",
-    "第一行纯文本。",
-    "````",
-    "`````",
-    "【你该给我的】",
-    "`````",
-    "### 文件：docs/summary.txt",
-    "### 范围：1-2",
-    "````",
-    "第一行纯文本。",
-    "第二行纯文本。",
-    "````",
-    "`````",
-    "",
-    "示例 5｜新建文件 —— 目录结构里没有，也照常给三段式",
-    "路径按我指定或按目录结构推断；范围写 1 到新增内容的末行。",
-    "【我给你的】",
-    "`````",
-    "（目录结构里没有 src/util/format.ts，请新建一个导出 formatDate 的工具）",
-    "`````",
-    "【你该给我的】",
-    "`````",
-    "### 文件：src/util/format.ts",
-    "### 范围：1-3",
-    "````typescript",
-    "export function formatDate(d: Date): string {",
-    "  return d.toISOString().slice(0, 10);",
-    "}",
-    "````",
-    "`````",
-    "",
-    "示例 6｜只是提问 / 讨论、不落文件 —— **不加锚点、不加围栏**",
-    "我要是没让你改文件，就按普通文字回答；不要硬套 ### 文件 与围栏，否则会被误当成待写入内容。",
-    "【我给你的】",
-    "`````",
-    "这个冒泡排序的时间复杂度是多少？",
-    "`````",
-    "【你该给我的】",
-    "`````",
-    "平均和最坏情况都是 O(n²)，最好情况（已有序且带提前退出判断）是 O(n)。空间复杂度 O(1)。",
-    "`````",
-  ].join('\n');
-
-  /** 完整版的兜底副本在状态读到前是空的（用 '加载中' 占位，不让用户看到空白框） */
-  const FALLBACK_FULL_PLACEHOLDER = '（正在从主进程读取完整版默认原文…）';
+  // 两版兜底原文来自构建生成资源，与 shared/formatSpec 保持逐字一致。
+  const defaults = window.formatSpecDefaults;
+  function defaultText(variant) { return defaults[variant === 'full' ? 'full' : 'short']; }
 
   /**
    * 每个版本的独立编辑状态。
@@ -281,8 +89,8 @@
   function effectiveText(v) {
     const st = state ? state[v] : null;
     if (st) return st.isCustom && typeof st.customSpec === 'string' ? st.customSpec : st.defaultSpec;
-    // 状态没读到：只有简洁版有兜底副本
-    return v === 'short' ? FALLBACK_SPEC : FALLBACK_FULL_PLACEHOLDER;
+    // 状态没读到时，两版均使用从权威模板生成的默认原文。
+    return defaultText(v);
   }
 
   /** 切到某个版本：先把当前版本的草稿存下来，再载入目标版本 */
@@ -361,7 +169,7 @@
         : '已恢复为默认文本：点「保存」即可切回该版本的内置默认。';
       el.hint.className = 'pm-hint';
     } else if (st && st.isCustom) {
-      el.hint.textContent = '当前这一版正在使用你自定义的格式要求。点「恢复默认」可随时改回。';
+      el.hint.textContent = '当前这一版使用自定义原文，请检查是否满足「文件 + 操作 + SEARCH／REPLACE」新协议；旧行号格式不可应用。点「恢复默认」可载入新版，保存后生效。';
       el.hint.className = 'pm-hint';
     } else {
       el.hint.textContent = '当前这一版使用内置默认。改动并保存后，只有你自己写的这段会替换它的默认。';
@@ -414,13 +222,13 @@
   function effectiveTextFrom(vs, v) {
     if (vs && vs.isCustom && typeof vs.customSpec === 'string') return vs.customSpec;
     if (vs && typeof vs.defaultSpec === 'string' && vs.defaultSpec.length > 0) return vs.defaultSpec;
-    return v === 'short' ? FALLBACK_SPEC : FALLBACK_FULL_PLACEHOLDER;
+    return defaultText(v);
   }
 
   /**
    * 读取状态。失败重试若干次，仍失败则用**内置默认兜底**呈现。
    *
-   * 为什么重试：主进程 handler 的注册时机曾经出过问题（见 FALLBACK_SPEC 注释），
+   * 为什么重试：主进程 handler 的注册时机曾经出过问题（见状态读取与构建资源约定），
    * 而面板页面加载与注册是两个异步过程 —— 少数情况下第一次调用会赶在注册之前。
    * 重试能把这种时序抖动吸收掉，而不是把用户丢在一个空白框前面。
    */
@@ -453,11 +261,13 @@
       el.tabs.forEach(function (t) {
         t.setAttribute('aria-selected', t.dataset.variant === 'short' ? 'true' : 'false');
       });
+      ['short', 'full'].forEach(function (v) {
+        perVariant[v].savedText = defaultText(v);
+        perVariant[v].defaultSpec = defaultText(v);
+        perVariant[v].dirty = perVariant[v].draft !== null && normalize(perVariant[v].draft) !== normalize(defaultText(v));
+      });
       const c = cur();
-      c.savedText = FALLBACK_SPEC;
-      c.draft = null;
-      c.dirty = false;
-      el.editor.value = FALLBACK_SPEC;
+      el.editor.value = c.draft !== null ? c.draft : c.savedText;
       el.hint.textContent =
         '未能从主进程读到设置（已显示内置默认原文，可直接编辑）。若保存也失败，请重启应用后重试：' +
         (err instanceof Error ? err.message : String(err));
@@ -515,7 +325,7 @@
     const st = state[active];
     const text = st && typeof st.defaultSpec === 'string' && st.defaultSpec.length > 0
       ? st.defaultSpec
-      : (active === 'short' ? FALLBACK_SPEC : FALLBACK_FULL_PLACEHOLDER);
+      : defaultText(active);
     el.editor.value = text;
     paint();
     el.editor.focus();

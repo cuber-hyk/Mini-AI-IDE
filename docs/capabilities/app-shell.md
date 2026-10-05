@@ -1,32 +1,9 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-04
+updated: 2026-10-05
 owner: 胡运宽
-source_of_truth:
-  - docs/adr/2026-10-02-honest-electron-identity.md
-  - docs/adr/2026-10-02-filesystem-permission-model.md
-  - DESIGN.md
-  - design-tokens.json
-  - src/main/windowLayout.ts
-  - src/main/layoutProbe.ts
-  - src/renderer/changeTree.js
-  - src/renderer/editorToolbar.js
-  - src/renderer/ui.css
-  - test/windowLayout.test.ts
-  - test/changeTree.test.ts
-  - test/editorToolbar.test.ts
-  - src/main/index.ts
-  - src/renderer/index.html
-  - src/renderer/style.css
-  - src/renderer/promptComposer.js
-  - test/promptComposer.test.ts
-  - src/main/workspaceController.ts
-  - src/main/workspaceProbe.ts
-  - src/renderer/fileExplorer.js
-  - src/renderer/editorTabs.js
-  - src/renderer/editorWorkspace.js
-  - test/editorWorkspace.test.ts
+source_of_truth: [docs/adr/2026-10-02-honest-electron-identity.md, docs/adr/2026-10-02-filesystem-permission-model.md, DESIGN.md, design-tokens.json, src/main/windowLayout.ts, src/main/layoutProbe.ts, src/renderer/changeTree.js, src/renderer/editorToolbar.js, src/renderer/ui.css, test/windowLayout.test.ts, test/changeTree.test.ts, test/editorToolbar.test.ts, src/main/index.ts, src/renderer/index.html, src/renderer/style.css, src/renderer/promptComposer.js, test/promptComposer.test.ts, src/main/workspaceController.ts, src/main/workspaceProbe.ts, src/renderer/fileExplorer.js, src/renderer/editorTabs.js, src/renderer/editorWorkspace.js, test/editorWorkspace.test.ts]
 ---
 
 # 能力：应用外壳与进程架构
@@ -67,7 +44,7 @@ Monaco、AI 网页和变更列表保持三列布局。目录恢复与最近 5 �
 | **editor renderer**（`persist:editor-ui`） | Monaco 渲染、文件树、编辑与保存、需求输入区 | `nodeIntegration:false`、`contextIsolation:true`、`sandbox:true`；无文件系统能力；CSP `connect-src 'none'` |
 | **webview renderer**（`persist:postcheck`） | 加载目标平台网页 | 顶级独立视图（`WebContentsView`）；程序**只读不写** |
 | **webbar renderer**（`persist:editor-ui`） | 网页区顶部 40px 工具条（网页可见）/ 恢复把手（网页隐藏）：只读采集与列显隐 | 只能请求只读采集和切换显隐；不能读写文件或向网页写入内容。**永不隐藏**——它是"把网页叫回来"的常驻入口 |
-| **preview renderer**（`persist:editor-ui`） | 最右侧变更树：文件筛选、片段预览、集中应用与撤销 | 同上；落盘只经主进程三向校验 |
+| **preview renderer**（`persist:editor-ui`） | 最右侧变更树：文件筛选、片段预览、集中应用与撤销 | 同上；落盘只经主进程精确定位与预览基线复核 |
 | **prompt renderer**（`persist:editor-ui`） | 提示词设置面板（覆盖式浮层，默认隐藏）：**分页查看/编辑两套版本的「输出格式要求」** | 只能读/写**这一份设置**（5 个通道）；不能读写文件、不能碰网页。**为什么单独开一个视图**：编辑器渲染进程持有文件写权限，而"编辑一段纯文本"不需要任何文件能力——不把提权面顺手扩大 |
 
 ## 布局规则（三列与独立显隐）
@@ -173,10 +150,10 @@ Monaco 编辑与内联预览 │                        │  目录 → 文件 �
 | **JS auto-grow 不能只在启动时量一次** | 脚本**同步执行**时 flex 布局尚未稳定、字体未就位，此时量到的 `scrollHeight` 不可靠，写死的内联 `height` 就是错的 → 初始页面观感错乱，只有触发重排才纠正 | 用 `ResizeObserver` **跟随实际宽度持续校正**，首次测量延到 `requestAnimationFrame` 之后。**防自激**：RO 观察的元素正是自己改height 的那个，必须在回调里只比较宽度（宽度没变就 return），否则 height → RO → height 成死循环 |
 | **窗口显示前测的 `getContentSize()` 不可信** | `new BaseWindow(...)` 之后立刻量内容区，此刻**窗口还没显示**，边框/缩放/DPI 适配都未最终确定 → 四个视图按错尺寸定bounds，而 **bounds 不会自动跟随视口** → 编辑器底部被切掉。**「拖一下窗口就恢复」是误认**：那只是触发了 `win.on('resize', relayout)` | 显示完成后重算：挂 `win.once('show')` + `win.once('resized')` + `did-finish-load` 三处，任一到即`relayout()`（幂等，重复无副作用）。⚠️ **`BaseWindow` 没有 `'ready-to-show'`**（那是 `BrowserWindow` 的），且 macOS 上 `resize` 与 `resized` 是两个事件，后者才代表尺寸真的定了 |
 | **自检里用正则匹配 `dist/**/*.js` 的编译产物** | `tsc` 会把 `CHANNELS` 编译成 `contract_1.CHANNELS`，正则漏匹配导致假失败 | 匹配时允许可选的命名空间前缀：`\.send\(\s*(?:contract_1\.)?CHANNELS\.` |
-| **局部替换范围使用原文件行号，新内容允许增减行** | `10-10` 表示只替换原第 10 行；写入十行后，新内容占 10-19，原第 11 行起整体后移 9 行。输出里的重复代码、空行、括号不能改变原范围 | `computeApply()` 只按声明的原区间拼接前文、新内容与后文，保留三向校验。内联预览的新增位置由行映射的原文游标确定。完整规范见 `return-path-and-format-contract.md`；单测与自检 J8–J11 / `npm run verify:range` 验证 |
+| **局部替换由原文唯一匹配定位，IDE 计算行号** | 明确替换用 SEARCH/REPLACE，新内容允许增减长度；多个原区间需唯一且不重叠，预览冻结完整原文 | computeApply 只统一换行，ReturnPathService 复核全文基线；自己的应用与撤销重算剩余位置，外部变化拒绝。完整规范见 return-path-and-format-contract.md，测试与 verify:range 验证 |
 | **"用户描述的现象"可能与代码实际行为相反，先复现再动手** | 用户描述"覆盖了全部区域"，而代码实际是"**该覆盖的行没被覆盖掉**（多写了→重复）"。两者在屏幕上看起来很像，但修法完全不同。若按字面去查"为什么会整文件替换"，会一头扎进错误方向 | 任何"范围/位置不对"的反馈，先用**真实原文 + 真实回复**在隔离脚本里跑一遍 `parseModelReply` → mode 构造 → `computeApply`，把中间量（range / mode / 结果全文）逐行打印出来核对。**先证明哪个环节出错，再改代码** |
 | **子串属性选择器 `[class*="x"]` 会静默命中语言标注等无关类名** | `[class*="markdown"]` 同时命中 `<code class="language-markdown">` 与 `<div class="ds-markdown-title">`。取"文档序最后一个"时会选中 `<code>`（更深、更靠后、内部无 `<pre>`）→ 采集结果为空，且**不报任何错**。同理 `[class*="code"]` 会命中 `language-*` 与各种 wrapper | 用子串选择器后**必须按 `tagName` 黑白名单过滤**（排除 `PRE`/`CODE`），并**优先选满足结构前提的候选**（此处 = 真正含 `<pre>` 的那个），无命中再回退到宽松候选。诊断脚本要打印"选中了哪个节点、它的 tagName 与子节点数"，否则空结果无法归因 |
-| **采集/定位类判据必须直接表达语义本身，别用代理指标** | 旧策略用"markdown 容器里 `<pre>` 最多"来近似"最新回复"。单回复会话里偶然正确，多轮对话里所有回复各 1 个 `<pre>` → 平局停在 DOM 第一个 = **最旧的回复**；且"pre 最多"本身与新鲜度无关。更迷惑的是路径标题用整页扫描取到了**最新**的 → 形成"旧代码 + 新标题"的错配，看起来像对了 | "最新"直接表达为**文档序最后**（`querySelectorAll` 反向遍历）；线索（`### 文件：` / `### 范围：`）**只在已定位的容器内**提取，绝不整页扫描。结构性常量（如策略数）改动时，**先 grep 自检里的硬编码断言**（本轮 `>= 4` 因降为 3 套而失效） |
+| **采集/定位类判据必须直接表达语义本身，别用代理指标** | 旧策略用"markdown 容器里 `<pre>` 最多"来近似"最新回复"。单回复会话里偶然正确，多轮对话里所有回复各 1 个 `<pre>` → 平局停在 DOM 第一个 = **最旧的回复**；且"pre 最多"本身与新鲜度无关。更迷惑的是路径标题用整页扫描取到了**最新**的 → 形成"旧代码 + 新标题"的错配，看起来像对了 | "最新"直接表达为**文档序最后**（`querySelectorAll` 反向遍历）；线索（`### 文件：` / `### 操作：`）**只在已定位的容器内**提取，绝不整页扫描。结构性常量（如策略数）改动时，**先 grep 自检里的硬编码断言**（本轮 `>= 4` 因降为 3 套而失效） |
 | **给模型看的提示词模板里，绝不要写出裸的三反引号** | 模板是**自然语言**，不是渲染后的文档。早期在说明里写「.py 用 ` ```python `、.ts 用 ` ```typescript `」，模型把它读成**代码块开头**，而这段说明后面没有配对的闭合围栏 → 模型输出出现"有开头没结尾"的代码块（用户实测："第一次输出没有 ``` 结尾"）。**反直觉**：人看这段说明毫无歧义，模型却按围栏语法解析 | 一律改用「三反引号 + python」这类**文字描述**；并显式写明「围栏**必须成对**：代码写完后必须再写一行三反引号闭合」。⚠️ **判据要随演进升级**：后来模板改为"五反引号包住示例"（示例里必须出现三/四反引号才直观），"零反引号"就不再成立 —— 真正的不变量是「**每段围栏都必须与同长度的另一段配对**」。用单测 + 自检 F3b + 离线断言 X1 锁死。**推论：凡是写进提示词的字符，都要按"模型会怎么解析它"来审，而不是按"人怎么读它"** |
 | **多条并列规则若互相冲突、又没给优先级，模型只会折中** | 旧模板同时给了「语言标注跟**文件类型**走（.md→markdown）」与「含反引号就用四反引号」，两条**并列无优先级**。当"文件是 .md"+"只改纯代码行"同时成立时，模型只能自己权衡，结果两头不讨好（用户实测：让 AI 改 .md 里内嵌代码块时格式翻车）。**这类缺陷的根因不是"规则写得不够多"，而是"规则之间没有关系"** —— 再加十条同层规则只会更乱 | **把"要模型推理的规则"换成"要模型照抄的事实"**：新原则 = **输入片段长什么样，输出就照抄同样的围栏结构**（语言标注照抄、围栏行照抄、成对闭合、长度自适应）。模型不必推理"文件类型/含不含围栏行"，只需对齐输入 —— 规则更少、遵守率更高。**推论：当你想给提示词加规则时，先问"这条能不能改成让它照抄某个已存在的东西"** |
 | **同一动作有多个入口时，状态必须由一处统一广播** | 应用有两个入口（预览面板按钮 / 编辑器工具条）。走面板入口时面板自己知道；走编辑器入口时落盘在主进程，而面板是**另一个渲染进程**（ADR-0002）→ 面板一直显示可应用的假状态（用户实测："左侧编辑器应用后，右侧状态没有同步更新"）。**这类缺陷不会报错，只是"看起来没生效"** | 状态变更由**主进程在成功那一刻统一广播**（`preview:applied`），而不是让各入口各自标记。撤销也要广播复位。跨视图的单向通知一律走 `webContents.send`（`oneWayChannels` 名单同步登记），并注意 `tsc` 会把 `CHANNELS.x` 编译成 `contract_1.CHANNELS.x`——在 dist 产物里搜断言必须容忍命名空间前缀 |

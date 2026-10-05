@@ -480,51 +480,48 @@ try {
 } catch (e) {
   check('X1', '格式模板的围栏全部成对（不存在未闭合的 opener）', false, { error: String(e && e.message) });
 }
-// 最终原则（方案甲）：输入输出共用同一条骨架 —— 行号只在 ### 范围，内容里不写行号
-const x2 =
-  /完全一致|照着它把结果写回来|同一条骨架|结构完全相同/.test(specSrc) &&
-  /### 范围：/.test(specSrc) &&
-  /绝不在行首写行号|不含行号/.test(specSrc);
-check('X2', '格式模板：结构对称（输入输出同骨架）+ 行号只在 ### 范围', x2, {
-  hasSymmetry: /完全一致|照着它把结果写回来|同一条骨架|结构完全相同/.test(specSrc),
-  hasRangeAnchor: /### 范围：/.test(specSrc),
-  hasNoLineNo: /绝不在行首写行号|不含行号/.test(specSrc),
-});
-const x3 = /成对|闭合/.test(specSrc) && /四个反引号/.test(specSrc) && /多一个|比它再多/.test(specSrc);
-check('X3', '格式模板：围栏成对闭合 + 至少四个反引号（内容含更多时加长）', x3, {
-  hasPair: /成对|闭合/.test(specSrc),
-  hasFour: /四个反引号/.test(specSrc),
-  hasAdaptive: /多一个|比它再多/.test(specSrc),
-});
-// 用户反馈（few-shot 必须够全）：示例要成体系地覆盖各类场景，且每段都有输入/输出对照。
+// 用真实解析与计算验证明确操作，不能把旧范围格式当成有效定位。
+const protocol = require(path.join(repo, 'dist', 'shared', 'returnPath.js'));
+const snippets = require(path.join(repo, 'dist', 'shared', 'snippet.js'));
+const sample = protocol.parseModelReply(['### 文件：x.ts', '### 操作：替换', '````typescript', '<<<<<<< SEARCH', 'old', '=======', 'new', '>>>>>>> REPLACE', '````'].join('\n')).blocks[0];
+const actual = protocol.computeApply('before old after', sample);
+const legacy = protocol.parseModelReply(['### 文件：x.ts', '### 范围：1-1', '````typescript', 'new', '````'].join('\n')).blocks[0];
+check('X2', '明确 SEARCH 唯一替换，旧行号输出明确拒绝', actual.ok && actual.text === 'before new after' && !protocol.computeApply('old', legacy).ok, { actual, legacyError: legacy.validationError });
+check('X3', '围栏至少四个且嵌套四反引号自动加长', snippets.fenceFor('plain') === '````' && snippets.fenceFor('````text\nbody\n````') === '`````');
 try {
-  const mod2 = require(path.join(repo, 'dist', 'shared', 'formatSpec.js'));
-  const full = mod2.FORMAT_SPEC_FULL;
-  const short = mod2.FORMAT_SPEC_SHORT;
-  const all = short + full;
-  const titles = (full.match(/示例 \d+｜/g) || []).length;
-  const ins = (full.match(/【我给你的】/g) || []).length;
-  const outs = (full.match(/【你该给我的】/g) || []).length;
-  check('X4', '格式模板：示例覆盖全部 8 类场景且输入/输出逐一对照', titles === 8 && ins === outs && ins >= 8, {
-    titles,
-    ins,
-    outs,
-  });
-  check(
-    'X5',
-    '格式模板：不含解析器不认识的 ### 续： 约定 + 保留语言标注对照表',
-    !/###\s*续/.test(all) && /语言标注/.test(all) && /typescript/.test(all),
-    {
-      hasContinuation: /###\s*续/.test(all),
-      hasLangTable: /语言标注/.test(all),
-      hasTsLabel: /typescript/.test(all),
+  const spec = require(path.join(repo, 'dist', 'shared', 'formatSpec.js'));
+  const full = spec.FORMAT_SPEC_FULL; const short = spec.FORMAT_SPEC_SHORT;
+  let valid = true; let contextSafe = true; const counts = []; const rejected = []; const operations = new Set();
+  for (const template of [short, full]) {
+    const fences = protocol.splitFences(template); counts.push(fences.length / 2); let bad = 0;
+    if (fences.length % 2) valid = false;
+    for (let i = 0; i < fences.length; i += 2) {
+      const inputText = fences[i].body;
+      const inputs = protocol.parseModelReply(inputText).blocks;
+      const contexts = new Map(); let previousEnd = 0;
+      for (const inputFence of protocol.splitFences(inputText)) {
+        const heading = /### 上下文文件：([^\r\n]+)/.exec(inputText.slice(previousEnd, inputFence.start));
+        if (heading) contexts.set(heading[1].trim(), inputFence.body);
+        previousEnd = inputFence.end;
+      }
+      if (inputs.some(block => block.operation)) contextSafe = false;
+      for (const block of protocol.parseModelReply(fences[i + 1].body).blocks) {
+        if (!block.operation) { if (block.kind !== 'other') valid = false; continue; }
+        operations.add(block.operation);
+        if (block.validationError) { bad++; if (protocol.computeApply('', block).ok) valid = false; continue; }
+        const input = block.operation === 'create' ? '' : contexts.get(block.filePath);
+        if (input === undefined || !protocol.computeApply(input, block).ok) valid = false;
+      }
     }
-  );
-  check('X6', '格式模板：截断场景改为分多轮给完整文件', /分多轮/.test(all) && /完整/.test(all), {
-    hasMultiRound: /分多轮/.test(all),
-  });
-} catch (e) {
-  check('X4', '格式模板：示例覆盖全部 8 类场景且输入/输出逐一对照', false, { error: String(e && e.message) });
+    rejected.push(bad);
+  }
+  check('X4', '简洁六组、完整十三组示例实际执行且错误示例拒绝', valid && JSON.stringify(counts) === '[6,13]' && JSON.stringify(rejected) === '[0,1]', { valid, counts, rejected });
+  check('X5', '复制上下文不暗示写入，两版实际覆盖明确三操作', contextSafe && JSON.stringify([...operations].sort()) === '["create","overwrite","replace"]', { contextSafe, operations: [...operations] });
+  check('X6', '完整操作可分多轮交付，模板不输出旧定位范围', /分多轮/.test(short + full) && /完整/.test(short + full) && !/### 范围：/.test(short + full));
+} catch (error) {
+  check('X4', '格式模板实际行为验证无异常', false, { error: String(error) });
+  check('X5', '模板上下文与操作行为无异常', false, { error: String(error) });
+  check('X6', '完整操作规则读取无异常', false, { error: String(error) });
 }
 
 console.log(`\n通过 ${pass} / 失败 ${fail}`);

@@ -1,409 +1,96 @@
-/**
- * 输出格式要求模板（纯逻辑，可单测）
- *
- * 用途：让"一键同步"稳定成立。**由用户自己复制并粘贴到提示词里**——
- * 程序只把这段文本写进系统剪贴板，**绝不写入网页输入框**（ADR-0003 零注入边界）。
- *
- * 与解析器的关系：模板声明的格式要**正好落在解析器能识别的形态上**
- * （见 src/shared/returnPath.ts 的路径线索优先级）。因此这里的示例写法不是随便写的：
- *  - `### 文件：路径` 命中"标题式路径行"线索；
- *  - `### 范围：N-M` 命中"行区间指令"（决定是片段替换还是整文件替换）；
- *  - 围栏内首行 `// 路径` 命中"路径注释"线索。
- *
- * ------------------------------------------------------------------
- * 核心设计：输入与输出**结构完全对称**（同一条骨架）
- * ------------------------------------------------------------------
- *   ### 文件：<相对路径>
- *   ### 范围：<起始行>-<结束行>
- *   ````<语言标注>
- *   <内容，不含行号>
- *   ````
- *
- * 程序发出去的片段（src/shared/snippet.ts）与这里要求的输出形态逐字一致，
- * 模型只需学一套规则：**把收到的骨架原样抄回来，只改内容**。
- *
- * 两个不可动摇的不变量：
- *  1. **行号只出现在 `### 范围` 行里**，内容里绝不带行号。
- *     内容里带行号对"人定位"与"机器写回"都是冗余 —— 范围行已经说清楚了；
- *     而对 .md/.txt 这类纯文本，行号会与正文混淆、被原样写进文件。
- *     单一真相源（范围行）比双份（行号 + 范围行）更稳。
- *  2. **围栏至少四个反引号**（不是"固定四个"）。
- *     内容里若出现四个及以上连续反引号，外层必须比它更长，否则会被提前闭合、
- *     内容被截断。程序侧 fenceFor 同样按"最长连续反引号 + 1、最少 4"计算。
- */
+/** 明确操作输出协议的唯一模板源；设置面板默认资源由构建生成。 */
+import { buildSnippetText, buildWholeFileText, fenceFor, languageHintFor } from './snippet';
 
-/**
- * 输入/输出结构说明 + few-shot 示例（**两个变体共用同一份素材**）。
- *
- * 为什么要共用：SHORT 与 FULL 只在"示例数量 / 细节详略"上不同，
- * 骨架与规则必须一字不差 —— 若各写一遍，改一处漏一处，
- * 用户切换变体时会得到互相矛盾的规范。这里用函数按参数拼装。
- */
-
-/** 一段 few-shot 示例：input 是用户侧片段，output 是模型应给出的形态 */
 interface SpecExample {
-  /** 场景标题 */
   title: string;
-  /** 要点说明（一句话） */
   note: string;
-  /** 用户给模型的输入（原样展示） */
   input: string;
-  /** 模型应输出的内容（原样展示） */
   output: string;
-  /** 是否纳入 SHORT 档（FULL 全含） */
   inShort: boolean;
 }
-
-const EX_MD_NESTED: SpecExample = {
-  title: '示例 1｜.md 里内嵌代码块 —— 内层三反引号原样保留',
-  note: '这是最容易出错的一种：内容里本来就有三反引号，外层仍用四个，不会被提前闭合。',
-  inShort: true,
-  input: [
-    '### 文件：docs/notes.md',
-    '### 范围：2-8',
-    '````markdown',
-    '# 说明',
-    '',
-    '```python',
-    'def foo():',
-    '    pass',
-    '```',
-    '````',
-  ].join('\n'),
-  output: [
-    '### 文件：docs/notes.md',
-    '### 范围：2-8',
-    '````markdown',
-    '# 说明',
-    '',
-    '```python',
-    'def foo():',
-    '    return 1',
-    '```',
-    '````',
-  ].join('\n'),
-};
-
-const EX_TS_PARTIAL: SpecExample = {
-  title: '示例 2｜.ts 局部替换几行 —— 只给那几行，不给整个文件',
-  note: '范围表示原文件要替换的行，保持 10-10；新内容有 10 行，应用后占 10-19，原第 11 行起后移 9 行。',
-  inShort: true,
-  input: [
-    '### 文件：src/counter.ts',
-    '### 范围：10-10',
-    '````typescript',
-    'let n = 0;',
-    '````',
-  ].join('\n'),
-  output: [
-    '### 文件：src/counter.ts',
-    '### 范围：10-10',
-    '````typescript',
-    'let n = 0;',
-    'export function inc() {',
-    '  n += 2;',
-    '  return n;',
-    '}',
-    '',
-    'export function reset() {',
-    '  n = 0;',
-    '  return n;',
-    '}',
-    '````',
-  ].join('\n'),
-};
-
-const EX_WHOLE_FILE: SpecExample = {
-  title: '示例 3｜整文件重写 —— 范围写成 1 到末行',
-  note: '整体输出与局部输出**写法完全一样**；范围仍覆盖原文件 1-2，输出增加到 3 行也不改范围。',
-  inShort: true,
-  input: [
-    '### 文件：src/config.ts',
-    '### 范围：1-2',
-    '````typescript',
-    'export const A = 1;',
-    'export const B = 2;',
-    '````',
-  ].join('\n'),
-  output: [
-    '### 文件：src/config.ts',
-    '### 范围：1-2',
-    '````typescript',
-    'export const A = 1;',
-    'export const B = 2;',
-    'export const C = 3;',
-    '````',
-  ].join('\n'),
-};
-
-const EX_PLAIN_TEXT: SpecExample = {
-  title: '示例 4｜纯文本文件（.txt / 无扩展名）—— 四个反引号后不写语言标注',
-  note: '纯文本没有语言可标：开头就是四个反引号，紧接着换行。',
-  inShort: true,
-  input: ['### 文件：docs/summary.txt', '### 范围：1-2', '````', '第一行纯文本。', '````'].join('\n'),
-  output: ['### 文件：docs/summary.txt', '### 范围：1-2', '````', '第一行纯文本。', '第二行纯文本。', '````'].join('\n'),
-};
-
-const EX_NEW_FILE: SpecExample = {
-  title: '示例 5｜新建文件 —— 目录结构里没有，也照常给三段式',
-  note: '路径按我指定或按目录结构推断；范围写 1 到新增内容的末行。',
-  inShort: true,
-  input: '（目录结构里没有 src/util/format.ts，请新建一个导出 formatDate 的工具）',
-  output: [
-    '### 文件：src/util/format.ts',
-    '### 范围：1-3',
-    '````typescript',
-    'export function formatDate(d: Date): string {',
-    '  return d.toISOString().slice(0, 10);',
-    '}',
-    '````',
-  ].join('\n'),
-};
-
-const EX_MULTI_FILE: SpecExample = {
-  title: '示例 6｜一次改多个文件 —— 每个文件各写一遍三段式，顺序与输入一致',
-  note: '不要把所有文件塞进一个代码块；一个文件一块。',
-  inShort: false,
-  input: [
-    '### 文件：src/a.ts',
-    '### 范围：1-1',
-    '````typescript',
-    'export const a = 1;',
-    '````',
-    '',
-    '### 文件：docs/b.md',
-    '### 范围：1-3',
-    '````markdown',
-    '# B',
-    '',
-    '正文',
-    '````',
-  ].join('\n'),
-  output: [
-    '### 文件：src/a.ts',
-    '### 范围：1-1',
-    '````typescript',
-    'export const a = 2;',
-    '````',
-    '',
-    '### 文件：docs/b.md',
-    '### 范围：1-3',
-    '````markdown',
-    '# B',
-    '',
-    '新的正文',
-    '````',
-  ].join('\n'),
-};
-
-const EX_CONVERSATION: SpecExample = {
-  title: '示例 7｜只是提问 / 讨论、不落文件 —— **不加锚点、不加围栏**',
-  note: '我要是没让你改文件，就按普通文字回答；不要硬套 ### 文件 与围栏，否则会被误当成待写入内容。',
-  inShort: true,
-  input: '这个冒泡排序的时间复杂度是多少？',
-  output: '平均和最坏情况都是 O(n²)，最好情况（已有序且带提前退出判断）是 O(n)。空间复杂度 O(1)。',
-};
-
-const EX_FOUR_BACKTICKS: SpecExample = {
-  title: '示例 8｜内容里出现四个连续反引号 —— 外层加长到五个',
-  note: '外层永远比内容里最长的连续反引号长一个，这样才不会被提前闭合。',
-  inShort: false,
-  input: [
-    '### 文件：docs/raw.md',
-    '### 范围：1-1',
-    '`````markdown',
-    '````（这一段本身就是四个反引号）',
-    '`````',
-  ].join('\n'),
-  output: [
-    '### 文件：docs/raw.md',
-    '### 范围：1-1',
-    '`````markdown',
-    '````（这一段本身就是四个反引号，已按你的要求处理）',
-    '`````',
-  ].join('\n'),
-};
-
-const ALL_EXAMPLES: SpecExample[] = [
-  EX_MD_NESTED,
-  EX_TS_PARTIAL,
-  EX_WHOLE_FILE,
-  EX_PLAIN_TEXT,
-  EX_NEW_FILE,
-  EX_MULTI_FILE,
-  EX_CONVERSATION,
-  EX_FOUR_BACKTICKS,
-];
-
-/**
- * 把一段示例文本包进「五反引号」里。
- *
- * 为什么必须包：示例内部含四反引号（甚至三反引号），若不包裹，
- * 模型会把示例里的围栏读成"格式要求结束了"，从而输出被带偏
- * （这是本项目真实踩过的坑）。五反引号比示例内最长的四个更长，安全。
- *
- * 注意：包裹行必须**成对**。自检 F3b / 离线 X1 会断言模板里每段反引号都成对 ——
- * 这条断言曾经抓到过我自己在说明文字里写出的裸 opener。
- */
-function block(text: string): string[] {
-  return ['·····', ...text.split('\n'), '·····'];
+function operation(path: string, kind: '替换' | '新建' | '覆盖全文', body: string): string {
+  const fence = fenceFor(body);
+  return ['### 文件：' + path, '### 操作：' + kind, fence + languageHintFor(path), body, fence].join('\n');
 }
-
-/**
- * 渲染若干示例为行数组（每段之间空一行）。
- *
- * 示例编号**按本次渲染的顺序重排**（不是常量里的绝对序号）：SHORT 只挑 4 个场景，
- * 若直接用绝对序号会出现「示例 1 / 2 / 4 / 7」这种跳号，读者会以为漏了内容。
- * 重排后 SHORT 是 1–4、FULL 是 1–8，各自连续。
- */
-function renderExamples(examples: SpecExample[]): string[] {
-  const out: string[] = [];
-  examples.forEach((ex, i) => {
-    if (i > 0) out.push('');
-    // 只替换标题开头的「示例 N｜」，保留后面的描述
-    out.push(ex.title.replace(/^示例 \d+｜/, '示例 ' + (i + 1) + '｜'));
-    out.push(ex.note);
-    out.push('【我给你的】');
-    out.push(...block(ex.input));
-    out.push('【你该给我的】');
-    out.push(...block(ex.output));
-  });
-  return out;
+function pair(oldText: string, newText: string): string {
+  return ['<<<<<<< SEARCH', oldText, '=======', newText, '>>>>>>> REPLACE'].join('\n');
 }
-
-/** 语言标注对照表（按目标文件扩展名） */
-const LANGUAGE_TABLE: string[] = [
-  '   扩展名          语言标注        扩展名          语言标注',
-  '   .md / .markdown  markdown        .ts / .tsx      typescript',
-  '   .js / .jsx       javascript      .py             python',
-  '   .json / .jsonc   json            .yaml / .yml    yaml',
-  '   .sh / .bash      bash            .html / .htm    html',
-  '   .css / .scss     css             .sql            sql',
-  '   .c / .h          c               .cpp / .hpp     cpp',
-  '   .java            java            .go             go',
-  '   .rs              rust            .rb             ruby',
-  '   .txt / 无扩展名 / 其它不认识 → **不写语言标注**（四个反引号后直接换行）',
+function context(path: string, body: string, whole = false): string {
+  return whole ? buildWholeFileText(path, body).text : buildSnippetText({ relPath: path, text: body, startLine: 1 }).text;
+}
+const examples: SpecExample[] = [
+  { title: '局部替换', note: 'SEARCH 必须逐字来自原文；新内容行数可增加，IDE 自行计算位置。', inShort: true,
+    input: context('src/counter.ts', 'let n = 0;'),
+    output: operation('src/counter.ts', '替换', pair('let n = 0;', 'let n = 0;\nexport function inc() {\n  return ++n;\n}')) },
+  { title: '新建文件', note: '只创建不存在的路径；围栏中是完整新文件内容，不包 SEARCH。', inShort: true,
+    input: '请新建 src/util/format.ts，导出日期格式化函数。',
+    output: operation('src/util/format.ts', '新建', 'export function formatDate(d: Date): string {\n  return d.toISOString().slice(0, 10);\n}') },
+  { title: '覆盖全文', note: '明确请求整体修改时输出全文；复制完整原文不自动意味着覆盖。', inShort: true,
+    input: context('src/config.ts', 'export const A = 1;\nexport const B = 2;', true),
+    output: operation('src/config.ts', '覆盖全文', 'export const A = 1;\nexport const B = 2;\nexport const C = 3;') },
+  { title: 'Markdown 内嵌代码块', note: '内层围栏原样保留；外层围栏至少四个反引号。', inShort: true,
+    input: context('docs/notes.md', '# 说明\n\n```python\ndef foo():\n    pass\n```'),
+    output: operation('docs/notes.md', '替换', pair('def foo():\n    pass', 'def foo():\n    return 1')) },
+  { title: '纯文本文件', note: '.txt 可不写语言标注，保留原文空白。', inShort: true,
+    input: context('docs/summary.txt', '第一行纯文本。'),
+    output: operation('docs/summary.txt', '替换', pair('第一行纯文本。', '第一行纯文本。\n第二行纯文本。')) },
+  { title: '普通讨论不落文件', note: '没有修改需求时，不加文件、操作头；命令及示例是只读内容。', inShort: true,
+    input: '冒泡排序的时间复杂度是多少？', output: '平均和最坏情况为 O(n²)，空间复杂度为 O(1)。' },
+  { title: '插入内容', note: '用真实原文作为 SEARCH，在 REPLACE 保留原文并追加内容。', inShort: false,
+    input: context('src/hello.ts', 'export const greeting = "hello";'),
+    output: operation('src/hello.ts', '替换', pair('export const greeting = "hello";', 'export const greeting = "hello";\nexport const language = "zh";')) },
+  { title: '删除内容', note: '空 REPLACE 表示删除；SEARCH 非空，不能用空 SEARCH 插入。', inShort: false,
+    input: context('src/debug.ts', 'console.log("debug");\n'),
+    output: operation('src/debug.ts', '替换', pair('console.log("debug");\n', '')) },
+  { title: '同文件多处替换', note: '一个块内可放多个完整替换对；各 SEARCH 在同一原文中唯一且不重叠，一次应用。', inShort: false,
+    input: context('src/options.ts', 'const size = 1;\nconst enabled = false;'),
+    output: operation('src/options.ts', '替换', pair('const size = 1;', 'const size = 2;') + '\n' + pair('const enabled = false;', 'const enabled = true;')) },
+  { title: '.env 与无扩展名文件', note: '每个文件重新声明文件与操作头；不从上一块继承路径或操作。', inShort: false,
+    input: context('.env', 'PORT=3000') + '\n\n' + context('LICENSE', '旧许可说明'),
+    output: operation('.env', '替换', pair('PORT=3000', 'PORT=4000')) + '\n\n' + operation('LICENSE', '覆盖全文', '新的许可说明') },
+  { title: '内容包含更长围栏', note: '内容有四个连续反引号时外层加长，结尾与开头同长度。', inShort: false,
+    input: context('docs/fences.md', '````text\n原文\n````', true),
+    output: operation('docs/fences.md', '覆盖全文', '````text\n新内容\n````') },
+  { title: '空文件与只读命令', note: '空新建或覆盖也须完整围栏；运行命令不附修改元数据。', inShort: false,
+    input: '请新建 empty.txt 空文件，并说明查看目录的命令。',
+    output: operation('empty.txt', '新建', '') + '\n\n仅供手动执行的命令：\n````powershell\nGet-ChildItem\n````' },
+  { title: '错误示例：残缺替换对（不可应用）', note: '下面故意缺少 REPLACE 闭合标记，不能这样输出；请给完整替换对。', inShort: false,
+    input: context('src/broken.ts', 'const a = 1;'),
+    output: operation('src/broken.ts', '替换', '<<<<<<< SEARCH\nconst a = 1;\n=======\nconst a = 2;') },
 ];
-
-/**
- * 简短版（日常默认）：核心规则 + 4 个最关键的示例。
- *
- * 为什么这几个进 SHORT：它们各自代表一类**高频且易错**的场景 ——
- * 带内嵌围栏的 .md、局部替换、纯文本、纯对话。
- * 其余场景（整文件 / 新建 / 多文件 / 含四个反引号）在 FULL 里给全。
- *
- * 用户保存的自定义内容（settings.json 的 customFormatSpec）会覆盖它；
- * 未设置时用的就是这一段 —— 见 resolveFormatSpec()。
- */
-export const FORMAT_SPEC_SHORT = [
+function displayed(text: string): string {
+  const fence = '`'.repeat(Math.max(5, fenceFor(text).length));
+  return [fence, text, fence].join('\n');
+}
+function renderExamples(short: boolean): string {
+  return examples.filter(example => !short || example.inShort).map((example, index) => [
+    '示例 ' + (index + 1) + '｜' + example.title, example.note,
+    '【我给你的】', displayed(example.input), '【你该给我的】', displayed(example.output),
+  ].join('\n')).join('\n\n');
+}
+const core = [
   '【输入/输出格式要求】',
-  '',
-  '你我会用**同一条骨架**来交换内容 —— 我给你什么结构，你就按同样的结构写回来：',
-  '',
-  '### 文件：相对路径',
-  '### 范围：起始行-结束行',
-  '````语言标注',
-  '（内容，不含行号）',
-  '````',
-  '',
-  '═══ 一、结构与规则 ═══',
-  '',
-  '1. 每个文件上方单独一行写：### 文件：相对路径',
-  '   例：### 文件：src/main/index.ts',
-  '   路径用相对路径、以 / 分隔，须与我的目录结构一致。',
-  '',
-  '2. 紧接下一行写：### 范围：起始行-结束行（用我给你的行号）',
-  '   例：### 范围：80-92',
-  '   - 局部修改 → 范围是原文件被替换的行，内容只放替换后的片段（不要给我整个文件）；',
-  '   - 整体修改 → 范围是原文件的完整行范围（1 到原末行），内容放修改后的全文。',
-  '   新内容行数可增减，范围保持原文件行号；范围之外的内容保留，后续行自动移动。',
-  '   ### 范围 是**替换哪几行**的唯一依据，**必须写**。',
-  '',
-  '3. 围栏内**只放内容本身**：',
-  '   - **绝不在行首写行号**（不要写成 ` 80| xxx`）——行号已经由 ### 范围 表达了；',
-  '   - 不要省略号（...）、不要"以下是……"之类的前后缀。',
-  '',
-  '4. 一次涉及多个文件时，每个文件都按上面三段式各写一遍，一个文件一块。',
-  '',
-  '5. **围栏固定用四个反引号**（不是三个）：开头 = 四个反引号 + 语言标注，',
-  '   结尾 = 同样四个反引号，**必须成对闭合**。语言标注按目标文件扩展名给：',
-  ...LANGUAGE_TABLE,
-  '',
-  '6. 内容里若出现四个及以上**连续**反引号，外层就比它再多一个（内层四个 → 外层五个）；',
-  '   内容里的三反引号（如 .md 内嵌代码块）**原样保留**，外面有四个就不会被提前闭合。',
-  '',
-  '7. 锚点（### 文件 / ### 范围）一律写在围栏**外面**，不得出现在围栏内容里。',
-  '',
-  '═══ 二、示例（输入 → 输出） ═══',
-  '',
-  '下面每段都用五反引号包着，**只是示范，不是你要输出的内容**。',
-  '注意看【我给你的】与【你该给我的】之间的差别 —— 结构完全相同，只有内容变了。',
-  '',
-  ...renderExamples(ALL_EXAMPLES.filter((e) => e.inShort)),
-].join('\n').replace(/·····/g, '`````');
-
-/**
- * 完整版：与简短版**同一份规则与素材**，示例给全 8 个（含整文件 / 新建 / 多文件 / 含四反引号）。
- *
- * 适用：改动较大、文件较多、或模型上一次没按规范输出时，贴这一版更稳。
- */
-export const FORMAT_SPEC_FULL = [
-  '【输入/输出格式要求】',
-  '',
-  '你我会用**同一条骨架**来交换内容 —— 我给你什么结构，你就按同样的结构写回来：',
-  '',
-  '### 文件：相对路径',
-  '### 范围：起始行-结束行',
-  '````语言标注',
-  '（内容，不含行号）',
-  '````',
-  '',
-  '→ 这条骨架就是**唯一**的输入结构，也是你唯一需要给出的输出结构。',
-  '',
-  '═══ 一、结构与规则 ═══',
-  '',
-  'A. 路径与范围（三段式的头两行）',
-  '  1. 每个文件上方单独一行：### 文件：相对路径',
-  '     例：### 文件：src/main/index.ts',
-  '     路径一律相对路径、以 / 分隔，须与我给的目录结构一致。',
-  '     目录结构里没有的文件视为新建，路径按我指定或按结构推断。',
-  '  2. 紧接下一行：### 范围：起始行-结束行（用我给你的行号）',
-  '     - 局部替换：范围 = 原文件被替换的行，内容只放替换后的片段；',
-  '     - 整体输出：范围 = 原文件的完整行范围（1 到原末行），内容放修改后的全文。',
-  '     新内容行数可增减，范围保持原文件行号；范围之外的内容保留，后续行自动移动。',
-  '     ### 范围 是**替换哪几行**的唯一依据，**必须写**。',
-  '',
-  'B. 围栏内容（第三段）',
-  '  3. 围栏内**只放内容本身**：',
-  '     - **绝不在行首写行号**（不要写成 ` 80| xxx`）；',
-  '     - 不要省略号、不要"以下是……"之类的前后缀。',
-  '  4. 锚点（### 文件 / ### 范围）一律写在围栏**外面**，不得出现在围栏内容里。',
-  '',
-  'C. 围栏怎么写',
-  '  5. **固定用四个反引号**（不是三个）：开头 = 四个反引号 + 语言标注；',
-  '     结尾 = 同样四个反引号，**必须成对闭合**。',
-  '     语言标注按目标文件扩展名给：',
-  ...LANGUAGE_TABLE,
-  '  6. 内容里若出现四个及以上**连续**反引号，外层比它多一个（内层四个 → 外层五个）。',
-  '  7. 内容里的三反引号（如 .md 内嵌代码块）**原样保留**，外层四个不会被提前闭合。',
-  '',
-  'D. 多文件与对话',
-  '  8. 多文件：每个文件各写一遍三段式，顺序与我给出的一致，一个文件一块。',
-  '  9. 我若只是提问、讨论、不要求落文件 → **不加 ### 文件、不加围栏**，按普通文字回答。',
-  '     只要涉及改动文件，就必须带 ### 文件 与 ### 范围。',
-  '',
-  'E. 关于长度',
-  '  10. 每次输出都要把该给的内容给**完整**。若确实太长，',
-  '      宁可**分多轮、每轮给某个文件的完整内容**（仍带它的 ### 文件 与 ### 范围），',
-  '      也不要在中间截断 —— 半截的内容无法被采用。',
-  '',
-  '═══ 二、示例（输入 → 输出，共 ' + String(ALL_EXAMPLES.length) + ' 个场景） ═══',
-  '',
-  '下面每段都用五反引号包着，**只是示范，不是你要输出的内容**。',
-  '注意看【我给你的】与【你该给我的】之间的差别 —— 结构完全相同，只有内容变了。',
-  '',
-  ...renderExamples(ALL_EXAMPLES),
-].join('\n').replace(/·····/g, '`````');
+  '我提供的是只读原文上下文；你输出的是明确的修改操作。不要把上下文头照抄成修改指令。',
+  '每个修改块必须紧邻声明 ### 文件：相对路径 和 ### 操作：替换／新建／覆盖全文（只能选其中一个）。',
+  '然后用至少四个反引号围栏承载内容，成对闭合，开头与结尾同长度。内容中最长连续反引号超过围栏时，外层比它多一个。',
+  '替换：围栏内依次写独立标记行 <<<<<<< SEARCH、原文、=======、新内容、>>>>>>> REPLACE。一个块可含多个完整替换对。',
+  'SEARCH 必须逐字复制上下文中的真实原文，非空且在目标原文中唯一匹配。保留缩进、Tab、空格、首尾空行与末尾换行；不改写，不加行号，不用省略号。',
+  '原文不存在匹配或出现多次时，请先请求补充上下文；不能猜测位置、模糊匹配或改掉所有匹配。',
+  '新建：目标必须不存在，围栏内直接给完整文件文本；覆盖全文：目标必须存在，围栏内直接给修改后的全文。两者不包装 SEARCH／REPLACE，允许空文件，但不能缺失围栏。',
+  '无需提供定位行号或范围，IDE 根据原文计算；旧行号协议不可应用。一次操作中的替换对不能重叠；同文件覆盖全文不能与其他操作混用，新建不能重复。',
+  '文件与操作头必须在围栏外，且每个块重新声明。命令、流程图、普通示例与讨论不带修改元数据；不冒充文件变更。',
+  '语言标注仅用于显示：.ts→typescript、.py→python、.json→json、.md→markdown；.txt／无扩展名可留空，.env→bash。正文里的路径注释属于内容，不能擅自剥除。',
+  '输出完整内容；无法一次输出时请分多轮，每轮交付一个完整操作，不用省略号、不提交半段围栏或替换对。',
+].join('\n');
+const details = [
+  '补充规则：插入使用一段真实 SEARCH，在 REPLACE 中保留它并追加；删除使用空 REPLACE。每个正文与后面的标记／闭合围栏间多一个结构性换行，正文自己的末尾换行仍须保留。',
+  '多个文件各自给完整头部；同文件多个围栏是独立操作，全部 SEARCH 根据同一原文校验，不能搜索前一 REPLACE 刚生成的内容。',
+  '若真实正文含独立的 SEARCH／分隔线／REPLACE 标记而产生歧义，请对该文件改用明确的覆盖全文，不猜测标记归属。新建／覆盖全文正文内的协议示例按字面保存。',
+  '重复原文请补选更多上下文来获得唯一匹配；不足以判断时先提问。覆盖全文会完整显示 diff，请核对是否遗漏原有内容。',
+  '格式错误示例（不可应用）：缺少操作头、操作名称未知、未闭合围栏、残缺替换对、空 SEARCH、混入旧范围头。不要使用这些格式；IDE 会显示诊断，不自动修正。',
+].join('\n');
+export const FORMAT_SPEC_SHORT = [core, '示例（输入 → 输出）', renderExamples(true)].join('\n\n');
+export const FORMAT_SPEC_FULL = [core, details, '示例（输入 → 输出）', renderExamples(false)].join('\n\n');
 
 export type FormatSpecVariant = 'short' | 'full';
 
@@ -509,7 +196,7 @@ export function buildPrompt(input: BuildPromptInput): string {
   }
 
   if (input.formatSpec.trim().length > 0) {
-    parts.push(input.formatSpec.trim());
+    parts.push(input.formatSpec);
   }
 
   return parts.join('\n\n');

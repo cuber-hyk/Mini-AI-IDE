@@ -1,12 +1,12 @@
 /**
  * 回程解析（纯逻辑，可单测）。
- * 每个代码块只采用自身首行路径注释与紧邻的文件/范围标题，不从正文、其他块或选区猜测。
+ * 每个修改块只采用紧邻文件与明确操作标题，不从正文、其他块或选区猜测。
  * 缺失或冲突的信息保留为诊断，交由应用层阻塞；无文件修改元数据的围栏作为只读附属内容。
  */
 
 /** 代码块 */
 export interface ParsedCodeBlock {
-  /** 块内代码（已去除路径注释行） */
+  /** 围栏正文原文，只去除围栏的结构性换行 */
   code: string;
   /** 围栏语言标注（可为空字符串） */
   language: string;
@@ -15,15 +15,18 @@ export interface ParsedCodeBlock {
   /** 路径线索来源 */
   pathSource: 'fence-comment' | 'preceding-heading' | 'none';
   /**
-   * 已有文件待替换的原行区间（1 起、闭区间）；null 表示未提供范围。
-   * 来源是围栏上方的 `### 范围：80-92` 指令（也接受 `### 行：80-92`）。
+   * 保留为 null；旧行号格式只触发迁移诊断，不再作为修改定位。
    */
   range: LineRange | null;
+  /** 明确的修改操作，不从内容或磁盘存在状态推断 */
+  operation?: EditOperation;
+  /** 替换操作中的完整 SEARCH/REPLACE 对 */
+  edits?: TextEdit[];
   /** 没有文件修改元数据的附属内容，只读展示；语言仅用于高亮 */
   kind?: 'other';
   /** 标题或路径注释相互冲突、格式无效时阻塞该块 */
   validationError?: string;
-  /** 被剥离的路径注释行原文（用于回溯） */
+  /** 保留为 null；协议正文内的路径注释按字面保留 */
   strippedPathLine: string | null;
   /** 在原文中的起止偏移（含围栏），便于回显 */
   start: number;
@@ -105,55 +108,57 @@ export function normalizeRelPath(raw: string): string | null {
  * 围栏切分
  * ------------------------------------------------------------------ */
 
-interface RawFence {
+export interface RawFence {
   start: number;
   end: number;
   info: string;
+  /** 完整正文；只移除围栏自己的结构性换行 */
   body: string;
-  /** body 在原文中的起始偏移（用于精确定位注释行） */
   bodyStart: number;
+  closed: boolean;
+  fenceLength: number;
+  marker: '`' | '~';
 }
 
-/**
- * 找出所有代码围栏（支持 ~~~ ；不支持嵌套围栏，与 Markdown 一致）。
- *
- * **容忍未闭合围栏**（实测必需）：目标站点把开头的 ``` 渲染成文本，但结尾围栏是
- * 装饰元素、不出现在 `innerText` 里。若坚持"围栏必须成对"，采到的整段回复会被判定为
- * "没有围栏"，表现为**采集成功但解析出 0 个代码块**（用户实测反馈）。
- * 因此未闭合的围栏视为**延续到文本结尾**。
- */
+interface TextLine { text: string; start: number; end: number }
+function textLines(text: string): TextLine[] {
+  const lines: TextLine[] = [];
+  const re = /([^\r\n]*)(\r\n|\r|\n|$)/g;
+  for (const match of text.matchAll(re)) {
+    if (match[0].length === 0) break;
+    const start = match.index ?? 0;
+    lines.push({ text: match[1] ?? '', start, end: start + match[0].length });
+  }
+  return lines;
+}
+
+function withoutStructuralNewline(text: string): string {
+  return text.replace(/(?:\r\n|\r|\n)$/, '');
+}
+
+/** Markdown 围栏逐行切分，记录闭合状态；缺失闭合不能成为可写正文。 */
 export function splitFences(text: string): RawFence[] {
+  const lines = textLines(text);
   const found: RawFence[] = [];
-
-  // 1) 成对围栏
-  const closed = /^[ \t]*(`{3,}|~{3,})([^\n]*)\n([\s\S]*?)^[ \t]*\1[ \t]*\r?$/gm;
-  for (const m of text.matchAll(closed)) {
-    const start = m.index ?? 0;
-    const full = m[0];
-    const firstLineEnd = full.indexOf('\n');
-    const bodyStart = start + (firstLineEnd >= 0 ? firstLineEnd + 1 : full.length);
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i]!;
+    const opening = /^[ \t]*(`{3,}|~{3,})([^\r\n]*)$/.exec(line.text);
+    if (!opening) continue;
+    const fence = opening[1]!;
+    const marker = fence[0] as '`' | '~';
+    const closing = new RegExp(`^[ \\t]*${marker === '`' ? '`' : '~'}{${fence.length},}[ \\t]*$`);
+    let j = i + 1;
+    while (j < lines.length && !closing.test(lines[j]!.text)) j += 1;
+    const close = lines[j];
+    const bodyStart = line.end;
     found.push({
-      start,
-      end: start + full.length,
-      info: (m[2] ?? '').trim(),
-      body: m[3] ?? '',
-      bodyStart,
+      start: line.start, end: close ? close.end : text.length,
+      info: (opening[2] ?? '').trim(),
+      body: close ? withoutStructuralNewline(text.slice(bodyStart, close.start)) : text.slice(bodyStart),
+      bodyStart, closed: Boolean(close), fenceLength: fence.length, marker,
     });
+    i = close ? j : lines.length;
   }
-
-  // 2) 未闭合围栏：从某个 ``` 行起一直到文本结尾（排除落在已闭合块内的）
-  for (const m of text.matchAll(/^[ \t]*(`{3,})[^\n]*(?:\n|$)/gm)) {
-    const start = m.index ?? 0;
-    if (found.some((f) => start >= f.start && start < f.end)) continue;
-    const full = m[0];
-    const newlineIdx = full.indexOf('\n');
-    const openingLine = newlineIdx >= 0 ? full.slice(0, newlineIdx) : full;
-    const info = openingLine.replace(/^[ \t]*`+/, '').replace(/`+[ \t]*$/, '').trim();
-    const bodyStart = newlineIdx >= 0 ? start + newlineIdx + 1 : text.length;
-    found.push({ start, end: text.length, info, body: text.slice(bodyStart), bodyStart });
-  }
-
-  found.sort((a, b) => a.start - b.start);
   return found;
 }
 
@@ -251,314 +256,272 @@ export function matchHeadingLine(line: string): string | null {
   return normalized;
 }
 
-/* ------------------------------------------------------------------ *
- * 行区间指令：### 范围：80-92
- *
- * 为什么需要它：片段替换比"整文件替换"省 token，但**行号必须可靠**。
- * 因此约定：
- *  - 用户复制片段时带上**文件真实行号**（见 formatNumberedSnippet）；
- *  - 模型回显 `### 范围：N-M`；
- *  - 应用前由 FileService 做**三向校验**（区间有效 / 原内容匹配 / 上下文匹配），
- *    任何一项不符即拒绝，绝不按可能已失效的行号写入（见 computeApply 的说明）。
- * ------------------------------------------------------------------ */
-
-/** 匹配 `### 范围：80-92`、`### 行：80-92`、`### lines: 80-92`、`### 位置：替换第 80-92 行` 等形态 */
-const RANGE_DIRECTIVE_RE =
-  /^\s*(?:#{1,6}\s*)?(?:范围|行|行号|位置|lines?|range|position)\s*[:：]\s*(?:替换第\s*)?(\d{1,7})\s*(?:[-–—~至到]\s*(\d{1,7}))?\s*行?\s*$/i;
-
-/** 从一行文本解析行区间；单数字（`### 范围：80`）视为 80-80 */
-export function matchRangeDirective(line: string): LineRange | null {
-  const m = RANGE_DIRECTIVE_RE.exec(line);
-  if (!m || !m[1]) return null;
-  const start = Number.parseInt(m[1], 10);
-  const end = m[2] ? Number.parseInt(m[2], 10) : start;
-  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 1 || end < 1) return null;
-  return start <= end ? { start, end } : { start: end, end: start };
-}
+export type EditOperation = 'replace' | 'create' | 'overwrite';
+export interface TextEdit { oldText: string; newText: string }
 
 interface BlockHeader {
   paths: string[];
-  ranges: LineRange[];
+  operations: EditOperation[];
   errors: string[];
   hasFileLabel: boolean;
+  hasOperationLabel: boolean;
+  hasRangeLabel: boolean;
+  context: boolean;
+  start: number;
 }
 
-/** 只扫描上一围栏之后、当前围栏之前的相邻标题；空行可跨越，正文或章节标题形成边界。 */
+const OPERATION_LABEL_RE = /^操作\s*[:：]\s*(.*)$/;
+const CONTEXT_LABEL_RE = /^(?:上下文文件|上下文)\s*[:：]/;
+const RANGE_LABEL_RE = /^(?:范围|行|行号|位置|lines?|range|position)\s*[:：]/i;
+const OPERATIONS = new Map<string, EditOperation>([['替换', 'replace'], ['新建', 'create'], ['覆盖全文', 'overwrite']]);
+
+/** 旧范围仅供识别与迁移诊断，绝不参与定位。 */
+export function matchRangeDirective(line: string): LineRange | null {
+  const match = /^(?:#{1,6}\s*)?(?:范围|行|行号|位置|lines?|range|position)\s*[:：]\s*(\d+)\s*[-–—~至到]\s*(\d+)\s*$/.exec(line.trim());
+  if (!match) return null;
+  const start = Number(match[1]), end = Number(match[2]);
+  return start >= 1 && end >= start ? { start, end } : null;
+}
+
 function findBlockHeader(text: string, previousEnd: number, fenceStart: number): BlockHeader {
-  const header: BlockHeader = { paths: [], ranges: [], errors: [], hasFileLabel: false };
-  const lines = text.slice(previousEnd, fenceStart).split(/\r\n|\r|\n/);
+  const header: BlockHeader = {
+    paths: [], operations: [], errors: [], hasFileLabel: false,
+    hasOperationLabel: false, hasRangeLabel: false, context: false, start: fenceStart,
+  };
+  const lines = textLines(text.slice(previousEnd, fenceStart));
   for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const line = lines[i]?.trim() ?? '';
+    const line = lines[i]?.text.trim() ?? '';
     if (!line) continue;
-    const fileLabel = FILE_LABEL_RE.test(cleanHeading(line));
-    const rangeLabel = /^(?:范围|行|行号|位置|lines?|range|position)\s*[:：]/i.test(cleanHeading(line));
+    const cleaned = cleanHeading(line);
+    const fileLabel = FILE_LABEL_RE.test(cleaned);
+    const operationLabel = OPERATION_LABEL_RE.exec(cleaned);
+    const rangeLabel = RANGE_LABEL_RE.test(cleaned);
+    const contextLabel = CONTEXT_LABEL_RE.test(cleaned);
     const path = matchHeadingLine(line);
-    const range = matchRangeDirective(line);
     if (fileLabel) header.hasFileLabel = true;
     if (path) header.paths.unshift(path);
-    else if (fileLabel) header.errors.unshift('文件路径格式无效或同一标题包含多个路径，请 AI 明确单个文件路径');
-    if (range) header.ranges.unshift(range);
-    else if (rangeLabel) header.errors.unshift('范围格式无效，请 AI 补充有效的原行区间');
-    if (!path && !range && !fileLabel && !rangeLabel) break;
+    else if (fileLabel) header.errors.unshift('文件路径格式无效或包含多个路径，请明确单个目标文件');
+    if (operationLabel) {
+      header.hasOperationLabel = true;
+      const operation = OPERATIONS.get(operationLabel[1]?.trim() ?? '');
+      if (operation) header.operations.unshift(operation);
+      else header.errors.unshift('未知或缺失操作，请明确使用替换、新建或覆盖全文');
+    }
+    if (rangeLabel) {
+      header.hasRangeLabel = true;
+      header.errors.unshift('旧行号范围协议不可应用，请改用明确操作与 SEARCH/REPLACE 新格式');
+    }
+    if (contextLabel) header.context = true;
+    if (!path && !fileLabel && !operationLabel && !rangeLabel && !contextLabel) break;
+    header.start = previousEnd + lines[i]!.start;
   }
   return header;
 }
 
-/* ------------------------------------------------------------------ *
- * 带行号的片段格式化（"复制选中片段"用）
- * ------------------------------------------------------------------ */
-
-/**
- * 把一段文本格式化为"带文件真实行号"的片段，供用户粘贴进提示词。
- * 行号格式为 `  80| ` （右对齐、竖线分隔），便于模型原样回显。
- */
-export function formatNumberedSnippet(text: string, startLine: number): string {
-  const lines = text.length === 0 ? [] : text.split(/\r\n|\r|\n/);
-  const width = Math.max(3, String(startLine + lines.length - 1).length);
-  return lines
-    .map((line, idx) => `${String(startLine + idx).padStart(width, ' ')}| ${line}`)
-    .join('\n');
-}
-
-/** 从"带行号片段"里还原纯文本（去掉 `NNN| ` 前缀），用于生成提示词里的干净片段 */
-export function stripNumberedPrefix(numbered: string): { text: string; startLine: number | null } {
-  const lines = numbered.split(/\r\n|\r|\n/);
-  let startLine: number | null = null;
-  const out: string[] = [];
+/** 替换对只解释独立标记行；正文字符与真实首尾换行保持不变。 */
+function parseTextEdits(code: string): { edits?: TextEdit[]; error?: string } {
+  const lines = textLines(code);
+  const edits: TextEdit[] = [];
+  let state: 'outside' | 'search' | 'replace' = 'outside';
+  let bodyStart = 0;
+  let oldText = '';
   for (const line of lines) {
-    const m = /^\s*(\d{1,7})\|\s?(.*)$/.exec(line);
-    if (m && m[1]) {
-      const n = Number.parseInt(m[1], 10);
-      if (startLine === null) startLine = n;
-      out.push(m[2] ?? '');
-    } else {
-      out.push(line);
+    const marker = line.text;
+    if (marker === '<<<<<<< SEARCH') {
+      if (state !== 'outside') return { error: 'SEARCH 标记冲突，请为该文件使用明确的覆盖全文' };
+      state = 'search'; bodyStart = line.end;
+    } else if (marker === '=======') {
+      if (state !== 'search') return { error: '分隔标记冲突或替换对残缺，请检查 SEARCH/REPLACE 结构' };
+      oldText = withoutStructuralNewline(code.slice(bodyStart, line.start));
+      if (oldText.length === 0) return { error: 'SEARCH 原文不能为空；插入请提供真实原文上下文' };
+      state = 'replace'; bodyStart = line.end;
+    } else if (marker === '>>>>>>> REPLACE') {
+      if (state !== 'replace') return { error: 'REPLACE 标记冲突或替换对残缺，请检查 SEARCH/REPLACE 结构' };
+      edits.push({ oldText, newText: withoutStructuralNewline(code.slice(bodyStart, line.start)) });
+      state = 'outside';
+    } else if (state === 'outside' && marker !== '') {
+      return { error: '替换正文包含结构外文本或非法标记，请提供完整 SEARCH/REPLACE 对' };
     }
   }
-  return { text: out.join('\n'), startLine };
+  if (state !== 'outside' || edits.length === 0) return { error: '缺失或残缺 SEARCH/REPLACE 对，请补充完整替换结构' };
+  return { edits };
 }
-
-/* ------------------------------------------------------------------ *
- * 主入口
- * ------------------------------------------------------------------ */
 
 export function parseModelReply(replyText: string): ParseResult {
   const text = replyText ?? '';
   const notes: string[] = [];
   const fences = splitFences(text);
   const mentionedPaths = extractPathMentions(text);
-  if (fences.length === 0) {
-    notes.push('回复中未找到代码围栏，无可应用内容');
-    return { blocks: [], mentionedPaths, hasUnresolved: false, notes };
-  }
-
+  const orphaned: ParsedCodeBlock[] = [];
+  const addMissingFence = (start: number, end: number) => {
+    const content = text.slice(start, end);
+    if (!textLines(content).some((line) => {
+      const cleaned = cleanHeading(line.text);
+      return FILE_LABEL_RE.test(cleaned) || OPERATION_LABEL_RE.test(cleaned) || RANGE_LABEL_RE.test(cleaned);
+    })) return;
+    orphaned.push({
+      code: content, language: '', filePath: null, pathSource: 'none', range: null,
+      strippedPathLine: null, start, end,
+      validationError: '文件修改缺少完整代码围栏，不能把缺失正文当作空文件',
+    });
+  };
   const blocks: ParsedCodeBlock[] = fences.map((f, index) => {
-    const header = findBlockHeader(text, fences[index - 1]?.end ?? 0, f.start);
-    let code = f.body;
-    let strippedPathLine: string | null = null;
-    const firstNewline = code.indexOf('\n');
-    const firstLine = firstNewline >= 0 ? code.slice(0, firstNewline) : code;
-    const comment = parsePathCommentLine(firstLine);
-    const fromComment = comment.path;
-    if (fromComment) {
-      strippedPathLine = firstLine;
-      code = firstNewline >= 0 ? code.slice(firstNewline + 1) : '';
-    }
-    const paths = [...header.paths, ...(fromComment ? [fromComment] : [])];
+    const previousEnd = fences[index - 1]?.end ?? 0;
+    const header = findBlockHeader(text, previousEnd, f.start);
+    addMissingFence(previousEnd, header.start);
+    const paths = header.paths;
     const distinctPaths = new Set(paths.map((path) => path.toLowerCase()));
-    const errors = [...header.errors, ...(comment.error ? [comment.error] : [])];
-    if (distinctPaths.size > 1) errors.push('文件路径相互冲突，请 AI 为该代码块明确单个目标文件');
-    const distinctRanges = new Set(header.ranges.map((range) => `${range.start}-${range.end}`));
-    if (distinctRanges.size > 1) errors.push('原行区间相互冲突，请 AI 为该代码块明确单个范围');
-    const filePath = distinctPaths.size === 1 ? (fromComment ?? header.paths[0] ?? null) : null;
-    const range = distinctRanges.size === 1 ? (header.ranges[0] ?? null) : null;
-    if (range) {
-      const stripped = stripNumberedPrefix(code);
-      if (stripped.startLine !== null) code = stripped.text;
+    const operations = new Set(header.operations);
+    const firstLine = textLines(f.body)[0]?.text ?? '';
+    const legacyComment = !header.hasOperationLabel && !header.context && paths.length === 0
+      ? parsePathCommentLine(firstLine) : { path: null };
+    const errors = [...header.errors, ...(legacyComment.error ? [legacyComment.error] : [])];
+    if (distinctPaths.size > 1) errors.push('文件路径相互冲突，请明确单个目标文件');
+    if (operations.size > 1) errors.push('操作相互冲突，请明确单个修改操作');
+    const filePath = distinctPaths.size === 1 ? (paths[0] ?? null) : null;
+    const operation = operations.size === 1 ? header.operations[0] : undefined;
+    const searchMarker = textLines(f.body).some((line) => /^\s*(?:<{7,}\s*SEARCH|={7,}|>{7,}\s*REPLACE)\s*$/.test(line.text));
+    const modification = paths.length > 0 || header.hasFileLabel || header.hasOperationLabel ||
+      header.hasRangeLabel || Boolean(legacyComment.path) || errors.length > 0 || (!header.context && searchMarker);
+    const contextOnly = header.context && !modification;
+    if (header.context && modification) errors.push('上下文与修改操作不能混用，请分别声明');
+    if (!f.closed) errors.push('代码围栏未闭合，请补充完整成对围栏');
+    if (modification) {
+      if (!filePath) errors.push('缺少明确文件路径，请补充本块文件标题');
+      else if (!header.hasFileLabel) errors.push('修改块必须显式声明 ### 文件：相对路径');
+      if (!operation) errors.push('缺少明确操作，请声明替换、新建或覆盖全文');
+      if (f.marker !== '`' || f.fenceLength < 4) errors.push('修改块必须使用至少四个反引号的完整围栏');
     }
-    const language = normalizeLanguage(f.info);
-    const other = !filePath && paths.length === 0 && !header.hasFileLabel &&
-      header.ranges.length === 0 && errors.length === 0;
+    let edits: TextEdit[] | undefined;
+    if (operation === 'replace') {
+      const parsed = parseTextEdits(f.body);
+      edits = parsed.edits;
+      if (parsed.error) errors.push(parsed.error);
+    }
+    const other = (contextOnly || !modification) && errors.length === 0;
     return {
-      code: code.replace(/\s+$/, ''),
-      language,
-      filePath,
-      pathSource: filePath ? (fromComment ? 'fence-comment' : 'preceding-heading') : 'none',
-      range,
-      strippedPathLine,
-      start: f.start,
-      end: f.end,
+      code: f.body, language: normalizeLanguage(f.info), filePath,
+      pathSource: filePath ? 'preceding-heading' : 'none',
+      range: null, strippedPathLine: null, start: f.start, end: f.end,
+      ...(operation ? { operation } : {}), ...(edits ? { edits } : {}),
       ...(other ? { kind: 'other' as const } : {}),
       ...(errors.length ? { validationError: errors.join('；') } : {}),
     };
   });
-
-  const unresolved = blocks.filter((block) => block.kind !== 'other' && (!block.filePath || block.validationError));
-  if (unresolved.length) notes.push(`${unresolved.length} 个代码块缺少明确路径或存在冲突，请 AI 补充后重新采集`);
-  const snippets = blocks.filter((block) => block.range && block.kind !== 'other');
-  if (snippets.length) notes.push(`${snippets.length} 个代码块携带原行区间；已有文件应用前做三向校验，新建文件完整写入代码`);
+  // 缺少实际代码框不能被解释为空的新建/覆盖正文；保留可见诊断。
+  addMissingFence(fences.at(-1)?.end ?? 0, text.length);
+  blocks.push(...orphaned);
+  blocks.sort((a, b) => a.start - b.start);
+  if (!fences.length && !blocks.length) notes.push('回复中未找到代码围栏，无可应用内容');
+  const unresolved = blocks.filter((block) => block.kind !== 'other' && (!block.filePath || !block.operation || block.validationError));
+  if (unresolved.length) notes.push(`${unresolved.length} 个修改块格式缺失或冲突，请补充新协议后重新采集`);
   const others = blocks.filter((block) => block.kind === 'other');
-  if (others.length) notes.push(`${others.length} 段附属内容只读展示，无需补充文件路径，IDE 不会执行或写入文件`);
+  if (others.length) notes.push(`${others.length} 段附属内容只读展示，无需补充修改信息`);
   return { blocks, mentionedPaths, hasUnresolved: unresolved.length > 0, notes };
 }
 
-/** 语言标注归一化（仅用于高亮；不参与路径判断） */
 function normalizeLanguage(info: string): string {
-  if (!info) return '';
-  const first = info.split(/\s+/)[0] ?? '';
-  return first.replace(/[{}]/g, '').trim().toLowerCase();
+  return (info.split(/\s+/)[0] ?? '').replace(/[{}]/g, '').trim().toLowerCase();
 }
 
-/* ------------------------------------------------------------------ *
- * 文本安全应用：不做覆盖式落盘，只计算"应用后文本"
- * ------------------------------------------------------------------ */
-
-export type ApplyMode =
-  | { kind: 'insert-at-cursor'; cursorOffset: number }
-  | { kind: 'replace-fence-region'; start: number; end: number }
-  | { kind: 'replace-whole-file' }
-  /**
-   * 片段替换（按文件真实行号）。
-   * **必须带 expectedOriginal**：这是"三向校验"里的第二项 —— 只有当前 1-based
-   * 闭区间 [start,end] 的内容与 expectedOriginal 完全一致时才允许替换。
-   * 缺了它，行号一旦漂移就会静默改错地方，因此本模式拒绝无校验的应用。
-   *
-   * `contextPrev` / `contextNext`（可选）：复制片段时记录的区间前后各一行，
-   * 用于第三项"上下文校验"。不提供则跳过该项。
-   */
-  | {
-      kind: 'replace-lines';
-      start: number;
-      end: number;
-      expectedOriginal: string;
-      contextPrev?: string | null;
-      contextNext?: string | null;
-    };
-
+export interface EditLocation {
+  /** 原文字符半开区间；对应 computeApply 输入的原始换行偏移 */
+  start: number;
+  end: number;
+  oldRange: LineRange | null;
+  newRange: LineRange | null;
+  /** 真实逻辑换行数增量，行内删除和末尾换行不能靠触及范围长度相减。 */
+  lineDelta: number;
+}
 export interface ApplyResult {
-  /** 应用后的文件内容 */
   text: string;
-  /** 实际采用的模式（便于 UI 告知用户） */
-  mode: ApplyMode['kind'];
-  /** 被替换掉的原文（用于撤销与 diff） */
+  mode: EditOperation;
   replaced: string;
+  locations: EditLocation[];
 }
-
 export type ApplyOutcome =
   | ({ ok: true } & ApplyResult)
-  | { ok: false; reason: 'range-invalid' | 'content-mismatch' | 'context-mismatch'; detail: string };
+  | { ok: false; reason: 'invalid-protocol' | 'empty-search' | 'search-not-found' | 'search-ambiguous' | 'overlap'; detail: string };
 
-/** 按 1-based 闭区间取行（用于片段校验） */
-export function getLineRange(text: string, start: number, end: number): string[] {
-  const lines = text.split(/\r\n|\r|\n/);
-  if (start < 1 || end < start) return [];
-  return lines.slice(start - 1, end);
+/** 只规范换行，并保留逻辑字符边界到原字符边界的映射。 */
+function normalizedText(text: string): { text: string; offsets: number[] } {
+  let normalized = '';
+  const offsets = [0];
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i]!;
+    if (char === '\r') {
+      if (text[i + 1] === '\n') i += 1;
+      normalized += '\n';
+    } else normalized += char;
+    offsets.push(i + 1);
+  }
+  return { text: normalized, offsets };
 }
 
-/**
- * 计算"把某个代码块应用到某文件后"的文本。
- *
- * ⚠️ 重要：本函数**不改动任何文件**，只做纯计算。落盘由 FileService 在用户确认后执行
- * （ADR-0004 方案 A）。
- *
- * 片段替换（`replace-lines`）做**三向校验**：
- *   ① 区间有效：1 ≤ start ≤ end ≤ 文件总行数；
- *   ② 原内容匹配：当前 [start,end] 行必须等于 `expectedOriginal`（用户复制片段时的原文）；
- *   ③ 上下文匹配：区间外紧邻的上一行/下一行（若存在）必须仍然存在且相同。
- * 任一项不符即返回 `ok: false`，**绝不按可能已失效的行号写入**。
- *
- * 插入规则（`insert-at-cursor`，确定性、便于测试）：
- *   在光标位置插入；若左侧不是行首/换行则补前导换行，右侧有内容且非换行则补尾随换行。
- */
-export function computeApply(
-  originalText: string,
-  block: ParsedCodeBlock,
-  mode: ApplyMode
-): ApplyOutcome {
-  switch (mode.kind) {
-    case 'insert-at-cursor': {
-      const at = Math.max(0, Math.min(mode.cursorOffset, originalText.length));
-      const before = originalText.slice(0, at);
-      const after = originalText.slice(at);
-      const needsLeading = before.length > 0 && !before.endsWith('\n');
-      const needsTrailing = after.length > 0 && !after.startsWith('\n');
-      const inserted = `${needsLeading ? '\n' : ''}${block.code}${needsTrailing ? '\n' : ''}`;
-      return { ok: true, text: `${before}${inserted}${after}`, mode: mode.kind, replaced: '' };
+/** 字符区间对应实际含内容的行；空区间没有新行。 */
+function lineRange(text: string, start: number, end: number): LineRange | null {
+  if (end <= start) return null;
+  const lineAt = (offset: number) => {
+    let line = 1;
+    for (const match of text.matchAll(/\r\n|\r|\n/g)) {
+      if ((match.index ?? 0) + match[0].length > offset) break;
+      line += 1;
     }
-    case 'replace-fence-region': {
-      const start = Math.max(0, Math.min(mode.start, originalText.length));
-      const end = Math.max(start, Math.min(mode.end, originalText.length));
-      const replaced = originalText.slice(start, end);
-      return {
-        ok: true,
-        text: `${originalText.slice(0, start)}${block.code}${originalText.slice(end)}`,
-        mode: mode.kind,
-        replaced,
-      };
-    }
-    case 'replace-whole-file': {
-      return { ok: true, text: block.code, mode: mode.kind, replaced: originalText };
-    }
-    case 'replace-lines': {
-      const allLines = originalText.split(/\r\n|\r|\n/);
-      const total = allLines.length;
-      if (mode.start < 1 || mode.end < mode.start || mode.end > total) {
-        return {
-          ok: false,
-          reason: 'range-invalid',
-          detail: `行区间 ${mode.start}-${mode.end} 超出文件范围（文件共 ${total} 行）`,
-        };
-      }
+    return line;
+  };
+  return { start: lineAt(start), end: lineAt(end - 1) };
+}
 
-      const currentSlice = allLines.slice(mode.start - 1, mode.end).join('\n');
-      const expected = mode.expectedOriginal.replace(/\s+$/, '');
-      if (currentSlice.replace(/\s+$/, '') !== expected) {
-        return {
-          ok: false,
-          reason: 'content-mismatch',
-          detail: `第 ${mode.start}-${mode.end} 行的当前内容与复制时的原文不一致（文件可能已被改动），已拒绝写入`,
-        };
-      }
+export function getLineRange(text: string, start: number, end: number): string[] {
+  if (start < 1 || end < start) return [];
+  return text.split(/\r\n|\r|\n/).slice(start - 1, end);
+}
 
-      // 上下文校验：前后各取一行（若存在）
-      const prevIdx = mode.start - 2;
-      const nextIdx = mode.end;
-      const currentPrev = prevIdx >= 0 ? allLines[prevIdx] : null;
-      const currentNext = nextIdx < total ? allLines[nextIdx] : null;
-      if (mode.contextPrev !== undefined && mode.contextPrev !== null && currentPrev !== mode.contextPrev) {
-        return {
-          ok: false,
-          reason: 'context-mismatch',
-          detail: `第 ${mode.start - 1} 行（区间上一行）与复制时不一致，行号可能已漂移，已拒绝写入`,
-        };
-      }
-      if (mode.contextNext !== undefined && mode.contextNext !== null && currentNext !== mode.contextNext) {
-        return {
-          ok: false,
-          reason: 'context-mismatch',
-          detail: `第 ${mode.end + 1} 行（区间下一行）与复制时不一致，行号可能已漂移，已拒绝写入`,
-        };
-      }
-
-      const replaced = currentSlice;
-      const blockLines = block.code.split(/\r\n|\r|\n/);
-
-      // 范围只指向原文；新内容行数不限制，区间外内容完整保留。
-      const newLines = [
-        ...allLines.slice(0, mode.start - 1),
-        ...blockLines,
-        ...allLines.slice(mode.end),
-      ];
-      return {
-        ok: true,
-        text: newLines.join('\n'),
-        mode: mode.kind,
-        replaced,
-      };
-    }
-    default: {
-      const exhaustive: never = mode;
-      throw new Error(`未知应用模式：${String(exhaustive)}`);
-    }
+/** 所有替换对在同一原文中定位、验证，然后一次计算；绝不把前一对结果作为后一对原文。 */
+export function computeApply(originalText: string, block: ParsedCodeBlock): ApplyOutcome {
+  const invalid = (detail: string): ApplyOutcome => ({ ok: false, reason: 'invalid-protocol', detail });
+  if (block.kind === 'other' || block.validationError || !block.filePath || !block.operation || block.range !== null) {
+    return invalid(block.validationError ?? '缺少明确文件或操作，或仍使用旧范围协议');
   }
+  const operation = block.operation;
+  if (!['replace', 'create', 'overwrite'].includes(operation)) return invalid('未知修改操作');
+  const eol = originalText.match(/\r\n|\r|\n/)?.[0] ?? '\n';
+  if (operation === 'create' || operation === 'overwrite') {
+    const text = operation === 'overwrite' ? normalizedText(block.code).text.replace(/\n/g, eol) : block.code;
+    return {
+      ok: true, text, mode: operation, replaced: originalText,
+      locations: [{ start: 0, end: originalText.length, oldRange: lineRange(originalText, 0, originalText.length), newRange: lineRange(text, 0, text.length),
+        lineDelta: normalizedText(text).text.split('\n').length - normalizedText(originalText).text.split('\n').length }],
+    };
+  }
+  if (!block.edits?.length) return invalid('替换操作缺少完整 SEARCH/REPLACE 对');
+  const original = normalizedText(originalText);
+  const located: Array<{ index: number; start: number; end: number; replacement: string }> = [];
+  for (const [index, edit] of block.edits.entries()) {
+    const search = normalizedText(edit.oldText).text;
+    if (!search.length) return { ok: false, reason: 'empty-search', detail: 'SEARCH 原文不能为空，请提供真实上下文' };
+    const first = original.text.indexOf(search);
+    if (first < 0) return { ok: false, reason: 'search-not-found', detail: `第 ${index + 1} 对 SEARCH 原文不匹配，请重新复制准确原文` };
+    if (original.text.indexOf(search, first + 1) >= 0) {
+      return { ok: false, reason: 'search-ambiguous', detail: `第 ${index + 1} 对 SEARCH 匹配多次，请补充唯一上下文` };
+    }
+    located.push({ index, start: original.offsets[first]!, end: original.offsets[first + search.length]!, replacement: normalizedText(edit.newText).text.replace(/\n/g, eol) });
+  }
+  const sorted = [...located].sort((a, b) => a.start - b.start);
+  for (let i = 1; i < sorted.length; i += 1) {
+    if (sorted[i]!.start < sorted[i - 1]!.end) return { ok: false, reason: 'overlap', detail: '多个 SEARCH 区间重叠，整块替换已拒绝' };
+  }
+  let text = '';
+  let cursor = 0;
+  const locations: EditLocation[] = [];
+  for (const item of sorted) {
+    text += originalText.slice(cursor, item.start);
+    const newStart = text.length;
+    text += item.replacement;
+    locations[item.index] = { start: item.start, end: item.end, oldRange: lineRange(originalText, item.start, item.end), newRange: lineRange(text, newStart, text.length),
+      lineDelta: normalizedText(item.replacement).text.split('\n').length - normalizedText(originalText.slice(item.start, item.end)).text.split('\n').length };
+    cursor = item.end;
+  }
+  text += originalText.slice(cursor);
+  return { ok: true, text, mode: operation, replaced: located.map((item) => originalText.slice(item.start, item.end)).join('\n'), locations };
 }

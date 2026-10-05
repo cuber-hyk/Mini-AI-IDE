@@ -11,6 +11,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, '..');
@@ -37,6 +38,9 @@ function copyTree(from, to) {
 }
 
 copyTree(path.join(repoRoot, 'src', 'renderer'), path.join(dist, 'renderer'));
+const { FORMAT_SPEC_SHORT, FORMAT_SPEC_FULL } = createRequire(import.meta.url)(path.join(dist, 'shared', 'formatSpec.js'));
+fs.writeFileSync(path.join(dist, 'renderer', 'formatSpecDefaults.js'),
+  `/* Generated from shared/formatSpec.ts */\nwindow.formatSpecDefaults = ${JSON.stringify({ short: FORMAT_SPEC_SHORT, full: FORMAT_SPEC_FULL })};\n`);
 const tokens = JSON.parse(fs.readFileSync(path.join(repoRoot, 'design-tokens.json'), 'utf8'));
 const tokenCss = Object.entries(tokens).map(([name, token]) => `  --${name}: ${token.$value};`).join('\n');
 fs.writeFileSync(path.join(dist, 'renderer', 'ui-tokens.css'), `/* Generated from design-tokens.json */\n:root {\n${tokenCss}\n}\n`);

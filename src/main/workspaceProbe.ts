@@ -1,5 +1,5 @@
 /** 隔离临时目录、离线 Electron 本地界面验收；不接触官方网页或用户文件。 */
-import { app, dialog, type WebContents } from 'electron';
+import { app, clipboard, dialog, type WebContents } from 'electron';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -79,7 +79,7 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     choice = 1; await controller.openRecent(1); await waitFor("Boolean(document.querySelector('#tree .tree-row[data-rel-path=\"sub\"]'))");
     fs.writeFileSync(path.join(a, 'keep.txt'), 'keep original');
     const fixture = path.join(directory, 'reply.html');
-    fs.writeFileSync(fixture, '<!doctype html><meta charset="utf-8"><main class="ds-markdown"><h3>文件：a.txt</h3><h3>范围：1-1</h3><pre><code>// a.txt\nA changed</code></pre><h3>文件：keep.txt</h3><h3>范围：1-1</h3><pre><code>// keep.txt\nkeep changed</code></pre></main>');
+    fs.writeFileSync(fixture, '<!doctype html><meta charset="utf-8"><main class="ds-markdown"><h3>文件：a.txt</h3><h3>操作：覆盖全文</h3><pre><code>A changed</code></pre><h3>文件：keep.txt</h3><h3>操作：覆盖全文</h3><pre><code>keep changed</code></pre></main>');
     // 加载自有静态测试页面；采集仍调用生产只读脚本，绝不改官方页面 DOM。
     await web.loadURL(pathToFileURL(fixture).href);
     const collected = await evaluate<{ ok: boolean; collectionId: string; blocks: Array<{ index: number; filePath: string }> }>('window.editorBridge.collectReply()');
@@ -161,7 +161,7 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     const deleted = await evaluate<{ ok: boolean }>(`window.editorBridge.trashEntry('renamed-notes/renamed.md', ${JSON.stringify(a)})`);
     check('删除只关闭受影响标签并切回剩余文件', deleted.ok && !fs.existsSync(path.join(a, 'renamed-notes/renamed.md')) && await waitFor("document.getElementById('file-name').textContent === 'root-file.txt' && document.querySelectorAll('#editor-tabs [role=tab]').length === 1"));
     const creationFixture = path.join(directory, 'creation-reply.html');
-    fs.writeFileSync(creationFixture, '<!doctype html><meta charset="utf-8"><main class="ds-markdown"><h3>文件：generated/deep/new.ts</h3>\n<h3>范围：1-99</h3>\n<pre><code>// generated/deep/new.ts\nconst created = 1;\nconst second = 2;</code></pre><h3>文件：race.txt</h3>\n<h3>范围：1-99</h3>\n<pre><code>// race.txt\nAI creation</code></pre></main>');
+    fs.writeFileSync(creationFixture, '<!doctype html><meta charset="utf-8"><main class="ds-markdown"><h3>文件：generated/deep/new.ts</h3>\n<h3>操作：新建</h3>\n<pre><code>const created = 1;\nconst second = 2;</code></pre><h3>文件：race.txt</h3>\n<h3>操作：新建</h3>\n<pre><code>AI creation</code></pre></main>');
     await web.loadURL(pathToFileURL(creationFixture).href);
     const creation = await evaluate<{ ok: boolean; collectionId: string; blocks: Array<{ index: number; filePath: string; applicable: boolean; fileExists: boolean; diff: { added: number; removed: number } }> }>('window.editorBridge.collectReply()');
     const fresh = creation.blocks.find(block => block.filePath === 'generated/deep/new.ts');
@@ -188,13 +188,13 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
       await evaluate('window.editorBridge.undoSave()');
       await waitFor("document.getElementById('file-name').textContent === 'root-file.txt'");
       const retargeted = await evaluate<{ ok: boolean; reason?: string }>(`window.editorBridge.applyChange(${JSON.stringify({ collectionId: creation.collectionId, index: race.index, filePath: 'root-file.txt' })})`);
-      check('新增改路径不能变成覆盖已有文件', !retargeted.ok && retargeted.reason === 'target-changed' && fs.readFileSync(path.join(a, 'root-file.txt'), 'utf8') === '');
+      check('新增改路径不能变成覆盖已有文件', !retargeted.ok && retargeted.reason === 'target-exists' && fs.readFileSync(path.join(a, 'root-file.txt'), 'utf8') === '');
       fs.writeFileSync(path.join(a, race.filePath), 'external content');
       const conflict = await evaluate<{ ok: boolean; reason?: string }>(`window.editorBridge.applyChange(${JSON.stringify({ collectionId: creation.collectionId, index: race.index, filePath: race.filePath })})`);
       check('预览后出现同名文件拒绝覆盖', !conflict.ok && conflict.reason === 'target-changed' && fs.readFileSync(path.join(a, race.filePath), 'utf8') === 'external content');
     }
-    // 用户真实回复按 Markdown 的语义 DOM 渲染，覆盖采集→关联→完整创建→撤销。
-    const backendReply = fs.readFileSync(path.join(app.getAppPath(), 'test/fixtures/backend-foundation-reply.md'), 'utf8');
+    // 从历史用户样本保留全文生成的新建协议样本按 Markdown 的语义 DOM 渲染，覆盖采集→关联→完整创建→撤销。
+    const backendReply = fs.readFileSync(path.join(app.getAppPath(), 'test/fixtures/backend-foundation-explicit-reply.md'), 'utf8');
     const escapeHtml = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     const markup: string[] = []; let offset = 0;
     const appendProse = (text: string) => {
@@ -215,8 +215,8 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     const backend = await evaluate<ReturnPreview>('window.editorBridge.collectReply()');
     const expected = parseModelReply(backendReply).blocks;
     check('真实回复五文件与命令逐块关联', backend.ok && backend.blocks.length === 6 &&
-      backend.blocks.every((block, index) => block.filePath === expected[index]!.filePath && JSON.stringify(block.range) === JSON.stringify(expected[index]!.range)), backend.blocks.map(block => ({ file: block.filePath, range: block.range, lines: block.codeLines, kind: block.kind })));
-    check('实际内容行数保留，不按AI标注裁剪', JSON.stringify(backend.blocks.map(block => block.codeLines)) === '[35,18,4,109,84,5]');
+      backend.blocks.every((block, index) => block.filePath === expected[index]!.filePath && block.operation === expected[index]!.operation), backend.blocks.map(block => ({ file: block.filePath, operation: block.operation, lines: block.codeLines, kind: block.kind })));
+    check('操作全文实际行数保留，不使用 AI 定位行号', JSON.stringify(backend.blocks.map(block => block.codeLines)) === '[35,18,4,109,84,5]');
     check('五个新文件可应用，命令只读', backend.blocks.filter(block => block.applicable).length === 5 && backend.blocks[5]?.kind === 'other' && !backend.blocks[5].applicable);
     await pause();
     check('预览统计只计文件与其他内容', await previewEvaluate("document.getElementById('pv-meta').textContent === '5 文件 · 1 段其他内容'"));
@@ -250,10 +250,10 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     await waitFor("document.getElementById('file-name').textContent === 'keep.txt'");
     await evaluate(`window.editorBridge.copyNumberedSnippet(${JSON.stringify({ root: a, relPath: 'keep.txt', text: 'keep changed', startLine: 1 })})`);
     const incompleteFixture = path.join(directory, 'incomplete-reply.html');
-    fs.writeFileSync(incompleteFixture, '<!doctype html><meta charset="utf-8"><main class="ds-markdown"><h3>文件：keep.txt</h3><pre><code class="language-text">wrong overwrite</code></pre><hr><h3>范围：1-1</h3><pre><code class="language-ts">const unknown = 1;</code></pre><hr><h3>文件：valid/new.ts</h3><h3>范围：1-1</h3><pre><code class="language-ts">const valid = 1;</code></pre></main>');
+    fs.writeFileSync(incompleteFixture, '<!doctype html><meta charset="utf-8"><main class="ds-markdown"><h3>文件：keep.txt</h3><pre><code class="language-text">wrong overwrite</code></pre><hr><h3>范围：1-1</h3><pre><code class="language-ts">const unknown = 1;</code></pre><hr><h3>文件：valid/new.ts</h3><h3>操作：新建</h3><pre><code class="language-ts">const valid = 1;</code></pre></main>');
     await web.loadURL(pathToFileURL(incompleteFixture).href);
     const incomplete = await evaluate<ReturnPreview>('window.editorBridge.collectReply()');
-    check('复制选区不回填缺失范围或路径', incomplete.blocks.length === 3 && !incomplete.blocks[0]!.applicable && incomplete.blocks[0]!.range === null && incomplete.blocks[1]!.filePath === null && !incomplete.blocks[1]!.applicable && incomplete.blocks[2]!.applicable, incomplete.blocks.map(block => ({ file: block.filePath, range: block.range, applicable: block.applicable })));
+    check('复制上下文不回填缺失操作或路径，旧范围明确拒绝', incomplete.blocks.length === 3 && !incomplete.blocks[0]!.applicable && incomplete.blocks[0]!.range === null && incomplete.blocks[1]!.filePath === null && !incomplete.blocks[1]!.applicable && incomplete.blocks[2]!.applicable, incomplete.blocks.map(block => ({ file: block.filePath, range: block.range, applicable: block.applicable })));
     check('编辑器导航跳过缺失元数据条目', await waitFor("document.getElementById('file-name').textContent === 'valid/new.ts' && document.getElementById('btn-diff-prev').disabled && document.getElementById('btn-diff-next').disabled"));
     for (const index of [0, 1]) {
       const result = await evaluate<{ ok: boolean }>(`window.editorBridge.applyChange(${JSON.stringify({ collectionId: incomplete.collectionId, index, filePath: 'keep.txt' })})`);
@@ -270,6 +270,63 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
       const restoredUndo = await evaluate<{ ok: boolean; deleted?: boolean }>('window.editorBridge.undoSave()');
       check('移回本次创建对象后撤销记录可重试', restoredUndo.ok && restoredUndo.deleted === true && !fs.existsSync(path.join(a, 'valid')));
     }
+    // 新协议定位、已展示基线和自己的成功写入推进，用自有静态网页走真实 IPC。
+    const protocolFile = path.join(a, 'protocol.txt');
+    const protocolBefore = 'head\nfirst();\nmid\nsecond();\ntail\n';
+    fs.writeFileSync(protocolFile, protocolBefore);
+    await evaluate("document.getElementById('file-refresh').click()");
+    await waitFor("Boolean(document.querySelector('#tree .tree-row[data-rel-path=\"protocol.txt\"]'))");
+    await evaluate("document.querySelector('#tree .tree-row[data-rel-path=\"protocol.txt\"]').click()");
+    await waitFor("document.getElementById('file-name').textContent === 'protocol.txt'");
+    const copiedText = '\n\tunsaved text  \n\n';
+    await evaluate(`window.monaco.editor.getEditors()[0].getModel().setValue(${JSON.stringify(copiedText)})`); await pause();
+    const copiedWhole = await evaluate<{ ok: boolean; snippet: string }>(`window.editorBridge.copyWholeFile(${JSON.stringify({ root: a, relPath: 'protocol.txt', text: copiedText })})`);
+    check('全文复制来自 Monaco 草稿而非磁盘，保留所有空白且只读', copiedWhole.ok && parseModelReply(await clipboard.readText()).blocks[0]?.code === copiedText && parseModelReply(copiedWhole.snippet).blocks[0]?.kind === 'other' && fs.readFileSync(protocolFile, 'utf8') === protocolBefore);
+    await evaluate(`window.monaco.editor.getEditors()[0].getModel().setValue(${JSON.stringify(protocolBefore)})`); await pause();
+    const editHtml = (file: string, oldText: string, newText: string) =>
+      '<h3>文件：' + escapeHtml(file) + '</h3><p>操作：替换</p><pre><code>' + escapeHtml(['<<<<<<< SEARCH', oldText, '=======', newText, '>>>>>>> REPLACE'].join('\n')) + '</code></pre>';
+    const protocolFixture = path.join(directory, 'protocol-reply.html');
+    const loadProtocolReply = async (html: string) => {
+      fs.writeFileSync(protocolFixture, '<!doctype html><meta charset="utf-8"><main class="ds-markdown">' + html + '</main>');
+      await web.loadURL(pathToFileURL(protocolFixture).href);
+      return evaluate<ReturnPreview>('window.editorBridge.collectReply()');
+    };
+    await previewEvaluate('window.__protocolPreview = null; window.previewBridge.onPreviewData(data => { window.__protocolPreview = data; })');
+    const twoEdits = await loadProtocolReply(editHtml('protocol.txt', 'first();', 'first();\ninserted();') + editHtml('protocol.txt', 'second();', 'secondDone();'));
+    check('同文件两段 SEARCH 根据同一原文独立唯一定位', twoEdits.blocks.length === 2 && twoEdits.blocks.every(block => block.applicable && block.operation === 'replace') && twoEdits.blocks[0]?.locations?.[0]?.oldRange?.start === 2 && twoEdits.blocks[1]?.locations?.[0]?.oldRange?.start === 4, twoEdits.blocks);
+    const upper = await evaluate<{ ok: boolean }>(`window.editorBridge.applyChange(${JSON.stringify({ collectionId: twoEdits.collectionId, index: 0, filePath: 'protocol.txt' })})`);
+    await pause();
+    check('上方插入成功后下方预览真实范围重算为第五行', upper.ok && await previewEvaluate("window.__protocolPreview && window.__protocolPreview.blocks[1].locations[0].oldRange.start === 5"));
+    const lower = await evaluate<{ ok: boolean }>(`window.editorBridge.applyChange(${JSON.stringify({ collectionId: twoEdits.collectionId, index: 1, filePath: 'protocol.txt' })})`);
+    check('下方继续应用保留上方插入与未修改的末尾换行', lower.ok && fs.readFileSync(protocolFile, 'utf8') === 'head\nfirst();\ninserted();\nmid\nsecondDone();\ntail\n');
+    const undoLower = await evaluate<{ ok: boolean }>('window.editorBridge.undoSave()');
+    const undoUpper = await evaluate<{ ok: boolean }>('window.editorBridge.undoSave()');
+    check('同文件两操作按顺序撤销，准确恢复完整原文', undoLower.ok && undoUpper.ok && fs.readFileSync(protocolFile, 'utf8') === protocolBefore);
+    const stale = await loadProtocolReply(editHtml('protocol.txt', 'first();', 'stale replacement();'));
+    const externalText = protocolBefore + 'external change\n'; fs.writeFileSync(protocolFile, externalText);
+    const staleApply = await evaluate<{ ok: boolean; reason?: string }>(`window.editorBridge.applyChange(${JSON.stringify({ collectionId: stale.collectionId, index: 0, filePath: 'protocol.txt' })})`);
+    check('预览后外部改动拒绝写入，不重建基线覆盖外部内容', !staleApply.ok && staleApply.reason === 'target-changed' && fs.readFileSync(protocolFile, 'utf8') === externalText, staleApply);
+    fs.writeFileSync(path.join(a, 'repeated.txt'), 'same\nsame\n');
+    const mismatches = await loadProtocolReply(editHtml('protocol.txt', 'missing original', 'wrong') + editHtml('repeated.txt', 'same', 'wrong'));
+    check('原文零次和多次匹配均显示具体阻塞，两个文件保持不变', mismatches.blocks.length === 2 && mismatches.blocks.every(block => !block.applicable) && mismatches.blocks[0]?.blockedReason?.includes('不匹配') === true && mismatches.blocks[1]?.blockedReason?.includes('多次') === true && fs.readFileSync(protocolFile, 'utf8') === externalText && fs.readFileSync(path.join(a, 'repeated.txt'), 'utf8') === 'same\nsame\n', mismatches.blocks);
+    const legacy = await loadProtocolReply('<h3>文件：protocol.txt</h3><h3>范围：1-1</h3><pre><code>legacy content</code></pre>');
+    const legacyApply = await evaluate<{ ok: boolean }>(`window.editorBridge.applyChange(${JSON.stringify({ collectionId: legacy.collectionId, index: 0, filePath: 'protocol.txt' })})`);
+    check('旧行号回复有可见新版格式诊断且应用入口拒绝', legacy.blocks.length === 1 && !legacy.blocks[0]!.applicable && Boolean(legacy.blocks[0]!.blockedReason) && !legacyApply.ok && fs.readFileSync(protocolFile, 'utf8') === externalText, legacy.blocks);
+    const empty = await loadProtocolReply('<h3>文件：empty-created.txt</h3><p>操作：新建</p><pre><code></code></pre>');
+    const emptyApply = await evaluate<{ ok: boolean; created?: boolean }>(`window.editorBridge.applyChange(${JSON.stringify({ collectionId: empty.collectionId, index: 0, filePath: 'empty-created.txt' })})`);
+    check('明确空代码框可预览并创建真正空文件', empty.blocks[0]?.applicable === true && empty.blocks[0]?.codeChars === 0 && emptyApply.ok && emptyApply.created === true && fs.readFileSync(path.join(a, 'empty-created.txt'), 'utf8') === '', empty.blocks);
+    const emptyUndo = await evaluate<{ ok: boolean; deleted?: boolean }>('window.editorBridge.undoSave()');
+    check('空文件创建可撤销且仅删除本次对象', emptyUndo.ok && emptyUndo.deleted === true && !fs.existsSync(path.join(a, 'empty-created.txt')));
+    const retarget = await loadProtocolReply('<h3>文件：retarget-a.txt</h3><p>操作：新建</p><pre><code>retarget content</code></pre>');
+    const movedPreview = await evaluate<{ ok: boolean }>(`window.editorBridge.showDiffInEditor('${retarget.collectionId}', 0, 'retarget-b.txt')`);
+    const movedApply = await evaluate<{ ok: boolean }>(`window.editorBridge.applyChange(${JSON.stringify({ collectionId: retarget.collectionId, index: 0, filePath: 'retarget-b.txt' })})`);
+    const movedUndo = await evaluate<{ ok: boolean }>('window.editorBridge.undoSave()');
+    const nextPreview = await evaluate<{ ok: boolean }>(`window.editorBridge.showDiffInEditor('${retarget.collectionId}', 0, 'retarget-c.txt')`);
+    check('撤销后重新改目标，右列预览采用新路径而不是历史应用路径', movedPreview.ok && movedApply.ok && movedUndo.ok && nextPreview.ok && await previewEvaluate("window.__protocolPreview.blocks[0].filePath === 'retarget-c.txt'"));
+    const nextApply = await evaluate<{ ok: boolean }>(`window.editorBridge.applyChange(${JSON.stringify({ collectionId: retarget.collectionId, index: 0, filePath: 'retarget-c.txt' })})`);
+    check('再次修改目标的实际写入与预览一致，撤销恢复不存在', nextApply.ok && fs.readFileSync(path.join(a, 'retarget-c.txt'), 'utf8') === 'retarget content' && !fs.existsSync(path.join(a, 'retarget-b.txt')) && (await evaluate<{ ok: boolean }>('window.editorBridge.undoSave()')).ok);
+    const missingCode = await loadProtocolReply('<h3>文件：missing-code.txt</h3><p>操作：新建</p>');
+    check('最新回复只有头部不会借用历史空文件代码，缺失围栏明确阻塞', missingCode.blocks.length === 1 && !missingCode.blocks[0]!.applicable && !fs.existsSync(path.join(a, 'missing-code.txt')), missingCode.blocks);
     // 多标签仅来自隔离目录，以真实 Chromium 滚动与 CSS 伪元素验证标签条。
     const tabPaths = Array.from({ length: 10 }, (_, i) => 'scroll-tab-' + i + '.txt');
     for (const relative of tabPaths) fs.writeFileSync(path.join(a, relative), relative);

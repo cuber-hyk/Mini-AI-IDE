@@ -53,26 +53,16 @@ check('original 与磁盘内容逐字节一致（标记不会错位的前提）'
   rereadLen: reread.length,
 });
 
-/* ---- 三向校验：区间 + 原内容 + 上下文（主进程用的那套）----
- * 注意 computeApply(originalText, block, mode) 里 block 需要带 code 字段 ——
- * 缺了它会在读取时抛 undefined.split（验证脚本自身的参数问题，不是实现缺陷）。
- */
-const mode = {
-  kind: 'replace-lines',
-  start: targetLine,
-  end: targetLine,
-  expectedOriginal: ctxLines[0],
-  contextPrev: lines[targetLine - 2] ?? null,
-  contextNext: lines[targetLine] ?? null,
-};
+/* ---- 按真实原文唯一匹配，定位范围只由 IDE 计算 ---- */
 const newLines = modifiedLines.slice(targetLine - 1, targetLine + 1);
+const block = returnPath.parseModelReply([
+  '### 文件：src/shared/diff.ts', '### 操作：替换', '````typescript',
+  '<<<<<<< SEARCH', ctxLines[0], '=======', newLines.join('\n'), '>>>>>>> REPLACE', '````',
+].join('\n')).blocks[0];
 let computed = { ok: false, error: '未执行' };
-try {
-  computed = returnPath.computeApply(original, { code: newLines.join('\n'), range: { start: targetLine, end: targetLine } }, mode);
-} catch (err) {
-  computed = { ok: false, error: String(err) };
-}
-check('三向校验通过（computeApply 成功）', computed.ok === true, computed);
+try { computed = returnPath.computeApply(original, block); }
+catch (error) { computed = { ok: false, error: String(error) }; }
+check('真实原文唯一匹配且 IDE 定位第七行', computed.ok && computed.locations[0].oldRange.start === targetLine && computed.locations[0].oldRange.end === targetLine, computed);
 
 /* ---- 校验产出的文本与手算的 modified 一致（内联标记的 modified 就是它）---- */
 check('computeApply 产出的文本与手算 modified 一致（标记依据的正是它）', computed.ok === true && computed.text === modified, {

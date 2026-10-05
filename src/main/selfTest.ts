@@ -14,14 +14,14 @@
 import type { WebContentsView } from 'electron';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import * as vm from 'node:vm';
 
 import { CHANNELS } from '../shared/contract';
 import { buildPrompt, getFormatSpec } from '../shared/formatSpec';
 import {
   computeApply,
-  formatNumberedSnippet,
   parseModelReply,
-  stripNumberedPrefix,
+  splitFences,
 } from '../shared/returnPath';
 import { buildSnippetText, buildWholeFileText, fenceFor } from '../shared/snippet';
 import { createFixtures, type FixturePaths } from './fixtures';
@@ -715,11 +715,11 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
         pmPreload.includes("'ui:save-prompt-spec'") &&
         pmPreload.includes("'ui:reset-prompt-spec'") &&
         pmPreload.includes("'ui:close-prompt-panel'") &&
-        /save:\s*\(variant: string, spec: string\)/.test(pmPreload) &&
-        /reset:\s*\(variant: string\)/.test(pmPreload);
+        /save:\s*\(variant, spec\)\s*=>\s*electron_1\.ipcRenderer\.invoke\(CH\.save, variant, spec\)/.test(pmPreload) &&
+        /reset:\s*\(variant\)\s*=>\s*electron_1\.ipcRenderer\.invoke\(CH\.reset, variant\)/.test(pmPreload);
       add('Y6', '提示词面板：独立 preload 暴露窄 bridge，通道名正确且 save/reset 带版本参数', pmBridgeOk, {
         exposeInMainWorld: /exposeInMainWorld\('promptBridge'/.test(pmPreload),
-        saveWithVariant: /save:\s*\(variant: string, spec: string\)/.test(pmPreload),
+        saveWithVariant: /save:\s*\(variant, spec\)\s*=>\s*electron_1\.ipcRenderer\.invoke\(CH\.save, variant, spec\)/.test(pmPreload),
       });
 
       /*
@@ -807,25 +807,14 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
        * 断言兜底副本与内置模板**逐字一致** —— 早期只比对首行，默认模板升级后
        * 副本会悄悄过期，那时面板在失败分支会显示一份**过时**的要求，比空白更糟。
        */
-      const hasFallback = /FALLBACK_SPEC/.test(pmJs) && /el\.editor\.value\s*=/.test(pmJs);
-      const fallbackBlock = /const FALLBACK_SPEC = \[([\s\S]*?)\]\.join\('\\n'\)/.exec(pmJs)?.[1] ?? '';
-      const fallbackText = (fallbackBlock.match(/"(?:[^"\\]|\\.)*"/g) ?? [])
-        .map((s) => JSON.parse(s) as string)
-        .join('\n');
-      const fallbackMatchesDefault = fallbackText === getFormatSpec('short');
+      const defaultsScript = fs.readFileSync(path.join(rendererDir, 'formatSpecDefaults.js'), 'utf8');
+      const sandbox = { window: {} as { formatSpecDefaults?: { short: string; full: string } } };
+      vm.runInNewContext(defaultsScript, sandbox, { timeout: 1000 });
+      const fallback = sandbox.window.formatSpecDefaults;
+      const hasFallback = /window\.formatSpecDefaults/.test(pmJs) && /formatSpecDefaults\.js/.test(pmHtml) && /el\.editor\.value\s*=/.test(pmJs);
+      const fallbackMatchesDefault = fallback?.short === getFormatSpec('short') && fallback?.full === getFormatSpec('full');
       const hasRetry = /const LOAD_RETRIES/.test(pmJs) && /load\(tries \+ 1\)/.test(pmJs);
-      add(
-        'Y12',
-        '提示词面板：读状态失败时有默认文本兜底（与内置默认逐字一致）+ 重试（不留空白框）',
-        hasFallback && fallbackMatchesDefault && hasRetry,
-        {
-          hasFallback,
-          fallbackMatchesDefault,
-          hasRetry,
-          fallbackLines: fallbackText.split('\n').length,
-          defaultLines: getFormatSpec('short').split('\n').length,
-        }
-      );
+      add('Y12', '提示词面板：构建生成两版默认兜底与权威模板逐字一致，加载失败可重试', hasFallback && fallbackMatchesDefault && hasRetry, { hasFallback, fallbackMatchesDefault, hasRetry });
 
       /*
        * Y14：**底部双段开关**（用户设计）。
@@ -1636,29 +1625,41 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   }
 
   /* ---- F) P3 纯逻辑：回程解析与格式模板 ---- */
-  const sampleReply = [
-    '### src/demo.ts',
-    '```ts',
-    'export const demo = 1;',
-    '```',
-    '',
-    '```py',
-    '# other.py',
-    'print("hi")',
-    '```',
-  ].join('\n');
+  const operationReply = (filePath: string, operation: string, body: string) =>
+    ['### 文件：' + filePath, '### 操作：' + operation, fenceFor(body), body, fenceFor(body)].join('\n');
+  const replacementReply = (filePath: string, oldText: string, newText: string) =>
+    operationReply(filePath, '替换', ['<<<<<<< SEARCH', oldText, '=======', newText, '>>>>>>> REPLACE'].join('\n'));
+  const sampleReply = operationReply('src/demo.ts', '覆盖全文', 'export const demo = 1;') + '\n\n' +
+    operationReply('other.py', '新建', '# other.py\nprint("hi")');
   const parsed = parseModelReply(sampleReply);
-  add('F1', '回程解析：标题式与注释式路径线索均被识别', parsed.blocks.length === 2 && parsed.blocks[0]?.filePath === 'src/demo.ts' && parsed.blocks[1]?.filePath === 'other.py', {
-    sources: parsed.blocks.map((b) => `${b.filePath ?? '<null>'}:${b.pathSource}`),
-  });
-  add('F2', '回程解析：路径注释行已从代码中剥离', parsed.blocks[1]?.code === 'print("hi")', parsed.blocks[1]?.code);
-
-  const spec = getFormatSpec('short');
-  const specParsed = parseModelReply(['### 文件：src/x.ts', '```ts', 'const x = 1;', '```'].join('\n'));
-  add('F3', '格式模板示例写法可被解析器识别（模板与解析器一致）', /### 文件：/.test(spec) && specParsed.blocks[0]?.filePath === 'src/x.ts', {
-    specHead: spec.split('\n')[1],
-    parsedPath: specParsed.blocks[0]?.filePath,
-  });
+  add('F1', '回程解析：每块紧邻文件与明确操作均被识别', parsed.blocks.length === 2 && parsed.blocks[0]?.filePath === 'src/demo.ts' && parsed.blocks[0]?.operation === 'overwrite' && parsed.blocks[1]?.filePath === 'other.py' && parsed.blocks[1]?.operation === 'create', parsed.blocks.map(block => ({ file: block.filePath, operation: block.operation })));
+  add('F2', '协议正文中的路径注释按字面保存，不剥除内容', parsed.blocks[1]?.code === '# other.py\nprint("hi")', parsed.blocks[1]?.code);
+  // 执行模板实际输出示例；输入上下文仅用于匹配，不可当作操作。
+  const templateChecks = (variant: 'short' | 'full') => {
+    const fences = splitFences(getFormatSpec(variant)); const operations = new Set<string>();
+    let valid = fences.length % 2 === 0; let rejected = 0;
+    for (let i = 0; i < fences.length; i += 2) {
+      const inputText = fences[i]!.body;
+      const inputs = parseModelReply(inputText).blocks;
+      const contexts = new Map<string, string>(); let previousEnd = 0;
+      for (const inputFence of splitFences(inputText)) {
+        const heading = /### 上下文文件：([^\r\n]+)/.exec(inputText.slice(previousEnd, inputFence.start));
+        if (heading) contexts.set(heading[1]!.trim(), inputFence.body);
+        previousEnd = inputFence.end;
+      }
+      if (inputs.some(block => block.operation)) valid = false;
+      for (const block of parseModelReply(fences[i + 1]!.body).blocks) {
+        if (!block.operation) { if (block.kind !== 'other') valid = false; continue; }
+        operations.add(block.operation);
+        if (block.validationError) { rejected++; if (computeApply('', block).ok) valid = false; continue; }
+        const original = block.operation === 'create' ? '' : contexts.get(block.filePath!);
+        if (original === undefined || !computeApply(original, block).ok) valid = false;
+      }
+    }
+    return { valid, examples: fences.length / 2, rejected, operations: [...operations].sort() };
+  };
+  const shortExamples = templateChecks('short'); const fullExamples = templateChecks('full');
+  add('F3', '两版提示词全部输出示例可解析计算，复制上下文不可写入', shortExamples.valid && fullExamples.valid && shortExamples.rejected === 0 && fullExamples.rejected === 1, { shortExamples, fullExamples });
 
   /*
    * F3b：格式模板里的**每一段围栏必须自洽成对**。
@@ -1690,57 +1691,10 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     { shortUnbalanced, fullUnbalanced }
   );
 
-  /*
-   * F3c：围栏规则与结构对称性要点必须都在。
-   *
-   * 用户实测的冲突场景（历史）：.md 文件 + 只改纯代码行时，旧的两条规则并列、没有优先级，
-   * 模型只能折中。
-   * 最终拍板（方案甲）：**输入输出共用同一条骨架** ——
-   *   ① 成对闭合；② 用四个反引号、内容含更多时加长；
-   *   ③ 行号只由 ### 范围 表达、内容里不写行号。
-   *
-   * 用户反馈（few-shot 必须够全）后追加检查：
-   *   ④ 示例要覆盖全部 8 类场景（含"含四个反引号"这种最刁钻的）；
-   *   ⑤ **不许**再出现 `### 续：` 这类解析器根本不认识的续写约定；
-   *   ⑥ 语言标注对照表要在（用户原自定义提示词里的有用内容不能被删掉）。
-   */
   const specAll = getFormatSpec('short') + getFormatSpec('full');
-  const specFull = getFormatSpec('full');
-  add(
-    'F3c',
-    '格式模板：结构对称 + 围栏成对闭合 + 四个反引号 + 内容不含行号',
-    /成对|闭合/.test(specAll) &&
-      /四个反引号/.test(specAll) &&
-      /完全一致|照着它把结果写回来|同一条骨架|结构完全相同/.test(specAll) &&
-      /绝不在行首写行号|不含行号/.test(specAll),
-    {
-      hasPair: /成对|闭合/.test(specAll),
-      hasFour: /四个反引号/.test(specAll),
-      hasSymmetry: /完全一致|照着它把结果写回来|同一条骨架|结构完全相同/.test(specAll),
-      hasNoLineNo: /绝不在行首写行号|不含行号/.test(specAll),
-    }
-  );
-  add(
-    'F3d',
-    '格式模板：示例覆盖全部 8 类场景（few-shot 够全）',
-    // FULL 版里 8 个「示例 N｜」都要在，且每段都有【我给你的】/【你该给我的】配成对
-    // （正文导语里各多提一次，故为 8+1；关键是输入与输出**数量相等**）
-    (specFull.match(/示例 \d+｜/g) || []).length === 8 &&
-      (specFull.match(/【我给你的】/g) || []).length === (specFull.match(/【你该给我的】/g) || []).length &&
-      (specFull.match(/【我给你的】/g) || []).length >= 8,
-    {
-      titles: (specFull.match(/示例 \d+｜/g) || []).length,
-      inputs: (specFull.match(/【我给你的】/g) || []).length,
-      outputs: (specFull.match(/【你该给我的】/g) || []).length,
-    }
-  );
-  add(
-    'F3g',
-    '格式模板：简洁版保留 6 个示例（高频易错场景不缺席）',
-    // 用户反馈后 SHORT 从 4 个补到 6 个：内嵌围栏 / 局部 / 整文件 / 纯文本 / 新建 / 纯对话
-    (getFormatSpec('short').match(/示例 \d+｜/g) || []).length === 6,
-    { shortTitles: (getFormatSpec('short').match(/示例 \d+｜/g) || []).length }
-  );
+  add('F3c', '格式模板实际覆盖替换、新建、覆盖全文且不输出定位范围', shortExamples.valid && JSON.stringify(shortExamples.operations) === '["create","overwrite","replace"]' && !/### 范围：/.test(specAll), shortExamples);
+  add('F3d', '完整版十三组示例实际验证，有效操作成功且格式错误拒绝', fullExamples.valid && fullExamples.examples === 13 && fullExamples.rejected === 1, fullExamples);
+  add('F3g', '简洁版六组高频示例逐一通过真实解析与计算', shortExamples.valid && shortExamples.examples === 6, shortExamples);
   add(
     'F3e',
     '格式模板：不含解析器不认识的 ### 续： 约定 + 保留语言标注对照表',
@@ -1760,7 +1714,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     { hasMultiRound: /分多轮/.test(specAll), hasFull: /完整/.test(specAll) }
   );
 
-  const appliedWhole = computeApply('old body', parsed.blocks[0]!, { kind: 'replace-whole-file' });
+  const appliedWhole = computeApply('old body', parsed.blocks[0]!);
   add(
     'F4',
     '应用计算：整文件替换返回新文本与被替换内容（供撤销）',
@@ -1768,102 +1722,51 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     appliedWhole.ok ? { text: appliedWhole.text, replaced: appliedWhole.replaced, mode: appliedWhole.mode } : appliedWhole
   );
 
-  /* ---- J) 片段替换（带行号）与三向校验 ---- */
+  /* ---- J) 精确原文替换、唯一匹配与计算范围 ---- */
   const original = ['line1', 'line2', 'line3', 'line4', 'line5'].join('\n');
-  const snippetBlock = parseModelReply(
-    ['### 文件：src/a.ts', '### 范围：2-3', '```ts', 'NEW2', 'NEW3', '```'].join('\n')
-  ).blocks[0]!;
-  add('J1', '解析出片段替换的行区间', snippetBlock.range?.start === 2 && snippetBlock.range?.end === 3, snippetBlock.range);
-
-  const okApply = computeApply(original, snippetBlock, {
-    kind: 'replace-lines',
-    start: 2,
-    end: 3,
-    expectedOriginal: 'line2\nline3',
-    contextPrev: 'line1',
-    contextNext: 'line4',
-  });
-  add('J2', '三向校验通过时按行替换', okApply.ok && okApply.text === ['line1', 'NEW2', 'NEW3', 'line4', 'line5'].join('\n'), okApply);
-
-  const mismatch = computeApply(original, snippetBlock, {
-    kind: 'replace-lines',
-    start: 2,
-    end: 3,
-    expectedOriginal: 'OLD-DIFFERENT\nWHATEVER',
-  });
-  add('J3', '原内容不匹配时拒绝写入（防行号漂移改错地方）', !mismatch.ok && mismatch.reason === 'content-mismatch', mismatch);
-
-  const outOfRange = computeApply(original, snippetBlock, {
-    kind: 'replace-lines',
-    start: 4,
-    end: 99,
-    expectedOriginal: 'line4\nline5',
-  });
-  add('J4', '区间越界时拒绝写入', !outOfRange.ok && outOfRange.reason === 'range-invalid', outOfRange);
-
-  const ctxBad = computeApply(original, snippetBlock, {
-    kind: 'replace-lines',
-    start: 2,
-    end: 3,
-    expectedOriginal: 'line2\nline3',
-    contextPrev: 'NOT-LINE1',
-  });
-  add('J5', '上下文不匹配时拒绝写入', !ctxBad.ok && ctxBad.reason === 'context-mismatch', ctxBad);
-
-  const numbered = formatNumberedSnippet('alpha\nbeta\ngamma', 80);
-  add('J6', '带行号片段格式化使用文件真实行号', numbered === ' 80| alpha\n 81| beta\n 82| gamma', numbered);
-  add(
-    'J7',
-    '带行号片段可被剥离回纯文本（供写入前还原）',
-    stripNumberedPrefix(numbered).text === 'alpha\nbeta\ngamma' && stripNumberedPrefix(numbered).startLine === 80,
-    stripNumberedPrefix(numbered)
-  );
-
-  /* ---- J8-J11) 原区间固定，新内容增减行，区间外原文不变 ---- */
+  const snippetBlock = parseModelReply(replacementReply('src/a.ts', 'line2\nline3', 'NEW2\nNEW3')).blocks[0]!;
+  add('J1', '解析明确替换对，AI 不提供定位行号', snippetBlock.operation === 'replace' && snippetBlock.range === null && snippetBlock.edits?.[0]?.oldText === 'line2\nline3', snippetBlock);
+  const okApply = computeApply(original, snippetBlock);
+  add('J2', '唯一原文匹配时替换且 IDE 计算实际 2–3 行', okApply.ok && okApply.text === 'line1\nNEW2\nNEW3\nline4\nline5' && okApply.locations[0]?.oldRange?.start === 2 && okApply.locations[0]?.oldRange?.end === 3, okApply);
+  const mismatch = computeApply(original.replace('line2', 'changed'), snippetBlock);
+  add('J3', '原文匹配零次时拒绝，不能猜测位置', !mismatch.ok && mismatch.reason === 'search-not-found', mismatch);
+  const duplicate = computeApply(original + '\nline2\nline3', snippetBlock);
+  add('J4', '原文匹配多次时拒绝，必须补充上下文', !duplicate.ok && duplicate.reason === 'search-ambiguous', duplicate);
+  const overlapBlock = parseModelReply(operationReply('src/a.ts', '替换', snippetBlock.code + '\n' + ['<<<<<<< SEARCH', 'line3', '=======', 'OTHER', '>>>>>>> REPLACE'].join('\n'))).blocks[0]!;
+  const overlapping = computeApply(original, overlapBlock);
+  add('J5', '同块替换对重叠时整块拒绝', !overlapping.ok && overlapping.reason === 'overlap', overlapping);
+  const literalNumbered = buildSnippetText({ relPath: 'literal.txt', text: ' 80| alpha\n 81| beta\n', startLine: 80 });
+  add('J6', '复制原文不新增或剥除真实行号状文本，保留末尾换行', parseModelReply(literalNumbered.text).blocks[0]?.code === ' 80| alpha\n 81| beta\n', literalNumbered.text);
+  const crlfApply = computeApply(original.replace(/\n/g, '\r\n'), snippetBlock);
+  add('J7', '精确匹配仅规范换行，写入保留原 CRLF 风格', crlfApply.ok && crlfApply.text === 'line1\r\nNEW2\r\nNEW3\r\nline4\r\nline5', crlfApply);
   const rangeLines = Array.from({ length: 25 }, (_, i) => `原第 ${i + 1} 行`);
-  rangeLines[10] = '}';
-  rangeLines[11] = '';
+  rangeLines[10] = '}'; rangeLines[11] = '';
   const replacement = [...Array.from({ length: 7 }, (_, i) => `新增 ${i + 1}`), '}', '', '最后一行'];
-  const rangeBlock = parseModelReply(
-    ['### 范围：10-10', '````', ...replacement, '````'].join('\n')
-  ).blocks[0]!;
-  const rangeApplied = computeApply(rangeLines.join('\n'), rangeBlock, {
-    kind: 'replace-lines', start: 10, end: 10,
-    expectedOriginal: rangeLines[9]!, contextPrev: rangeLines[8]!, contextNext: rangeLines[10]!,
-  });
+  const rangeBlock = parseModelReply(replacementReply('range.txt', rangeLines[9]!, replacement.join('\n'))).blocks[0]!;
+  const rangeApplied = computeApply(rangeLines.join('\n'), rangeBlock);
   const rangeAfter = rangeApplied.ok ? rangeApplied.text.split('\n') : [];
-  add('J8', '10-10 替换十行：新内容占第 10-19 行，原第 11 行变为第 20 行',
-    rangeApplied.ok && rangeAfter.length === 34 && rangeAfter.slice(9, 19).join('\n') === replacement.join('\n'), rangeApplied);
-  add('J9', '重复括号与空行不能吞掉原区间外内容',
-    rangeApplied.ok && rangeAfter.slice(0, 9).join('\n') === rangeLines.slice(0, 9).join('\n') &&
-    rangeAfter.slice(19).join('\n') === rangeLines.slice(10).join('\n'), rangeApplied);
-  const shortBlock = { ...rangeBlock, code: 'tail' };
-  const shortened = computeApply('head\na\nb\nc\ntail', shortBlock, {
-    kind: 'replace-lines', start: 2, end: 4,
-    expectedOriginal: 'a\nb\nc', contextPrev: 'head', contextNext: 'tail',
-  });
-  add('J10', '缩短原区间，后续行向前移动且相同行完整保留',
-    shortened.ok && shortened.text === 'head\ntail\ntail', shortened);
-  const atEnd = computeApply(rangeLines.slice(0, 10).join('\n'), rangeBlock, {
-    kind: 'replace-lines', start: 10, end: 10, expectedOriginal: rangeLines[9]!,
-  });
-  add('J11', '末行替换为十行：文件增长九行',
-    atEnd.ok && atEnd.text === [...rangeLines.slice(0, 9), ...replacement].join('\n'), atEnd);
+  add('J8', '第十行唯一原文替换十行：IDE 显示新 10–19，文件增九行', rangeApplied.ok && rangeAfter.length === 34 && rangeAfter.slice(9, 19).join('\n') === replacement.join('\n') && rangeApplied.locations[0]?.newRange?.end === 19, rangeApplied);
+  add('J9', '重复括号与空行不能吞掉匹配区间外内容', rangeApplied.ok && rangeAfter.slice(0, 9).join('\n') === rangeLines.slice(0, 9).join('\n') && rangeAfter.slice(19).join('\n') === rangeLines.slice(10).join('\n'), rangeApplied);
+  const shortBlock = parseModelReply(replacementReply('range.txt', 'a\nb\nc', 'tail')).blocks[0]!;
+  const shortened = computeApply('head\na\nb\nc\ntail', shortBlock);
+  add('J10', '缩短匹配原文，后续行向前移动且相同行完整保留', shortened.ok && shortened.text === 'head\ntail\ntail', shortened);
+  const atEnd = computeApply(rangeLines.slice(0, 10).join('\n'), rangeBlock);
+  add('J11', '无末尾换行的最后一行替换为十行，文件增九行', atEnd.ok && atEnd.text === [...rangeLines.slice(0, 9), ...replacement].join('\n'), atEnd);
 
-  /* ---- M) 提示词片段组装：输入输出同构 + 围栏自适应（防内容里的 ``` 提前闭合） ---- */
+  /* ---- M) 提示词上下文组装：精确保留原文 + 围栏自适应（防内容里的 ``` 提前闭合） ---- */
   const plainSnippet = buildSnippetText({ relPath: 'src/a.py', text: 'def f():\n    pass', startLine: 80 });
   add(
     'M1',
-    '局部片段为四部件骨架（### 文件 + ### 范围 + 四反引号围栏 + 无行号内容）',
+    '选区复制声明只读上下文文件与原文片段，不提供操作或定位范围',
     plainSnippet.text ===
-      ['### 文件：src/a.py', '### 范围：80-81', '````python', 'def f():', '    pass', '````'].join('\n'),
+      ['### 上下文文件：src/a.py', '### 上下文：原文片段', '````python', 'def f():', '    pass', '````'].join('\n'),
     plainSnippet.text
   );
 
   add(
     'M1b',
-    '片段围栏内**不含行号前缀**（行号只由 ### 范围 表达；防纯文本文件被写入行号）',
-    !/^\s*\d+\|/m.test(plainSnippet.text),
+    '原文上下文不添加行号前缀，也不产生应用操作',
+    !/^\s*\d+\|/m.test(plainSnippet.text) && parseModelReply(plainSnippet.text).blocks[0]?.kind === 'other',
     plainSnippet.text
   );
 
@@ -1876,8 +1779,8 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   const whole = buildWholeFileText('src/a.ts', 'export const a = 1;');
   add(
     'M3',
-    '整文件片段与局部片段**同骨架**（### 文件 + ### 范围：1-N + 围栏），不再用「这个文件是」头部',
-    whole.text === ['### 文件：src/a.ts', '### 范围：1-1', '````typescript', 'export const a = 1;', '````'].join('\n') &&
+    '全文复制明确为完整原文上下文，不暗示覆盖全文',
+    whole.text === ['### 上下文文件：src/a.ts', '### 上下文：完整原文', '````typescript', 'export const a = 1;', '````'].join('\n') &&
       !whole.text.includes('这个文件是'),
     whole.text
   );
@@ -1912,7 +1815,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   const fakeRunner = {
     evaluate: async (script: string): Promise<unknown> => {
       if (script === COLLECT_STRATEGIES[0]?.script) {
-        return ['### 文件：src/greeting.ts\n```ts\nexport const hi = 1;\n```'];
+        return [operationReply('src/greeting.ts', '新建', 'export const hi = 1;')];
       }
       return [];
     },
@@ -1963,28 +1866,28 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   const originalText = beforeAll.ok ? beforeAll.text : '';
   add('K3a', '读取样例文件成功（闭环前置条件）', beforeAll.ok && originalText.length > 0, beforeAll.ok ? { chars: originalText.length } : beforeAll);
 
-  const wholeBlock = parseModelReply(['### 文件：hello.ts', '### 范围：1-' + originalText.split(/\r\n|\r|\n/).length, '```ts', 'export const hi = 2;', '```'].join('\n')).blocks[0]!;
-  const applied = await rp.applyChange({ filePath: 'hello.ts', block: wholeBlock, expectedOriginal: originalText.replace(/\r\n|\r/g, '\n') });
-  add('K3', '明确完整原范围的替换可应用并返回新文本', applied.ok && applied.after === 'export const hi = 2;', applied.ok ? { mode: applied.mode } : applied);
-
+  const wholeBlock = parseModelReply(operationReply('hello.ts', '覆盖全文', 'export const hi = 2;')).blocks[0]!;
+  const wholePreview = await rp.prepareChange(wholeBlock);
+  const applied = await rp.applyChange({ filePath: 'hello.ts', block: wholeBlock });
+  add('K3', '明确覆盖全文先预览后写入，结果等于已展示内容', wholePreview.ok && applied.ok && applied.after === wholePreview.after && applied.after === 'export const hi = 2;', applied);
   const undone = await rp.undoLast();
   add('K4', '撤销按快照恢复原文', undone.ok && undone.filePath === 'hello.ts', undone);
-
   const afterUndo = await input.fileService.readRawText('hello.ts');
-  add('K5', '撤销后文件内容确实回到应用前（逐字相同）', afterUndo.ok && afterUndo.text === originalText, afterUndo.ok ? { same: afterUndo.text === originalText } : afterUndo);
-
-  // 片段替换：基线取自"读文件那一刻"，之后被改动则拒绝
+  add('K5', '撤销后文件内容逐字恢复，包括末尾换行', afterUndo.ok && afterUndo.text === originalText, afterUndo);
   const firstLine = originalText.split(/\r\n|\r|\n/)[0] ?? '';
-  const greetingSnippetBlock = parseModelReply(['### 文件：hello.ts', '### 范围：1-1', '```ts', 'export const hi = 99;', '```'].join('\n')).blocks[0]!;
-  const snippetApplied = await rp.applyChange({ filePath: 'hello.ts', block: greetingSnippetBlock, expectedOriginal: firstLine });
-  add('K6', '片段替换在基线一致时成功', snippetApplied.ok && snippetApplied.mode === 'replace-lines', snippetApplied.ok ? { mode: snippetApplied.mode } : snippetApplied);
+  const greetingSnippetBlock = parseModelReply(replacementReply('hello.ts', firstLine, 'export const hi = 99;')).blocks[0]!;
+  await rp.prepareChange(greetingSnippetBlock);
+  const snippetApplied = await rp.applyChange({ filePath: 'hello.ts', block: greetingSnippetBlock });
+  add('K6', '局部精确替换在已展示基线一致时成功', snippetApplied.ok && snippetApplied.mode === 'replace', snippetApplied);
   await rp.undoLast();
-
-  const staleApplied = await rp.applyChange({ filePath: 'hello.ts', block: greetingSnippetBlock, expectedOriginal: '这行内容并不存在' });
-  add('K7', '片段替换在基线不一致时拒绝写入（防行号漂移）', !staleApplied.ok && staleApplied.reason === 'content-mismatch', staleApplied);
-
+  const staleBlock = parseModelReply(replacementReply('hello.ts', firstLine, 'stale content')).blocks[0]!;
+  await rp.prepareChange(staleBlock);
+  await input.fileService.writeFile('hello.ts', originalText + '\nexternal change');
+  const staleApplied = await rp.applyChange({ filePath: 'hello.ts', block: staleBlock });
+  add('K7', '预览后外部文件变化拒绝应用，不重新生成基线', !staleApplied.ok && staleApplied.reason === 'target-changed', staleApplied);
   const afterReject = await input.fileService.readRawText('hello.ts');
-  add('K8', '被拒绝的片段替换没有改动文件（拒绝即无副作用）', afterReject.ok && afterReject.text === originalText, afterReject.ok ? { same: afterReject.text === originalText } : afterReject);
+  add('K8', '拒绝应用后外部改动逐字保留', afterReject.ok && afterReject.text === originalText + '\nexternal change', afterReject);
+  await input.fileService.writeFile('hello.ts', originalText);
 
   /* ---- I) prompt 组装（需求 + 环境 + 目录树 + 格式要求）---- */
   const ctx = buildContextSummary(fixtures.root);
@@ -1997,7 +1900,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   add(
     'I1',
     'prompt 组装包含需求/工作环境/目录结构/格式要求四段',
-    /## 用户需求/.test(assembled) && /## 工作环境/.test(assembled) && /## 目录结构/.test(assembled) && /【输出格式要求】/.test(assembled),
+    /## 用户需求/.test(assembled) && /## 工作环境/.test(assembled) && /## 目录结构/.test(assembled) && assembled.endsWith(getFormatSpec('short')) && /### 操作：/.test(assembled),
     assembled.slice(0, 120)
   );
   add('I2', '工作环境摘要含真实运行环境与工作目录', ctx.environment.length > 0 && ctx.root === fixtures.root, {

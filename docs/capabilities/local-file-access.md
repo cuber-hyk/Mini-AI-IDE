@@ -1,7 +1,7 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-04
+updated: 2026-10-05
 owner: 胡运宽
 source_of_truth: [docs/adr/2026-10-02-filesystem-permission-model.md, src/main/fileService.ts, src/main/fileManagement.ts, src/main/workspaceService.ts, src/main/workspaceController.ts, src/main/editorSession.ts, src/main/settings.ts, src/shared/contract.ts, src/main/preload.ts, src/renderer/editorWorkspace.js, src/renderer/editorTabs.js, src/renderer/fileExplorer.js, test/workspaceService.test.ts, test/fileManagement.test.ts, test/editorSession.test.ts, test/editorWorkspace.test.ts, test/fileService.test.ts]
 ---
@@ -65,6 +65,7 @@ source_of_truth: [docs/adr/2026-10-02-filesystem-permission-model.md, src/main/f
 | `editor:state` | （编辑器 → 主进程）`{ root, path, documents: [{ path, dirty }] }` | 单向编辑状态上报 |
 | `editor:request` / `editor:reply` | 保存请求 `{ id, kind: save, path }`／回执 ID 和成功布尔值 | 离开确认的保存回执 |
 | `ui:copy-numbered-snippet` | `{ root, relPath, text, startLine }` | 片段复制结果；目录或当前文件已变化则拒绝，不写入旧片段记忆 |
+| `ui:copy-whole-file` | `{ root, relPath, text }` | 复制当前 Monaco 全文上下文，包含未保存内容；目录或当前文件已变化则拒绝 |
 
 写入和文件管理的 `root` 必须等于当前根目录。新增管理与编辑状态通道仅接受本地编辑器发送者；网页没有对应 preload。完整类型以 `src/shared/contract.ts` 为准。
 
@@ -83,7 +84,8 @@ source_of_truth: [docs/adr/2026-10-02-filesystem-permission-model.md, src/main/f
 | 目录列表 | 隐藏点文件、跳过 `node_modules`/`.git`/`dist` 等；目录在前按名称排序；单目录上限 500 条并标记 `truncated` |
 | 写入 | 仅 `write-file` 通道；同样过白名单与大小上限；**只由用户在编辑器里明确保存时触发** |
 | 新建 | 文件树顶部或右键入口；选中文件夹内创建、选中文件的父目录内创建、无选中或空白处右键则根目录内创建；排他创建，不覆盖已有目标 |
-| AI 新增 | 明确路径的完整内容以空原文只读预览；应用时排他创建文件及缺失父目录，失败回滚本次空目录；撤销核对创建时文件身份（dev/ino/birthtimeMs）和内容，只删除本次文件及空目录，同名同内容外部替换也拒绝，保留记录供重试 |
+| AI 新增 | 明确操作“新建”和路径的完整内容以空原文只读预览；目标必须不存在，应用排他创建文件及缺失父目录，失败回滚本次空目录；撤销核对创建时文件身份（dev/ino/birthtimeMs）和内容，只删除本次文件及空目录，同名同内容外部替换也拒绝，保留记录供重试 |
+| AI 更新 | 明确替换／覆盖全文仅更新已有目标，writeFile 的预期原文参数复核打开文件的内容和身份，r+ 不重建消失目标；不提供跨进程锁保证 |
 | 名称 | 树内输入，Enter 确认、Esc 取消；拒绝 Windows 非法字符、保留名称、尾随点／空格、重名及过长名称 |
 | 改名 | F2 或右键；同步所有打开文件及文件夹后代文件的保存路径，保留草稿；不覆盖已存在目标 |
 | 删除 | 原生确认后仅调用 `shell.trashItem`，失败可见且不改为永久删除；成功后关闭受影响标签，其他标签保留 |

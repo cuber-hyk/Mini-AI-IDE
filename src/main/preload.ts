@@ -95,15 +95,15 @@ const bridge = {
   getContext: () => ipcRenderer.invoke(CH.getContext),
   copyPrompt: (requirement: string, targetFiles: string[]) => ipcRenderer.invoke(CH.copyPrompt, requirement, targetFiles),
   copyNumberedSnippet: (input: unknown) => ipcRenderer.invoke(CH.copyNumberedSnippet, input),
-  copyWholeFile: (relPath: string) => ipcRenderer.invoke(CH.copyWholeFile, relPath),
+  copyWholeFile: (input: { root: string; relPath: string; text: string }) => ipcRenderer.invoke(CH.copyWholeFile, input),
   setPreviewPanel: (width: number) => ipcRenderer.invoke(CH.setPreviewPanel, width),
   setWebVisible: (visible: boolean) => ipcRenderer.invoke(CH.setWebVisible, visible),
   setSidebarVisible: (visible: boolean) => ipcRenderer.invoke(CH.setSidebarVisible, visible),
   setSidebarWidth: (width: number) => ipcRenderer.invoke(CH.setSidebarWidth, width),
   /** 请求主进程打开「提示词编辑面板」（面板是独立视图，只能由主进程显示） */
   openPromptPanel: () => ipcRenderer.invoke(CH.openPromptPanel),
-  showDiffInEditor: (collectionId: string, index: number) =>
-    ipcRenderer.invoke(CH.showDiffInEditor, collectionId, index),
+  showDiffInEditor: (collectionId: string, index: number, filePath?: string) =>
+    ipcRenderer.invoke(CH.showDiffInEditor, collectionId, index, filePath),
   /** 跳到批次内相邻的变更（主进程会同时同步右下角面板的高亮） */
   stepDiff: (collectionId: string, index: number) =>
     ipcRenderer.invoke(CH.stepDiff, collectionId, index),

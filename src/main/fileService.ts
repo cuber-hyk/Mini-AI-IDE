@@ -242,14 +242,14 @@ export class FileService {
    *
    * 边界说明（ADR-0004）：这是**用户在编辑器里明确编辑后保存**的通道，不是"程序自动落盘"。
    * 因此：只接受字符串内容；路径仍过白名单；大小上限与读取一致。
-   * 回程解析的"预览后应用"复用此写入通道，并在调用前先做三向校验。
+   * 回程的预览后应用传入预期原文，在打开的文件上再次核对后写入。
    */
-  async writeFile(relPath: string, text: string): Promise<WriteFileResult> {
+  async writeFile(relPath: string, text: string, expectedText?: string): Promise<WriteFileResult> {
     const r = this.requireRoot();
     if (!r.ok) return { ok: false, error: r.error };
     if (typeof text !== 'string') return { ok: false, error: '内容必须是字符串' };
 
-    const verdict = await this.resolveSafePath(relPath, true);
+    const verdict = await this.resolveSafePath(relPath, expectedText === undefined);
     if (!verdict.ok) return { ok: false, error: verdict.error };
 
     if (text.length > this.charLimit) {
@@ -258,7 +258,25 @@ export class FileService {
 
     try {
       if (!this.isCurrentRoot(verdict.rootRevision)) return { ok: false, error: '目录已切换，请重新操作' };
-      await fs.writeFile(verdict.absolute, text, 'utf8');
+      if (expectedText !== undefined) {
+        // r+ 要求文件存在，不能在检查后目标消失时静默重建。
+        const handle = await fs.open(verdict.absolute, 'r+');
+        try {
+          const current = decodeTextFile(await handle.readFile());
+          const opened = await handle.stat();
+          const named = await fs.stat(verdict.absolute);
+          if (!current.ok || current.text !== expectedText || opened.dev !== named.dev || opened.ino !== named.ino ||
+              !this.isCurrentRoot(verdict.rootRevision)) return { ok: false, error: '文件已在预览后变化，已拒绝写入' };
+          const buffer = Buffer.from(text, 'utf8');
+          let written = 0;
+          while (written < buffer.length) {
+            const result = await handle.write(buffer, written, buffer.length - written, written);
+            if (!result.bytesWritten) throw new Error('文件写入未完成');
+            written += result.bytesWritten;
+          }
+          await handle.truncate(buffer.length);
+        } finally { await handle.close(); }
+      } else await fs.writeFile(verdict.absolute, text, 'utf8');
     } catch (err) {
       return { ok: false, error: `写入失败：${err instanceof Error ? err.message : String(err)}` };
     }
