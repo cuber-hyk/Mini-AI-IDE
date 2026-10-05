@@ -19,7 +19,7 @@
 | 本地文件读取 / 编码 / 大小控制 | `docs/capabilities/local-file-access.md` | 无关能力文档 |
 | 目录恢复 / 最近目录 / 文件管理 / 多文件标签 / 未保存保护 | `docs/capabilities/local-file-access.md`、`src/main/workspaceService.ts`、`workspaceController.ts`、`fileManagement.ts`、`editorSession.ts`、`src/renderer/editorWorkspace.js`、`editorTabs.js`、`fileExplorer.js` | 历史计划、官方网页实现 |
 | 人机边界 / 出程（什么由人做） | `docs/capabilities/human-machine-boundary.md`、`docs/adr/2026-10-02-zero-injection-and-automation-trace-baseline.md`（ADR-0003） | 回程解析细节 |
-| 回程解析 / 一键应用 / 输出格式 | `docs/capabilities/return-path-and-format-contract.md`、`docs/adr/2026-10-02-return-path-contract-and-trust-boundary.md` | 指纹与网络层细节 |
+| 回程解析 / 新增文件 / 一键应用 / 输出格式 | `docs/capabilities/return-path-and-format-contract.md`、`src/main/replyCollector.ts`、`src/shared/returnPath.ts`、`src/main/returnPathService.ts`、`src/main/fileService.ts`、`src/renderer/editorWorkspace.js`、`docs/adr/2026-10-02-return-path-contract-and-trust-boundary.md` | 指纹与网络层细节 |
 | 指纹与环境特征 | `docs/adr/2026-10-02-honest-electron-identity.md`（ADR-0001）、`docs/adr/2026-10-02-zero-injection-and-automation-trace-baseline.md`（ADR-0003） | 实现细节代码（`src/shared/userAgent.ts` 为落地实现） |
 | 会话 / 登录持久化 | `docs/capabilities/session-persistence.md`（会话分区命名 ADR 为**候选未建项**，暂由该能力文档承载） | 计划文档 |
 | UI / 设计规则 | `DESIGN.md`、`design-tokens.json`、`src/renderer/ui.css`、`docs/capabilities/app-shell.md` 的「布局规则」「左侧编辑器与目录树的当前行为」「底部需求输入区的当前行为」 | — |

@@ -8,6 +8,14 @@
  */
 import * as path from 'node:path';
 
+/** 文件及目录创建统一使用 Windows 条目名称规则。 */
+export function validateEntryName(name: unknown): string | null {
+  if (typeof name !== 'string' || !name || name !== name.trim() || /[<>:"/\\|?*\x00-\x1f]/.test(name) || /[. ]$/.test(name)) return '名称不能为空或包含 Windows 不允许的字符';
+  if (name === '.' || name === '..' || /^(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\.|$)/i.test(name)) return '不能使用 Windows 保留名称';
+  if (name.length > 255) return '名称过长';
+  return null;
+}
+
 export type PathVerdict =
   | { ok: true; absolute: string; relative: string }
   | { ok: false; reason: 'outside-root' | 'invalid'; detail: string };

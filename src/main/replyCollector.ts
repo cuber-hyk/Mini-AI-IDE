@@ -82,11 +82,13 @@ const COLLECT_HELPERS = `
     var t = String(s || '').replace(/^[ \\t]*\\r?\\n/, '').replace(/\\r?\\n[ \\t]*$/, '');
     return t.trim().length === 0 ? '' : t; // 判空可以用 trim，**返回值**绝不用 trim 后的
   };
-  // 从一个 <pre> 取内容：innerText 优先（贴近渲染结果），为空则回退 textContent；
+  // 从 pre 内的 code 取内容（没有 code 才用 pre），排除代码框控件；innerText 为空则读 textContent；
   // 两者都只做上面的结构性清理 —— 内层围栏行、空行与缩进一律保留。
   var textOf = function (pre) {
     try {
-      return cleanText(pre.innerText) || cleanText(pre.textContent);
+      var code = pre.querySelector('code');
+      var source = code || pre;
+      return cleanText(source.innerText) || cleanText(source.textContent);
     } catch (e) { return ''; }
   };
   // markdown 语义容器：按**文档序取最后一个** —— 这就是"最新一条回复"
@@ -114,76 +116,67 @@ const COLLECT_HELPERS = `
     }
     return requirePre ? fallback : fallback;
   };
-  // 线索（### 文件：/ ### 范围：）**只从给定容器内**提取。
-  // 早期是整页扫描取最后一条：最新回复不带标题时会取到**历史回复**的路径 → 错配。
-  var hintIn = function (root, kind) {
-    if (!root) return '';
-    // 路径部分允许**空格与中文**（2026-10-04 用户实测）：真实文件名常见
-    // 「BLIP 阅读笔记.md」这种"英文+空格+中文"形态，旧版 [^\s\`]+ 不允许空格，
-    // 在「BLIP」后断掉 → 整条匹配失败 → 路径线索全丢（范围行纯数字不受影响）。
-    // 现改为：排除反引号与换行，其余允许，非贪婪扩展到第一个「.扩展名」——
-    // 「文件： BLIP 阅读笔记.md，其余说明」也只会取到「BLIP 阅读笔记.md」。
-    var pathRe = /(?:文件|文件名|路径|file|filename|path)\\s*[:：]\\s*([^\\\`\\n]+?\\.[A-Za-z0-9]+)/;
-    var rangeRe = /(?:范围|行号|lines?|range)\\s*[:：]\\s*(?:替换第\\s*)?(\\d{1,7})\\s*[-\\u2013\\u2014~\\u81f3\\u5230]\\s*(\\d{1,7})/;
-    var all;
-    try {
-      all = root.querySelectorAll('*');
-    } catch (e) { return ''; }
-    // 从后往前扫（越靠后越接近"最新回复里的收尾说明"），命中的第一条即为线索
-    for (var i = all.length - 1; i >= 0; i -= 1) {
-      var own = (all[i].textContent || '').trim();
-      if (own.length === 0 || own.length > 200) continue;
-      if (kind === 'path') {
-        var mp = pathRe.exec(own);
-        if (mp && mp[1]) return mp[1];
-      } else {
-        var mr = rangeRe.exec(own);
-        if (mr && mr[1] && mr[2]) return '### \\u8303\\u56f4\\uff1a' + mr[1] + '-' + mr[2];
+  // 按 DOM 顺序保留正文与每个 pre 之前的标题，不能用整条回复最后的线索回填。
+  // 非语义代码框控件（语言标签、复制、下载）不参与正文；pre 内只读 code 内容。
+  var replyParts = function (root) {
+    var parts = [];
+    var walk = function (node) {
+      var tag = String(node.tagName || '').toUpperCase();
+      if (tag === 'PRE') {
+        var src = textOf(node);
+        parts.push({ pre: node, text: src ? fenced(langOf(node), src) : '' });
+        return;
       }
-    }
-    return '';
+      if (/^(BUTTON|SCRIPT|STYLE|INPUT|TEXTAREA|SELECT)$/.test(tag)) return;
+      if (tag === 'HR') { parts.push({ text: '---' }); return; }
+      var hasPre = false;
+      try { hasPre = node.querySelectorAll('pre').length > 0; } catch (e) { hasPre = false; }
+      if (hasPre) {
+        var children = node.children || [];
+        for (var i = 0; i < children.length; i += 1) walk(children[i]);
+        return;
+      }
+      var text = cleanText(node.innerText) || cleanText(node.textContent);
+      if (!text) return;
+      var metadata = /^(?:#{1,6}\\s*)?(?:文件|文件名|路径|file|filename|path|范围|行号|lines?|range)\\s*[:：]/i.test(text.trim());
+      var heading = /^H([1-6])$/.exec(tag);
+      if (metadata) {
+        // 渲染后的标题没有 Markdown #；统一恢复标题，路径不受扩展名或空格限制。
+        text = text.trim().replace(/^#{1,6}\\s*/, '').replace(/^([^:：]+)\\s*[:：]\\s*/, '$1：');
+        parts.push({ text: '### ' + text });
+      } else if (heading) {
+        parts.push({ text: new Array(Number(heading[1]) + 1).join('#') + ' ' + text.trim() });
+      } else if (/^(P|LI|BLOCKQUOTE|DT|DD)$/.test(tag)) {
+        parts.push({ text: text });
+      } else {
+        var nested = node.children || [];
+        for (var j = 0; j < nested.length; j += 1) walk(nested[j]);
+      }
+    };
+    walk(root);
+    return parts;
   };
 `;
 
 /**
  * 候选策略：**每一层都必须保持「最新」语义**，不接受"有内容就行"。
  *
- *  - S1 最新回复容器（markdown 语义容器，文档序最后一个）内的全部 <pre>；
+ *  - S1 最新回复容器（markdown 语义容器，文档序最后一个）内的全部 <pre> 及逐块前置正文；
  *  - S2 该容器整体文本（容器无 pre 时用：纯文本回复 / 结构变化）；
  *  - S3 文档序最后一个 <pre>（结构兜底：最后一个 pre 大概率属于最新回复）。
  */
 export const COLLECT_STRATEGIES: CollectStrategy[] = [
   {
     id: 'latest-reply-container',
-    description: '最新一条回复容器（文档序最后一个 markdown 容器）内的代码块 + 容器内线索',
+    description: '最新一条回复容器（文档序最后一个 markdown 容器）内的代码块 + 按文档顺序保留的逐块标题',
     script: `(() => {
       ${COLLECT_HELPERS}
       var node = lastMarkdownNode(true);
       if (!node) return [];
 
-      // 容器内 <pre> 按**文档序**拼接：一条回复可以有多个代码块
-      var pres = Array.from(node.querySelectorAll('pre'));
-      var parts = [];
-      for (var i = 0; i < pres.length; i += 1) {
-        var src = textOf(pres[i]);
-        if (src) parts.push(fenced(langOf(pres[i]), src));
-      }
-      if (parts.length === 0) return [];
-
-      var code = parts.join('\\n\\n');
-
-      // 线索只从**本容器内**取，绝不整页扫描（否则会取到历史回复的路径 → 错配）
-      var pathHint = hintIn(node, 'path');
-      var rangeHint = hintIn(node, 'range');
-
-      // 行区间只在**单代码块**时注入：多块时容器内的"最后一条范围"无法与各块一一对应，
-      // 宁可不注入（交给选区记忆或人工确认），否则会把同一个区间错套到所有块上。
-      var head = [
-        pathHint ? '### 文件：' + pathHint : '',
-        pres.length === 1 && rangeHint ? rangeHint : '',
-      ].filter(function (s) { return s.length > 0; }).join('\\n');
-
-      return [head ? head + '\\n\\n' + code : code];
+      var parts = replyParts(node);
+      if (!parts.some(function (part) { return part.pre && part.text; })) return [];
+      return [parts.map(function (part) { return part.text; }).filter(Boolean).join('\\n\\n')];
     })()`,
   },
   {
@@ -212,19 +205,18 @@ export const COLLECT_STRATEGIES: CollectStrategy[] = [
       var last = pres[pres.length - 1];
       var src = textOf(last);
       if (!src) return [];
-      // 线索：从该 pre 所在的 markdown 容器内取（依然限定范围，不整页扫描）
+      // 只保留上一代码块之后、目标代码块之前的上下文，不能跨块借用路径或范围。
       var holder = null;
       try { holder = last.closest('[class*="markdown"]'); } catch (e) { holder = null; }
-      var node = holder || last;
-      var pathHint = hintIn(node, 'path');
-      var rangeHint = hintIn(node, 'range');
-      var head = [
-        pathHint ? '### 文件：' + pathHint : '',
-        rangeHint ? rangeHint : '',
-      ].filter(function (s) { return s.length > 0; }).join('\\n');
-      return [fenced(langOf(last), src)].map(function (body) {
-        return head ? head + '\\n\\n' + body : body;
-      });
+      var parts = replyParts(holder || last);
+      var start = 0;
+      for (var i = 0; i < parts.length; i += 1) {
+        if (parts[i].pre === last) {
+          return [parts.slice(start, i + 1).map(function (part) { return part.text; }).filter(Boolean).join('\\n\\n')];
+        }
+        if (parts[i].pre) start = i + 1;
+      }
+      return [];
     })()`,
   },
 ];

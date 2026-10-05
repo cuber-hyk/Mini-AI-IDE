@@ -138,8 +138,8 @@ const bridge = {
    * 订阅「磁盘文件被回程链路改写」。
    * 落盘在主进程、编辑在另一个渲染进程，不广播的话编辑器就一直显示旧内容。
    */
-  onFileChanged: (listener: (filePath: unknown) => void) => {
-    ipcRenderer.on(CH.fileChanged, (_e, filePath) => listener(filePath));
+  onFileChanged: (listener: (filePath: string, change: 'updated' | 'created' | 'deleted', revision: number) => void) => {
+    ipcRenderer.on(CH.fileChanged, (_e, filePath, change, revision) => listener(filePath, change, revision));
   },
 };
 

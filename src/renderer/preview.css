@@ -12,8 +12,12 @@ body { display: flex; flex-direction: column; background: var(--ui-bg); color: v
 .pv-filter-wrap { padding: 10px 10px 6px; }
 .pv-filter, .pv-path { width: 100%; color: inherit; font: inherit; background: var(--ui-surface); border: 1px solid var(--ui-border); border-radius: var(--ui-radius); padding: 6px 9px; }
 .pv-filter:focus, .pv-path:focus { outline: 1px solid var(--ui-accent); }
-.pv-notes { flex: 0 0 auto; max-height: 7em; overflow: auto; padding: 6px 10px; color: #e0b876; border-bottom: 1px solid var(--ui-border); white-space: pre-wrap; overflow-wrap: anywhere; }
+.pv-notes { flex: 0 0 auto; max-height: 7em; overflow: auto; padding: 6px 10px; color: var(--ui-muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 .pv-notes:empty { display: none; }
+.pv-diagnostics { flex: 0 0 auto; border-bottom: 1px solid var(--ui-border); }
+.pv-diagnostics > summary { padding: 4px 10px; color: var(--ui-muted); cursor: pointer; }
+.pv-status { flex: 0 0 auto; padding: 4px 10px; color: var(--ui-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pv-other > summary { display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 3px 5px; color: var(--ui-muted); cursor: pointer; border-radius: var(--ui-radius); }
 .pv-list { flex: 1; min-height: 0; overflow: auto; list-style: none; margin: 0; padding: 4px 8px 10px; }
 .pv-list ul { list-style: none; margin: 0 0 0 10px; padding: 0 0 0 7px; border-left: 1px solid var(--ui-border); }
 .pv-empty { padding: 12px 3px; color: var(--ui-muted); }
@@ -43,3 +47,5 @@ details[open] > summary::before { content: '⌄'; }
 .pv-detail-actions { display: flex; gap: 6px; margin-top: 8px; }
 .pv-hint { margin-top: 6px; color: #e0b876; overflow-wrap: anywhere; white-space: pre-wrap; }
 .pv-path { margin-top: 8px; }
+
+.pv-content { white-space: pre-wrap; overflow-wrap: anywhere; font-family: 'Cascadia Code', Consolas, 'Courier New', monospace; font-size: 12px; }

@@ -9,7 +9,7 @@ import * as path from 'node:path';
 
 import { decodeTextFile } from '../shared/encoding';
 import { checkSize, isProbablyTextFile, sliceLines, type TextMeta } from '../shared/limits';
-import { DEFAULT_LIST_POLICY, filterAndSortEntries, isInsideRoot, resolveWithinRoot, type DirEntryLike } from '../shared/pathGuard';
+import { DEFAULT_LIST_POLICY, filterAndSortEntries, isInsideRoot, resolveWithinRoot, validateEntryName, type DirEntryLike } from '../shared/pathGuard';
 import type { DirEntry, ListDirResult, ReadFileResult, SliceFileResult, WriteFileResult } from '../shared/contract';
 
 /** 单次返回内容上限（字符数）。超限只返回元信息，要求用户显式确认后分片读取。 */
@@ -19,11 +19,21 @@ export type SafeFilePath =
   | { ok: true; absolute: string; relative: string; rootRevision: number }
   | { ok: false; error: string };
 
+/** 撤销只清理由本次新增记录的真实目录对象，不能仅凭名称删除重建目录。 */
+export interface CreatedDirectory { relative: string; dev: number; ino: number }
+/** 创建时取得的文件对象身份，避免撤销删除外部同名重建文件。 */
+export interface CreatedFileIdentity { dev: number; ino: number; birthtimeMs: number }
+export type CreateFileResult =
+  | { ok: true; relPath: string; byteLength: number; createdDirectories: CreatedDirectory[]; createdFileIdentity: CreatedFileIdentity }
+  | { ok: false; error: string; createdDirectories?: never; createdFileIdentity?: never };
+
 export class FileService {
   private root: string | null = null;
   private rootRevision = 0;
 
   constructor(private readonly charLimit: number = DEFAULT_CHAR_LIMIT) {}
+
+  get characterLimit(): number { return this.charLimit; }
 
   getRoot(): string | null {
     return this.root;
@@ -54,22 +64,28 @@ export class FileService {
     if (!verdict.ok) return { ok: false, error: verdict.detail };
     try {
       const realRoot = await fs.realpath(r.root);
-      let realTarget: string;
-      try {
-        realTarget = await fs.realpath(verdict.absolute);
-      } catch (err) {
-        if (!allowMissing || (err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-        // 悬空链接不是可创建目标，不能沿其指向写入根目录外。
-        try {
-          await fs.lstat(verdict.absolute);
-          return { ok: false, error: '目标是无法访问的链接' };
-        } catch (statErr) {
-          if ((statErr as NodeJS.ErrnoException).code !== 'ENOENT') throw statErr;
+      const parts = verdict.relative ? verdict.relative.split(path.sep) : [];
+      if (allowMissing) {
+        for (const part of parts) {
+          const invalid = validateEntryName(part);
+          if (invalid) return { ok: false, error: invalid };
         }
-        realTarget = path.join(await fs.realpath(path.dirname(verdict.absolute)), path.basename(verdict.absolute));
       }
-      if (!isInsideRoot(realRoot, realTarget)) {
-        return { ok: false, error: '目标真实路径不在已打开的根目录内' };
+      let current = r.root;
+      for (let index = 0; index < parts.length; index += 1) {
+        current = path.join(current, parts[index]!);
+        let stat;
+        try { stat = await fs.lstat(current); }
+        catch (err) {
+          if (!allowMissing || (err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+          // 已逐级核对最近存在的祖先；后续路径尚未存在，预览不创建任何条目。
+          break;
+        }
+        const realTarget = await fs.realpath(current); // 悬空链接在此报错，不视作缺失文件。
+        if (!isInsideRoot(realRoot, realTarget)) return { ok: false, error: '目标真实路径不在已打开的根目录内' };
+        if (index < parts.length - 1 && !(stat.isDirectory() || (stat.isSymbolicLink() && (await fs.stat(current)).isDirectory()))) {
+          return { ok: false, error: '路径的父级不是文件夹（ENOTDIR）' };
+        }
       }
       if (!this.isCurrentRoot(rootRevision)) return { ok: false, error: '目录已切换，请重新操作' };
       return { ok: true, absolute: verdict.absolute, relative: verdict.relative, rootRevision };
@@ -81,6 +97,25 @@ export class FileService {
   private requireRoot(): { ok: true; root: string } | { ok: false; error: string } {
     if (!this.root) return { ok: false, error: '尚未打开任何目录' };
     return { ok: true, root: this.root };
+  }
+
+  /** 新增路径不得穿过根下链接目录，以保证撤销时能确认新增目录归属。 */
+  private async validateCreationParents(target: Extract<SafeFilePath, { ok: true }>): Promise<{ ok: true } | { ok: false; error: string }> {
+    const root = this.requireRoot();
+    if (!root.ok) return root;
+    if (!this.isCurrentRoot(target.rootRevision)) return { ok: false, error: '目录已切换，请重新操作' };
+    try {
+      let ancestor = root.root;
+      for (const part of target.relative.split(path.sep).slice(0, -1)) {
+        ancestor = path.join(ancestor, part);
+        let stat;
+        try { stat = await fs.lstat(ancestor); }
+        catch (err) { if ((err as NodeJS.ErrnoException).code === 'ENOENT') break; throw err; }
+        if (stat.isSymbolicLink()) return { ok: false, error: '不能通过链接目录创建新文件' };
+        if (!stat.isDirectory()) return { ok: false, error: '路径的父级不是文件夹（ENOTDIR）' };
+      }
+      return this.isCurrentRoot(target.rootRevision) ? { ok: true } : { ok: false, error: '目录已切换，请重新操作' };
+    } catch (err) { return { ok: false, error: `无法检查新增父路径：${err instanceof Error ? err.message : String(err)}` }; }
   }
 
   async listDir(relPath: string): Promise<ListDirResult> {
@@ -169,17 +204,25 @@ export class FileService {
    * 用途：回程应用前的 diff 预览与撤销快照 —— 必须拿到完整原文才能正确计算差异；
    * 若超限则返回错误，由调用方提示用户（避免在超大文件上生成不可读的 diff）。
    */
-  async readRawText(relPath: string): Promise<{ ok: true; text: string; relPath: string } | { ok: false; error: string }> {
+  async readRawText(relPath: string, allowMissing = false): Promise<{ ok: true; text: string; relPath: string; exists: boolean; rootRevision: number } | { ok: false; error: string }> {
     const r = this.requireRoot();
     if (!r.ok) return { ok: false, error: r.error };
 
-    const verdict = await this.resolveSafePath(relPath);
+    const verdict = await this.resolveSafePath(relPath, allowMissing);
     if (!verdict.ok) return { ok: false, error: verdict.error };
 
     let buf: Buffer;
     try {
       buf = await fs.readFile(verdict.absolute);
     } catch (err) {
+      if (allowMissing && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+        const checked = await this.resolveSafePath(relPath, true);
+        if (!checked.ok) return checked;
+        if (checked.rootRevision !== verdict.rootRevision || !this.isCurrentRoot(verdict.rootRevision)) return { ok: false, error: '目录已切换，请重新操作' };
+        const parents = await this.validateCreationParents(checked);
+        if (!parents.ok) return parents;
+        return { ok: true, text: '', relPath: verdict.relative, exists: false, rootRevision: verdict.rootRevision };
+      }
       return { ok: false, error: `无法读取文件：${err instanceof Error ? err.message : String(err)}` };
     }
     if (!this.isCurrentRoot(verdict.rootRevision)) return { ok: false, error: '目录已切换，请重新操作' };
@@ -191,7 +234,7 @@ export class FileService {
         error: `文件过大（${decoded.text.length} 字符 > 上限 ${this.charLimit}），暂不支持在预览中应用`,
       };
     }
-    return { ok: true, text: decoded.text, relPath: verdict.relative };
+    return { ok: true, text: decoded.text, relPath: verdict.relative, exists: true, rootRevision: verdict.rootRevision };
   }
 
   /**
@@ -220,6 +263,134 @@ export class FileService {
       return { ok: false, error: `写入失败：${err instanceof Error ? err.message : String(err)}` };
     }
     return { ok: true, relPath: verdict.relative, byteLength: Buffer.byteLength(text, 'utf8') };
+  }
+
+  /** AI 整文件新增：只在应用时创建目录，排他创建文件，绝不覆盖已有目标。 */
+  async createFile(relPath: string, text: string, expectedRevision?: number): Promise<CreateFileResult> {
+    if (typeof text !== 'string') return { ok: false, error: '内容必须是字符串' };
+    if (text.length > this.charLimit) return { ok: false, error: `内容超出上限（${text.length} > ${this.charLimit} 字符）` };
+    const target = await this.resolveSafePath(relPath, true);
+    if (!target.ok) return target;
+    if (!target.relative) return { ok: false, error: '不能创建已打开的根目录' };
+    if (!this.isCurrentRoot(target.rootRevision) || (expectedRevision !== undefined && expectedRevision !== target.rootRevision)) return { ok: false, error: '目录已切换，请重新操作' };
+    const parentsChecked = await this.validateCreationParents(target);
+    if (!parentsChecked.ok) return parentsChecked;
+    if (!this.isCurrentRoot(target.rootRevision)) return { ok: false, error: '目录已切换，请重新操作' };
+    const root = this.root!;
+    const createdDirectories: CreatedDirectory[] = [];
+    let realRoot: string;
+    try { realRoot = await fs.realpath(root); }
+    catch (err) { return { ok: false, error: `无法访问根目录：${err instanceof Error ? err.message : String(err)}` }; }
+    let handle: fs.FileHandle | null = null;
+    let createdFile: CreatedFileIdentity | null = null;
+    try {
+      const parents = target.relative.split(path.sep).slice(0, -1);
+      for (let index = 0; index < parents.length; index += 1) {
+        const relative = parents.slice(0, index + 1).join(path.sep);
+        const directory = await this.resolveSafePath(relative, true);
+        if (!directory.ok) throw new Error(directory.error);
+        if (directory.rootRevision !== target.rootRevision || !this.isCurrentRoot(target.rootRevision)) throw new Error('目录已切换，请重新操作');
+        try {
+          await fs.mkdir(directory.absolute);
+          const created = await fs.lstat(directory.absolute);
+          if (created.isSymbolicLink() || !created.isDirectory()) throw new Error('新增目录已被其他操作替换');
+          createdDirectories.push({ relative: relative.split(path.sep).join('/'), dev: created.dev, ino: created.ino });
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+        }
+        const checked = await this.resolveSafePath(relative);
+        if (!checked.ok) throw new Error(checked.error);
+        const stat = await fs.lstat(checked.absolute);
+        if (stat.isSymbolicLink()) throw new Error('不能通过链接目录创建新文件');
+        if (checked.rootRevision !== target.rootRevision || !stat.isDirectory()) throw new Error('目录已切换或父级不是文件夹');
+      }
+      const checked = await this.resolveSafePath(target.relative, true);
+      if (!checked.ok) throw new Error(checked.error);
+      const parentsVerdict = await this.validateCreationParents(checked);
+      if (!parentsVerdict.ok) throw new Error(parentsVerdict.error);
+      if (checked.rootRevision !== target.rootRevision || !this.isCurrentRoot(target.rootRevision)) throw new Error('目录已切换，请重新操作');
+      handle = await fs.open(target.absolute, 'wx');
+      createdFile = await handle.stat();
+      if (!this.isCurrentRoot(target.rootRevision)) throw new Error('目录已切换，请重新操作');
+      await handle.writeFile(text, 'utf8');
+      if (!this.isCurrentRoot(target.rootRevision)) throw new Error('目录已切换，请重新操作');
+      await handle.close(); handle = null;
+      return { ok: true, relPath: target.relative, byteLength: Buffer.byteLength(text, 'utf8'), createdDirectories, createdFileIdentity: { dev: createdFile.dev, ino: createdFile.ino, birthtimeMs: createdFile.birthtimeMs } };
+    } catch (err) {
+      const warnings: string[] = [];
+      if (handle) { try { await handle.close(); } catch (closeErr) { warnings.push(String(closeErr)); } }
+      if (createdFile) {
+        try {
+          const stat = await fs.lstat(target.absolute);
+          if (!stat.isSymbolicLink() && stat.dev === createdFile.dev && stat.ino === createdFile.ino && isInsideRoot(realRoot, await fs.realpath(target.absolute))) await fs.unlink(target.absolute);
+        } catch (cleanupErr) { if ((cleanupErr as NodeJS.ErrnoException).code !== 'ENOENT') warnings.push(String(cleanupErr)); }
+      }
+      warnings.push(...await this.cleanCreatedDirectories(root, realRoot, createdDirectories));
+      return { ok: false, error: `创建失败：${err instanceof Error ? err.message : String(err)}${warnings.length ? `；清理失败：${warnings.join('；')}` : ''}` };
+    }
+  }
+
+  /** 撤销新增只删除内容仍等于应用结果的文件及本次创建的空目录。 */
+  async removeCreatedFile(relPath: string, expectedText: string, createdDirectories: CreatedDirectory[], expectedIdentity: CreatedFileIdentity): Promise<{ ok: boolean; error?: string }> {
+    const target = await this.resolveSafePath(relPath);
+    if (!target.ok) return target;
+    if (!target.relative) return { ok: false, error: '不能删除已打开的根目录' };
+    if (!this.isCurrentRoot(target.rootRevision)) return { ok: false, error: '目录已切换，请重新操作' };
+    const root = this.root!;
+    try {
+      const directories: CreatedDirectory[] = [];
+      for (const directory of createdDirectories) {
+        const verdict = resolveWithinRoot(root, directory.relative);
+        if (!verdict.ok || !verdict.relative || !isInsideRoot(verdict.absolute, path.dirname(target.absolute))) return { ok: false, error: '新增目录记录与目标文件不匹配' };
+        if (!Number.isFinite(directory.dev) || !Number.isFinite(directory.ino)) return { ok: false, error: '新增目录记录缺少真实身份' };
+        const relative = verdict.relative.split(path.sep).join('/');
+        directories.push({ relative, dev: directory.dev, ino: directory.ino });
+      }
+      const stat = await fs.lstat(target.absolute);
+      if (stat.isSymbolicLink() || !stat.isFile()) return { ok: false, error: '目标已变为链接或其他类型，不能撤销新增' };
+      if (!expectedIdentity || stat.dev !== expectedIdentity.dev || stat.ino !== expectedIdentity.ino || stat.birthtimeMs !== expectedIdentity.birthtimeMs) return { ok: false, error: '目标已被同名文件替换，不能撤销其他操作创建的文件' };
+      let ancestor = root;
+      for (const part of target.relative.split(path.sep).slice(0, -1)) {
+        ancestor = path.join(ancestor, part);
+        if ((await fs.lstat(ancestor)).isSymbolicLink()) return { ok: false, error: '目标父目录已变为链接，不能撤销新增' };
+      }
+      const current = await this.readRawText(target.relative);
+      if (!current.ok) return current;
+      if (current.text !== expectedText) return { ok: false, error: '新增文件已被修改，不能直接删除' };
+      const checked = await this.resolveSafePath(target.relative);
+      if (!checked.ok) return checked;
+      const latest = await fs.lstat(checked.absolute);
+      const realRoot = await fs.realpath(root);
+      if (latest.isSymbolicLink() || latest.dev !== stat.dev || latest.ino !== stat.ino || latest.size !== stat.size || latest.mtimeMs !== stat.mtimeMs || latest.ctimeMs !== stat.ctimeMs) return { ok: false, error: '目标文件已改变，不能撤销新增' };
+      if (checked.rootRevision !== target.rootRevision || current.rootRevision !== target.rootRevision || !this.isCurrentRoot(target.rootRevision)) return { ok: false, error: '目录已切换，请重新操作' };
+      await fs.unlink(target.absolute);
+      const warnings = await this.cleanCreatedDirectories(root, realRoot, directories.sort((a, b) => a.relative.split('/').length - b.relative.split('/').length));
+      // 文件已成功撤销，清理目录的错误单独提示，不能让调用方重复撤销文件。
+      return warnings.length ? { ok: true, error: `文件已删除，但部分新增空目录未能清理：${warnings.join('；')}` } : { ok: true };
+    } catch (err) { return { ok: false, error: `撤销新增失败：${err instanceof Error ? err.message : String(err)}` }; }
+  }
+
+  private async cleanCreatedDirectories(root: string, realRoot: string, directories: readonly CreatedDirectory[]): Promise<string[]> {
+    const warnings: string[] = [];
+    for (const directory of [...directories].reverse()) {
+      const relative = directory.relative;
+      const absolute = path.join(root, relative);
+      try {
+        let ancestor = root;
+        let linkedAncestor = false;
+        for (const part of relative.split('/').slice(0, -1)) {
+          ancestor = path.join(ancestor, part);
+          if ((await fs.lstat(ancestor)).isSymbolicLink()) { linkedAncestor = true; break; }
+        }
+        if (linkedAncestor) { warnings.push(`${relative} 父级已变为链接，保留目录`); continue; }
+        const stat = await fs.lstat(absolute);
+        if (stat.isSymbolicLink() || !stat.isDirectory() || stat.dev !== directory.dev || stat.ino !== directory.ino || !isInsideRoot(realRoot, await fs.realpath(absolute))) { warnings.push(`${relative} 已改变，保留目录`); continue; }
+        await fs.rmdir(absolute);
+      } catch (err) {
+        if (!['ENOTEMPTY', 'EEXIST', 'ENOENT'].includes((err as NodeJS.ErrnoException).code ?? '')) warnings.push(`${relative}：${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return warnings;
   }
 
   /** 分片读取：仅接受行号，路径仍需过白名单 */

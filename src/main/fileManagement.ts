@@ -4,13 +4,8 @@ import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { FileService } from './fileService';
 import type { FileOperationResult } from '../shared/contract';
-
-export function validateEntryName(name: unknown): string | null {
-  if (typeof name !== 'string' || !name || name !== name.trim() || /[<>:"/\\|?*\x00-\x1f]/.test(name) || /[. ]$/.test(name)) return '名称不能为空或包含 Windows 不允许的字符';
-  if (name === '.' || name === '..' || /^(CON|PRN|AUX|NUL|COM[1-9¹²³]|LPT[1-9¹²³])(?:\.|$)/i.test(name)) return '不能使用 Windows 保留名称';
-  if (name.length > 255) return '名称过长';
-  return null;
-}
+import { validateEntryName } from '../shared/pathGuard';
+export { validateEntryName } from '../shared/pathGuard';
 
 export class FileManagementService {
   constructor(private readonly files: FileService, private readonly trashItem: (absolute: string) => Promise<void>) {}

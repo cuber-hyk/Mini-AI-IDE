@@ -628,7 +628,7 @@
     el.diffLabel.textContent = '';
     // 预览期间是只读的，退出后必须恢复可编辑
     if (state.editor) {
-      state.editor.updateOptions({ readOnly: false });
+      state.editor.updateOptions({ readOnly: Boolean(state.previewOnly) });
     }
   }
 
@@ -660,7 +660,10 @@
       return;
     }
 
-    const ops = lineMap(original, payload.modified || '');
+    const modified = payload.modified || '';
+    const ops = payload.newFile ? (modified ? modified.split(/\r?\n/).map(function (text, index) {
+      return { kind: 'add', newLine: index + 1, afterLine: 0, text: text };
+    }) : []) : lineMap(original, modified);
     const decorations = [];
     const total = model.getLineCount();
 
@@ -732,8 +735,9 @@
     /* ---- 3) 进入预览态：只读 + 操作条 ---- */
     editor.updateOptions({ readOnly: true });
     el.diffActions.hidden = false;
+    el.btnDiffApply.textContent = payload.newFile ? '创建文件' : '应用此变更';
     el.diffLabel.textContent =
-      (payload.filePath || '') + (payload.identical ? '（无差异，应用后内容与当前文件相同）' : '');
+      (payload.filePath || '') + (payload.newFile ? '（新增文件）' : payload.identical ? '（无差异，应用后内容与当前文件相同）' : '');
 
     // 滚到第一处变更，避免「标记画了但没看见」
     const firstDel = ops.find(function (op) { return op.kind === 'del'; });
@@ -741,7 +745,7 @@
       editor.revealLineInCenter(firstDel.oldLine);
     }
 
-    setInfo('变更预览：红色删除线是要被替换的行，绿色是应用后新增的行 —— 确认无误后点「应用此变更」');
+    setInfo(payload.newFile ? '新增文件预览：绿色为完整文件内容，点击「创建文件」后才会写入磁盘' : '变更预览：红色删除线是要被替换的行，绿色是应用后新增的行 —— 确认无误后点「应用此变更」');
   }
 
   /** 进入某个变更的预览（打开对应文件 + 叠加内联标记） */
@@ -753,7 +757,8 @@
        存到局部变量，渲染后再放回去 —— 否则同批次跳转能力会在每次预览时丢失。 */
     const keepNav = state.diffNav;
     if (payload.filePath) {
-      if (!await editorWorkspace.reload(payload.filePath, true, true)) return;
+      const opened = payload.newFile ? await editorWorkspace.previewNewFile(payload.filePath) : await editorWorkspace.reload(payload.filePath, true, true);
+      if (!opened) return;
     }
     if (revision !== workspaceRevision) return;
     renderInlineDiff(payload);
@@ -761,6 +766,7 @@
       collectionId: payload.collectionId,
       index: payload.index,
       filePath: payload.filePath,
+      newFile: Boolean(payload.newFile),
     };
     if (keepNav) {
       state.diffNav = keepNav;
@@ -775,6 +781,7 @@
 
   function exitDiff() {
     clearInlineDiff();
+    editorWorkspace.exitPreview();
     setInfo('已退出变更预览');
   }
 
@@ -819,7 +826,7 @@
       filePath: target.filePath,
     });
     el.btnDiffApply.disabled = false;
-    el.btnDiffApply.textContent = '应用此变更';
+    el.btnDiffApply.textContent = target.newFile ? '创建文件' : '应用此变更';
     if (!result.ok) {
       setInfo('应用失败：' + (result.error || '未知错误'), true);
       return;
@@ -982,8 +989,13 @@
     void enterDiff(payload);
   });
 
-  bridge.onFileChanged(async function (filePath) {
+  bridge.onFileChanged(async function (filePath, change, revision) {
     if (typeof filePath !== 'string' || filePath.length === 0) return;
+    if (revision !== workspaceRevision) return;
+    if (change === 'deleted') {
+      editorWorkspace.entryChanged({ kind: 'deleted', oldRelPath: filePath, isDirectory: false });
+      await loadTree(); return;
+    }
     /*
      * 磁盘被回程链路改写了。若这个文件正打开在编辑器里，必须重新读盘 ——
      * 落盘在主进程、编辑在另一个渲染进程，不主动刷新就一直显示旧内容
@@ -995,7 +1007,11 @@
       clearInlineDiff();
       setInfo('已应用变更，文件内容已刷新');
     }
-    await editorWorkspace.reload(filePath, false, false);
+    if (change === 'created') {
+      await loadTree();
+      if (revision !== workspaceRevision) return;
+      if (!await editorWorkspace.reload(filePath, false, false) && revision === workspaceRevision) await editorWorkspace.open(filePath);
+    } else await editorWorkspace.reload(filePath, false, false);
   });
 
   bridge.onSidebarChanged(function (s) {
@@ -1103,6 +1119,7 @@
     showDocument: function (doc, focus) {
       if (state.editor) {
         state.editor.setModel(doc ? doc.model : emptyModel);
+        state.editor.updateOptions({ readOnly: Boolean(doc && doc.previewOnly) });
         if (doc && doc.viewState) state.editor.restoreViewState(doc.viewState);
         if (focus) state.editor.focus();
       }

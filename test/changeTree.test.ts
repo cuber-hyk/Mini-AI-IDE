@@ -43,7 +43,7 @@ function setup(overrides: Record<string, unknown> = {}) {
   let activeElement: Element | null = null;
   const onFocus = (element: Element) => { if (activeElement) activeElement.focused = false; activeElement = element; };
   const nodes: Record<string, Element> = {};
-  for (const name of ['meta', 'notes', 'list', 'collapse', 'undo', 'apply-all', 'filter', 'detail', 'resizer']) nodes[name] = new Element('div', onFocus);
+  for (const name of ['meta', 'notes', 'diagnostics', 'status', 'list', 'collapse', 'undo', 'apply-all', 'filter', 'detail', 'resizer']) nodes[name] = new Element('div', onFocus);
   const listeners: Record<string, (value: any) => void> = {};
   const writes: any[] = []; const shown: any[] = []; const widths: number[] = [];
   const bridge = {
@@ -63,7 +63,7 @@ function setup(overrides: Record<string, unknown> = {}) {
   vm.createContext(sandbox); vm.runInContext(read('changeTree.js'), sandbox); vm.runInContext(read('preview.js'), sandbox);
   return { nodes, writes, shown, widths, model: sandbox.window.changeTree,
     focused: () => activeElement,
-    preview(blocks = [block(4), block(9)], collectionId = 'batch') { listeners.preview({ ok: true, collectionId, blocks, notes: [] }); },
+    preview(blocks = [block(4), block(9)], collectionId = 'batch', notes = [] as string[]) { listeners.preview({ ok: true, collectionId, blocks, notes }); },
     publish: (event: any) => listeners.applied(event),
     active: (index: number) => listeners.active(index),
     chrome: (width: number) => listeners.chrome({ previewWidth: width }),
@@ -84,6 +84,18 @@ it('树按目录文件聚合；筛选后预览仍使用原批次的片段 index'
 it('一行替换为十行的范围和增量符合用户的行号预期', () => {
   const ui = setup(); assert.equal(ui.model.rangeLabel(block(4)), '原 10–10 → 新 10–19（+9 行）');
   assert.equal(ui.model.rangeLabel({ ...block(4), codeLines: 1 }), '原 10–10 → 新 10–10（0 行）');
+});
+it('明确路径的新增文件带范围也使用创建入口，缺失元数据保持阻塞', async () => {
+  const ui = setup(); const created = { ...block(4, 'new/a.ts'), range: { start: 1, end: 99 }, fileExists: false, hints: ['目标文件不存在，应用时将创建新文件'] };
+  assert.equal(ui.model.rangeLabel(created), '新增文件 · 10 行');
+  assert.equal(ui.model.rangeLabel({ ...created, filePath: '', range: null }), '未指定范围 · 10 行');
+  assert.equal(ui.model.rangeLabel({ ...created, applicable: false, range: null }), '未指定范围 · 10 行');
+  ui.preview([created, { ...block(9, 'missing.ts', false), fileExists: false }]);
+  await ui.rows()[0].children[0].fire('click'); assert.ok(ui.detailButton('创建文件'));
+  await ui.detailButton('创建文件').fire('click'); assert.equal(ui.writes.length, 1);
+  assert.ok(ui.detailButton('已应用')); assert.doesNotMatch(ui.nodes.detail.textContent, /目标文件不存在/);
+  await ui.rows()[1].children[0].fire('click'); assert.equal(ui.detailButton('创建文件'), undefined);
+  assert.match(ui.nodes.detail.textContent, /内容不匹配/);
 });
 it('同文件多片段撤销只复位精确身份；旧批次和无身份广播不污染当前树', () => {
   const ui = setup(); ui.preview();
@@ -170,4 +182,49 @@ it('同片段状态广播保留改路径可见态、草稿、焦点和输入光�
   await input.fire('keydown', { key: 'Escape' });
   assert.equal(input.hidden, true); assert.equal(ui.focused(), ui.detailButton('改路径'));
   ui.active(9); assert.equal(ui.nodes.detail.all(e => e.className === 'pv-path')[0].hidden, true);
+});
+
+it('命令单独只读展示完整内容，不计入文件数且批量应用跳过命令和缺失路径块', async () => {
+  const ui = setup();
+  const command = { ...block(12, '', false), kind: 'other', range: null, codeLines: 8,
+    contentText: 'cd backend\nnpm install\nnpm run seed', hints: ['请手动执行'], blockedReason: undefined };
+  ui.preview([block(4), { ...block(9, '', false), range: null }, command] as any);
+  assert.equal(ui.nodes.meta.textContent, '1 文件 · 1 段其他内容 · 1 段待补充');
+  await ui.rows()[2].children[0].fire('click');
+  assert.match(ui.nodes.detail.textContent, /其他内容.*只读/s);
+  assert.match(ui.nodes.detail.textContent, /cd backend\nnpm install\nnpm run seed/);
+  assert.doesNotMatch(ui.nodes.detail.textContent, /阻塞/);
+  assert.equal(ui.detailButton('应用此片段'), undefined); assert.equal(ui.detailButton('改路径'), undefined);
+  assert.equal(ui.shown.length, 0);
+  await ui.nodes['apply-all'].fire('click');
+  assert.deepEqual(ui.writes.map(input => input.index), [4]);
+});
+
+it('其他内容默认折叠，展开后刷新保留状态，新批次重新折叠', async () => {
+  const ui = setup(); const other = { ...block(12, '', false), kind: 'other', range: null, contentText: '<script>example()</script>' };
+  ui.preview([block(4), other] as any);
+  let group = ui.nodes.list.all(e => e.className === 'pv-other')[0];
+  assert.equal(group.open, false);
+  group.open = true; await group.fire('toggle');
+  await ui.rows()[1].children[0].fire('click');
+  assert.equal(ui.nodes.list.all(e => e.className === 'pv-other')[0].open, true);
+  assert.match(ui.nodes.detail.textContent, /<script>example\(\)<\/script>/);
+  ui.publish({ kind: 'applied', collectionId: 'batch', index: 4 });
+  assert.equal(ui.nodes.list.all(e => e.className === 'pv-other')[0].open, true);
+  ui.preview([other] as any, 'new');
+  assert.equal(ui.nodes.list.all(e => e.className === 'pv-other')[0].open, false);
+  assert.equal(ui.nodes['apply-all'].disabled, true);
+});
+it('常驻采集说明移入默认关闭的诊断入口，应用错误仍有可见反馈', async () => {
+  const ui = setup({ applyChange: async () => ({ ok: false, error: '磁盘无法写入' }) });
+  ui.preview([block(4)], 'batch', ['采集策略：latest-reply-container', '字符数：100']);
+  assert.equal(ui.nodes.diagnostics.open, false); assert.equal(ui.nodes.diagnostics.hidden, false);
+  assert.equal(ui.nodes.status.hidden, true); assert.match(ui.nodes.notes.textContent, /采集策略/);
+  ui.nodes.diagnostics.open = true;
+  await ui.rows()[0].children[0].fire('click'); await ui.detailButton('应用此片段').fire('click');
+  assert.equal(ui.nodes.status.hidden, false); assert.match(ui.nodes.status.textContent, /磁盘无法写入/);
+  assert.match(ui.nodes.notes.textContent, /采集策略/); assert.match(ui.nodes.notes.textContent, /磁盘无法写入/);
+  assert.equal(ui.nodes.diagnostics.open, true);
+  ui.preview([block(4)], 'next');
+  assert.equal(ui.nodes.diagnostics.open, false); assert.equal(ui.nodes.status.hidden, true);
 });

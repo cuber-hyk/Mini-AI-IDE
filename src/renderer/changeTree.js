@@ -5,6 +5,7 @@
     const files = new Map();
     const needle = (query || '').trim().toLowerCase();
     for (const block of blocks || []) {
+      if (block.kind === 'other') continue;
       const path = (block.filePath || '（未指定文件）').replace(/\\/g, '/');
       if (needle && !path.toLowerCase().includes(needle)) continue;
       if (!files.has(path)) files.set(path, { path, blocks: [], added: 0, removed: 0 });
@@ -16,7 +17,9 @@
     return Array.from(files.values());
   }
   function rangeLabel(block) {
-    if (!block.range) return '整文件 · ' + block.codeLines + ' 行';
+    if (block.kind === 'other') return '只读内容 · ' + block.codeLines + ' 行（只读）';
+    if (block.fileExists === false && block.applicable && block.filePath) return '新增文件 · ' + block.codeLines + ' 行';
+    if (!block.range) return '未指定范围 · ' + block.codeLines + ' 行';
     const old = block.range;
     const delta = block.codeLines - (old.end - old.start + 1);
     const next = block.codeLines > 0 ? old.start + '–' + (old.start + block.codeLines - 1) : '删除该区域';

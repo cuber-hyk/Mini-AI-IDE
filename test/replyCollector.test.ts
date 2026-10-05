@@ -94,9 +94,11 @@ function link(parent: FakeNode, child: FakeNode): FakeNode {
 function makeReply(
   pathTitle: string | null,
   blocks: Array<{ lang: string; text: string }>,
+  rangeTitle?: string,
 ): { node: FakeNode; container: FakeNode } {
   const container = fakeEl('div', 'ds-markdown', 'reply-container');
   if (pathTitle) link(container, fakeEl('div', 'ds-markdown-title', pathTitle));
+  if (rangeTitle) link(container, fakeEl('div', 'ds-markdown-title', rangeTitle));
   for (const b of blocks) {
     const pre = link(container, fakeEl('pre', '', b.text));
     link(pre, fakeEl('code', b.lang ? `language-${b.lang}` : '', b.text));
@@ -136,12 +138,11 @@ function makePageWithoutPath(): { document: unknown } {
 function makePageWithRange(): { document: unknown } {
   const r = makeReply('文件： Mini-AI-IDE-test.md', [
     { lang: 'python', text: 'def bubble_sort(arr):\n    return arr' },
-  ]);
-  link(r.container, fakeEl('div', 'ds-markdown-title', '范围：2-10'));
+  ], '范围：2-10');
   return pageOf([r]);
 }
 
-/** 多代码块 + 容器内「范围」的页面：区间无法与各块对应，不应注入 */
+/** 范围写在所有代码块之后，不能向前归属任一代码块。 */
 function makePageWithTwoBlocksAndRange(): { document: unknown } {
   const r = makeReply(null, [
     { lang: 'python', text: 'print(1)' },
@@ -190,7 +191,7 @@ describe('采集策略脚本（模拟目标站 DOM）', () => {
     assert.ok(text.includes('```python'), text);
   });
 
-  it('单代码块 + 容器内「范围：2-10」→ 注入范围指令（修整文件覆盖的根因之一）', async () => {
+  it('单代码块前的「范围：2-10」保留为原区间定位指令', async () => {
     const raw = runScript(scriptOf('latest-reply-container'), makePageWithRange());
     const texts = normalizeStrategyOutput(raw);
     const text = texts[0] as string;
@@ -204,12 +205,14 @@ describe('采集策略脚本（模拟目标站 DOM）', () => {
     assert.deepEqual(parsed.blocks[0]?.range, { start: 2, end: 10 });
   });
 
-  it('多代码块 + 容器内「范围」→ 不注入（区间无法与各块对应，宁可交给选区记忆/人工）', () => {
+  it('代码块之后才出现范围标题，不得回填前面的任意块', async () => {
     const raw = runScript(scriptOf('latest-reply-container'), makePageWithTwoBlocksAndRange());
-    const texts = normalizeStrategyOutput(raw);
-    const text = texts[0] as string;
-    assert.ok(!text.includes('### 范围：'), `多块时不应注入区间，实际：${text}`);
-    assert.ok(text.includes('```python'), text);
+    const text = normalizeStrategyOutput(raw)[0] as string;
+    const { parseModelReply } = await import('../src/shared/returnPath');
+    const parsed = parseModelReply(text);
+    assert.equal(parsed.blocks.length, 2);
+    assert.ok(parsed.blocks.every((block) => block.range === null), '尾部标题只能用于后续块');
+    assert.ok(text.indexOf('范围：2-10') > text.lastIndexOf('print(2)'), text);
   });
 
   it('采集结果可直接被解析器识别出路径与语言（端到端一致性）', async () => {
@@ -331,8 +334,7 @@ describe('采集策略脚本（模拟目标站 DOM）', () => {
 
     // 页面：pre 首部带结构性换行；容器内带「文件 / 范围」线索（模型回显区间）
     const preText = '\n' + INDENTED_SNIPPET_LINES.join('\n') + '\n';
-    const r = makeReply('文件： sort.py', [{ lang: 'python', text: preText }]);
-    link(r.container, fakeEl('div', 'ds-markdown-title', '范围：9-14'));
+    const r = makeReply('文件： sort.py', [{ lang: 'python', text: preText }], '范围：9-14');
     const raw = runScript(scriptOf('latest-reply-container'), pageOf([r]));
     const replyText = normalizeStrategyOutput(raw)[0] as string;
 
@@ -404,8 +406,7 @@ describe('采集策略脚本（模拟目标站 DOM）', () => {
   it('路径线索：文件名含空格与中文也能取到，端到端解析出 filePath', async () => {
     const r = makeReply('文件： BLIP 阅读笔记.md', [
       { lang: 'markdown', text: '- **ITC（对比损失）**：把配图文本拉到表示空间相近。' },
-    ]);
-    link(r.container, fakeEl('div', 'ds-markdown-title', '范围：113-113'));
+    ], '范围：113-113');
     const raw = runScript(scriptOf('latest-reply-container'), pageOf([r]));
     const replyText = normalizeStrategyOutput(raw)[0] as string;
 
@@ -416,6 +417,85 @@ describe('采集策略脚本（模拟目标站 DOM）', () => {
     assert.equal(parsed.blocks.length, 1);
     assert.equal(parsed.blocks[0]?.filePath, 'BLIP 阅读笔记.md', '端到端必须解析出中文空格文件名');
     assert.deepEqual(parsed.blocks[0]?.range, { start: 113, end: 113 });
+  });
+
+  it('多文件标题、范围与代码框之间有空行时，各块保留自己的元数据和代码', async () => {
+    const container = fakeEl('div', 'ds-markdown');
+    const files = [
+      { path: 'ecommerce-demo/backend/package.json', lang: 'json', range: '1-46', code: '{"name":"backend"}' },
+      { path: 'ecommerce-demo/backend/tsconfig.json', lang: 'json', range: '1-23', code: '{"compilerOptions":{}}' },
+      { path: 'ecommerce-demo/backend/.env', lang: 'text', range: '1-4', code: 'PORT=3000' },
+      { path: 'ecommerce-demo/backend/prisma/schema.prisma', lang: 'prisma', range: '1-82', code: 'model Product {\n  id Int @id\n}' },
+      { path: 'ecommerce-demo/backend/seed.ts', lang: 'typescript', range: '1-96', code: 'const products = [];' },
+    ];
+    for (const file of files) {
+      link(container, fakeEl('h3', '', '文件： ' + file.path));
+      link(container, fakeEl('p', '', '\n'));
+      link(container, fakeEl('h3', '', '范围： ' + file.range));
+      link(container, fakeEl('p', '', '\n'));
+      const chrome = link(container, fakeEl('div', 'code-block'));
+      link(chrome, fakeEl('div', 'toolbar', file.lang + ' 复制 下载', [
+        fakeEl('span', '', file.lang), fakeEl('button', '', '复制'), fakeEl('button', '', '下载'),
+      ]));
+      link(chrome, fakeEl('pre', '', file.lang + '\n复制\n下载\n' + file.code, [
+        fakeEl('code', 'language-' + file.lang, file.code),
+      ]));
+      link(container, fakeEl('hr'));
+    }
+    link(container, fakeEl('h2', '', '下一步'));
+    link(container, fakeEl('p', '', '请手动执行以下命令。'));
+    link(container, fakeEl('pre', '', 'cd ecommerce-demo/backend\nnpm install', [
+      fakeEl('code', 'language-bash', 'cd ecommerce-demo/backend\nnpm install'),
+    ]));
+    const text = normalizeStrategyOutput(runScript(scriptOf('latest-reply-container'), pageOf([{ node: container }])))[0] as string;
+    assert.ok(!text.includes('复制'), text);
+    assert.ok(!text.includes('下载'), text);
+    const { parseModelReply } = await import('../src/shared/returnPath');
+    const parsed = parseModelReply(text);
+    assert.equal(parsed.blocks.length, 6);
+    for (let i = 0; i < files.length; i += 1) {
+      const file = files[i]!;
+      assert.equal(parsed.blocks[i]?.filePath, file.path, '标题只能归属紧随其后的块');
+      assert.equal(parsed.blocks[i]?.code, file.code, '代码框工具栏不能进入代码');
+      const [start, end] = file.range.split('-').map(Number);
+      assert.deepEqual(parsed.blocks[i]?.range, { start, end });
+    }
+    assert.equal(parsed.blocks[5]?.filePath, null, '运行命令不得借用上一文件路径');
+    assert.equal(parsed.blocks[5]?.range, null);
+    assert.equal(parsed.blocks[5]?.kind, 'other', 'Shell 命令应进入只读组');
+  });
+
+  it('S3 只携带最后代码块的前置标题，并忽略最后代码块之后的新标题', async () => {
+    const container = fakeEl('div', 'ds-markdown');
+    link(container, fakeEl('h3', '', '文件：first.ts'));
+    link(container, fakeEl('h3', '', '范围：2-3'));
+    link(container, fakeEl('pre', '', 'first()', [fakeEl('code', 'language-typescript', 'first()')]));
+    link(container, fakeEl('h3', '', '文件：last.ts'));
+    link(container, fakeEl('h3', '', '范围：8-8'));
+    link(container, fakeEl('pre', '', 'last()', [fakeEl('code', 'language-typescript', 'last()')]));
+    link(container, fakeEl('h3', '', '文件：future.ts'));
+    link(container, fakeEl('h3', '', '范围：90-99'));
+    const text = normalizeStrategyOutput(runScript(scriptOf('last-pre-in-document'), pageOf([{ node: container }])))[0] as string;
+    assert.ok(!text.includes('first.ts'), text);
+    assert.ok(!text.includes('future.ts'), text);
+    const { parseModelReply } = await import('../src/shared/returnPath');
+    const parsed = parseModelReply(text);
+    assert.equal(parsed.blocks[0]?.filePath, 'last.ts');
+    assert.deepEqual(parsed.blocks[0]?.range, { start: 8, end: 8 });
+  });
+
+  it('S3 最后块缺少标题时，不借用上一代码块的路径和范围', async () => {
+    const container = fakeEl('div', 'ds-markdown');
+    link(container, fakeEl('h3', '', '文件：first.ts'));
+    link(container, fakeEl('h3', '', '范围：2-3'));
+    link(container, fakeEl('pre', '', 'first()', [fakeEl('code', 'language-typescript', 'first()')]));
+    link(container, fakeEl('pre', '', 'last()', [fakeEl('code', 'language-typescript', 'last()')]));
+    const text = normalizeStrategyOutput(runScript(scriptOf('last-pre-in-document'), pageOf([{ node: container }])))[0] as string;
+    assert.ok(!text.includes('first.ts'), text);
+    const { parseModelReply } = await import('../src/shared/returnPath');
+    const parsed = parseModelReply(text);
+    assert.equal(parsed.blocks[0]?.filePath, null);
+    assert.equal(parsed.blocks[0]?.range, null);
   });
 
   /* ---- 结构性断言 ---- */

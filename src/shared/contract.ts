@@ -278,11 +278,15 @@ export interface CopyWholeFileResult {
 export interface ReturnPreviewBlock {
   /** 在本次采集结果中的序号 */
   index: number;
-  /** 目标文件（相对根目录）；null 表示未确定，需要用户指定 */
+  /** 无文件修改线索的围栏只读展示，不参与文件应用。 */
+  kind?: 'other';
+  /** 仅其他内容块携带完整只读文本。 */
+  contentText?: string;
+  /** 目标文件（相对根目录）；null 表示缺少明确路径 */
   filePath: string | null;
   /** 路径线索来源 */
-  pathSource: 'fence-comment' | 'preceding-heading' | 'unique-mention' | 'none';
-  /** 片段行区间；null 表示整文件替换 */
+  pathSource: 'fence-comment' | 'preceding-heading' | 'none';
+  /** 原文件替换区间；新建文件完整写入，已有文件缺少区间时阻塞 */
   range: { start: number; end: number } | null;
   /** 代码块行数 */
   codeLines: number;
@@ -374,6 +378,8 @@ export interface ApplyChangeInput {
 
 export interface ApplyChangeResult {
   ok: boolean;
+  /** 成功创建了原先不存在的文件。 */
+  created?: boolean;
   filePath?: string;
   mode?: string;
   /** 变更前的完整原文（撤销用；已存快照） */
@@ -404,6 +410,10 @@ export interface AppliedChangeEvent {
 
 export interface UndoResult {
   ok: boolean;
+  /** 撤销新建已删除目标文件；普通替换撤销则不设置。 */
+  deleted?: boolean;
+  /** 文件撤销成功，但新建目录清理未完成时说明原因。 */
+  warning?: string;
   collectionId?: string;
   index?: number;
   filePath?: string;
@@ -494,6 +504,8 @@ export interface PromptPanelBridge {
  * 因此不会出现「编辑器里显示了 diff、点应用却失败」。
  */
 export interface EditorDiffPayload {
+  /** 新增预览使用空原文，预览本身不创建文件。 */
+  newFile?: boolean;
   workspaceRevision?: number;
   /** 退出 diff 视图时为 false */
   active: boolean;
@@ -619,6 +631,7 @@ export interface EditorBridge {
   /** 撤销上一次应用（按快照恢复原文） */
   undoSave(): Promise<UndoResult>;
   onRootChanged(listener: (info: RootInfo) => void): void;
+  onFileChanged(listener: (filePath: string, change: 'updated' | 'created' | 'deleted', revision: number) => void): void;
   /** 记忆的根目录已失效（被删除/移动）时的通知 */
   onRootStale(listener: (info: RootInfo) => void): void;
 }

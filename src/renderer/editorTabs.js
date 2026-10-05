@@ -3,6 +3,14 @@
   'use strict';
   window.createEditorTabs = function (host, options) {
     let signature = '';
+    host.addEventListener('wheel', function (event) {
+      if (event.ctrlKey || host.scrollWidth <= host.clientWidth) return;
+      const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? host.clientWidth : 1;
+      const next = Math.max(0, Math.min(host.scrollWidth - host.clientWidth, host.scrollLeft + delta * unit));
+      if (next === host.scrollLeft) return;
+      host.scrollLeft = next; event.preventDefault();
+    }, { passive: false });
     function render(documents, activePath) {
       const next = JSON.stringify([documents, activePath]);
       if (next === signature) return;
@@ -13,9 +21,9 @@
         const item = document.createElement('div'); item.className = 'editor-tab';
         item.classList.toggle('active', doc.path === activePath); item.classList.toggle('dirty', doc.dirty);
         const tab = document.createElement('button'); tab.type = 'button'; tab.className = 'editor-tab-label';
-        tab.dataset.path = doc.path; tab.textContent = doc.path.split('/').pop(); tab.title = doc.path + (doc.dirty ? '（未保存）' : '');
+        tab.dataset.path = doc.path; tab.textContent = doc.path.split('/').pop() + (doc.previewOnly ? '（新增预览）' : ''); tab.title = doc.path + (doc.previewOnly ? '（新增文件预览，尚未创建）' : doc.dirty ? '（未保存）' : '');
         tab.setAttribute('role', 'tab'); tab.setAttribute('aria-selected', String(doc.path === activePath));
-        tab.setAttribute('aria-controls', 'monaco'); tab.setAttribute('aria-label', doc.path + (doc.dirty ? '，未保存' : ''));
+        tab.setAttribute('aria-controls', 'monaco'); tab.setAttribute('aria-label', doc.path + (doc.previewOnly ? '，新增文件预览' : doc.dirty ? '，未保存' : ''));
         tab.tabIndex = doc.path === activePath ? 0 : -1;
         tab.addEventListener('click', function () { void options.open(doc.path); });
         tab.addEventListener('keydown', function (event) {

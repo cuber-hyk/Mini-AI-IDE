@@ -1,22 +1,7 @@
 /**
- * 回程解析（纯逻辑，可单测）
- *
- * 职责：把模型的自由文本回复解析成"待应用变更"列表。
- *
- * 设计原则（见 docs/capabilities/return-path-and-format-contract.md）：
- *  1. **不"理解"模型**：只用确定性文本规则（围栏 + 路径线索 + 相邻标题）；
- *  2. **高容忍**：模型不按约定回复是常态，必须尽量识别，识别不了就降级为"无路径建议"；
- *  3. **不猜测**：无法确定目标文件时**绝不猜**，交给用户在预览里指定；
- *  4. **不丢内容**：解析结果保留原文与偏移量，便于 UI 回显与人工兜底。
- *
- * 识别顺序（按可信度从高到低）：
- *  a) 围栏内首行的路径注释（`// path/to/a.ts`、`# a.py`、`<!-- a.html -->`）
- *  b) 围栏**上方**最近的标题式路径行（`### src/a.ts`、`**src/a.ts**`、`文件名：src/a.ts`）
- *  c) 全文中出现的、看起来像路径的 token（`` `src/a.ts` ``、裸 `src/a.ts`）→ 整篇唯一时才采用
- *  d) 都不满足 → path 为 null（UI 需用户指定或改为"插入光标处"）
- *
- * **不用「当前打开的文件」兜底**：编辑器里打开的文件与待改文件未必相关，
- * 猜错会把代码写进错误的文件。宁可留空交预览，也不猜（用户明确要求）。
+ * 回程解析（纯逻辑，可单测）。
+ * 每个代码块只采用自身首行路径注释与紧邻的文件/范围标题，不从正文、其他块或选区猜测。
+ * 缺失或冲突的信息保留为诊断，交由应用层阻塞；无文件修改元数据的围栏作为只读附属内容。
  */
 
 /** 代码块 */
@@ -28,12 +13,16 @@ export interface ParsedCodeBlock {
   /** 推断出的目标文件（相对根目录，正斜杠）；null 表示未能确定 */
   filePath: string | null;
   /** 路径线索来源 */
-  pathSource: 'fence-comment' | 'preceding-heading' | 'unique-mention' | 'none';
+  pathSource: 'fence-comment' | 'preceding-heading' | 'none';
   /**
-   * 片段替换的行区间（1 起、闭区间）；null 表示"整文件替换"。
+   * 已有文件待替换的原行区间（1 起、闭区间）；null 表示未提供范围。
    * 来源是围栏上方的 `### 范围：80-92` 指令（也接受 `### 行：80-92`）。
    */
   range: LineRange | null;
+  /** 没有文件修改元数据的附属内容，只读展示；语言仅用于高亮 */
+  kind?: 'other';
+  /** 标题或路径注释相互冲突、格式无效时阻塞该块 */
+  validationError?: string;
   /** 被剥离的路径注释行原文（用于回溯） */
   strippedPathLine: string | null;
   /** 在原文中的起止偏移（含围栏），便于回显 */
@@ -46,16 +35,11 @@ export interface LineRange {
   end: number;
 }
 
-export interface ParseOptions {
-  /** 仅当整篇只提到一个候选路径时才采用 (c) 线索（默认 true） */
-  allowUniqueMention?: boolean;
-}
-
 export interface ParseResult {
   blocks: ParsedCodeBlock[];
   /** 全文出现的路径候选（去重后，按出现顺序） */
   mentionedPaths: string[];
-  /** 是否存在无法确定目标文件的代码块 */
+  /** 是否存在缺少目标路径或元数据冲突的待修改块；只读附属内容不计入 */
   hasUnresolved: boolean;
   /** 解析备注（供 UI 展示，例如"未找到路径线索，已降级"） */
   notes: string[];
@@ -72,7 +56,7 @@ const FILE_EXTENSIONS = [
   'swift', 'scala', 'lua', 'pl', 'sh', 'bash', 'zsh', 'ps1', 'psm1', 'bat', 'cmd',
   'sql', 'graphql', 'gql', 'css', 'scss', 'less', 'html', 'htm', 'xml', 'svg',
   'vue', 'svelte', 'astro', 'tex', 'bib', 'csv', 'tsv', 'log', 'diff', 'patch',
-  'md', 'markdown', 'txt', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'conf', 'env',
+  'prisma', 'md', 'markdown', 'txt', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'conf', 'env',
 ];
 
 const EXT_ALTERNATION = FILE_EXTENSIONS.join('|');
@@ -142,7 +126,7 @@ export function splitFences(text: string): RawFence[] {
   const found: RawFence[] = [];
 
   // 1) 成对围栏
-  const closed = /^[ \t]*(`{3,}|~{3,})([^\n]*)\n([\s\S]*?)^[ \t]*\1[ \t]*$/gm;
+  const closed = /^[ \t]*(`{3,}|~{3,})([^\n]*)\n([\s\S]*?)^[ \t]*\1[ \t]*\r?$/gm;
   for (const m of text.matchAll(closed)) {
     const start = m.index ?? 0;
     const full = m[0];
@@ -198,86 +182,73 @@ const PATH_COMMENT_PATTERNS: RegExp[] = [
   new RegExp(`^[ \\t]*\\/\\*[ \\t]*(?:file|filename|path|文件|路径)?[ \\t]*[:：]?[ \\t]*${PATH_CAPTURE}[ \\t]*\\*\\/[ \\t]*$`, 'i'),
 ];
 
-/** 判断首行是否是"路径注释"；是则返回路径与消费掉的字符数 */
-export function matchPathCommentLine(line: string): string | null {
-  for (const re of PATH_COMMENT_PATTERNS) {
-    const m = re.exec(line);
-    if (m && m[1]) {
-      const normalized = normalizeRelPath(m[1]);
-      if (normalized) return normalized;
+interface PathComment {
+  path: string | null;
+  error?: string;
+}
+
+/** 路径注释与显式文件标签统一校验，歧义不能变成带空格的合法文件名。 */
+function parsePathCommentLine(line: string): PathComment {
+  const comment = /^\s*(?:\/\/|#|--|<!--|\/\*)\s*(.*?)\s*(?:-->|\*\/)?\s*$/.exec(line);
+  const explicitLabel = comment ? FILE_LABEL_RE.exec(comment[1] ?? '') : null;
+  let candidate: string | null = explicitLabel?.[1]?.trim() ?? null;
+  if (!explicitLabel) {
+    for (const re of PATH_COMMENT_PATTERNS) {
+      const matched = re.exec(line);
+      if (matched?.[1]) { candidate = matched[1].trim(); break; }
     }
   }
-  return null;
+  if (candidate === null) return { path: null };
+  const mentions = extractPathMentions(candidate);
+  if (mentions.length > 1) return { path: null, error: '路径注释包含多个目标文件，请 AI 明确单个文件路径' };
+  const path = normalizeRelPath(candidate);
+  if (!path || /[，。；：！？、<>"`*]/.test(candidate.replace(/^[A-Za-z]:/, ''))) {
+    return { path: null, error: '路径注释的文件路径格式无效，请 AI 补充有效的单个文件路径' };
+  }
+  return { path };
+}
+
+/** 判断首行是否明确指定单个路径；无效或歧义路径返回 null。 */
+export function matchPathCommentLine(line: string): string | null {
+  return parsePathCommentLine(line).path;
 }
 
 /* ------------------------------------------------------------------ *
  * 路径线索：围栏上方的标题式行
  * ------------------------------------------------------------------ */
 
-/** 从"标题式行"里抽路径：### src/a.ts / **src/a.ts** / 文件名：src/a.ts / 1. `src/a.ts` */
-export function matchHeadingLine(line: string): string | null {
-  const stripped = line.replace(/^\s*#{1,6}\s*/, '').trim();
-  const isMarkdownHeading = stripped !== line.trim() || /^\s*[-*+]\s+/.test(line) || /^\s*\d+[.)]\s+/.test(line);
+/** 文件标签必须独占标题，正文中的示例不作为目标文件。 */
+const FILE_LABEL_RE = /^(?:文件名|文件|路径|file|filename|path)\s*[:：]\s*(.*)$/i;
 
-  const cleaned = stripped
-    .replace(/^\s*[-*+]\s+/, '')
-    .replace(/^\s*\d+[.)]\s+/, '')
+function cleanHeading(line: string): string {
+  return line.trim()
+    .replace(/^#{1,6}\s*/, '')
+    .replace(/^[-*+]\s+/, '')
+    .replace(/^\d+[.)]\s+/, '')
+    .replace(/^(?:\*\*|__)(.*?)(?:\*\*|__)$/, '$1')
     .trim();
-  if (cleaned.length === 0) return null;
-
-  // 整行被强调符包裹（`**path**` / `` `path` ``）也视为标题形态
-  const isWrappedEmphasis = /^(\*\*|__)(.+)(\*\*|__)$/.test(cleaned) || /^`(.+)`$/.test(cleaned);
-
-  // 形如 (文件名|文件|file|filename|path|路径) ：xxx
-  const labeled = /(?:文件名|文件|路径|file|filename|path)\s*[:：]\s*(.+)$/i.exec(cleaned);
-  const hasLabel = Boolean(labeled && labeled[1]);
-  const candidate = labeled && labeled[1] ? labeled[1] : cleaned;
-
-  // 去掉包裹用的强调符号；**注意不要动下划线**（它是合法文件名字符，如 train_caption.py）
-  const unwrapped = candidate.replace(/[*`]/g, ' ').trim();
-
-  // 整行必须"基本就是"一个路径（避免把整句中文当路径）
-  const mentions = extractPathMentions(unwrapped);
-  if (mentions.length === 0) {
-    /*
-     * 回退（2026-10-04 用户实测）：带「文件：」标签的行，模型给出的路径可能是
-     * 「BLIP 阅读笔记.md」这种"英文+空格+中文"文件名 —— extractPathMentions 的
-     * 保守字符类（无空格、\w 不含中文）完全认不出来，整条 (b) 线索失灵，
-     * 块的 filePath 落为 null（用户看到"未确定目标文件"）。
-     * 这里对**带标签**的情形退一步：candidate 不含句子标点、以已知扩展名结尾、
-     * 长度合理 → 整体当作路径。模型显式写了「文件：」时其意图就是给路径；
-     * 即便给错，预览面板的「改路径」仍可人工纠正（宁可带核对提示，也不丢线索）。
-     * 不带标签的行**不适用**本回退 —— 那类情形维持原判（交给唯一候选线索）。
-     */
-    const candidateIsPathLike =
-      labeled &&
-      labeled[1] &&
-      unwrapped.length <= 200 &&
-      !/[，。；：！？、""''（）<>]/.test(unwrapped) &&
-      new RegExp(String.raw`\.(?:${EXT_ALTERNATION})$`, 'i').test(unwrapped);
-    if (!candidateIsPathLike) return null;
-    return unwrapped;
-  }
-  const only = mentions[0] as string;
-  const residue = unwrapped.replace(only, '').replace(/[\s:：,，。;；\-–—()（）[\]*`]/g, '');
-  if (residue.length > 4) return null;
-
-  // 额外约束：只有当这一行**看起来就是标题**（Markdown 标题/列表项/带标签/整行强调）时才接受；
-  // 否则一段普通文本里恰好提到一个路径（例如"请把 `src/c.ts` 改成："）不应被当作标题，
-  // 那类情形应交给"全文唯一候选"线索处理。
-  if (!isMarkdownHeading && !hasLabel && !isWrappedEmphasis) return null;
-
-  return only;
 }
 
-/** 该行是否具有"标题形态"（用于在一个连续行块里判断是否还有标题行） */
-function looksLikeHeadingLine(line: string): boolean {
-  return (
-    /^\s*#{1,6}\s+\S/.test(line) ||
-    /^\s*[-*+]\s+\S/.test(line) ||
-    /^\s*\d+[.)]\s+\S/.test(line) ||
-    /^(?:文件名|文件|路径|file|filename|path)\s*[:：]/i.test(line.trim())
-  );
+/** 显式标签允许中文、空格、点文件及自定义扩展名；具体磁盘合法性由白名单校验。 */
+export function matchHeadingLine(line: string): string | null {
+  const cleaned = cleanHeading(line);
+  const labeled = FILE_LABEL_RE.exec(cleaned);
+  const candidate = (labeled?.[1] ?? cleaned)
+    .replace(/^(?:\*\*|__|`)(.*?)(?:\*\*|__|`)$/, '$1').trim();
+  const heading = /^\s*(?:#{1,6}\s|[-*+]\s|\d+[.)]\s)/.test(line);
+  const wrapped = /^(?:\*\*|__|`)/.test(line.trim());
+  if (!labeled && !heading && !wrapped) return null;
+  if (!candidate || candidate.length > 200 || /[，。；：！？、<>"`*]/.test(candidate.replace(/^[A-Za-z]:/, ''))) return null;
+  if (labeled) {
+    // 多条路径在同一标题中仍属歧义，不能把分隔符当成文件名的一部分。
+    if (extractPathMentions(candidate).length > 1) return null;
+    return normalizeRelPath(candidate);
+  }
+  if (!new RegExp(String.raw`\.(?:${EXT_ALTERNATION})$`, 'i').test(candidate)) return null;
+  const mentions = extractPathMentions(candidate);
+  const normalized = normalizeRelPath(candidate);
+  if (mentions.length !== 1 || mentions[0] !== normalized) return null;
+  return normalized;
 }
 
 /* ------------------------------------------------------------------ *
@@ -305,26 +276,32 @@ export function matchRangeDirective(line: string): LineRange | null {
   return start <= end ? { start, end } : { start: end, end: start };
 }
 
-/** 在围栏上方的标题区里找行区间指令（与路径线索同一段文本） */
-function findPrecedingRange(text: string, fenceStart: number): LineRange | null {
-  const before = text.slice(0, fenceStart);
-  const lines = before.split(/\r\n|\r|\n/);
-  let i = lines.length - 1;
-  while (i >= 0 && (lines[i] ?? '').trim().length === 0) i -= 1;
+interface BlockHeader {
+  paths: string[];
+  ranges: LineRange[];
+  errors: string[];
+  hasFileLabel: boolean;
+}
 
-  const block: string[] = [];
-  while (i >= 0) {
-    const line = (lines[i] ?? '').trim();
-    if (line.length === 0) break;
-    block.unshift(line);
-    i -= 1;
+/** 只扫描上一围栏之后、当前围栏之前的相邻标题；空行可跨越，正文或章节标题形成边界。 */
+function findBlockHeader(text: string, previousEnd: number, fenceStart: number): BlockHeader {
+  const header: BlockHeader = { paths: [], ranges: [], errors: [], hasFileLabel: false };
+  const lines = text.slice(previousEnd, fenceStart).split(/\r\n|\r|\n/);
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i]?.trim() ?? '';
+    if (!line) continue;
+    const fileLabel = FILE_LABEL_RE.test(cleanHeading(line));
+    const rangeLabel = /^(?:范围|行|行号|位置|lines?|range|position)\s*[:：]/i.test(cleanHeading(line));
+    const path = matchHeadingLine(line);
+    const range = matchRangeDirective(line);
+    if (fileLabel) header.hasFileLabel = true;
+    if (path) header.paths.unshift(path);
+    else if (fileLabel) header.errors.unshift('文件路径格式无效或同一标题包含多个路径，请 AI 明确单个文件路径');
+    if (range) header.ranges.unshift(range);
+    else if (rangeLabel) header.errors.unshift('范围格式无效，请 AI 补充有效的原行区间');
+    if (!path && !range && !fileLabel && !rangeLabel) break;
   }
-  // 从近到远找第一条可解析的区间指令
-  for (let k = block.length - 1; k >= 0; k -= 1) {
-    const r = matchRangeDirective(block[k] as string);
-    if (r) return r;
-  }
-  return null;
+  return header;
 }
 
 /* ------------------------------------------------------------------ *
@@ -361,136 +338,67 @@ export function stripNumberedPrefix(numbered: string): { text: string; startLine
   return { text: out.join('\n'), startLine };
 }
 
-function findPrecedingHeadingPath(text: string, fenceStart: number): string | null {  const before = text.slice(0, fenceStart);
-  const lines = before.split(/\r\n|\r|\n/);
-
-  // 关键：**只有当紧邻围栏的上方是一个"连续的非空行块"时**，才把它当作标题区。
-  // 若该块之前是空行（即它自己是一段独立文本），则它大概率是正文句子——
-  // 例如"请把 `src/c.ts` 改成："后面直接跟代码块。这种情形应交给 (c) 唯一候选线索处理，
-  // 否则会把任意提到路径的句子误判为"标题式路径行"。
-  // 注意：`"a\n\n".split("\n")` 会得到 ["a","",""] —— 换行结尾会产生**两个**空串。
-  // 因此必须跳过**所有**尾随空行，而不是只跳一个（早期只跳一个，导致标题块被判为空）。
-  let i = lines.length - 1;
-  while (i >= 0 && (lines[i] ?? '').trim().length === 0) i -= 1;
-
-  const block: string[] = [];
-  while (i >= 0) {
-    const line = (lines[i] ?? '').trim();
-    if (line.length === 0) break;
-    block.unshift(line);
-    i -= 1;
-  }
-  if (block.length === 0) return null;
-  // 该行块必须与更早的内容之间有空行（即它自成一段），才视为标题区。
-  // 例外：块本身只有一行且**具备标题形态**（如文档开头的 `### src/b.ts`）——
-  // 此时它前面没有内容也没有空行，仍应被接受。
-  const separated = i < 0 || (lines[i] ?? '').trim().length === 0;
-  if (!separated && !(block.length === 1 && looksLikeHeadingLine(block[0] as string))) return null;
-
-  // 在标题区内自上而下寻找第一条可识别的路径行
-  for (const line of block) {
-    if (line.length > 200) continue;
-    const p = matchHeadingLine(line);
-    if (p) return p;
-  }
-  return null;
-}
-
 /* ------------------------------------------------------------------ *
  * 主入口
  * ------------------------------------------------------------------ */
 
-export function parseModelReply(replyText: string, options: ParseOptions = {}): ParseResult {
+export function parseModelReply(replyText: string): ParseResult {
   const text = replyText ?? '';
   const notes: string[] = [];
   const fences = splitFences(text);
   const mentionedPaths = extractPathMentions(text);
-  const allowUnique = options.allowUniqueMention !== false;
-  const uniqueMention = allowUnique && mentionedPaths.length === 1 ? (mentionedPaths[0] as string) : null;
-
   if (fences.length === 0) {
     notes.push('回复中未找到代码围栏，无可应用内容');
     return { blocks: [], mentionedPaths, hasUnresolved: false, notes };
   }
-  if (mentionedPaths.length === 0) {
-    notes.push('回复中未发现路径线索');
-  } else if (mentionedPaths.length > 1) {
-    notes.push(`发现 ${mentionedPaths.length} 个路径候选，将按围栏就近匹配`);
-  }
 
-  const blocks: ParsedCodeBlock[] = fences.map((f) => {
+  const blocks: ParsedCodeBlock[] = fences.map((f, index) => {
+    const header = findBlockHeader(text, fences[index - 1]?.end ?? 0, f.start);
     let code = f.body;
     let strippedPathLine: string | null = null;
-    let filePath: string | null = null;
-    let pathSource: ParsedCodeBlock['pathSource'] = 'none';
-
-    // (a) 围栏内首行路径注释 —— 最可信（就在代码里）
     const firstNewline = code.indexOf('\n');
     const firstLine = firstNewline >= 0 ? code.slice(0, firstNewline) : code;
-    const fromComment = matchPathCommentLine(firstLine);
+    const comment = parsePathCommentLine(firstLine);
+    const fromComment = comment.path;
     if (fromComment) {
-      filePath = fromComment;
-      pathSource = 'fence-comment';
       strippedPathLine = firstLine;
       code = firstNewline >= 0 ? code.slice(firstNewline + 1) : '';
     }
-
-    // (b) 围栏上方标题式路径行 —— 明确指定了"这段代码属于哪个文件"，优先于全局唯一候选
-    if (!filePath) {
-      const fromHeading = findPrecedingHeadingPath(text, f.start);
-      if (fromHeading) {
-        filePath = fromHeading;
-        pathSource = 'preceding-heading';
-      }
-    }
-
-    // (c) 全文唯一候选 —— 最后的自动线索，**可靠性最低**，必须提示用户核对
-    if (!filePath && uniqueMention) {
-      filePath = uniqueMention;
-      pathSource = 'unique-mention';
-    }
-
-    // 行区间指令：存在即表示"这是片段替换"，否则视为"整文件替换"
-    const range = findPrecedingRange(text, f.start);
-
-    // 若片段里行号被原样带进来（` 80| code`），剥掉前缀让代码保持干净
+    const paths = [...header.paths, ...(fromComment ? [fromComment] : [])];
+    const distinctPaths = new Set(paths.map((path) => path.toLowerCase()));
+    const errors = [...header.errors, ...(comment.error ? [comment.error] : [])];
+    if (distinctPaths.size > 1) errors.push('文件路径相互冲突，请 AI 为该代码块明确单个目标文件');
+    const distinctRanges = new Set(header.ranges.map((range) => `${range.start}-${range.end}`));
+    if (distinctRanges.size > 1) errors.push('原行区间相互冲突，请 AI 为该代码块明确单个范围');
+    const filePath = distinctPaths.size === 1 ? (fromComment ?? header.paths[0] ?? null) : null;
+    const range = distinctRanges.size === 1 ? (header.ranges[0] ?? null) : null;
     if (range) {
       const stripped = stripNumberedPrefix(code);
       if (stripped.startLine !== null) code = stripped.text;
     }
-
-    // 注意：不再用"当前打开的文件"兜底 —— 编辑器里打开的文件与待改文件未必相关，
-    // 猜错会把代码写进错误的文件。宁可 null（交预览让用户指定）。
-
+    const language = normalizeLanguage(f.info);
+    const other = !filePath && paths.length === 0 && !header.hasFileLabel &&
+      header.ranges.length === 0 && errors.length === 0;
     return {
       code: code.replace(/\s+$/, ''),
-      language: normalizeLanguage(f.info),
+      language,
       filePath,
-      pathSource,
+      pathSource: filePath ? (fromComment ? 'fence-comment' : 'preceding-heading') : 'none',
       range,
       strippedPathLine,
       start: f.start,
       end: f.end,
+      ...(other ? { kind: 'other' as const } : {}),
+      ...(errors.length ? { validationError: errors.join('；') } : {}),
     };
   });
 
-  const unresolved = blocks.filter((b) => !b.filePath);
-  if (unresolved.length > 0) {
-    notes.push(`${unresolved.length} 个代码块无法确定目标文件，需在预览中指定`);
-  }
-  const weak = blocks.filter((b) => b.pathSource === 'unique-mention');
-  if (weak.length > 0) {
-    notes.push(
-      `${weak.length} 个代码块的目标文件来自"全文唯一候选"推断（可靠性最低）—— 请务必核对：回复正文里出现的示例路径可能导致误匹配`
-    );
-  }
-  const snippets = blocks.filter((b) => b.range !== null);
-  if (snippets.length > 0) {
-    notes.push(
-      `${snippets.length} 个代码块是**片段替换**（带行区间）：应用前会做三向校验（区间有效 / 原内容匹配 / 上下文匹配），不一致即拒绝`
-    );
-  }
-
+  const unresolved = blocks.filter((block) => block.kind !== 'other' && (!block.filePath || block.validationError));
+  if (unresolved.length) notes.push(`${unresolved.length} 个代码块缺少明确路径或存在冲突，请 AI 补充后重新采集`);
+  const snippets = blocks.filter((block) => block.range && block.kind !== 'other');
+  if (snippets.length) notes.push(`${snippets.length} 个代码块携带原行区间；已有文件应用前做三向校验，新建文件完整写入代码`);
+  const others = blocks.filter((block) => block.kind === 'other');
+  if (others.length) notes.push(`${others.length} 段附属内容只读展示，无需补充文件路径，IDE 不会执行或写入文件`);
   return { blocks, mentionedPaths, hasUnresolved: unresolved.length > 0, notes };
 }
 
@@ -653,52 +561,4 @@ export function computeApply(
       throw new Error(`未知应用模式：${String(exhaustive)}`);
     }
   }
-}
-
-/* ------------------------------------------------------------------ *
- * 选区记忆兜底：把"复制片段那一刻"的区间回填给无区间的代码块
- * ------------------------------------------------------------------ */
-
-/** 「复制选中片段」时的选区记忆（主进程在 copyNumberedSnippet 成功后记录） */
-export interface SnippetRangeMemory {
-  /** 片段所属文件（相对根目录，正斜杠） */
-  relPath: string;
-  /** 片段起始行（1 起） */
-  startLine: number;
-  /** 片段结束行（含） */
-  endLine: number;
-}
-
-/**
- * 选区兜底：模型没回显（或采集策略没采到）`### 范围：N-M` 时，
- * 用「复制片段那一刻」的选区回填 —— **否则无区间的块会被当成整文件替换**。
- * 实测踩坑：用户选中 2-10 行复制片段让模型改，模型也只回了针对 2-10 的内容，
- * 但解析出的块没有行区间，应用时整个文件被模型内容覆盖，区间外的行全部丢失。
- *
- * 两个保守条件，避免把记忆套到不相关的块上：
- *  1. 批次内**恰好一个**「无区间且路径与片段一致」的块 —— 多个时无法判断各自区间，
- *     宁可维持 null（预览里人工确认），也不猜；
- *  2. 路径比较大小写不敏感（Windows 文件名语义）。
- *
- * 模型自己回显的区间指令优先级更高：已解析出 range 的块不做任何改动。
- *
- * @returns 回填说明（供解析备注展示）；未回填返回 null。
- *          **原地修改**传入的 blocks（collectReply 缓存与预览共用同一批对象）。
- */
-export function applySnippetRangeFallback(
-  blocks: ParsedCodeBlock[],
-  snippet: SnippetRangeMemory | null
-): string | null {
-  if (!snippet) return null;
-  const target = snippet.relPath.toLowerCase();
-  const candidates = blocks.filter(
-    (b) => b.range === null && b.filePath !== null && b.filePath.toLowerCase() === target
-  );
-  const block = candidates[0];
-  if (candidates.length !== 1 || !block) return null;
-  block.range = { start: snippet.startLine, end: snippet.endLine };
-  return (
-    `代码块未携带行区间指令，已按「复制片段时的选区」回填为 ${snippet.startLine}-${snippet.endLine}` +
-    `（应用时仅替换该区间，不再整文件覆盖）`
-  );
 }

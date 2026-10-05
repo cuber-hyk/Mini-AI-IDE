@@ -58,7 +58,7 @@ check(
   'P3',
   '预览期只读、退出后恢复可编辑',
   /updateOptions\(\{\s*readOnly:\s*true\s*\}\)/.test(js) &&
-    /updateOptions\(\{\s*readOnly:\s*false\s*\}\)/.test(js),
+    /updateOptions\(\{\s*readOnly:\s*Boolean\(state\.previewOnly\)\s*\}\)/.test(js),
   {},
 );
 
@@ -151,8 +151,8 @@ check(
   'Q1',
   '落盘后广播 fileChanged、编辑器收到即重读（修复"应用后仍显示旧代码"）',
   /fileChanged:\s*'fs:file-changed'/.test(contractTs) &&
-    /notifyFileChanged\(filePath\)/.test(mainTs) &&
-    /notifyFileChanged\(result\.filePath\)/.test(mainTs) &&
+    /notifyFileChanged\(filePath,\s*outcome\.created\s*\?/.test(mainTs) &&
+    /notifyFileChanged\(result\.filePath,\s*result\.deleted\s*\?/.test(mainTs) &&
     /onFileChanged/.test(js) &&
     /onFileChanged/.test(preloadTs),
   {},

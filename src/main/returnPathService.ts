@@ -12,7 +12,7 @@
  */
 import type { ApplyChangeResult, UndoResult } from '../shared/contract';
 import { computeApply, type ApplyMode, type ParsedCodeBlock } from '../shared/returnPath';
-import type { FileService } from './fileService';
+import type { CreatedDirectory, CreatedFileIdentity, FileService } from './fileService';
 
 /**
  * 服务层的输入形状（**已解析**：路径、代码、区间、校验基线都由主进程备好）。
@@ -22,6 +22,8 @@ import type { FileService } from './fileService';
  * 代码本体与校验基线一律由主进程掌握。
  */
 export interface ResolvedApplyInput {
+  /** 预览时的目标存在状态；改变时不能把新建静默转换成覆盖。 */
+  expectedFileExists?: boolean;
   /** 变更列表的批次与片段身份，供撤销后只复位对应条目。 */
   source?: { collectionId: string; index: number };
   /** 目标文件（相对根目录） */
@@ -42,7 +44,13 @@ interface Snapshot {
   after: string;
   at: string;
   mode: string;
+  createdDirectories?: CreatedDirectory[];
+  createdFileIdentity?: CreatedFileIdentity;
 }
+
+export type PreparedChange =
+  | { ok: true; filePath: string; fileExists: boolean; before: string; after: string; mode: string; rootRevision: number }
+  | { ok: false; error: string; reason?: string; fileExists?: boolean };
 
 const MAX_SNAPSHOTS = 20;
 
@@ -66,6 +74,28 @@ export class ReturnPathService {
     }
   }
 
+  /** 预览与应用共用目标准备；合法缺失文件只返回空原文，不创建任何内容。 */
+  async prepareChange(block: ParsedCodeBlock, target: string | null = block.filePath): Promise<PreparedChange> {
+    if (block.kind === 'other') return { ok: false, error: '其他内容仅供只读查看，不可作为文件应用', reason: 'read-only-content' };
+    if (block.validationError) return { ok: false, error: block.validationError, reason: 'metadata-invalid' };
+    if (!block.filePath || !target) return { ok: false, error: '缺少明确文件路径，请让 AI 补充对应代码块的文件标题', reason: 'path-missing' };
+    const read = await this.files.readRawText(target, true);
+    if (!read.ok) return read;
+    if (read.exists && !block.range) return { ok: false, fileExists: true, error: '已有文件缺少原替换范围，请让 AI 补充范围；不会自动覆盖整文件', reason: 'range-missing' };
+    const lines = read.text.split(/\r\n|\r|\n/);
+    const mode: ApplyMode = read.exists && block.range ? {
+      kind: 'replace-lines', start: block.range.start, end: block.range.end,
+      expectedOriginal: lines.slice(block.range.start - 1, block.range.end).join('\n'),
+      contextPrev: block.range.start - 2 >= 0 ? (lines[block.range.start - 2] ?? null) : null,
+      contextNext: block.range.end < lines.length ? (lines[block.range.end] ?? null) : null,
+    } : { kind: 'replace-whole-file' };
+    const computed = computeApply(read.text, block, mode);
+    if (!computed.ok) return { ok: false, fileExists: read.exists, error: computed.detail, reason: computed.reason };
+    if (computed.text.length > this.files.characterLimit) return { ok: false, fileExists: read.exists, error: '内容超出文件写入上限' };
+    return { ok: true, filePath: read.relPath.replace(/\\/g, '/'), fileExists: read.exists,
+      before: read.text, after: computed.text, mode: read.exists ? computed.mode : 'create-file', rootRevision: read.rootRevision };
+  }
+
   /**
    * 应用一个变更。
    * 步骤：读原文 → 计算新区间（含三向校验）→ 写回 → 存快照。
@@ -73,16 +103,19 @@ export class ReturnPathService {
    */
   async applyChange(input: ResolvedApplyInput): Promise<ApplyChangeResult> {
     const root = this.files.getRoot();
-    const read = await this.files.readRawText(input.filePath);
-    if (!read.ok) return { ok: false, error: read.error };
-    const filePath = read.relPath.replace(/\\/g, '/');
+    const read = await this.prepareChange(input.block, input.filePath);
+    if (input.expectedFileExists !== undefined && read.fileExists !== undefined && input.expectedFileExists !== read.fileExists) return {
+      ok: false, reason: 'target-changed', error: '目标文件的存在状态已在预览后改变，请重新核对；不会覆盖新出现的同名文件',
+    };
+    if (!read.ok) return { ok: false, error: read.error, ...(read.reason ? { reason: read.reason } : {}) };
+    const filePath = read.filePath;
 
-    const before = read.text;
+    const before = read.before;
     const block: ParsedCodeBlock = input.block;
     const range = block.range;
 
     let mode: ApplyMode;
-    if (range) {
+    if (read.fileExists && range) {
       if (typeof input.expectedOriginal !== 'string') {
         return {
           ok: false,
@@ -107,9 +140,17 @@ export class ReturnPathService {
       return { ok: false, error: computed.detail, reason: computed.reason };
     }
 
-    if (root !== this.files.getRoot()) return { ok: false, error: '目录已切换，请重新采集' };
-    const written = await this.files.writeFile(filePath, computed.text);
-    if (!written.ok) return { ok: false, error: written.error };
+    if (root !== this.files.getRoot() || !this.files.isCurrentRoot(read.rootRevision)) return { ok: false, error: '目录已切换，请重新采集' };
+    const created = !read.fileExists;
+    let creation: { createdDirectories: CreatedDirectory[]; createdFileIdentity: CreatedFileIdentity } | undefined;
+    if (created) {
+      const written = await this.files.createFile(filePath, computed.text, read.rootRevision);
+      if (!written.ok) return { ok: false, error: written.error };
+      creation = { createdDirectories: written.createdDirectories, createdFileIdentity: written.createdFileIdentity };
+    } else {
+      const written = await this.files.writeFile(filePath, computed.text);
+      if (!written.ok) return { ok: false, error: written.error };
+    }
 
     this.snapshots.push({
       root,
@@ -118,11 +159,12 @@ export class ReturnPathService {
       before,
       after: computed.text,
       at: new Date().toISOString(),
-      mode: computed.mode,
+      mode: created ? 'create-file' : computed.mode,
+      ...(creation ?? {}),
     });
     while (this.snapshots.length > MAX_SNAPSHOTS) this.snapshots.shift();
 
-    return { ok: true, filePath, mode: computed.mode, before, after: computed.text };
+    return { ok: true, filePath, mode: created ? 'create-file' : computed.mode, before, after: computed.text, ...(created ? { created: true } : {}) };
   }
 
   /** 撤销最近一次应用 */
@@ -135,6 +177,13 @@ export class ReturnPathService {
     if (!current.ok || current.text !== snap.after) {
       this.snapshots.push(snap);
       return { ok: false, error: '文件已在应用后修改，不能用旧记录覆盖当前内容' };
+    }
+
+    if (snap.createdDirectories !== undefined) {
+      if (!snap.createdFileIdentity) { this.snapshots.push(snap); return { ok: false, error: '新增快照缺少文件身份，不能撤销' }; }
+      const removed = await this.files.removeCreatedFile(snap.relPath, snap.after, snap.createdDirectories, snap.createdFileIdentity);
+      if (!removed.ok) { this.snapshots.push(snap); return { ok: false, error: removed.error || '撤销新建失败' }; }
+      return { ok: true, filePath: snap.relPath, deleted: true, ...snap.source, ...(removed.error ? { warning: removed.error } : {}) };
     }
 
     const written = await this.files.writeFile(snap.relPath, snap.before);

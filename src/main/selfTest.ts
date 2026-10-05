@@ -1005,7 +1005,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     });
 
     const readOnlyWhenPreview = /updateOptions\(\{\s*readOnly:\s*true\s*\}\)/.test(js);
-    const restoredOnExit = /updateOptions\(\{\s*readOnly:\s*false\s*\}\)/.test(js);
+    const restoredOnExit = /updateOptions\(\{\s*readOnly:\s*Boolean\(state\.previewOnly\)\s*\}\)/.test(js);
     add('P3', '预览期只读、退出后恢复可编辑', readOnlyWhenPreview && restoredOnExit, {
       readOnlyWhenPreview,
       restoredOnExit,
@@ -1070,8 +1070,8 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
      * 实际读取已上移到本 try 块开头，此处只留说明。
      */
     const hasFileChangedChannel = /fileChanged:\s*'fs:file-changed'/.test(contractTs);
-    const notifiesOnApply = /notifyFileChanged\(filePath\)/.test(mainTs);
-    const notifiesOnUndo = /notifyFileChanged\(result\.filePath\)/.test(mainTs);
+    const notifiesOnApply = /notifyFileChanged\(filePath,\s*outcome\.created\s*\?/.test(mainTs);
+    const notifiesOnUndo = /notifyFileChanged\(result\.filePath,\s*result\.deleted\s*\?/.test(mainTs);
     const editorListens = /onFileChanged/.test(js) && /onFileChanged/.test(preloadTs);
     add(
       'Q1',
@@ -1963,9 +1963,9 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   const originalText = beforeAll.ok ? beforeAll.text : '';
   add('K3a', '读取样例文件成功（闭环前置条件）', beforeAll.ok && originalText.length > 0, beforeAll.ok ? { chars: originalText.length } : beforeAll);
 
-  const wholeBlock = parseModelReply(['### 文件：hello.ts', '```ts', 'export const hi = 2;', '```'].join('\n')).blocks[0]!;
-  const applied = await rp.applyChange({ filePath: 'hello.ts', block: wholeBlock });
-  add('K3', '整文件替换可应用并返回新文本', applied.ok && applied.after === 'export const hi = 2;', applied.ok ? { mode: applied.mode } : applied);
+  const wholeBlock = parseModelReply(['### 文件：hello.ts', '### 范围：1-' + originalText.split(/\r\n|\r|\n/).length, '```ts', 'export const hi = 2;', '```'].join('\n')).blocks[0]!;
+  const applied = await rp.applyChange({ filePath: 'hello.ts', block: wholeBlock, expectedOriginal: originalText.replace(/\r\n|\r/g, '\n') });
+  add('K3', '明确完整原范围的替换可应用并返回新文本', applied.ok && applied.after === 'export const hi = 2;', applied.ok ? { mode: applied.mode } : applied);
 
   const undone = await rp.undoLast();
   add('K4', '撤销按快照恢复原文', undone.ok && undone.filePath === 'hello.ts', undone);

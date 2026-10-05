@@ -12,23 +12,27 @@
 
     function sync() {
       const current = documents.get(key(state.currentPath));
-      if (current) current.text = state.currentText;
+      if (current && !current.previewOnly) current.text = state.currentText;
     }
     function report() {
       sync();
-      const tabs = Array.from(documents.values()).map(function (doc) { return { path: doc.path, dirty: doc.text !== doc.savedText }; });
-      bridge.reportEditorState({ root: state.root, path: state.currentPath, documents: tabs });
+      const tabs = Array.from(documents.values()).map(function (doc) { return { path: doc.path, dirty: !doc.previewOnly && doc.text !== doc.savedText, previewOnly: Boolean(doc.previewOnly) }; });
+      bridge.reportEditorState({ root: state.root, path: state.previewOnly ? null : state.currentPath, documents: tabs.filter(function (doc) { return !doc.previewOnly; }).map(function (doc) { return { path: doc.path, dirty: doc.dirty }; }) });
       options.renderTabs(tabs, state.currentPath);
     }
     function activate(doc, focus) {
       sync();
       const current = documents.get(key(state.currentPath));
       if (current) current.viewState = options.captureViewState();
+      const previews = Array.from(documents.values()).filter(function (value) { return value.previewOnly && value !== doc; });
+      previews.forEach(function (value) { documents.delete(key(value.path)); });
       options.clearDiff();
       state.currentPath = doc ? doc.path : null;
+      state.previewOnly = Boolean(doc && doc.previewOnly);
       state.currentText = doc ? doc.text : '';
       state.savedText = doc ? doc.savedText : '';
       options.showDocument(doc, focus);
+      previews.forEach(function (value) { options.disposeModel(value.model); });
       options.changed();
       if (doc) options.highlight(doc.path);
     }
@@ -41,7 +45,7 @@
       const root = state.root;
       const epoch = generation;
       const existing = documents.get(key(relPath));
-      if (existing) { activate(existing, true); return true; }
+      if (existing) { if (!existing.previewOnly) activate(existing, true); return true; }
       try {
         await options.ready();
         if (epoch !== generation || request !== openRequest || root !== state.root) return false;
@@ -63,10 +67,27 @@
       }
     }
 
+    async function previewNewFile(relPath) {
+      if (!state.root) return false;
+      relPath = relPath.replace(/\\/g, '/');
+      const existing = documents.get(key(relPath));
+      if (existing && !existing.previewOnly) { options.setInfo('目标文件已在标签页中打开，请先确认文件状态后重新采集', true); return false; }
+      const root = state.root; const epoch = generation; const request = ++openRequest;
+      await options.ready();
+      if (root !== state.root || epoch !== generation || request !== openRequest) return false;
+      const doc = existing || { path: relPath, text: '', savedText: '', model: options.createModel(relPath, ''), viewState: null, saving: null, reading: 0, previewOnly: true };
+      documents.set(key(relPath), doc); activate(doc, true); return true;
+    }
+    function exitPreview() {
+      const doc = documents.get(key(state.currentPath));
+      if (doc && doc.previewOnly) remove(doc);
+    }
+
     async function save(path) {
       sync();
       const doc = documents.get(key(path || state.currentPath));
       if (!doc || !state.root) return true;
+      if (doc.previewOnly) { options.setInfo('新增文件预览尚未写入磁盘，请点击「创建文件」', true); return false; }
       if (doc.saving) return doc.saving;
       const root = state.root; const epoch = generation; const target = doc.path; const text = doc.text;
       doc.saving = (async function () {
@@ -124,7 +145,8 @@
         sync();
         if (!sameDocument(doc, root, epoch) || request !== doc.reading || doc.text !== before || (focus && navigation !== openRequest)) return false;
         if (!result.ok || result.tooLarge) { options.setInfo('读取失败：' + (result.error || '文件过大'), true); return false; }
-        doc.text = doc.savedText = result.text || '';
+        doc.previewOnly = false; doc.text = doc.savedText = result.text || '';
+        if (state.currentPath === doc.path) state.previewOnly = false;
         if (state.currentPath === doc.path) { options.clearDiff(); state.currentText = state.savedText = doc.text; }
         options.replaceContent(doc, doc.text);
         if (focus) activate(doc, true); else options.changed();
@@ -160,6 +182,6 @@
     bridge.onEditorRequest(async function (request) {
       if (request.kind === 'save') await bridge.editorReply(request.id, await save(request.path));
     });
-    return { open, save, close, reload, clear, entryChanged, report };
+    return { open, save, close, reload, clear, entryChanged, report, previewNewFile, exitPreview };
   };
 })();

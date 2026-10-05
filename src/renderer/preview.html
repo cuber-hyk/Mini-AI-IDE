@@ -18,7 +18,11 @@
       <button id="pv-collapse" type="button" class="ui-button ui-icon" title="收起变更列" aria-label="收起变更列">›</button>
     </header>
     <div class="pv-filter-wrap"><input id="pv-filter" class="pv-filter" type="search" placeholder="筛选文件…" aria-label="筛选变更文件" spellcheck="false" /></div>
-    <div id="pv-notes" class="pv-notes" role="status" aria-live="polite"></div>
+    <div id="pv-status" class="pv-status" role="status" aria-live="polite" hidden></div>
+    <details id="pv-diagnostics" class="pv-diagnostics" hidden>
+      <summary>诊断信息</summary>
+      <div id="pv-notes" class="pv-notes"></div>
+    </details>
     <ul id="pv-list" class="pv-list" aria-label="变更文件">
       <li class="pv-empty">采集 AI 回复后，变更会显示在这里。</li>
     </ul>

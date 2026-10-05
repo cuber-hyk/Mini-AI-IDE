@@ -3,7 +3,7 @@ artifact_type: capability
 status: current
 updated: 2026-10-04
 owner: 胡运宽
-source_of_truth: [docs/adr/2026-10-02-filesystem-permission-model.md, src/main/fileService.ts, src/main/fileManagement.ts, src/main/workspaceService.ts, src/main/workspaceController.ts, src/main/editorSession.ts, src/main/settings.ts, src/shared/contract.ts, src/main/preload.ts, src/renderer/editorWorkspace.js, src/renderer/editorTabs.js, src/renderer/fileExplorer.js, test/workspaceService.test.ts, test/fileManagement.test.ts, test/editorSession.test.ts, test/editorWorkspace.test.ts]
+source_of_truth: [docs/adr/2026-10-02-filesystem-permission-model.md, src/main/fileService.ts, src/main/fileManagement.ts, src/main/workspaceService.ts, src/main/workspaceController.ts, src/main/editorSession.ts, src/main/settings.ts, src/shared/contract.ts, src/main/preload.ts, src/renderer/editorWorkspace.js, src/renderer/editorTabs.js, src/renderer/fileExplorer.js, test/workspaceService.test.ts, test/fileManagement.test.ts, test/editorSession.test.ts, test/editorWorkspace.test.ts, test/fileService.test.ts]
 ---
 
 # 能力：本地文件访问
@@ -20,7 +20,7 @@ source_of_truth: [docs/adr/2026-10-02-filesystem-permission-model.md, src/main/f
 
 - 文件系统访问**仅限主进程**（见 ADR-0002）。
 - 编辑器渲染进程通过 `contextBridge` 暴露的窄接口请求**纯文本结果**。
-- 主进程对每个请求做 `path.resolve` 归一化，同时用 `realpath` 校验目标与根目录的真实路径；新建目标校验其父目录，阻止链接／junction 指向根目录外。
+- 主进程对每个请求做 `path.resolve` 归一化，同时用 `realpath` 校验目标与根目录的真实路径；缺失目标逐级校验最近存在的祖先，阻止链接／junction 指向根目录外。AI 新增还拒绝根目录下的链接父级；根目录本身可以是合法 junction。
 - 网页视图**没有任何**文件 IPC 通道。
 - 新目录通过系统选择对话框取得；最近目录仅按主进程已有历史的索引打开，渲染进程不能自行指定任意根目录。
   `fs:set-root-internal` 仅供主进程内部/自检使用，**不暴露给 preload**（自检 D3 专门验证它被拒绝）。
@@ -59,6 +59,7 @@ source_of_truth: [docs/adr/2026-10-02-filesystem-permission-model.md, src/main/f
 | `fs:rename-entry` | `relPath, name, root` | 文件操作结果，成功含旧／新路径 |
 | `fs:trash-entry` | `relPath, root` | 文件操作结果，成功含旧路径 |
 | `fs:root-changed` | （主进程 → 编辑器） | 根目录、历史、版本 |
+| `fs:file-changed` | （主进程 → 编辑器）`filePath, updated/created/deleted, revision` | AI 更新重读目标，创建／删除同步标签和文件树，拒绝旧目录事件 |
 | `fs:entry-changed` | （主进程 → 编辑器） | 改名／删除事件、路径、目录标记和版本 |
 | `editor:confirm-leave` | 可选 `path, root`（无参数检查所有文档） | `{ ok }`，是否允许离开 |
 | `editor:state` | （编辑器 → 主进程）`{ root, path, documents: [{ path, dirty }] }` | 单向编辑状态上报 |
@@ -82,6 +83,7 @@ source_of_truth: [docs/adr/2026-10-02-filesystem-permission-model.md, src/main/f
 | 目录列表 | 隐藏点文件、跳过 `node_modules`/`.git`/`dist` 等；目录在前按名称排序；单目录上限 500 条并标记 `truncated` |
 | 写入 | 仅 `write-file` 通道；同样过白名单与大小上限；**只由用户在编辑器里明确保存时触发** |
 | 新建 | 文件树顶部或右键入口；选中文件夹内创建、选中文件的父目录内创建、无选中或空白处右键则根目录内创建；排他创建，不覆盖已有目标 |
+| AI 新增 | 明确路径的完整内容以空原文只读预览；应用时排他创建文件及缺失父目录，失败回滚本次空目录；撤销核对创建时文件身份（dev/ino/birthtimeMs）和内容，只删除本次文件及空目录，同名同内容外部替换也拒绝，保留记录供重试 |
 | 名称 | 树内输入，Enter 确认、Esc 取消；拒绝 Windows 非法字符、保留名称、尾随点／空格、重名及过长名称 |
 | 改名 | F2 或右键；同步所有打开文件及文件夹后代文件的保存路径，保留草稿；不覆盖已存在目标 |
 | 删除 | 原生确认后仅调用 `shell.trashItem`，失败可见且不改为永久删除；成功后关闭受影响标签，其他标签保留 |
@@ -97,7 +99,7 @@ source_of_truth: [docs/adr/2026-10-02-filesystem-permission-model.md, src/main/f
 | `test/encoding.test.ts` | UTF-8 合法性（7 类非法序列）、BOM、GBK 回退、二进制拒绝、空文件 |
 | `test/pathGuard.test.ts` | `..` 穿越、绝对路径越界、前缀相似目录（`project` vs `project2`）、大小写不敏感、NUL、目录过滤与截断 |
 | `test/limits-and-ua.test.ts` | 元信息统计、上限判定、分片边界、文本扩展名判定、UA 规则 |
-| `test/fileService.test.ts` | 真实文件系统集成：列目录 / 读写 / 回退 / 拒绝 / 越界 / 超限 / 子目录 |
+| `test/fileService.test.ts` | 真实文件系统集成：列目录 / 读写 / 回退 / 拒绝 / 越界 / 超限 / 多级新增 / 同名冲突 / 链接 / 新增撤销与回滚 |
 | `test/workspaceService.test.ts` | 恢复、最近 5 项、关闭、失效目录、设置写入失败与测试隔离 |
 | `test/fileManagement.test.ts` | 新建、改名、大小写改名、重名不覆盖、回收站失败、外部 junction 与延迟根目录切换 |
 | `test/editorSession.test.ts`、`test/editorWorkspace.test.ts` | 多文件切换、后台保存及确认、失败保留缓冲、延迟读取、输入变化及所有标签改名删除 |

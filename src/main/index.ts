@@ -16,7 +16,7 @@ import * as path from 'node:path';
 
 import { CHANNELS, type ApplyChangeInput, type AppliedChangeEvent, type PromptPanelState, type PromptComposerStatus, type PromptVariantState, type SavePromptSpecResult, type ReturnPreview, type RootInfo } from '../shared/contract';
 import { buildPrompt, getFormatSpec, resolveFormatSpec, normalizeVariant, MAX_CUSTOM_FORMAT_SPEC_LENGTH, type CustomFormatSpecs, type FormatSpecVariant } from '../shared/formatSpec';
-import { parseModelReply, computeApply, applySnippetRangeFallback, type ParsedCodeBlock, type SnippetRangeMemory } from '../shared/returnPath';
+import { parseModelReply, type ParsedCodeBlock } from '../shared/returnPath';
 import { buildSnippetText, buildWholeFileText } from '../shared/snippet';
 import { diffTexts } from '../shared/diff';
 import { checkUaConsistency, stripSelfDeclarations } from '../shared/userAgent';
@@ -669,30 +669,17 @@ async function loadLocalView(
     const block = cached?.blocks[index];
     if (!cached || cached.invalidated.has(index) || !block || !block.filePath) return null;
 
-    const read = await fileService.readRawText(block.filePath);
+    const read = await returnPath.prepareChange(block);
     if (!read.ok || workspace.getState().revision !== revision || cached.invalidated.has(index)) return null;
-
-    const lines = read.text.split(/\r\n|\r|\n/);
-    const mode: Parameters<typeof computeApply>[2] = block.range
-      ? {
-          kind: 'replace-lines',
-          start: block.range.start,
-          end: block.range.end,
-          expectedOriginal: lines.slice(block.range.start - 1, block.range.end).join('\n'),
-          contextPrev: block.range.start - 2 >= 0 ? (lines[block.range.start - 2] ?? null) : null,
-          contextNext: block.range.end < lines.length ? (lines[block.range.end] ?? null) : null,
-        }
-      : { kind: 'replace-whole-file' };
-
-    const computed = computeApply(read.text, block, mode);
-    if (!computed.ok) return null;
+    const expected = cached.previewTargets.get(index);
+    if (expected && expected.exists !== read.fileExists) return null;
 
     /* 同批次内可导航的变更（供编辑器「上一个 / 下一个」）。
      必须在 map 之后按类型收窄：`filePath` 可能是 null，而 `exactOptionalPropertyTypes`
      下 optional 字段不接受 null。 */
     const siblings: import('../shared/contract').EditorDiffSibling[] = [];
     cached.blocks.forEach((b, i) => {
-      if (typeof b.filePath === 'string' && !cached.invalidated.has(i)) {
+      if (typeof b.filePath === 'string' && cached.previewTargets.has(i) && !cached.invalidated.has(i)) {
         siblings.push({ collectionId, index: i, filePath: b.filePath });
       }
     });
@@ -700,13 +687,14 @@ async function loadLocalView(
     return {
       active: true,
       workspaceRevision: revision,
-      filePath: read.relPath,
-      original: read.text,
-      modified: computed.text,
-      language: languageIdFor(read.relPath),
+      filePath: read.filePath,
+      original: read.before,
+      modified: read.after,
+      language: languageIdFor(read.filePath),
+      ...(!read.fileExists ? { newFile: true } : {}),
       collectionId,
       index,
-      identical: computed.text === read.text,
+      identical: read.after === read.before,
       siblings,
       position: siblings.findIndex((s) => s.index === index),
     };
@@ -759,11 +747,11 @@ async function loadLocalView(
    *
    * 为什么放主进程而不是回传渲染进程：
    *  1. 渲染进程不需要（也不应该）经手大块代码文本；
-   *  2. **片段替换的三向校验需要"复制那一刻的原文"** —— 只有主进程在读文件的同一时刻
+   *  2. **片段替换的三向校验需要应用准备时的原文** —— 只有主进程在读文件的同一时刻
    *     抓取当前行内容，才能得到真正可用的校验基线。让渲染进程转手就做不到可信。
    * 只保留最近若干批，避免长期驻留。
    */
-  const collections = new Map<string, { blocks: ParsedCodeBlock[]; at: string; replyLength: number; invalidated: Set<number>; targets: Map<number, string>; invalidPaths: Array<{ path: string; directory: boolean }> }>();
+  const collections = new Map<string, { blocks: ParsedCodeBlock[]; at: string; replyLength: number; invalidated: Set<number>; targets: Map<number, string>; previewTargets: Map<number, { path: string; exists: boolean }>; invalidPaths: Array<{ path: string; directory: boolean }> }>();
   const MAX_COLLECTIONS = 5;
   let collectionSeq = 0;
 
@@ -775,27 +763,12 @@ async function loadLocalView(
    */
   const consumption = new ConsumptionStore();
 
-  /**
-   * 最近一次「复制选中片段」的选区记忆。
-   *
-   * 为什么必须记：`### 范围：N-M` 只出现在**剪贴板提示词**里，模型回不回显是它的自由；
-   * 采集策略虽已补抓正文里的范围行，但模型不按约定回显时仍然拿不到。
-   * 缺了区间，解析结果的 range 为 null，应用层只能按「整文件替换」处理 ——
-   * 用户实测：选中 2-10 行让模型改，应用时整个文件被覆盖、区间外的行全丢。
-   *
-   * 因此复制片段成功那一刻把选区记在主进程，采集解析后由
-   * `applySnippetRangeFallback` 回填给路径一致的无区间块。
-   * 只记最近一次：用户复制了新片段，旧选区自然失效（多轮对话以最后一次意图为准）；
-   * 「复制整个文件」（copyWholeFile）是**上下文**用途，刻意**不更新**此记忆 ——
-   * 给全文不等于改全文，最近一次明确的片段选区仍然有效。
-   */
-  let lastSnippetRange: SnippetRangeMemory | null = null;
   let announcedRevision = workspace.getState().revision;
   const workspaceController = new WorkspaceController(win, editorView.webContents, fileService, workspace,
     (info) => {
       if (info.revision !== announcedRevision) {
         announcedRevision = info.revision ?? announcedRevision;
-        collections.clear(); returnPath.clear(); consumption.clear(); lastSnippetRange = null;
+        collections.clear(); returnPath.clear(); consumption.clear();
         editorView.webContents.send(CHANNELS.diffData, { active: false });
         previewView.webContents.send(CHANNELS.invalidateChanges, { all: true });
       }
@@ -818,7 +791,6 @@ async function loadLocalView(
         previewView.webContents.send(CHANNELS.invalidateChanges, { collectionId: id, indices, oldRelPath: event.oldRelPath, isDirectory: event.isDirectory });
       }
       returnPath.invalidate(event.oldRelPath, event.isDirectory);
-      if (lastSnippetRange && affected(lastSnippetRange.relPath)) lastSnippetRange = null;
       consumption.clear();
       editorView.webContents.send(CHANNELS.entryChanged, event);
     }, () => collections.size > 0 || returnPath.undoCount > 0);
@@ -942,14 +914,6 @@ async function loadLocalView(
     const parsed = parseModelReply(collected.replyText);
 
     /*
-     * 选区兜底：模型没回显 `### 范围：N-M`（或采集没采到）时，用「复制片段那一刻」
-     * 的选区回填 —— 不回填的话该块会被当成整文件替换，应用时覆盖整个文件。
-     * 必须在缓存（collections.set）与 diff/预览计算之前做，
-     * 保证预览里看到的 diff 与实际应用行为一致。
-     */
-    const fallbackNote = applySnippetRangeFallback(parsed.blocks, lastSnippetRange);
-
-    /*
      * 诊断信息必须**紧凑**。
      * 实测教训：早期把"采集到的开头 8 行"整段塞进备注，结果备注占满面板高度，
      * 列表与其中的「应用」按钮被挤出视口 —— 诊断本身把界面搞坏了。
@@ -962,11 +926,10 @@ async function loadLocalView(
       ...parsed.notes,
       `采集：策略 ${collected.strategyId} · ${collected.replyText.length} 字符 / ${collectedLines.length} 行 · 围栏标记 ${fenceMarkCount} 处`,
       `首行：${firstLine}${(collectedLines[0] ?? '').length > 60 ? '…' : ''}`,
-      ...(fallbackNote ? [fallbackNote] : []),
     ];
 
     const collectionId = emptyId;
-    collections.set(collectionId, { blocks: parsed.blocks, at: collected.collectedAt, replyLength: collected.replyText.length, invalidated: new Set(), targets: new Map(), invalidPaths: [] });
+    collections.set(collectionId, { blocks: parsed.blocks, at: collected.collectedAt, replyLength: collected.replyText.length, invalidated: new Set(), targets: new Map(), previewTargets: new Map(), invalidPaths: [] });
     while (collections.size > MAX_COLLECTIONS) {
       const oldest = collections.keys().next();
       if (oldest.done) break;
@@ -978,101 +941,37 @@ async function loadLocalView(
     for (let i = 0; i < parsed.blocks.length; i += 1) {
       const b = parsed.blocks[i] as ParsedCodeBlock;
       const hints: string[] = [];
-      if (b.pathSource === 'unique-mention') {
-        hints.push('目标文件来自"全文唯一候选"推断（可靠性最低），请务必核对');
-      }
-      if (b.pathSource === 'none' || !b.filePath) {
-        hints.push('未能确定目标文件，请手动填写路径');
-      }
+      if (b.kind === 'other') hints.push('其他内容仅供只读查看，不参与文件应用，也不会执行；如需修改文件，请让 AI 补充文件路径和范围后重新采集');
+      else if (!b.filePath) hints.push('缺少明确文件路径，请让 AI 补充对应代码块的文件标题');
 
-      let fileExists = false;
-      let fileLines: number | null = null;
-      let applicable = false;
-      let blockedReason: string | undefined;
-
-      if (b.filePath) {
-        const read = await fileService.readRawText(b.filePath);
-        if (read.ok) {
-          fileExists = true;
-          fileLines = read.text.split(/\r\n|\r|\n/).length;
-        } else {
-          blockedReason = read.error;
-        }
-      } else {
-        blockedReason = '未确定目标文件';
+      const prepared = await returnPath.prepareChange(b);
+      const fileExists = prepared.ok ? prepared.fileExists : prepared.fileExists === true;
+      const fileLines = prepared.ok && prepared.fileExists ? prepared.before.split(/\r\n|\r|\n/).length : null;
+      const applicable = prepared.ok;
+      const blockedReason = prepared.ok || b.kind === 'other' ? undefined : prepared.error;
+      if (prepared.ok) {
+        collections.get(collectionId)!.previewTargets.set(i, { path: prepared.filePath.toLowerCase(), exists: prepared.fileExists });
+        if (!prepared.fileExists) hints.push('新增文件：点击应用将创建文件及缺失的父目录；预览不会写盘');
+        else if (b.range) hints.push('片段替换：应用时会用当前行内容做三向校验，不一致将被拒绝');
       }
 
-      if (b.range) {
-        if (!fileExists) {
-          applicable = false;
-          blockedReason = blockedReason ?? '目标文件不存在，无法做片段替换';
-        } else if (fileLines !== null && (b.range.end > fileLines || b.range.start < 1)) {
-          applicable = false;
-          blockedReason = `行区间 ${b.range.start}-${b.range.end} 超出文件范围（共 ${fileLines} 行）`;
-        } else {
-          // 片段替换还需要"复制时的原文"做三向校验；此处只有区间，故标记为"需人工确认"
-          applicable = true;
-          hints.push('片段替换：应用时会用当前行内容做三向校验，不一致将被拒绝');
-        }
-      } else {
-        applicable = fileExists;
-        if (!fileExists) hints.push('目标文件不存在，应用将创建新文件（需你确认）');
-      }
-
-      // 行号预览：整文件替换从第 1 行起算；片段替换用"范围起始行"，
+      // 行号预览：新建文件从第 1 行起算；已有文件替换用范围起始行，
       // 这样用户看到的就是**应用后会落在文件里的真实行号**。
-      const previewStart = b.range ? b.range.start : 1;
+      const previewStart = prepared.ok && prepared.fileExists && b.range ? b.range.start : 1;
       const allCodeLines = b.code.length === 0 ? [] : b.code.split(/\r\n|\r|\n/);
+      if (prepared.ok && !prepared.fileExists) {
+        if (!b.range) hints.push('新建文件缺少范围标记；将完整写入代码，请让 AI 保持三段式格式');
+        else if (b.range.start !== 1 || b.range.end !== allCodeLines.length) hints.push('新建文件的范围标记与实际内容不同；将完整写入 ' + allCodeLines.length + ' 行，不按范围截断');
+      }
       const PREVIEW_LINES = 6;
       const firstLines = allCodeLines.slice(0, PREVIEW_LINES).map((text, k) => ({ lineNo: previewStart + k, text }));
 
-      /*
-       * 逐行 diff —— 顺带完成"三向校验"。
-       *
-       * 这里复用 computeApply 得到"应用后的完整文本"，再与原文对比：
-       *  - 校验通过 → 给出 diff，用户在落盘前就能看到具体增删了哪些行；
-       *  - 校验失败（区间越界 / 原内容不匹配 / 上下文不匹配）→ 不给 diff，
-       *    直接把该块标成阻塞并说明原因。**绝不让用户以为可以应用**。
-       */
-      let diff: ReturnPreview['blocks'][number]['diff'] = null;
-      if (b.filePath && fileExists) {
-        const readForDiff = await fileService.readRawText(b.filePath);
-        if (readForDiff.ok) {
-          let mode: Parameters<typeof computeApply>[2];
-          if (b.range) {
-            const lines = readForDiff.text.split(/\r\n|\r|\n/);
-            const sliceOk = b.range.start >= 1 && b.range.end <= lines.length;
-            if (sliceOk) {
-              mode = {
-                kind: 'replace-lines',
-                start: b.range.start,
-                end: b.range.end,
-                expectedOriginal: lines.slice(b.range.start - 1, b.range.end).join('\n'),
-                contextPrev: b.range.start - 2 >= 0 ? (lines[b.range.start - 2] ?? null) : null,
-                contextNext: b.range.end < lines.length ? (lines[b.range.end] ?? null) : null,
-              };
-            } else {
-              mode = { kind: 'replace-lines', start: b.range.start, end: b.range.end, expectedOriginal: '' };
-            }
-          } else {
-            mode = { kind: 'replace-whole-file' };
-          }
-
-          const computed = computeApply(readForDiff.text, b, mode);
-          if (computed.ok) {
-            diff = diffTexts(readForDiff.text, computed.text);
-            if (diff.identical) {
-              hints.push('应用后内容与当前文件完全相同，无需改动');
-            }
-          } else {
-            applicable = false;
-            blockedReason = computed.detail;
-          }
-        }
-      }
+      const diff = prepared.ok ? diffTexts(prepared.before, prepared.after) : null;
+      if (diff && diff.identical && fileExists) hints.push('应用后内容与当前文件完全相同，无需改动');
 
       blocks.push({
         index: i,
+        ...(b.kind ? { kind: b.kind, contentText: b.code } : {}),
         filePath: b.filePath,
         pathSource: b.pathSource,
         range: b.range,
@@ -1103,7 +1002,7 @@ async function loadLocalView(
     //（典型：切换目录后模型回显的文件在新根目录下不存在）从此在终端直接可读。
     const applicableCount = blocks.filter((b) => b.applicable).length;
     const blockedDetail = blocks
-      .filter((b) => !b.applicable)
+      .filter((b) => !b.applicable && b.kind !== 'other')
       .map((b) => `${b.filePath ?? '(未确定路径)'}:${b.blockedReason ?? '未知'}`)
       .join('；');
     process.stdout.write(
@@ -1144,7 +1043,7 @@ async function loadLocalView(
    * 应用一个变更。
    *
    * 由 `collectionId` + `index` 引用主进程缓存里的代码块（渲染进程不转手代码文本）。
-   * 若是片段替换，主进程在**读文件的同一时刻**抓取该区间当前内容作为"复制时的原文"——
+   * 若是片段替换，主进程在**应用准备时**抓取该区间当前内容作为校验基线——
    * 这样三向校验才有可信基线；此后文件若被改动，校验必然失败并拒绝写入。
    */
   ipcMain.handle(CHANNELS.applyChange, (_e, input: unknown) => workspaceController.run(async () => {
@@ -1176,10 +1075,15 @@ async function loadLocalView(
     let contextPrev: string | null = null;
     let contextNext: string | null = null;
 
-    if (block.range) {
-      const read = await fileService.readRawText(filePath);
-      if (!read.ok) return { ok: false, error: read.error };
-      const lines = read.text.split(/\r\n|\r|\n/);
+    const prepared = await returnPath.prepareChange(block, filePath);
+    const previewTarget = cached.previewTargets.get(raw.index);
+    if (previewTarget && (!previewTarget.exists || previewTarget.path === normalizedTarget) &&
+        prepared.fileExists !== undefined && prepared.fileExists !== previewTarget.exists) return {
+      ok: false, reason: 'target-changed', error: '目标文件的存在状态已在预览后改变，请重新采集核对',
+    };
+    if (!prepared.ok) return { ok: false, error: prepared.error, reason: prepared.reason };
+    if (prepared.fileExists && block.range) {
+      const lines = prepared.before.split(/\r\n|\r|\n/);
       if (block.range.start < 1 || block.range.end > lines.length) {
         return {
           ok: false,
@@ -1202,13 +1106,15 @@ async function loadLocalView(
       source: { collectionId: raw.collectionId, index: raw.index },
       filePath,
       block,
+      ...(cached.previewTargets.has(raw.index) && (!cached.previewTargets.get(raw.index)!.exists || cached.previewTargets.get(raw.index)!.path === normalizedTarget)
+        ? { expectedFileExists: cached.previewTargets.get(raw.index)!.exists } : {}),
       ...(expectedOriginal !== undefined ? { expectedOriginal } : {}),
       contextPrev,
       contextNext,
     });
     if (outcome.ok) {
       cached.targets.set(raw.index, filePath);
-      notifyFileChanged(filePath);
+      notifyFileChanged(filePath, outcome.created ? 'created' : 'updated');
       /*
        * 同步最右侧预览面板：应用有**两个入口**（面板按钮 / 编辑器工具条），
        * 走编辑器那条时面板不知情，会一直显示「应用」可用态（用户实测反馈）。
@@ -1220,9 +1126,9 @@ async function loadLocalView(
   }));
 
   /** 通知编辑器：磁盘上的这个文件刚被改写了（成功落盘后才调用） */
-  function notifyFileChanged(filePath: string) {
+  function notifyFileChanged(filePath: string, change: 'updated' | 'created' | 'deleted' = 'updated') {
     if (!editorView.webContents.isDestroyed()) {
-      editorView.webContents.send(CHANNELS.fileChanged, filePath);
+      editorView.webContents.send(CHANNELS.fileChanged, filePath, change, workspace.getState().revision);
     }
   }
 
@@ -1238,7 +1144,7 @@ async function loadLocalView(
     const result = await returnPath.undoLast();
     // 撤销也是改写磁盘，同样要通知编辑器刷新
     if (result.ok && result.filePath) {
-      notifyFileChanged(result.filePath);
+      notifyFileChanged(result.filePath, result.deleted ? 'deleted' : 'updated');
       // 并让预览面板把对应条目恢复成「可应用」，否则撤销后按钮仍显示「已应用 ✓」
       notifyChangeState({
         kind: 'undone', filePath: result.filePath,
@@ -1274,9 +1180,6 @@ async function loadLocalView(
     const parts = buildSnippetText({ relPath, text, startLine });
     try {
       clipboard.writeText(parts.text);
-      // 记住选区：回程解析拿不到行区间时用它兜底（见 lastSnippetRange 注释）。
-      // 只在剪贴板真正写入成功后记录，失败不污染记忆。
-      lastSnippetRange = { relPath: parts.relPath, startLine: parts.startLine, endLine: parts.endLine };
       return { ok: true, snippet: parts.text, length: parts.text.length, startLine: parts.startLine, endLine: parts.endLine };
     } catch (err) {
       return { ok: false, snippet: parts.text, length: parts.text.length, error: err instanceof Error ? err.message : String(err) };
@@ -1592,7 +1495,7 @@ async function loadLocalView(
   }
 
   if (workspaceProbeDirectory) {
-    const workspaceReport = await runWorkspaceProbe(editorView.webContents, webView.webContents, workspaceController, workspaceProbeDirectory);
+    const workspaceReport = await runWorkspaceProbe(editorView.webContents, webView.webContents, previewView.webContents, workspaceController, workspaceProbeDirectory);
     const columns = await runLayoutProbe({
       win, editor: editorView, webbar: webBarView, preview: previewView,
       configure: (web, preview) => { webVisible = web; previewWidth = preview ? lastPreviewWidth : 0; relayout(); },

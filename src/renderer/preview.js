@@ -4,7 +4,7 @@
   const bridge = window.previewBridge;
   const model = window.changeTree;
   const el = {};
-  for (const name of ['meta', 'notes', 'list', 'collapse', 'undo', 'apply-all', 'filter', 'detail', 'resizer']) {
+  for (const name of ['meta', 'notes', 'diagnostics', 'status', 'list', 'collapse', 'undo', 'apply-all', 'filter', 'detail', 'resizer']) {
     el[name] = document.getElementById('pv-' + name);
   }
   if (!bridge || !model || Object.values(el).some(function (node) { return !node; })) return;
@@ -13,6 +13,7 @@
   let activeIndex = null;
   let pathEditingIndex = null;
   let busy = false;
+  let diagnosticLines = [];
   const applied = new Set();
   const paths = new Map();
   const closed = new Set();
@@ -24,9 +25,16 @@
     if (text !== undefined) value.textContent = text;
     return value;
   }
-  function setNotes(lines) { el.notes.textContent = (lines || []).filter(Boolean).join('\n'); }
+  function setNotes(lines) {
+    const messages = (lines || []).filter(Boolean);
+    el.status.textContent = messages[0] || '';
+    el.status.hidden = messages.length === 0;
+    el.status.title = messages.join('\n');
+    el.notes.textContent = diagnosticLines.concat(messages).join('\n');
+    el.diagnostics.hidden = !el.notes.textContent;
+  }
   function errorText(error) { return error && error.message ? error.message : String(error || '未知错误'); }
-  function stateOf(block) { return applied.has(block.index) ? '已应用' : block.applicable ? '待应用' : '阻塞'; }
+  function stateOf(block) { return block.kind === 'other' ? '只读' : applied.has(block.index) ? '已应用' : block.applicable ? '待应用' : '阻塞'; }
   function pathOf(block) { return paths.has(block.index) ? paths.get(block.index).trim() : block.filePath || ''; }
   function updateButtons() {
     el['apply-all'].disabled = busy || !lastPreview || !(lastPreview.blocks || []).some(function (b) { return b.applicable && !applied.has(b.index); });
@@ -52,10 +60,10 @@
     const li = node('li', 'pv-file'); li.dataset.index = String(block.index);
     li.classList.toggle('active', block.index === activeIndex);
     li.classList.toggle('done', applied.has(block.index));
-    li.classList.toggle('blocked', !block.applicable);
+    li.classList.toggle('blocked', !block.applicable && block.kind !== 'other');
     const button = node('button', 'pv-select'); button.type = 'button';
     button.dataset.focusKey = 'block:' + block.index;
-    button.title = block.filePath || '未指定文件';
+    button.title = block.kind === 'other' ? '其他内容（只读）' : block.filePath || '未指定文件';
     button.setAttribute('aria-pressed', String(block.index === activeIndex));
     const row = node('span', 'pv-file-row');
     row.appendChild(node('span', 'pv-file-name', label));
@@ -70,7 +78,8 @@
     el.list.textContent = '';
     const blocks = lastPreview && lastPreview.ok ? lastPreview.blocks || [] : [];
     const files = model.groupFiles(blocks, el.filter.value);
-    if (!files.length) {
+    const other = blocks.filter(function (b) { return b.kind === 'other'; });
+    if (!files.length && !other.length) {
       const text = blocks.length ? '没有匹配的文件。' : lastPreview && lastPreview.noNewContent
         ? '回复已采集过，等待新的回复。' : lastPreview && !lastPreview.ok
           ? '采集失败，请查看诊断后重试。' : '采集 AI 回复后，变更会显示在这里。';
@@ -100,20 +109,30 @@
         const wrapper = node('li'); wrapper.appendChild(branch.box); parent.appendChild(wrapper);
       }
     }
+    if (other.length) {
+      const branch = details('其他内容（只读）', 'other', 'pv-other');
+      branch.title.appendChild(node('span', 'pv-file-count', other.length + ' 段'));
+      other.forEach(function (block, i) { branch.children.appendChild(blockRow(block, '内容 ' + (i + 1))); });
+      const wrapper = node('li'); wrapper.appendChild(branch.box); el.list.appendChild(wrapper);
+    }
   }
   function renderDetail() {
     el.detail.textContent = '';
     const block = lastPreview && (lastPreview.blocks || []).find(function (b) { return b.index === activeIndex; });
     el.detail.hidden = !block;
     if (!block) return;
-    el.detail.appendChild(node('div', 'pv-detail-title', block.filePath || '未指定文件'));
+    el.detail.appendChild(node('div', 'pv-detail-title', block.kind === 'other' ? '其他内容（只读）' : block.filePath || '未指定文件'));
     el.detail.appendChild(node('div', 'pv-detail-range', model.rangeLabel(block) + ' · ' + stateOf(block)));
-    const hints = (block.hints || []).slice();
-    if (block.blockedReason) hints.push('阻塞：' + block.blockedReason);
+    const hints = applied.has(block.index) ? [] : (block.hints || []).slice();
+    if (block.blockedReason && !applied.has(block.index)) hints.push('阻塞：' + block.blockedReason);
     if (hints.length) el.detail.appendChild(node('div', 'pv-hint', hints.join('\n')));
+    if (block.kind === 'other') {
+      el.detail.appendChild(node('pre', 'pv-content', block.contentText || (block.firstLines || []).map(function (line) { return line.text; }).join('\n')));
+      return;
+    }
     if (!block.applicable) return;
     const actions = node('div', 'pv-detail-actions');
-    const apply = node('button', 'ui-button primary', applied.has(block.index) ? '已应用' : '应用此片段');
+    const apply = node('button', 'ui-button primary', applied.has(block.index) ? '已应用' : block.fileExists === false && block.filePath ? '创建文件' : '应用此片段');
     apply.dataset.focusKey = 'apply:' + block.index;
     apply.type = 'button'; apply.disabled = busy || applied.has(block.index);
     apply.addEventListener('click', function () { void applyOne(block); }); actions.appendChild(apply);
@@ -162,14 +181,17 @@
   }
   function render(preview) {
     if (!lastPreview || !preview || lastPreview.collectionId !== preview.collectionId) {
-      applied.clear(); paths.clear(); closed.clear(); activeIndex = null; pathEditingIndex = null;
+      applied.clear(); paths.clear(); closed.clear(); closed.add('other'); el.diagnostics.open = false; activeIndex = null; pathEditingIndex = null;
     }
     lastPreview = preview;
     const blocks = preview && preview.ok ? preview.blocks || [] : [];
-    const count = model.groupFiles(blocks, '').length;
-    el.meta.textContent = preview && preview.ok ? count + ' 文件' : preview ? '采集失败' : '尚未采集';
+    const count = model.groupFiles(blocks.filter(function (b) { return b.filePath && b.kind !== 'other'; }), '').length;
+    const others = blocks.filter(function (b) { return b.kind === 'other'; }).length;
+    const unresolved = blocks.filter(function (b) { return !b.filePath && b.kind !== 'other'; }).length;
+    el.meta.textContent = preview && preview.ok ? count + ' 文件' + (others ? ' · ' + others + ' 段其他内容' : '') + (unresolved ? ' · ' + unresolved + ' 段待补充' : '') : preview ? '采集失败' : '尚未采集';
     el.meta.title = preview ? '批次 ' + preview.collectionId + ' · ' + blocks.length + ' 个片段' : '';
-    setNotes((preview && preview.error ? [preview.error] : []).concat((preview && preview.notes) || []));
+    diagnosticLines = (preview && preview.notes) || [];
+    setNotes(preview && preview.error ? ['采集失败：' + preview.error] : []);
     refresh();
   }
   async function requestApply(preview, block) {
@@ -195,7 +217,7 @@
     const preview = lastPreview;
     const blocks = (preview.blocks || []).filter(function (b) { return b.applicable && !applied.has(b.index); });
     if (!blocks.length) {
-      setNotes(['没有待应用片段。'].concat((preview.blocks || []).filter(function (b) { return !b.applicable; })
+      setNotes(['没有待应用片段。'].concat((preview.blocks || []).filter(function (b) { return !b.applicable && b.kind !== 'other'; })
         .map(function (b) { return (b.filePath || '未指定文件') + '：' + (b.blockedReason || '不满足应用条件'); })));
       return;
     }
@@ -225,7 +247,7 @@
       const result = await bridge.undoSave();
       if (result && result.ok) {
         model.applyEvent(lastPreview, applied, { ...result, kind: 'undone' });
-        setNotes(['已撤销 ' + result.filePath + ' 的上一次应用。']);
+        setNotes(['已撤销 ' + result.filePath + ' 的上一次应用。'].concat(result.warning ? [result.warning] : []));
       } else setNotes(['撤销失败：' + ((result && result.error) || '没有可撤销的变更')]);
     } catch (error) { setNotes(['撤销失败：' + errorText(error)]); }
     finally { busy = false; refresh(); }
