@@ -3,7 +3,7 @@ artifact_type: capability
 status: current
 updated: 2026-10-05
 owner: 胡运宽
-source_of_truth: [electron-builder.config.cjs, scripts/package-win.mjs, tools/gen-icon.mjs, tools/verify-icon.mjs, package.json, .gitignore, src/main/index.ts, src/main/selfTest.ts]
+source_of_truth: [electron-builder.config.cjs, scripts/package-win.mjs, tools/gen-icon.mjs, tools/verify-icon.mjs, tools/verify-icon-embedded.mjs, assets/icon-source.png, package.json, .gitignore, src/main/index.ts, src/main/selfTest.ts]
 ---
 
 # 能力：Windows 打包与分发
@@ -36,15 +36,31 @@ Electron **44** 已删除 Windows ia32（32 位）发行版，arm64 需另出构
 
 ## 图标
 
-`build/icon.ico` 由 `tools/gen-icon.mjs` **零依赖生成**（Node 内置 `zlib` 手写 PNG，再用 PNG-in-ICO 容器封装 7 档尺寸 16→256）。图案取自 `design-tokens.json` 配色，构图为 IDE 的「左编辑器 / 右网页」双栏。
+图标由设计源图 `assets/icon-source.png` 转换而来（深蓝渐变圆角方块 + 蓝色轨道环 + 白色尖括号 + 中心光球），由 `tools/gen-icon.mjs` 处理成 `build/icon.ico`。
 
-`pnpm run gen-icon` 可重新生成。`tools/verify-icon.mjs` 校验其合法性 —— **这一检查是必要的**：electron-builder 遇到不合格图标时**不报错**，只是静默沿用 Electron 默认图标，直到用户看到 exe 才发现。
+**为什么是「转换」而不是直接拿设计稿用**：设计稿是 RGB 无 alpha，把「透明」画成了棋盘格像素，还带平台水印与投影。直接转 ICO 会让任务栏里出现一块灰格子。转换链做四件事：
+
+1. **识别主体包围盒** —— 按「每行主体像素数占 15% 宽度」判定，这样水印那点零星像素不会把边界撑大（曾用「连续 2 像素」判据，水印把包围盒撑大 150px 导致裁切错位）。
+2. **重建 alpha** —— 用圆角矩形有向距离场生成抗锯齿遮罩；从弧上采样反解真实圆角半径（当前 23.3%），比硬编码比例稳。遮罩内缩 1.5px，避免把源图边缘与棋盘格的混合像素当内容留下。
+3. **裁掉边界外的一切** —— 水印、投影都在主体之外，天然被排除。
+4. **面积平均降采样** —— 用积分图（summed-area table）把任意矩形求和降到 O(1)；**预乘 alpha** 后再平均，否则透明区域的颜色会渗进 RGB，边缘出现灰边。
+
+`pnpm run gen-icon` 可重新生成；`--variant=split|orbit|bracket` 可切到程序化绘制（无素材时的备选）；`--preview` 只出预览图。
+
+### 两道校验（都必要）
+
+| 工具 | 查什么 | 为什么必要 |
+|---|---|---|
+| `tools/verify-icon.mjs` | ICO 结构：头字段、各档 PNG 负载签名、是否含 256×256 | electron-builder 遇到不合格图标**不报错**，只是静默沿用默认图标 |
+| `tools/verify-icon-embedded.mjs` | 图标数据是否真的出现在 exe 字节里 | 图标没生效时 builder 照样打印 `updating asar integrity executable resource`，看日志发现不了 |
+
+`build/icon-preview.png` 是给人看的：同一图标在**浅色与深色两种背景**下的 168 / 48 / 32 / 16 表现。深色那行对应 Windows 深色任务栏 —— 图标在浅底上好看、在深底上糊掉是最常见的翻车点。
 
 ## 打包流程中的三个坑（都已在脚本里绕过）
 
 1. **配置文件名必须是 `.cjs`，不能用 `.mjs`。** electron-builder 的配置自动发现只认 `electron-builder.{yml,yaml,json,json5,toml,js,cjs,ts}`。命名成 `.mjs` 会被**静默忽略**（不报错），于是 `directories.output` 退回默认的 `dist`，触发上面第 1 条的连锁错误。脚本额外显式传 `--config`，把静默失败变成硬错误。
 2. **复用本地 Electron 发行版**（`--config.electronDist=node_modules/electron/dist`）。默认行为是重新下载 151 MB 的 zip 再解压，而 `scripts/install-electron.mjs` 已经把发行版装好了。复用后既不下载也不触发清理动作。
-3. **输出目录必须为空。** builder 每次先 `emptyDir`；目录里有上次残留时会失败，而报错指向某个中间文件，极难定位。脚本改为前置检查并给出明确提示，不自动删除 —— 残留里可能有上一版的好产物。
+3. **输出目录先清空。** builder 每次会自己清 `release/`，但在 Windows 上文件被占用时失败，报错却指向某个中间文件（如 `LICENSE.electron.txt`），看不出真实原因。脚本改为**先自己清一遍**，失败时给出「关闭正在运行的程序后重试」这类可执行提示。删除前会检查目录内容是否「长得像打包产物」，避免 `directories.output` 被误配到仓库其他位置时误删。
 
 ## 验证状态
 

@@ -109,21 +109,44 @@ run(process.execPath, [path.join('tools', 'verify-icon.mjs')], '校验图标');
  * 注意 `--config` 必须放在 `--win` 之前：builder 按位置解析，先给配置文件
  * 才能确保后续 target 参数作用在它上面。
  */
-/* 前置检查：输出目录非空时 electron-builder 必然失败。
+/*
+ * 清空输出目录。electron-builder 自己也会清（`emptyDir`），但它在 Windows 上
+ * 文件被占用时失败，报错信息却指向某个无辜的中间文件（如 `LICENSE.electron.txt`），
+ * 完全看不出「上次残留没清干净」这个真实原因。这里先自己清一遍，失败时给出
+ * 可执行的提示，而不是让用户去猜 builder 的日志。
  *
- * 原因：builder 每次都会先清空输出目录（`emptyDir`），而 Windows 上文件被占用时
- * 清空会失败，报错信息却指向某个无辜的中间文件（如 `LICENSE.electron.txt`），
- * 完全看不出「上次残留没清干净」这个真实原因。
- *
- * 这里提前判定并给出可执行的提示，而不是让用户去猜日志。
- * 注意不做自动清理：输出目录里可能有上一版的好产物，静默删掉不合适。 */
+ * 为什么要做安全检查再删：`directories.output` 是可配置的，万一有人把它指到
+ * 仓库根目录，无条件递归删除会酿成事故。所以只有确认「这个目录确实长得像
+ * 我们自己的打包输出」时才删。
+ */
 const outRoot = path.join(repoRoot, 'release');
 if (fs.existsSync(outRoot)) {
-  const stale = fs.readdirSync(outRoot);
-  if (stale.length > 0) {
-    console.error(`[package-win] 输出目录 release/ 里已有 ${stale.length} 项产物。`);
-    console.error('[package-win] electron-builder 需要先清空它才能打包，请先删除 release/ 后重试。');
+  const entries = fs.readdirSync(outRoot);
+  const looksLikeOurOutput = entries.length === 0 || entries.every((name) =>
+    name === 'win-unpacked'
+    || name === 'builder-debug.yml'
+    || name === '.icon-ico'
+    || name.endsWith('.exe')
+    || name.endsWith('.7z')
+    || name.endsWith('.blockmap')
+    || name.endsWith('.yml'));
+
+  if (!looksLikeOurOutput) {
+    console.error(`[package-win] release/ 里有不像打包产物的内容：${entries.slice(0, 5).join(', ')}`);
+    console.error('[package-win] 为安全起见不自动删除，请人工确认后清理。');
     process.exit(1);
+  }
+
+  if (entries.length > 0) {
+    console.log(`[package-win] 清理上次的 ${entries.length} 项产物：release/`);
+    try {
+      fs.rmSync(outRoot, { recursive: true, force: true, maxRetries: 3 });
+    } catch (err) {
+      /* 清不掉通常是文件被占用（上次的 exe 还在跑），也可能是环境的安全守卫拦了删除 */
+      console.error(`[package-win] 无法清空 release/：${err instanceof Error ? err.message : String(err)}`);
+      console.error('[package-win] 请关闭正在运行的程序后重试，或手动删除 release/。');
+      process.exit(1);
+    }
   }
 }
 
@@ -170,7 +193,18 @@ if (fs.existsSync(path.join(localElectronDist, 'electron.exe'))) {
   ], 'electron-builder');
 }
 
-/* 5) 汇报产物，让用户不用自己去翻 release/ */
+/* 5) 校验图标真的嵌进了 exe。
+ *
+ * 为什么非查不可：electron-builder 在图标没生效时**不报错**，日志照样打印
+ * `updating asar integrity executable resource`，看日志根本发现不了。
+ * 这个检查直接去 exe 字节里找图标数据，是「图标生效」唯一的硬证据。
+ * 只在有解包产物时跑（`--dir` 模式没有独立的安装包可查）。 */
+const unpackedExe = path.join(repoRoot, 'release', 'win-unpacked', 'Mini-AI-IDE.exe');
+if (fs.existsSync(unpackedExe)) {
+  run(process.execPath, [path.join('tools', 'verify-icon-embedded.mjs')], '校验图标已嵌入');
+}
+
+/* 6) 汇报产物，让用户不用自己去翻 release/ */
 const outDir = path.join(repoRoot, 'release');
 if (!fs.existsSync(outDir)) {
   console.log('[package-win] 未发现 release/ 目录，请检查上一步日志');
