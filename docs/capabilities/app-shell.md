@@ -32,7 +32,7 @@ Monaco、AI 网页和变更列表保持三列布局。目录恢复与最近 5 �
 | 包管理 | pnpm（**依赖 postinstall 的二进制需单独安装**，见下） |
 | 编辑器 | Monaco Editor 0.57.0（AMD 发行版，从 `node_modules` 复制到 `dist`） |
 | 测试 | Node 内置测试运行器 + tsx（`npm test`） |
-| 打包器 | **无**（`tsc` + 静态复制脚本） |
+| 打包器 | [electron-builder](https://www.electron.build/) 26.15.3（devDependency；配置见 `electron-builder.config.cjs`，入口 `scripts/package-win.mjs`） |
 
 ## 进程契约
 
