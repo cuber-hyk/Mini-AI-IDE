@@ -16,10 +16,10 @@ source_of_truth: [electron-builder.config.cjs, scripts/package-win.mjs, scripts/
 
 | 文件 | 用途 |
 |---|---|
-| `release/Mini-AI-IDE-Setup-0.1.0-x64.exe` | NSIS 安装程序。允许自选安装目录，创建桌面与开始菜单快捷方式；安装版使用应用内更新 |
-| `release/Mini-AI-IDE-Setup-0.1.0-x64.exe.blockmap` | NSIS 差分下载分块清单，与安装包一起发布 |
+| `release/Mini-AI-IDE-Setup-<version>-x64.exe` | NSIS 安装程序。允许自选安装目录，创建桌面与开始菜单快捷方式；安装版使用应用内更新 |
+| `release/Mini-AI-IDE-Setup-<version>-x64.exe.blockmap` | NSIS 差分下载分块清单，与安装包一起发布 |
 | `release/latest.yml` | 稳定版本更新元数据，只指向 NSIS 安装包，含版本、大小和 SHA-512 |
-| `release/Mini-AI-IDE-Portable-0.1.0-x64.exe` | 免安装单文件，双击即用，不写安装注册表；暂不支持原地更新 |
+| `release/Mini-AI-IDE-Portable-<version>-x64.exe` | 免安装单文件，双击即用，不写安装注册表；暂不支持原地更新 |
 
 解包目录 `release/win-unpacked/` 是安装包与 portable 的共同中间产物，可直接运行其中的 `Mini-AI-IDE.exe`。
 安装后占用约 300–400 MB（Electron 运行时本体约 235 MB，不可裁剪）。
@@ -87,6 +87,7 @@ GitHub 正式 Release 使用 `v<package.json版本>` 标签，附件为上述四
 - ✅ 图标文件结构校验通过（7 档，含 256×256）
 - ✅ 更新版 v0.1.0 完整 NSIS 与 Portable 构建通过；`latest.yml` 只指向 NSIS，文件大小、SHA-512 与 blockmap 校验通过。asar 内四个主进程更新入口的源码和编译结果与本地逐字节一致，生产依赖与无 token 的公开更新源配置存在。
 - ✅ 更新版打包程序在隔离 user-data-dir 下运行 `--self-test`：160 项通过、失败 0；类型检查、构建及 329 项测试通过，无跳过。
+- ✅ v0.1.1更新验证包完整构建与发布清单校验通过；包内版本为0.1.1，功能模块与0.1.0一致，隔离启动160项自检通过。该包仅提高版本号，真实升级结果由0.1.0客户端在Release发布后验收。
 - 发布前仍须验证两个 NSIS 版本之间的真实更新、未保存文件交互、设置和网页登录态保留，以及用户网络下的 GitHub 下载。启动自检不能替代这些更新验收。
 
 ## 现场排障
