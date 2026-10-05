@@ -25,17 +25,26 @@
  * 用法：
  *   node tools/gen-icon.mjs                     # 默认：从 assets/icon-source.png 转换
  *   node tools/gen-icon.mjs --from=<png>        # 指定源图
+ *   node tools/gen-icon.mjs --out=<目录>         # 指定产物目录（默认 ./build）
  *   node tools/gen-icon.mjs --variant=bracket   # 程序化绘制指定方案
  *   node tools/gen-icon.mjs --preview           # 只出预览图，不写 icon.ico
  */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as zlib from 'node:zlib';
-import { fileURLToPath } from 'node:url';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(here, '..');
-const outDir = path.join(repoRoot, 'build');
+/*
+ * 路径基准取**当前工作目录**，而不是脚本所在目录。
+ *
+ * 为什么不取脚本位置：这个脚本会被复制到别的项目里当构建工具用，那时
+ * `脚本位置/..` 会指向项目之外，产物落到莫名其妙的地方。cwd 在
+ * 「npm script / spawnSync」两种调用方式下都是项目根（npm 会把 cwd 设为
+ * package 根），语义稳定。
+ */
+const baseDir = process.cwd();
+/* 允许 --out=<目录> 改产物位置，便于在别的项目里把它当通用工具用 */
+const outArg = process.argv.slice(2).find((a) => a.startsWith('--out='));
+const outDir = outArg ? path.resolve(baseDir, outArg.split('=')[1]) : path.join(baseDir, 'build');
 const outFile = path.join(outDir, 'icon.ico');
 
 /** .ico 内嵌的各档尺寸。Windows 按场景挑：16 任务栏、32 列表、48 桌面、256 大图标视图。 */
@@ -735,20 +744,23 @@ if (variantArg) {
   master = drawProgrammatic(512, variant);
   modeLabel = `程序化方案 ${variant}`;
 } else {
-  const sourcePath = path.resolve(repoRoot, fromArg ? fromArg.split('=')[1] : 'assets/icon-source.png');
+  const sourcePath = path.resolve(baseDir, fromArg ? fromArg.split('=')[1] : 'assets/icon-source.png');
   if (!fs.existsSync(sourcePath)) {
-    console.error(`[gen-icon] 找不到源图：${path.relative(repoRoot, sourcePath)}`);
+    console.error(`[gen-icon] 找不到源图：${path.relative(baseDir, sourcePath)}`);
     console.error('[gen-icon] 请放置设计源图，或用 --variant=<方案> 走程序化绘制');
     process.exit(1);
   }
-  console.log(`[gen-icon] 源图：${path.relative(repoRoot, sourcePath)}`);
+  console.log(`[gen-icon] 源图：${path.relative(baseDir, sourcePath)}`);
   const decoded = decodePng(fs.readFileSync(sourcePath));
   master = convertSourceImage(decoded.data, decoded.w, decoded.h);
   modeLabel = '设计源图';
 }
 
+/** 日志里显示相对 cwd 的路径，用 --out 时也能显示对实际位置。 */
+const rel = (p) => path.relative(baseDir, p) || path.basename(p);
+
 fs.writeFileSync(path.join(outDir, 'icon-preview.png'), encodePng(buildPreviewSheet(master)));
-console.log('[gen-icon] 预览图：build/icon-preview.png（上浅底 / 下深底）');
+console.log(`[gen-icon] 预览图：${rel(path.join(outDir, 'icon-preview.png'))}（上浅底 / 下深底）`);
 
 if (previewOnly) {
   console.log('[gen-icon] --preview 模式，未写 icon.ico');
@@ -757,7 +769,7 @@ if (previewOnly) {
 
 const entries = SIZES.map((size) => ({ size, png: encodePng(resampleArea(master, size, size)) }));
 fs.writeFileSync(outFile, buildIco(entries));
-console.log(`[gen-icon] 完成：build/icon.ico（${modeLabel}，${SIZES.length} 档：${SIZES.join('/')}，${(fs.statSync(outFile).size / 1024).toFixed(1)} KB）`);
+console.log(`[gen-icon] 完成：${rel(outFile)}（${modeLabel}，${SIZES.length} 档：${SIZES.join('/')}，${(fs.statSync(outFile).size / 1024).toFixed(1)} KB）`);
 
 fs.writeFileSync(path.join(outDir, 'icon.png'), entries.find((e) => e.size === 256).png);
-console.log('[gen-icon] 完成：build/icon.png（256×256）');
+console.log(`[gen-icon] 完成：${rel(path.join(outDir, 'icon.png'))}（256×256）`);
