@@ -14,7 +14,7 @@ export interface LedgerEntry {
 }
 interface StoreData { version: 1; config: ToolConfig; rules: Rule[]; ledger: LedgerEntry[] }
 export type Reservation = { kind: 'new' | 'duplicate'; entry: LedgerEntry } | { kind: 'conflict' };
-const DEFAULT_CONFIG: ToolConfig = { permission: 'ask', automatic: false, dirtyPolicy: 'ask', completionSound: false, autoCopyResults: true };
+const DEFAULT_CONFIG: ToolConfig = { permission: 'ask', automatic: false, dirtyPolicy: 'ask', completionSound: false, autoCopyResults: true, sendIntervalSeconds: 3 };
 const STATUSES: ToolResult['status'][] = ['running', 'pending_permission', 'done', 'failed', 'permission_denied', 'cancelled', 'skipped_dependency', 'unknown'];
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 const rootKey = (root: string) => hash(path.resolve(root).toLowerCase());
@@ -49,11 +49,12 @@ export class ToolStore {
   getEntries(): LedgerEntry[] { return clone(this.data.ledger); }
 
   async configure(patch: unknown): Promise<ToolConfig> {
-    if (!record(patch) || Object.keys(patch).some(k => !['permission', 'automatic', 'dirtyPolicy', 'completionSound', 'autoCopyResults'].includes(k))) throw new Error('工具设置包含未定义字段');
+    if (!record(patch) || Object.keys(patch).some(k => !['permission', 'automatic', 'dirtyPolicy', 'completionSound', 'autoCopyResults', 'sendIntervalSeconds'].includes(k))) throw new Error('工具设置包含未定义字段');
     if ('permission' in patch && !['ask', 'rules', 'full'].includes(String(patch.permission))) throw new Error('权限模式无效');
     if ('automatic' in patch && typeof patch.automatic !== 'boolean') throw new Error('自动采集设置必须为布尔值');
     if ('completionSound' in patch && typeof patch.completionSound !== 'boolean') throw new Error('完成音效设置必须为布尔值');
     if ('autoCopyResults' in patch && typeof patch.autoCopyResults !== 'boolean') throw new Error('自动复制设置必须为布尔值');
+    if ('sendIntervalSeconds' in patch && (typeof patch.sendIntervalSeconds !== 'number' || !Number.isInteger(patch.sendIntervalSeconds) || patch.sendIntervalSeconds < 0 || patch.sendIntervalSeconds > 300)) throw new Error('自动发送间隔必须是 0–300 秒的整数');
     if ('dirtyPolicy' in patch && !['ask', 'continue', 'stop'].includes(String(patch.dirtyPolicy))) throw new Error('未保存内容策略无效');
     return this.mutate(data => {
       data.config = { ...data.config, ...patch } as ToolConfig;
@@ -137,6 +138,7 @@ export class ToolStore {
     if (!['ask', 'rules', 'full'].includes(String(c.permission)) || typeof c.automatic !== 'boolean' || !['ask', 'continue', 'stop'].includes(String(c.dirtyPolicy))) return false;
     if (c.completionSound !== undefined && typeof c.completionSound !== 'boolean') return false;
     if (c.autoCopyResults !== undefined && typeof c.autoCopyResults !== 'boolean') return false;
+    if (c.sendIntervalSeconds !== undefined && (typeof c.sendIntervalSeconds !== 'number' || !Number.isInteger(c.sendIntervalSeconds) || c.sendIntervalSeconds < 0 || c.sendIntervalSeconds > 300)) return false;
     if (value.rules.length > 5000 || value.rules.some(r => !record(r) || !validHash(r.root) || typeof r.fingerprint !== 'string' || !r.fingerprint || r.fingerprint.length > 1000 || !['allow', 'ask', 'deny'].includes(String(r.action)))) return false;
     const scopes = new Set<string>();
     return value.ledger.length <= 10_000 && value.ledger.every(e => {

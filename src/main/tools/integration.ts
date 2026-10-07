@@ -12,13 +12,16 @@ import type { WorkspaceController } from '../workspaceController';
 import { ToolFiles, resolveToolPath } from './files';
 import { ToolProcesses } from './processes';
 import { ToolStore } from './store';
-import { ToolHarness } from './harness';
+import { ToolHarness, type ToolSelection } from './harness';
+import { ChangeReviewOwner, type ChangeReviewState } from './changeReview';
 import { ToolChanges, checkBatchChanges, checkResolvedBatchChanges, projectAliases } from './changes';
 import { AutoCollector } from './autoCollector';
 import type { AutoReply } from './autoCollector';
 import { ReplyMonitor, readAutoReply } from './replyObservation';
 import { ReplyChangeWatcher } from './replyChangeWatcher';
 import { ResultClipboard, formatToolResults } from './resultClipboard';
+import { AutoContinuation } from './autoContinuation';
+import { WebResultSender } from './webResultSender';
 export { readAutoReply } from './replyObservation';
 
 interface Options {
@@ -27,6 +30,9 @@ interface Options {
   ask: (title: string, detail: string, buttons: string[], checkboxLabel?: string) => Promise<{ response: number; checkboxChecked: boolean }>;
   notifyFile: (relative: string, change: 'updated' | 'created' | 'deleted', discard: boolean) => void;
   copy: (text: string) => void;
+  review?: WebContents;
+  notifyReview?: (state: ChangeReviewState) => void;
+  sender?: Pick<WebResultSender, 'send' | 'cancel' | 'dispose'>;
 }
 const READ_TOOLS = new Set(['get_project_info', 'list_directory', 'search_files', 'read_file', 'search_text']);
 const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
@@ -124,16 +130,24 @@ export async function createToolIntegration(options: Options) {
   const store = new ToolStore(options.storePath); await store.ready();
   const fileTools = new ToolFiles();
   let disposed = false; let revision = 0;
+  let automaticSuspended = false;
   let harness: ToolHarness;
+  let continuation: AutoContinuation | undefined;
+  let automaticSend: { promise: Promise<boolean>; finish: (confirmed: boolean) => void } | undefined;
+  const sender = options.sender ?? new WebResultSender(options.web);
+  const review = new ChangeReviewOwner(options.notifyReview);
+  const reviewTokens = new WeakMap<ToolSelection, number>();
   const clipboard = new ResultClipboard(options.copy);
   const processes = new ToolProcesses(() => {
     if (!disposed && harness) harness.refreshProcesses();
   });
   const publish = (state: ToolState) => {
-    auto.setEnabled(!options.disabled && state.config.automatic);
-    watcher.setEnabled(!options.disabled && state.config.automatic);
+    review.updateResults(state.results);
+    auto.setEnabled(!options.disabled && !automaticSuspended && state.config.automatic);
+    watcher.setEnabled(!options.disabled && !automaticSuspended && state.config.automatic);
     if (!disposed) clipboard.complete(state);
-    if (!options.editor.isDestroyed()) options.editor.send(CHANNELS.toolState, { ...state, canUndo: changes.canUndo, hasRunningProcesses: processes.hasRunning, clipboard: clipboard.notification(state) });
+    continuation?.observe({ root: options.files.getRoot(), session: sessionKeyOf(options.web.getURL()), state: options.disabled || automaticSuspended ? { ...state, config: { ...state.config, automatic: false } } : state });
+    if (!options.editor.isDestroyed()) options.editor.send(CHANNELS.toolState, { ...state, canUndo: changes.canUndo, hasRunningProcesses: processes.hasRunning, clipboard: clipboard.notification(state), continuation: continuation?.getState() });
   };
   const approveDirty = async (relative: string): Promise<boolean> => {
     const policy = harness.getState().config.dirtyPolicy;
@@ -143,32 +157,81 @@ export async function createToolIntegration(options: Options) {
     return choice.response === 0;
   };
   const changes = new ToolChanges(options.files, options.returnPath, rel => options.workspace.editor.isDirty(rel), approveDirty, options.notifyFile,
-    () => options.workspace.editor.current.documents.map(d => d.path));
+    () => options.workspace.editor.current.documents.map(d => d.path), (event, token) => review.record(token, event));
+  let changeSession = sessionKeyOf(options.web.getURL());
+  const synchronizeChangeSession = () => {
+    const current = sessionKeyOf(options.web.getURL());
+    if (current !== changeSession) { changes.reset(); changeSession = current; }
+  };
   const monitor = new ReplyMonitor(options.web);
+  const finishAutomaticSend = (confirmed: boolean, attempt = automaticSend) => {
+    if (!attempt || automaticSend !== attempt) return;
+    automaticSend = undefined;
+    if (!confirmed) auto.cancelTurn();
+    attempt.finish(confirmed);
+  };
   const auto = new AutoCollector(() => monitor.read(), async (text, current) => {
     const root = options.files.getRoot(); const session = sessionKeyOf(options.web.getURL());
+    const attempt = automaticSend;
+    if (attempt && !await attempt.promise) return;
     await watcher.acknowledge();
     if (current() && root === options.files.getRoot() && session === sessionKeyOf(options.web.getURL())) await harness.collect(text);
   }, message => harness.report(message));
-  const watcher = new ReplyChangeWatcher(options.web, userTurn => { if (userTurn) auto.noteUserTurn(); return auto.tick(); }, () => auto.reset(), message => harness.report(message));
+  const watcher = new ReplyChangeWatcher(options.web, userTurn => { if (userTurn) { finishAutomaticSend(false); continuation?.userTurn(); auto.noteUserTurn(); } return auto.tick(); }, () => { finishAutomaticSend(false); continuation?.reset(); auto.reset(); synchronizeChangeSession(); harness.getState(); }, message => harness.report(message));
   harness = new ToolHarness({ store, root: () => options.files.getRoot(), session: () => sessionKeyOf(options.web.getURL()),
+    selected: selection => {
+      continuation?.reset();
+      synchronizeChangeSession();
+      if (!selection) { review.clear(); return; }
+      reviewTokens.set(selection, review.begin({ root: selection.root, session: selection.session,
+        batchId: selection.batch.batch_id, contentKey: hash(JSON.stringify(selection.batch)) }, selection.batch));
+    },
+    stopped: (selection, error) => review.stop(reviewTokens.get(selection), error),
     describe: describeTool, snapshotProcess: id => processes.snapshot(id), prepare: async (root, batch) => { checkBatchChanges(root, batch); await checkResolvedBatchChanges(root, batch); },
     authorize: async (root, request) => {
       const targets = await describeTool(root, request);
       const choice = await options.ask('工具请求需要批准', `项目：${root}\n工具：${request.tool}\n${targets.external ? '包含项目外目标\n' : ''}${request.tool === 'run_command' ? '命令可访问当前账户的文件与网络；工作目录不构成沙箱。\n' : ''}实际参数：\n${JSON.stringify(request.args, null, 2)}`, targets.canRemember ? ['允许一次', '记住本项目的精确请求', '拒绝'] : ['允许一次', '拒绝']);
       return choice.response === 0 ? 'once' : targets.canRemember && choice.response === 1 ? 'remember' : 'deny';
     },
-    execute: async (root, request, started) => {
-      if (request.tool === 'apply_changes') return options.workspace.run(() => changes.execute(root, request));
+    execute: async (root, request, started, selection) => {
+      if (request.tool === 'apply_changes') return options.workspace.run(() => {
+        if (selection.session !== sessionKeyOf(options.web.getURL())) throw new Error('会话已切换，未启动文件修改');
+        return changes.execute(root, request, reviewTokens.get(selection));
+      });
       if (['run_command', 'get_process_output', 'stop_process'].includes(request.tool)) return processes.execute(root, request.tool, request.args, started);
       return fileTools.execute(root, request.tool, request.args);
     }, changed: publish,
   });
   const getState = (): ToolState => {
+    synchronizeChangeSession();
     const state = harness.getState();
     const notification = clipboard.notification(state);
-    return { ...state, canUndo: changes.canUndo, hasRunningProcesses: processes.hasRunning, ...(notification ? { clipboard: notification } : {}) };
+    return { ...state, canUndo: changes.canUndo, hasRunningProcesses: processes.hasRunning, ...(notification ? { clipboard: notification } : {}), ...(continuation ? { continuation: continuation.getState() } : {}) };
   };
+  continuation = new AutoContinuation({
+    current: () => ({ root: options.files.getRoot(), session: sessionKeyOf(options.web.getURL()), state: getState() }),
+    cancelSend: () => { finishAutomaticSend(false); return sender.cancel(); },
+    changed: () => { if (!disposed && !options.editor.isDestroyed()) options.editor.send(CHANNELS.toolState, getState()); },
+    send: async (text, session, current) => {
+      const state = harness.getState();
+      const root = options.files.getRoot();
+      const reply = await readAutoReply(options.web);
+      if (!current()) return { ok: false, error: '本批自动发送已取消' };
+      if (reply.url !== session || reply.completion !== 'complete') return { ok: false, error: '网页回复状态或会话已变化，请检查后手动发送' };
+      const parsed = parseToolBatch(reply.text);
+      if (parsed.kind !== 'batch' || !harness.matchesBatch(parsed.batch)) return { ok: false, error: '网页最新回复已变化，未发送旧工具结果' };
+      const latest = harness.getState();
+      if (!current() || automaticSuspended || !latest.config.automatic || latest.busy || latest.completion?.cancelled || latest.completion?.id !== state.completion?.id || formatToolResults(latest.results) !== text || root !== options.files.getRoot() || sessionKeyOf(options.web.getURL()) !== session) return { ok: false, error: '自动继续已关闭或项目、会话、批次已切换' };
+      let finish!: (confirmed: boolean) => void;
+      const attempt = { promise: new Promise<boolean>(resolve => { finish = resolve; }), finish: (confirmed: boolean) => finish(confirmed) };
+      automaticSend = attempt; auto.noteUserTurn();
+      try {
+        const result = await sender.send(text, session);
+        finishAutomaticSend(result.ok && current(), attempt);
+        return result;
+      } catch (error) { finishAutomaticSend(false, attempt); throw error; }
+    },
+  });
   const channels: string[] = [];
   const register = (channel: string, action: (...args: unknown[]) => unknown, count: number) => {
     options.ipc.handle(channel, (event, ...args: unknown[]) => {
@@ -178,7 +241,15 @@ export async function createToolIntegration(options: Options) {
     }); channels.push(channel);
   };
   register(CHANNELS.getToolState, getState, 0);
-  register(CHANNELS.setToolConfig, async config => { await harness.configure(config); return getState(); }, 1);
+  register(CHANNELS.setToolConfig, async config => {
+    if (config && typeof config === 'object' && !Array.isArray(config) && (config as { automatic?: unknown }).automatic === false) {
+      // 关闭先取消计时与等待发送，不等配置写盘，也不取消本地正在执行的工具。
+      automaticSuspended = true; publish(harness.getState());
+    }
+    await harness.configure(config);
+    if (config && typeof config === 'object' && (config as { automatic?: unknown }).automatic === true) automaticSuspended = false;
+    publish(harness.getState()); return getState();
+  }, 1);
   register(CHANNELS.copyToolResults, () => {
     const results = harness.getCopyResults();
     const batchError = harness.getState().batchError;
@@ -197,10 +268,25 @@ export async function createToolIntegration(options: Options) {
     return getState();
   }, 1);
   register(CHANNELS.clearToolRules, async () => { await harness.clearRules(); return getState(); }, 0);
-  register(CHANNELS.undoToolChange, async () => { const result = await options.workspace.run(() => changes.undo()); publish(harness.getState()); return result; }, 0);
+  const undo = async () => { synchronizeChangeSession(); const result = await options.workspace.run(() => changes.undo()); publish(harness.getState()); return result; };
+  register(CHANNELS.undoToolChange, undo, 0);
+  if (options.review) {
+    for (const [channel, action] of [
+      [CHANNELS.getReviewState, () => { harness.getState(); return review.getState(); }],
+      [CHANNELS.undoReviewChange, undo],
+    ] as const) {
+      options.ipc.handle(channel, (event, ...args: unknown[]) => {
+        if (event.sender !== options.review || event.senderFrame !== options.review!.mainFrame || args.length) throw new Error('变更查看仅供本地变更视图主 frame 使用');
+        return action();
+      });
+      channels.push(channel);
+    }
+  }
   publish(getState());
   return {
     channels, getState, approveDirty,
+    invalidate: (relative: string, isDirectory: boolean) => { changes.invalidate(relative, isDirectory); publish(harness.getState()); },
+    getReviewState: () => { harness.getState(); return review.getState(); },
     async prepareDirty(relative: string): Promise<{ allowed: boolean; discard: boolean; aliases: string[] }> {
       const root = options.files.getRoot(); if (!root) return { allowed: false, discard: false, aliases: [] };
       const aliases = await projectAliases(root, relative, options.workspace.editor.current.documents.map(d => d.path));
@@ -209,7 +295,7 @@ export async function createToolIntegration(options: Options) {
       return { allowed: true, discard: dirty.length > 0, aliases };
     },
     async accept(text: string, completion: AutoReply['completion']): Promise<boolean> {
-      const parsed = parseToolBatch(text); if (parsed.kind === 'none') return false;
+      const parsed = parseToolBatch(text);
       const root = options.files.getRoot(); const session = sessionKeyOf(options.web.getURL()); const currentRevision = revision;
       if (completion === 'generating') { harness.report('AI 仍在生成回复，工具批次未执行；请等待回复结束'); return true; }
       if (completion === 'interrupted') { harness.report('AI 回复已中断，等待继续生成；当前工具批次未执行'); return true; }
@@ -226,7 +312,7 @@ export async function createToolIntegration(options: Options) {
       auto.acknowledge(sessionKeyOf(options.web.getURL()), text);
       void harness.collect(text); return true;
     },
-    reset(): void { revision++; harness.cancel(); watcher.reset(); changes.reset(); },
-    async dispose(): Promise<void> { disposed = true; revision++; auto.dispose(); await watcher.dispose(); harness.cancel(); await processes.dispose(); },
+    reset(): void { revision++; continuation?.reset(); harness.cancel(); watcher.reset(); changes.reset(); },
+    async dispose(): Promise<void> { disposed = true; revision++; continuation?.dispose(); await sender.dispose(); auto.dispose(); await watcher.dispose(); harness.cancel(); await processes.dispose(); },
   };
 }

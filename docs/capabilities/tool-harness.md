@@ -3,14 +3,14 @@ artifact_type: capability
 status: current
 updated: 2026-10-07
 owner: 胡运宽
-source_of_truth: [src/shared/toolJsonDiagnostic.ts, src/main/tools/resultClipboard.ts, src/renderer/toolExecutionClock.js, test/toolJsonDiagnostic.test.ts, test/toolResultClipboard.test.ts, test/toolExecutionClock.test.ts, test/toolExecutionIntegration.test.ts, src/shared/toolProtocol.ts, src/main/tools/harness.ts, src/main/tools/store.ts, src/main/tools/files.ts, src/main/tools/processes.ts, src/main/tools/changes.ts, src/main/tools/autoCollector.ts, src/main/tools/replyObservation.ts, src/main/tools/replyContinuation.ts, src/main/tools/replyChangeWatcher.ts, src/main/tools/integration.ts, src/renderer/toolHarness.js, src/renderer/toolHarness.css, src/renderer/toolPanelLayout.js, src/renderer/toolResultPresentation.js, test/toolProtocol.test.ts, test/toolHarness.test.ts, test/toolIntegration.test.ts, test/toolAutoCollector.test.ts, test/replyObservation.test.ts, test/replyChangeWatcher.test.ts, test/toolHarnessUi.test.ts, test/toolPanelLayout.test.ts, test/toolResultPresentation.test.ts, test/deepseekReplyState.test.ts, test/toolChanges.test.ts, test/toolProcesses.test.ts]
+source_of_truth: [src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, tools/verify-web-result-sender.cjs, src/shared/toolJsonDiagnostic.ts, src/main/tools/resultClipboard.ts, src/renderer/toolExecutionClock.js, test/toolJsonDiagnostic.test.ts, test/toolResultClipboard.test.ts, test/toolExecutionClock.test.ts, test/toolExecutionIntegration.test.ts, src/shared/toolProtocol.ts, src/main/tools/harness.ts, src/main/tools/store.ts, src/main/tools/files.ts, src/main/tools/processes.ts, src/main/tools/changes.ts, src/main/tools/autoCollector.ts, src/main/tools/replyObservation.ts, src/main/tools/replyContinuation.ts, src/main/tools/replyChangeWatcher.ts, src/main/tools/integration.ts, src/renderer/toolHarness.js, src/renderer/toolHarness.css, src/renderer/toolPanelLayout.js, src/renderer/toolResultPresentation.js, test/toolProtocol.test.ts, test/toolHarness.test.ts, test/toolIntegration.test.ts, test/toolAutoCollector.test.ts, test/replyObservation.test.ts, test/replyChangeWatcher.test.ts, test/toolHarnessUi.test.ts, test/toolPanelLayout.test.ts, test/toolResultPresentation.test.ts, test/deepseekReplyState.test.ts, test/toolChanges.test.ts, test/toolProcesses.test.ts]
 ---
 
 # 能力：通用本地工具
 
-权限、只读网页与剪贴板边界依据已接受的 ADR：`docs/adr/2026-10-06-native-tool-harness-boundary.md`。
+权限与执行边界依据 `docs/adr/2026-10-06-native-tool-harness-boundary.md`；限定网页结果回传依据 `docs/adr/2026-10-07-automatic-result-return-boundary.md`，均已接受。
 
-AI 输出规范请求，IDE 只读采集、校验、按权限执行并显示真实结果。当前工具批次执行结束可按设置自动复制结果，覆盖读取、搜索、修改与命令；用户粘贴并手动发送到 AI 网页。路由、权限、状态与截断由确定性代码完成。
+AI 输出规范请求，IDE 只读采集、校验、按权限执行并显示真实结果。开启 automatic 后，在当前整批工具真实结束时按间隔回传官网，覆盖读取、搜索、修改与命令；关闭或暂停时保留用户手动复制发送。路由、权限、计时、状态与截断由确定性代码完成。
 
 ## 协议与工具
 
@@ -34,7 +34,7 @@ AI 输出规范请求，IDE 只读采集、校验、按权限执行并显示真�
 
 ## 权限与状态
 
-底部预选权限，初始请求批准、自动采集关闭、草稿策略询问，设置持久保存。请求批准时项目内五类只读工具自动，其余由 IDE 询问；规则模式精确匹配允许/询问/拒绝规则，未覆盖询问；完全访问在当前账户内执行项目内外请求。权限不关闭参数、基线与草稿校验。
+底部预选权限，初始请求批准、自动继续关闭、草稿策略询问，设置持久保存。请求批准时项目内五类只读工具自动，其余由 IDE 询问；规则模式精确匹配允许/询问/拒绝规则，未覆盖询问；完全访问在当前账户内执行项目内外请求。权限不关闭参数、基线与草稿校验。
 
 批准可仅一次或记住本项目精确请求；工作目录到项目根的配置与直接引用脚本变化使规则失效。字面路径支持引号、空格和中文；展开、拼接、嵌套 shell 或无法确定的引用仅支持当次批准。外部脚本不读取正文建立授权指纹，只支持当次批准。设置可清除本项目规则。规则不是命令沙箱，不保证约束间接脚本和联网。
 
@@ -50,9 +50,9 @@ AI 输出规范请求，IDE 只读采集、校验、按权限执行并显示真�
 
 展开面板可拖动顶部横向分隔条，方向键每次调整 24px，Home／End 调至当前最小／最大高度，双击恢复 160px 请求高度。实际高度随窗口、输入区与摘要高度钳制，保留至少 120px 编辑空间；拖动在取消、失去捕获、失焦或收起时结束，不跨次保留活动指针。
 
-权限与自动采集常驻输入框操作栏。详细设置在本地浮层，包含未保存策略、完成音效、规则清理与原提示词设置入口；浮层不参与三列宽度计算。Escape 关闭并恢复按钮焦点，外点、焦点离开或失焦关闭；窄列和长输入仍保留常用操作。常态说明收进悬停提示及浮层，异常原因保留可见。
+权限与自动继续常驻输入框操作栏，同一个 automatic 开关包含采集、权限执行与结果回传，无轮数参数。详细设置在本地浮层，包含发送间隔（0–300 整数秒，默认 3）、未保存策略、完成音效、规则清理与原提示词设置入口；浮层不参与三列宽度计算。Escape 关闭并恢复按钮焦点，外点、焦点离开或失焦关闭；窄列和长输入仍保留常用操作。摘要显示倒计时、发送、等待回复/用户及暂停原因。
 
-修改先准备本请求全部变更，检查所有真实目标别名的未保存内容，再逐项写入。继续替换 B 为 C，停止保留 A/B；成功落盘后更新编辑器。撤销使用唯一源身份，不能误撤销其后的人工预览修改。保留最近 20 项工具撤销，项目切换清空。
+修改先准备本请求全部变更，检查所有真实目标别名的未保存内容，再逐项直接写入。继续替换 B 为 C，停止保留 A/B；成功落盘后更新编辑器。右侧仅查看本批实际 before/after、差异与逐项执行状态，不提供再次应用或左侧内联预览；后续人工编辑不污染执行快照，失败与部分成功如实显示。快照仅存当前轮内存，不进入复制结果或执行账本。撤销使用唯一源身份，复用原工具入口并同步变更状态，不能误撤销其后的人工修改。保留同项目／会话内最近 20 项工具撤销，项目或会话切换清空；迟到完成的旧会话修改不能进入新撤销栈。改名／删除仅移除相关路径撤销记录。
 
 自动采集同步观察生成/完成控件和正文，不以文字静止判结束；启用或导航建立历史基线。结构未知时提示手动采集；手动未知状态需用户确认并再次核对正文，生成中不执行。采集不点击、输入或修改网页。
 
@@ -62,7 +62,7 @@ DeepSeek 主回复使用当前回复页脚的原生复制、可用重新生成�
 
 本次新批结果就绪产生一次当前轮完成事件；本地摘要显示短暂成功/错误动画，不展开面板或抢焦点，尊重减少动态效果。工具设置中的完成音效默认关闭、持久保存，用户由关闭切换为开启且保存成功后预听一次，与批次完成使用同一短音；保存失败或准备结束前已关闭不播放。此后每批最多一次本地短音；播放失败独立提示，不覆盖工具事实。刷新、重复批和重启历史状态不触发，切项目或会话清空事件，ID 在主进程生命周期内递增。
 
-新轮来自隔离上下文对真实用户原生发送/重新生成/继续生成点击或普通 Enter 发送的只读识别，不读输入内容，不接受合成事件、Shift/修饰键或输入法回车。动作仅记轮序号，相关 DOM 变化才检查/采集。无新轮时即使网址先改、历史稍后加载，也只更新基线；导航先作废旧执行资格，再消费未通知的旧轮标记。空新对话首次发送随自动分配地址保留一次，依据发送当时是否为空，不依赖新根与网址挂载先后；自动确认完成、手动成功、其它用户点击/非输入区键盘动作及输入区 Alt+Left/Right 清除这一次关联。自动完成不能清除后来真实发送的新轮，手动成功同步消费尚未通知的旧轮。已开始生成后才启用自动采集、未知控件或不支持的发送方式可使用手动采集。
+真实用户新轮来自隔离上下文对原生发送/重新生成/继续生成点击或普通 Enter 发送的只读识别，不读输入内容，不接受合成事件、Shift/修饰键或输入法回车。动作仅记轮序号，相关 DOM 变化才检查/采集。无新轮时即使网址先改、历史稍后加载，也只更新基线；导航先作废旧执行资格，再消费未通知的旧轮标记。空新对话首次发送随自动分配地址保留一次，依据发送当时是否为空，不依赖新根与网址挂载先后；自动确认完成、手动成功、其它用户点击/非输入区键盘动作及输入区 Alt+Left/Right 清除这一次关联。自动完成不能清除后来真实发送的新轮，手动成功同步消费尚未通知的旧轮。已开始生成后才启用自动采集、未知控件或不支持的发送方式可使用手动采集。
 
 输入区外可见、可用的原生“继续生成／Continue generating”按钮表示回复中断，优先于普通完成页脚；正在生成标志仍优先。中断等待时不读取正文摘要或自动采集半成品，工具栏显示“等待续写”。标签须精确匹配，允许最新唯一回复的正文外页脚和独立原生控件，历史回复、正文及代码卡不作为续写控件。真实点击继续后，页面变化恢复检查；再次中断继续等待，最终结束才重新采集整条原回复。早期格式错误不写执行账本，不占用批次 ID；补全后仍校验完整协议，已执行失败、重复或未知批次不自动重放。手动采集在明确中断状态及确认期间再次中断时也不执行。
 
@@ -82,4 +82,16 @@ DeepSeek 主回复使用当前回复页脚的原生复制、可用重新生成�
 
 工具 JSON 错误整批不执行、不预约批次；多个请求中一项校验失败也不部分执行。工具结果列表显示一个展开的“批次校验”失败卡片，包含原生 SyntaxError；有位置时给 JSON 正文行列、UTF-16 偏移与短片段，没有位置时不推测。不能解析的批次不伪造工具名或请求 ID，复制本批结果返回 {protocol_version:1,tool_results:[],batch_error:{status:"failed",error:诊断正文}}。不另铺全局长诊断，正文只保留最近轮内存，切换项目/会话清除，不联网或自动修复 JSON。
 
-当前新批次全部工具真正结束且至少一个工具实际执行后自动复制完整 tool_results 一次，覆盖读取、搜索、修改、进程查询和命令，默认开启，在工具结果栏“⋯”可关闭并保存；工具执行失败输出也复制。后台启动、全部未执行、取消、未知、历史恢复及界面状态查询/设置不会写剪贴板；切换项目/会话作废旧轮。摘要明确提示自动复制成功或失败，手动复制按钮保留。批次完成事件主进程单调编号，状态广播、界面初始化或重绘不重复复制，失败不暗中重试。粘贴和发送由用户完成。
+当前新批次全部工具真正结束且至少一个工具实际执行后自动复制完整 tool_results 一次，覆盖读取、搜索、修改、进程查询和命令，默认开启，在工具结果栏“⋯”可关闭并保存；工具执行失败输出也复制。后台启动、全部未执行、取消、未知、历史恢复及界面状态查询/设置不会写剪贴板；切换项目/会话作废旧轮。手动复制按钮保留，复制失败独立提示，automatic 开启时成功复制不误提示用户必须再粘贴。批次完成事件主进程单调编号，状态广播、界面初始化或重绘不重复复制，失败不暗中重试。
+
+## 自动继续与结果发送
+
+`autoContinuation.ts` 独立拥有完成事件去重、等待、倒计时和一次发送状态。发送只消费当前项目/会话/批次的新完成事件，且至少一项 done/failed 结果具有真实 started_at；实际执行失败可回传用于修复。后台启动及 cleanup_pending 继续等待。任何拒绝、取消/中断、unknown，或无执行、批次格式错误、纯对话时暂停/等待用户；历史恢复与重复状态不启动发送。
+
+关闭 automatic 在配置写盘前优先取消计时与待发送，不中断本地工具；等待授权不计时。用户发起新轮或项目/会话切换取消旧结果。发送前 integration 再读最新完整回复，核验正式批次匹配、完成事件/结果/作用域仍有效；发送前用 auto.noteUserTurn 关联下一轮，后续只读 DOM 变化驱动采集，不把合成 click 认作真实用户事件。
+
+`webResultSender.ts` 是唯一网页写 owner，仅官方 DeepSeek 当前会话、唯一可见 textarea 与已知发送 SVG 的局部关联，隔离世界 1005；采集/监听仍只读世界 1004。输入为空且页面空闲才以原生 value setter、input 和 click 填入并提交同源纯文本结果，不读取剪贴板、不写 HTML、不保存用户草稿。未知控件、已有草稿或用户改写暂停；点击前取消只清理自有文本，点击后不确定、超时或异常不重试。网页始终无 IPC/文件桥，AI HTTP 仍由 Chromium 发起。
+
+规则验收入口为 `test/autoContinuation.test.ts`、`test/webResultSender.test.ts`、`test/toolIntegration.test.ts`；原生 sender 验收为 `tools/verify-web-result-sender.cjs` 的本地 Electron 夹具。真实官网尚未验收，不能据夹具断言平台接受合成发送。
+
+发送确认屏障由 integration 管理：网页下一回复若先出现，必须等当前发送确认成功才执行；unknown、失败或取消撤销该自动轮资格，迟到的回复不启动新工具。真实用户后续发起新轮仍可恢复。`AutoCollector.cancelTurn` 保留观察基线，不重试未确认发送。

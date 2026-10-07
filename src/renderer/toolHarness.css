@@ -25,6 +25,14 @@
 .tool-settings-body { display: flex; flex-direction: column; align-items: stretch; gap: 10px; font-size: 12px; color: var(--ui-text); }
 .tool-settings-body p, .tool-permission-hint { margin: 0; color: var(--ui-muted); font-size: 12px; line-height: 1.6; }
 .tool-settings-body .tool-select { width: 100%; }
+.tool-interval { display: flex; align-items: center; gap: 5px; height: var(--ui-control-height); padding: 3px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius); background: var(--ui-surface); }
+.tool-interval:focus-within { outline: 2px solid var(--ui-accent); outline-offset: 2px; }
+.tool-interval #tool-send-interval { flex: 1; width: 0; min-width: 0; height: 100%; border: 0; background: transparent; outline: none; appearance: textfield; font-variant-numeric: tabular-nums; }
+#tool-send-interval::-webkit-inner-spin-button, #tool-send-interval::-webkit-outer-spin-button { appearance: none; margin: 0; }
+.tool-interval-actions { display: flex; align-items: center; gap: 3px; }
+.tool-settings-body .tool-interval-actions .ui-button { width: 24px; height: 24px; padding: 0; border-color: transparent; background: transparent; text-align: center; font-size: 16px; line-height: 1; }
+.tool-interval-actions .ui-button:hover:not(:disabled) { background: var(--ui-bg); border-color: var(--ui-border); }
+.tool-interval-actions .ui-button:focus-visible { outline: 1px solid var(--ui-accent); outline-offset: -2px; }
 .tool-settings-body .tool-auto-label { padding: 5px 0; color: var(--ui-text); }
 .tool-settings-body .ui-button { text-align: left; }
 .tool-permission-hint { border-top: 1px solid var(--ui-border); padding-top: 10px; }

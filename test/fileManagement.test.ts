@@ -58,3 +58,41 @@ it('捕获旧根后发生切换时拒绝继续异步操作', async (t) => {
   const pending = f.files.readFile('a.txt'); f.files.clearRoot();
   assert.equal((await pending).ok, false);
 });
+
+it('永久删除真实文件和文件夹全部内容，保持回收站作为独立操作', async (t) => {
+  const f = await fixture(t); await f.manager.create('', 'sub', true); await f.manager.create('sub', 'a.txt', false);
+  assert.equal((await f.manager.delete('sub/a.txt')).ok, true); await assert.rejects(fs.stat(path.join(f.root, 'sub/a.txt')), { code: 'ENOENT' });
+  await f.manager.create('sub', 'b.txt', false); assert.equal((await f.manager.delete('sub')).ok, true);
+  await assert.rejects(fs.stat(path.join(f.root, 'sub')), { code: 'ENOENT' });
+  await f.manager.create('', 'recycle.txt', false); assert.equal((await f.manager.trash('recycle.txt')).ok, false);
+  assert.equal((await fs.stat(path.join(f.root, 'recycle.txt'))).isFile(), true);
+});
+
+it('永久删除拒绝根、越界、缺失目标、链接和链接祖先，检查路径可用于复制与定位', async (t) => {
+  const f = await fixture(t); await f.manager.create('', 'real', true); await f.manager.create('real', 'a.txt', false);
+  await fs.symlink(path.join(f.root, 'real'), path.join(f.root, 'link'), process.platform === 'win32' ? 'junction' : 'dir');
+  for (const relative of ['', '.', '..', 'missing.txt', 'link', 'link/a.txt']) assert.equal((await f.manager.delete(relative)).ok, false, relative);
+  assert.equal((await f.manager.inspect('link/a.txt')).ok, false);
+  assert.equal((await f.manager.inspect('')).ok, true); const target = await f.manager.inspect('real/a.txt');
+  assert.equal(target.ok, true); if (target.ok) assert.equal(target.absolute, path.join(f.root, 'real/a.txt'));
+  assert.equal(await fs.readFile(path.join(f.root, 'real/a.txt'), 'utf8'), '');
+});
+
+it('确认目标身份过期或根发生切换时不删除新目标', async (t) => {
+  const f = await fixture(t); await f.manager.create('', 'a.txt', false);
+  const inspected = await f.manager.inspect('a.txt'); assert.equal(inspected.ok, true);
+  if (inspected.ok) {
+    const result = await f.manager.delete('a.txt', { ...inspected.identity, birthtimeMs: inspected.identity.birthtimeMs + 1 });
+    assert.equal(result.ok, false); assert.equal((await fs.stat(path.join(f.root, 'a.txt'))).isFile(), true);
+  }
+  const pending = f.manager.delete('a.txt'); f.files.clearRoot(); assert.equal((await pending).ok, false);
+});
+
+it('删除普通文件夹内的 junction 仅移除链接，不递归删除外部内容', async (t) => {
+  const f = await fixture(t); const outside = await fs.mkdtemp(path.join(os.tmpdir(), 'mini-delete-external-'));
+  t.after(() => fs.rm(outside, { recursive: true, force: true }));
+  await fs.mkdir(path.join(f.root, 'sub')); await fs.writeFile(path.join(outside, 'keep.txt'), 'external');
+  await fs.symlink(outside, path.join(f.root, 'sub', 'link'), process.platform === 'win32' ? 'junction' : 'dir');
+  assert.equal((await f.manager.delete('sub')).ok, true);
+  assert.equal(await fs.readFile(path.join(outside, 'keep.txt'), 'utf8'), 'external');
+});

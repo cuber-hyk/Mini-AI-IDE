@@ -17,7 +17,7 @@ source_of_truth: [src/main/appUpdater.ts, src/main/updateService.ts, src/main/up
 
 - 更新源固定为公开仓库 `cuber-hyk/Mini-AI-IDE` 的正式 GitHub Releases；客户端不持有 GitHub token，不暴露任意源或 URL 输入能力。
 - 使用 `electron-updater` 与现有 electron-builder NSIS 产物，版本检查与下载由主进程更新 owner 承担。该网络例外只访问更新源及 GitHub 资源分发/重定向，不处理模型业务、工作区文本或文件上传。
-- 编辑器 CSP、渲染进程权限、AI 网页独立会话与零注入边界保持不变。
+- 软件更新不扩大编辑器 CSP、渲染进程权限或 AI 网页独立会话能力；网页结果回传单独遵循自动结果回传 ADR。
 - 每次正常启动检查一次，本地更新浮层可手动检查，帮助菜单打开同一入口；下载和安装分别由用户明确点击确认。关闭程序不自动安装。
 - 安装前串行复用工作区离开确认，保存失败/取消阻止安装；应用标识、设置目录、固定网页会话分区保持稳定。
 - 首版仅安装版支持更新；Portable、解包目录、开发模式和自检/诊断/探针不执行安装版更新。

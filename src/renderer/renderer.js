@@ -29,8 +29,6 @@
     btnWholeFile: document.getElementById('btn-whole-file'),
     // 注意：这里**不要**用键名 `monaco`，否则会遮蔽全局的 `window.monaco`（AMD 模块对象），
     // 导致 `window.monaco.editor.createModel` / `createDecorationsCollection` 之类的调用难以排查。
-    // 另：这个键是**普通编辑器**的唯一宿主。内联 diff 的标记也画在它上面，
-    // 本进程不再有第二个 Monaco 实例（见 renderInlineDiff）。
     monacoHost: document.getElementById('monaco'),
     resizer: document.getElementById('resizer'),
     requirement: document.getElementById('requirement'),
@@ -38,16 +36,10 @@
     // 提示词版本双段开关（开=完整版 / 关=简洁版），状态持久化在主进程设置里
     variantSwitch: document.getElementById('variant-switch'),
     // 采集入口在 AI 网页顶部，变更列表在右侧独立视图。
-    // 面板显示控制与 diff 视图
+    // 面板显示控制
     sidebar: document.getElementById('sidebar'),
     sidebarResizer: document.getElementById('sidebar-resizer'),
     btnSidebar: document.getElementById('btn-sidebar'),
-    diffActions: document.getElementById('diff-actions'),
-    diffLabel: document.getElementById('diff-label'),
-    btnDiffApply: document.getElementById('btn-diff-apply'),
-    btnDiffClose: document.getElementById('btn-diff-close'),
-    btnDiffPrev: document.getElementById('btn-diff-prev'),
-    btnDiffNext: document.getElementById('btn-diff-next'),
     // 提示词设置入口（齿轮）：面板本体是独立视图，这里只是"打开"的入口
     btnSettings: document.getElementById('btn-settings'),
   };
@@ -85,24 +77,7 @@
     savedText: '',
     /** Monaco 编辑器实例（整个进程只有这一个，从不销毁重建） */
     editor: null,
-    /**
-     * 内联 diff 的行内标记装饰集合。
-     *
-     * 为什么是 decorations 而不是 Monaco 的 DiffEditor：**用户要的是「diff 与原文件整合显示」**——
-     * 文件还是那份真实内容，变更行原地标红/ 标绿。若改用 DiffEditor，界面会变成
-     * 左边「当前文件」、右边「应用后」两个独立板块，正是用户明确不要的形态。
-     *
-     * Monaco 0.57.0 **没有**官方内联 diff API（`monaco.d.ts` 与 `editor.api.d.ts` 中
-     * `InlineDiff` 命中数为 0），因此这里用公开的 `createDecorationsCollection` + `changeViewZones` 自行实现。
-     */
-    diffDecorations: null,
     selectionBubbleReady: false, // 选区浮层复制按钮是否已挂载（幂等保护）
-    /** 内联 diff 中"插入的新增行"用 view zone 画出（它们不是真实文本，见 renderInlineDiff） */
-    diffZoneIds: [],
-    /** 当前正在预览的变更（退出预览时清理） */
-    diffTarget: null,
-    /** 当前批次全部变更的定位信息，供「上一个 / 下一个」导航 */
-    diffNav: null,
     /** 右侧 AI 网页当前是否显示（由主进程广播同步） */
     webVisible: true,
     /** 回程预览面板当前是否显示 */
@@ -537,334 +512,6 @@
     el.btnSidebar.classList.toggle('active', visible);
   }
 
-/* ---------------- 内联 diff（差异与原文件整合显示）----------------
- *
- * 用户要的是「diff 与原文件整合一起显示，而不是分两个板块」——
- * 因此编辑器里放的**始终是磁盘上那份真实文件**（一个字符都没改过），
- * 变更以行内标记叠加在上面：
- *   - 删除行：淡红底 + 文字删除线 + 行号标红
- *   - 新增行：淡绿底 + 行号 `+`，**插在变更位置的紧后面**
- *
- * 为什么不改用 Monaco 的 DiffEditor：那会把界面变成左边「当前文件」、
- * 右边「应用后」两个独立板块，正是用户明确否掉的形态。
- *
- * 为什么全部自己画：Monaco 0.57.0 未导出官方内联 diff API
- * （`monaco.d.ts` 与 `esm/vs/editor/editor.api.d.ts` 搜 `InlineDiff` 命中 0），
- * VS Code 的内联 diff 依赖编辑器内部协议，第三方拿不到。
- * `createDecorationsCollection` 与 `changeViewZones` 都是公开 API，够用。
- */
-
-/**
- * 计算两侧文本的行级映射（与主进程 src/shared/diff.ts 同算法：行级 LCS）。
- * 返回按原文顺序排列的 { kind:'del'|'add', oldLine, newLine, afterLine, text }。
- * 新增行的 afterLine 是已走过的原文行数（0 表示首行之前）。
- */
-  function lineMap(original, modified) {
-    const a = original.split(/\r\n|\r|\n/);
-    const b = modified.split(/\r\n|\r|\n/);
-    if (a.length > 1 && a[a.length - 1] === '') a.pop();
-    if (b.length > 1 && b[b.length - 1] === '') b.pop();
-
-    // 行数过大时不做 LCS（O(n²) 会卡住 UI），退化为「整文件替换」：全删 + 全增。
-    const ops = [];
-    if (a.length > 4000 || b.length > 4000) {
-      a.forEach(function (text, i) { ops.push({ kind: 'del', oldLine: i + 1, text: text }); });
-      b.forEach(function (text, j) { ops.push({ kind: 'add', newLine: j + 1, afterLine: a.length, text: text }); });
-      return ops;
-    }
-
-    const rows = a.length + 1;
-    const cols = b.length + 1;
-    const table = [];
-    for (let i = 0; i < rows; i += 1) table.push(new Uint32Array(cols));
-    for (let i = a.length - 1; i >= 0; i -= 1) {
-      const row = table[i];
-      const next = table[i + 1];
-      for (let j = b.length - 1; j >= 0; j -= 1) {
-        row[j] = a[i] === b[j] ? next[j + 1] + 1 : Math.max(next[j], row[j + 1]);
-      }
-    }
-
-    let i = 0;
-    let j = 0;
-    while (i < a.length && j < b.length) {
-      if (a[i] === b[j]) {
-        i += 1;
-        j += 1;
-      } else if (table[i + 1][j] >= table[i][j + 1]) {
-        ops.push({ kind: 'del', oldLine: i + 1, text: a[i] });
-        i += 1;
-      } else {
-        ops.push({ kind: 'add', newLine: j + 1, afterLine: i, text: b[j] });
-        j += 1;
-      }
-    }
-    while (i < a.length) {
-      ops.push({ kind: 'del', oldLine: i + 1, text: a[i] });
-      i += 1;
-    }
-    while (j < b.length) {
-      ops.push({ kind: 'add', newLine: j + 1, afterLine: i, text: b[j] });
-      j += 1;
-    }
-    return ops;
-  }
-
-  /** 清掉所有内联标记（decoration + view zone），恢复成普通可编辑编辑器 */
-  function clearInlineDiff() {
-    if (state.editor && state.diffZoneIds.length > 0) {
-      state.editor.changeViewZones(function (accessor) {
-        state.diffZoneIds.forEach(function (id) {
-          accessor.removeZone(id);
-        });
-      });
-    }
-    state.diffZoneIds = [];
-    if (state.diffDecorations) {
-      state.diffDecorations.clear();
-    }
-    state.diffTarget = null;
-    state.diffNav = null;
-    el.diffActions.hidden = true;
-    el.diffLabel.textContent = '';
-    // 预览期间是只读的，退出后必须恢复可编辑
-    if (state.editor) {
-      state.editor.updateOptions({ readOnly: Boolean(state.previewOnly) });
-    }
-  }
-
-  /**
-   * 在**当前已打开的编辑器**上叠加内联标记。
-   *
-   * 关键前提：主进程 buildEditorDiff 返回的 original 必须就是编辑器里现在这份内容
-   * 应用前还会再次复核原文。若显示时不一致（用户中途改过文件），
-   * 宁可不画 —— 画错位置的标记比不画更糟。
-   */
-  function renderInlineDiff(payload) {
-    const editor = state.editor;
-    if (!editor || !window.monaco) {
-      setInfo('编辑器尚未就绪，无法显示变更标记', true);
-      return;
-    }
-
-    clearInlineDiff();
-
-    const model = editor.getModel();
-    if (!model) {
-      setInfo('编辑器中没有内容，无法显示变更标记', true);
-      return;
-    }
-
-    const original = payload.original || '';
-    if (model.getValue() !== original) {
-      setInfo('文件内容已变化，请重新采集后再预览变更', true);
-      return;
-    }
-
-    const modified = payload.modified || '';
-    const ops = payload.newFile ? (modified ? modified.split(/\r?\n/).map(function (text, index) {
-      return { kind: 'add', newLine: index + 1, afterLine: 0, text: text };
-    }) : []) : lineMap(original, modified);
-    const decorations = [];
-    const total = model.getLineCount();
-
-    /* ---- 1) 删除行：整行标红+ 左侧留删除标记 ---- */
-    ops.forEach(function (op) {
-      if (op.kind !== 'del') return;
-      decorations.push({
-        range: new window.monaco.Range(op.oldLine, 1, op.oldLine, 1),
-        options: {
-          isWholeLine: true,
-          className: 'inline-deleted',
-          linesDecorationsClassName: 'inline-deleted-gutter',
-          lineNumberClassName: 'inline-deleted-ln',
-        },
-      });
-    });
-
-    /* ---- 2) 插入行：同一原文锚点的 add 合并成一个 view zone ----
-     *
-     * 插入点由行映射的原文游标决定；即便前面只有未改动的行，也能正确定位。
-     */
-    const groups = [];
-    ops.forEach(function (op) {
-      if (op.kind !== 'add') return;
-      const last = groups[groups.length - 1];
-      if (last && last.afterLine === op.afterLine) last.lines.push(op);
-      else groups.push({ afterLine: op.afterLine, lines: [op] });
-    });
-
-    state.editor.changeViewZones(function (accessor) {
-      groups.forEach(function (group) {
-        const box = document.createElement('div');
-        box.className = 'inline-added-group';
-
-        group.lines.forEach(function (line) {
-          const row = document.createElement('div');
-          row.className = 'inline-added';
-
-          const no = document.createElement('span');
-          no.className = 'inline-added-ln';
-          no.textContent = String(line.newLine);
-          row.appendChild(no);
-
-          const sign = document.createElement('span');
-          sign.className = 'inline-added-sign';
-          sign.textContent = '+';
-          row.appendChild(sign);
-
-          const text = document.createElement('span');
-          text.className = 'inline-added-text';
-          text.textContent = line.text.length > 0 ? line.text : ' ';
-          row.appendChild(text);
-
-          box.appendChild(row);
-        });
-
-        // afterLineNumber 表示插到该原文行之后；0 表示首行之前
-        const id = accessor.addZone({
-          afterLineNumber: Math.min(group.afterLine, total),
-          heightInPx: group.lines.length * 22 + 2,
-          domNode: box,
-        });
-        state.diffZoneIds.push(id);
-      });
-    });
-
-    state.diffDecorations = editor.createDecorationsCollection(decorations);
-
-    /* ---- 3) 进入预览态：只读 + 操作条 ---- */
-    editor.updateOptions({ readOnly: true });
-    el.diffActions.hidden = false;
-    el.btnDiffApply.textContent = payload.newFile ? '创建文件' : payload.operation === 'overwrite' ? '覆盖全文' : '应用此变更';
-    el.diffLabel.textContent =
-      (payload.filePath || '') + (payload.newFile ? '（新增文件）' : payload.operation === 'overwrite' ? '（覆盖全文）' : payload.identical ? '（无差异，应用后内容与当前文件相同）' : '');
-
-    // 滚到第一处变更，避免「标记画了但没看见」
-    const firstDel = ops.find(function (op) { return op.kind === 'del'; });
-    if (firstDel) {
-      editor.revealLineInCenter(firstDel.oldLine);
-    }
-
-    setInfo(payload.newFile ? '新增文件预览：绿色为完整文件内容，点击「创建文件」后才会写入磁盘' : '变更预览：红色删除线是要被替换的行，绿色是应用后新增的行 —— 确认无误后点「应用此变更」');
-  }
-
-  /** 进入某个变更的预览（打开对应文件 + 叠加内联标记） */
-  async function enterDiff(payload) {
-    const revision = workspaceRevision;
-    if (payload.workspaceRevision !== undefined && payload.workspaceRevision !== revision) return;
-    /* renderInlineDiff 内部会先 clearInlineDiff（要清掉上一个文件的标记），
-       而 clearInlineDiff 会把 diffNav 一起清掉。所以在**渲染之前**把导航上下文
-       存到局部变量，渲染后再放回去 —— 否则同批次跳转能力会在每次预览时丢失。 */
-    const keepNav = state.diffNav;
-    if (payload.filePath) {
-      const opened = payload.newFile ? await editorWorkspace.previewNewFile(payload.filePath) : await editorWorkspace.reload(payload.filePath, true, true);
-      if (!opened) return;
-    }
-    if (revision !== workspaceRevision) return;
-    renderInlineDiff(payload);
-    state.diffTarget = {
-      collectionId: payload.collectionId,
-      index: payload.index,
-      filePath: payload.filePath,
-      newFile: Boolean(payload.newFile),
-      operation: payload.operation,
-    };
-    if (keepNav) {
-      state.diffNav = keepNav;
-      if (state.diffNav.files.length > 1 && state.diffTarget) {
-        const at = state.diffNav.files.findIndex(function (f) {
-          return f.index === state.diffTarget.index;
-        });
-        if (at >= 0) state.diffNav.position = at;
-      }
-    }
-  }
-
-  function exitDiff() {
-    clearInlineDiff();
-    editorWorkspace.exitPreview();
-    setInfo('已退出变更预览');
-  }
-
-  el.btnDiffClose.addEventListener('click', function () {
-    exitDiff();
-  });
-
-  /* ---- 上一处 / 下一处：多文件变更时在批次内跳转 ---- */
-  async function stepDiff(delta) {
-    const nav = state.diffNav;
-    if (!nav || !nav.files || nav.files.length <= 1) return;
-    let idx = nav.position;
-    for (let step = 0; step < nav.files.length; step += 1) {
-      idx = (idx + delta + nav.files.length) % nav.files.length;
-      const next = nav.files[idx];
-      if (!next) continue;
-      if (state.diffTarget && next.index === state.diffTarget.index && nav.files.length > 1) continue;
-      const result = await bridge.stepDiff(next.collectionId, next.index);
-      if (result && result.ok) {
-        nav.position = idx;
-        return;
-      }
-    }
-  }
-
-  el.btnDiffPrev.addEventListener('click', function () {
-    void stepDiff(-1);
-  });
-  el.btnDiffNext.addEventListener('click', function () {
-    void stepDiff(1);
-  });
-
-  el.btnDiffApply.addEventListener('click', async function () {
-    const target = state.diffTarget;
-    if (!target) return;
-    const nav = state.diffNav;
-    el.btnDiffApply.disabled = true;
-    el.btnDiffApply.textContent = '应用中…';
-    const result = await bridge.applyChange({
-      collectionId: target.collectionId,
-      index: target.index,
-      filePath: target.filePath,
-    });
-    el.btnDiffApply.disabled = false;
-    el.btnDiffApply.textContent = target.newFile ? '创建文件' : target.operation === 'overwrite' ? '覆盖全文' : '应用此变更';
-    if (!result.ok) {
-      setInfo('应用失败：' + (result.error || '未知错误'), true);
-      return;
-    }
-    clearInlineDiff();
-    setInfo('已应用' + result.filePath + '（模式 ' + result.mode + '）—— 可在右下角预览面板点「撤销」回退');
-
-    /*
-     * 这里**不再自己 openFile**：主进程在落盘成功后会广播 `fileChanged`，
-     * 刷新统一由 onFileChanged 处理（否则应用按钮与右下角面板两条路径
-     * 各刷一次，既重复又可能出现先后竞态）。
-     */
-
-    // 自动跳到下一个变更，一路看一路应用
-    if (nav && nav.files && nav.files.length > 1) {
-      const rest = nav.files.filter(function (f) {
-        return f.index !== target.index;
-      });
-      if (rest.length > 0) {
-        const next = rest[0];
-        const applied = await bridge.stepDiff(next.collectionId, next.index);
-        /*
-         * 注意：跳转后主进程会推来**新文件**的 payload（带它自己的 siblings），
-         * onDiffData 会据此重建 state.diffNav。所以这里不能去改旧的 nav ——
-         * 只需要保证"新 nav 的 position 指向刚跳过去的这个变更"。
-         */
-        if (applied && applied.ok && state.diffNav) {
-          const at = state.diffNav.files.findIndex(function (f) {
-            return f.index === next.index;
-          });
-          state.diffNav.position = at >= 0 ? at : 0;
-        }
-      }
-    }
-  });
-
   /* ---------------- 目录树与编辑器之间的拖拽 ---------------- */
   (function setupSidebarResizer() {
     let dragging = false;
@@ -977,20 +624,6 @@
     }
   });
 
-  bridge.onDiffData(function (payload) {
-    if (!payload || !payload.active) {
-      exitDiff();
-      return;
-    }
-    // 批次内导航上下文：给「上一个 / 下一个」用
-    if (payload.siblings && payload.siblings.length > 0) {
-      state.diffNav = { files: payload.siblings, position: payload.position ?? 0 };
-      el.btnDiffPrev.disabled = state.diffNav.files.length <= 1;
-      el.btnDiffNext.disabled = state.diffNav.files.length <= 1;
-    }
-    void enterDiff(payload);
-  });
-
   bridge.onFileChanged(async function (filePath, change, revision, discardDraft) {
     if (typeof filePath !== 'string' || filePath.length === 0) return;
     if (revision !== workspaceRevision) return;
@@ -1004,11 +637,6 @@
      * （用户实测：应用后仍是旧代码，关闭文件重开才对）。
      */
 
-    // 正在预览该文件的变更：标记已失效（original 不再等于磁盘内容），先退出
-    if (state.diffTarget && state.diffTarget.filePath === filePath) {
-      clearInlineDiff();
-      setInfo('已应用变更，文件内容已刷新');
-    }
     if (change === 'created') {
       await loadTree();
       if (revision !== workspaceRevision) return;
@@ -1027,65 +655,6 @@
     state.previewVisible = Boolean(s.previewVisible);
 
   });
-
-  /**
-   * 内联 diff 视图探针（`--ui-probe --test-diff` 使用）。
-   *
-   * 为什么需要：内联标记是靠`createDecorationsCollection` + `changeViewZones`
-   * 自绘的（Monaco 0.57 无官方内联 diff API），"标记到底画上去没有"只能实测 ——
-   * 曾经吃过"配置写了但运行期没生效"的亏（多项）。
-   *
-   * 注意：探针会**先把编辑器内容替换成 sample**（内联标记要求编辑器里就是原文），
-   * 所以必须在没有打开真实文件时调用。
-   */
-  window.__uiDiffProbe = async function (original, modified) {
-    try {
-      const editor = state.editor;
-      if (!editor) return { ok: false, error: '编辑器尚未创建' };
-
-      // 内联标记画在**当前编辑器内容**上，因此先把它设成 original
-      editor.setValue(original);
-
-      await enterDiff({
-        active: true,
-        filePath: 'probe.ts',
-        original: original,
-        modified: modified,
-        language: 'typescript',
-        collectionId: 'probe',
-        index: 0,
-        identical: false,
-      });
-
-      const ops = lineMap(original, modified);
-      const expectedDel = ops.filter(function (o) { return o.kind === 'del'; }).length;
-      const expectedAdd = ops.filter(function (o) { return o.kind === 'add'; }).length;
-      const zonesDrawn = state.diffZoneIds.length;
-      const decorationsDrawn = state.diffDecorations
-        ? state.diffDecorations.length
-        : 0;
-      const readOnlyNow = Boolean(editor.getOption(window.monaco.editor.EditorOption.readOnly));
-      const actionsVisible = !el.diffActions.hidden;
-      const label = el.diffLabel.textContent;
-
-      // 复原，避免影响后续测量
-      exitDiff();
-
-      return {
-        /* 装饰数量应等于删除行数；插入行数等于view zone 里的行数 */
-        decorationsDrawn,
-        expectedDel,
-        zonesDrawn,
-        expectedAdd,
-        readOnlyNow,
-        actionsVisible,
-        label,
-        ok: decorationsDrawn === expectedDel && zonesDrawn >= 1 && readOnlyNow && actionsVisible,
-      };
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) };
-    }
-  };
 
   /* ---------------- 界面渲染 ---------------- */
   function renderRoot() {
@@ -1114,14 +683,12 @@
   let workspaceRevision = null;
   const editorWorkspace = window.createEditorWorkspace({
     state, bridge, setInfo,
-    clearDiff: clearInlineDiff,
     ready: function () { return monacoReady; },
     createModel: function (path, text) { return window.monaco.editor.createModel(text, languageFor(path)); },
     captureViewState: function () { return state.editor && state.editor.saveViewState(); },
     showDocument: function (doc, focus) {
       if (state.editor) {
         state.editor.setModel(doc ? doc.model : emptyModel);
-        state.editor.updateOptions({ readOnly: Boolean(doc && doc.previewOnly) });
         if (doc && doc.viewState) state.editor.restoreViewState(doc.viewState);
         if (focus) state.editor.focus();
       }
@@ -1192,7 +759,7 @@
 
   /** 复制当前 Monaco 全文作为只读上下文，包含未保存草稿，不暗示覆盖操作。 */
   async function copyWholeFileContext() {
-    if (!state.currentPath || state.previewOnly) {
+    if (!state.currentPath) {
       setInfo('请先打开一个文件，再复制', true);
       return false;
     }
@@ -1219,7 +786,7 @@
    * 顶部按钮无选区时保留取全文的既有行为；浮动按钮必须有选区。
    */
   async function copyNumberedSelection(fallbackToWholeFile) {
-    if (!state.currentPath || state.previewOnly) {
+    if (!state.currentPath) {
       setInfo('请先打开一个文件，再选中要交给模型修改的代码', true);
       return false;
     }

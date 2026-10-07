@@ -2,7 +2,7 @@
   "name": "mini-ai-ide",
   "version": "0.1.2",
   "private": true,
-  "description": "Windows 桌面工具：左侧 Monaco 编辑本地文件，右侧只读加载 DeepSeek 网页版并解析回复（零注入）",
+  "description": "Windows 桌面工具：Monaco 本地编辑、DeepSeek 网页接入、规范工具执行与可控结果回传",
   "author": "Mini-AI-IDE contributors",
   "main": "dist/main/index.js",
   "scripts": {

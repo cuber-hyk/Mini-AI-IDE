@@ -20,7 +20,7 @@ async function fixture(path = 'a.txt') {
   const bridge = { reportEditorState(value: any) { report = value; }, confirmLeave: async () => ({ ok: leave }), readFile: (...args: any[]) => read(...args),
     writeFile: async (...args: any[]) => { writes.push(args); return writeLater ? writeLater(...args) : { ok: write }; }, onEditorRequest() {}, editorReply: async () => ({ ok: true }) };
   const context: any = { window: {} }; vm.runInNewContext(fs.readFileSync('src/renderer/editorWorkspace.js', 'utf8'), context);
-  const workspace = context.window.createEditorWorkspace({ state, bridge, ready: async () => {}, clearDiff() {},
+  const workspace = context.window.createEditorWorkspace({ state, bridge, ready: async () => {},
     changed() { workspace.report(); }, highlight() {}, setInfo() {}, renderTabs(value: any) { tabs = value; }, captureViewState() { return { cursor: 8 }; },
     createModel(path: string, text: string) { return { path, text }; }, showDocument(doc: any) { shown = doc; },
     disposeModel(model: any) { disposed.push(model); }, renameModel() {}, replaceContent(doc: any, text: string) { doc.model.text = text; } });
@@ -93,41 +93,20 @@ it('Windows 大小写及分隔符别名共享一个标签，刷新和删除匹�
   f.workspace.entryChanged({ kind: 'deleted', oldRelPath: 'NEW', isDirectory: true }); assert.equal(f.state.currentPath, null);
 });
 
-it('新增文件预览不读盘或写盘，保存和重复打开不会将预览变成草稿', async () => {
-  const f = await fixture(); const original = f.shown(); let reads = 0;
-  f.readLater(async () => { reads++; return { ok: false, error: 'ENOENT' }; });
-  assert.equal(await f.workspace.previewNewFile('new/sub.ts'), true); const preview = f.shown();
-  assert.equal(preview.previewOnly, true); assert.equal(f.state.currentText, '');
-  assert.equal(f.tabs().find((tab: any) => tab.path === 'new/sub.ts').previewOnly, true);
-  assert.equal(f.report().path, null); assert.equal(f.report().documents.length, 1);
-  assert.equal(await f.workspace.save(), false); assert.equal(await f.workspace.open('NEW\\SUB.TS'), true);
-  assert.equal(f.shown(), preview); assert.equal(preview.previewOnly, true); assert.equal(reads, 0); assert.equal(f.writes.length, 0);
-  await f.workspace.open('a.txt'); assert.equal(f.shown(), original); assert.equal(f.state.currentText, 'draft');
-  assert.equal(f.tabs().length, 1); assert.equal(f.disposed.includes(preview.model), true);
-});
-it('退出或关闭新增预览只释放虚拟模型，现有文件及草稿不会被覆盖', async () => {
+it('不存在的文件读取失败不创建虚拟标签，也不写盘', async () => {
   const f = await fixture(); const original = f.shown();
-  assert.equal(await f.workspace.previewNewFile('A.TXT'), false); assert.equal(f.shown(), original); assert.equal(f.state.currentText, 'draft');
-  await f.workspace.previewNewFile('first.ts'); const first = f.shown();
-  await f.workspace.previewNewFile('second.ts'); assert.equal(f.disposed.includes(first.model), true);
-  f.workspace.exitPreview(); assert.equal(f.shown(), original); assert.equal(f.state.currentText, 'draft'); assert.equal(f.tabs().length, 1);
-  await f.workspace.previewNewFile('third.ts'); f.cancel(); assert.equal(await f.workspace.close('third.ts'), true);
-  assert.equal(f.shown(), original); assert.equal(f.writes.length, 0);
+  f.readLater(async () => ({ ok: false, error: 'ENOENT' }));
+  assert.equal(await f.workspace.open('missing.ts'), false);
+  assert.equal(f.shown(), original); assert.equal(f.tabs().length, 1);
+  assert.equal(f.state.currentText, 'draft'); assert.equal(f.writes.length, 0);
 });
-it('创建事件读盘后预览转换为真实文档，后续保存使用真实完整内容', async () => {
-  const f = await fixture(); await f.workspace.previewNewFile('new.ts'); const preview = f.shown();
+it('工具创建完成后打开真实文件，删除通知只释放新增标签并保留原草稿', async () => {
+  const f = await fixture();
   f.readLater(async () => ({ ok: true, text: 'export const value = 1;', encoding: 'utf8' }));
-  assert.equal(await f.workspace.reload('new.ts', false, false), true);
-  assert.equal(f.shown(), preview); assert.equal(preview.previewOnly, false); assert.equal(f.state.currentText, 'export const value = 1;');
-  assert.equal(f.report().path, 'new.ts'); assert.equal(f.report().documents.length, 2);
-  assert.equal(await f.workspace.save(), true); assert.deepEqual(f.writes[0], ['new.ts', 'export const value = 1;', 'A']);
+  assert.equal(await f.workspace.open('new.ts'), true);
+  assert.equal(f.state.currentText, 'export const value = 1;');
+  assert.equal(f.report().documents.length, 2); assert.equal(f.writes.length, 0);
   f.workspace.entryChanged({ kind: 'deleted', oldRelPath: 'new.ts', isDirectory: false });
   assert.equal(f.state.currentPath, 'a.txt'); assert.equal(f.state.currentText, 'draft');
-});
-it('目录切换使新增预览等待与模型失效，创建刷新读盘失败保持只读预览', async () => {
-  const f = await fixture(); await f.workspace.previewNewFile('new.ts'); const preview = f.shown();
-  f.readLater(async () => ({ ok: false, error: 'ENOENT' }));
-  assert.equal(await f.workspace.reload('new.ts', false, false), false); assert.equal(preview.previewOnly, true);
-  f.state.root = 'B'; f.workspace.clear(); assert.equal(f.tabs().length, 0); assert.equal(f.disposed.includes(preview.model), true);
-  assert.equal(f.report().path, null); assert.equal(f.writes.length, 0);
+  assert.equal(f.disposed.length, 1);
 });

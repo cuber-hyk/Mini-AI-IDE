@@ -26,7 +26,7 @@ function state(overrides: Record<string, unknown> = {}) {
 function setup(overrides: Record<string, unknown> = {}, audioConstructor?: unknown) {
   const ids = ['tool-permission', 'tool-automatic', 'tool-dirty-policy', 'tool-permission-hint', 'tool-count',
     'tool-activity', 'tool-message', 'tool-results', 'tool-copy', 'tool-cancel', 'tool-clear-rules', 'tool-undo',
-    'tool-panel', 'tool-completion-notice', 'tool-sound-notice', 'tool-completion-sound', 'tool-more-toggle', 'tool-copy-notice', 'tool-auto-copy'];
+    'tool-panel', 'tool-completion-notice', 'tool-sound-notice', 'tool-completion-sound', 'tool-more-toggle', 'tool-copy-notice', 'tool-auto-copy', 'tool-send-interval', 'tool-continue-notice', 'tool-interval-down', 'tool-interval-up'];
   const nodes = Object.fromEntries(ids.map(id => [id, element()]));
   let current = state();
   let publish: (value: any) => void = () => {};
@@ -60,6 +60,18 @@ function setup(overrides: Record<string, unknown> = {}, audioConstructor?: unkno
 async function flush() { for (let i = 0; i < 8; i++) await Promise.resolve(); }
 const result = { batch_id: 'inspect', request_id: 'read', tool: 'read_file', status: 'done', data: { text: '真实文件内容' } };
 
+it('自动继续显示倒计时或暂停原因，间隔设置可修改，无轮次输入', async () => {
+  const ui = setup(); await flush();
+  ui.publish(state({ config: { permission: 'full', automatic: true, sendIntervalSeconds: 7 }, continuation: { phase: 'countdown', message: '即将发送', dueAt: Date.now() + 7000 } }));
+  assert.equal(ui.nodes['tool-automatic'].checked, true); assert.match(ui.nodes['tool-activity'].textContent, /[67]s 后发送/);
+  assert.equal(ui.nodes['tool-send-interval'].value, '7');
+  ui.publish(state({ config: { permission: 'full', automatic: true }, continuation: { phase: 'off', message: '已立即关闭，配置正在保存' } }));
+  assert.equal(ui.nodes['tool-automatic'].checked, false);
+  ui.publish(state({ config: { permission: 'full', automatic: true }, continuation: { phase: 'paused', message: '输入框已有草稿，未覆盖' } }));
+  assert.equal(ui.nodes['tool-activity'].textContent, '自动已暂停'); assert.match(ui.nodes['tool-continue-notice'].textContent, /未覆盖/);
+  ui.nodes['tool-send-interval'].value = '4'; await ui.nodes['tool-send-interval'].fire('change'); assert.deepEqual(ui.calls.at(-1), { sendIntervalSeconds: 4 });
+  const calls = ui.calls.length; ui.nodes['tool-send-interval'].value = ''; await ui.nodes['tool-send-interval'].fire('change'); assert.equal(ui.calls.length, calls);
+});
 it('JSON格式错误归入批次失败卡片，复制统一结果；不伪造具体工具调用', async () => {
   const ui = setup(); await flush();
   const diagnostic = '工具 JSON 无效\nSyntaxError: position 700\n第 1 行，第 701 列';

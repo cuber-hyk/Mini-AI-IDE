@@ -3,16 +3,16 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vm from 'node:vm';
 import { it } from 'node:test';
+import { diffTexts } from '../src/shared/diff';
+import type { ChangeReviewRecord, ChangeReviewState } from '../src/main/tools/changeReview';
 
 const read = (name: string) => fs.readFileSync(path.join(__dirname, '../src/renderer', name), 'utf8');
 const flush = async () => { for (let i = 0; i < 16; i++) await Promise.resolve(); };
 class Element {
-  children: Element[] = [];
-  className = ''; dataset: Record<string, string> = {}; attrs: Record<string, string> = {};
-  value = ''; hidden = false; disabled = false; title = ''; type = ''; open = false; focused = false;
-  selectionStart = 0; selectionEnd = 0;
-  private text = '';
-  listeners: Record<string, Array<(event: any) => any>> = {};
+  children: Element[] = []; className = ''; dataset: Record<string, string> = {}; attrs: Record<string, string> = {};
+  value = ''; hidden = false; disabled = false; title = ''; type = ''; open = false; scrollTop = 0;
+  scrolledIntoView = false;
+  private text = ''; listeners: Record<string, Array<(event: any) => any>> = {};
   constructor(public tag = 'div', private onFocus: (element: Element) => void = () => {}) {}
   set textContent(value: string) { this.text = value; this.children = []; }
   get textContent(): string { return this.text + this.children.map(n => n.textContent).join(''); }
@@ -22,311 +22,200 @@ class Element {
   } }; }
   appendChild(child: Element) { this.children.push(child); return child; }
   setAttribute(name: string, value: string) { this.attrs[name] = value; }
+  getAttribute(name: string) { return this.attrs[name] ?? null; }
   addEventListener(name: string, listener: (event: any) => any) { (this.listeners[name] ||= []).push(listener); }
   async fire(name: string, event: Record<string, unknown> = {}) {
-    await Promise.all((this.listeners[name] || []).map(fn => fn({ type: name, preventDefault() {}, ...event })));
-    await flush();
+    await Promise.all((this.listeners[name] || []).map(fn => fn({ type: name, preventDefault() {}, ...event }))); await flush();
   }
-  focus() { this.focused = true; this.onFocus(this); }
-  setSelectionRange(start: number, end: number) { this.selectionStart = start; this.selectionEnd = end; }
-  querySelectorAll(selector: string) { return this.all(e => selector === '[data-focus-key]' && !!e.dataset.focusKey); }
+  focus() { this.onFocus(this); }
+  querySelectorAll(selector: string) { return this.all(e => selector === '[data-focus-key]' ? !!e.dataset.focusKey : selector === '[data-record-id]' && !!e.dataset.recordId); }
+  scrollIntoView() { this.scrolledIntoView = true; }
   setPointerCapture() {} hasPointerCapture() { return false; } releasePointerCapture() {}
-  all(predicate: (e: Element) => boolean): Element[] {
-    return [this, ...this.children.flatMap(child => child.all(predicate))].filter(predicate);
-  }
+  all(predicate: (e: Element) => boolean): Element[] { return [this, ...this.children.flatMap(child => child.all(predicate))].filter(predicate); }
 }
-function block(index: number, filePath = 'src/a.ts', applicable = true) {
-  return { index, filePath, operation: 'replace', range: null,
-    locations: [{ start: 100, end: 103, oldRange: { start: 10, end: 10 }, newRange: { start: 10, end: 19 }, lineDelta: 9 }], codeLines: 10, applicable,
-    blockedReason: applicable ? undefined : '内容不匹配', hints: [], diff: { added: 10, removed: 1 } };
-}
+const record = (id = 'edit:0', filePath = 'src/a.ts'): ChangeReviewRecord => ({ id, requestId: 'edit', path: filePath,
+  operation: 'replace', status: 'applied', before: 'old\nkeep\n', after: 'new\nkeep\n', diff: diffTexts('old\nkeep\n', 'new\nkeep\n') });
+const state = (records: ChangeReviewRecord[], generation = 1): ChangeReviewState => ({ generation,
+  scope: { root: 'C:/project', session: 'chat', batchId: 'batch-' + generation, contentKey: 'contents-' + generation }, records });
 function setup(overrides: Record<string, unknown> = {}) {
   let activeElement: Element | null = null;
-  const onFocus = (element: Element) => { if (activeElement) activeElement.focused = false; activeElement = element; };
+  const onFocus = (element: Element) => { activeElement = element; };
   const nodes: Record<string, Element> = {};
-  for (const name of ['meta', 'notes', 'diagnostics', 'status', 'list', 'collapse', 'undo', 'apply-all', 'filter', 'detail', 'resizer']) nodes[name] = new Element('div', onFocus);
-  const listeners: Record<string, (value: any) => void> = {};
-  const writes: any[] = []; const shown: any[] = []; const widths: number[] = [];
+  for (const name of ['meta', 'status', 'list', 'collapse', 'undo', 'filter', 'detail', 'resizer', 'navigation', 'navigate', 'wrap', 'expand']) nodes[name] = new Element('div', onFocus);
+  nodes.navigation.hidden = true; nodes.wrap.attrs['aria-pressed'] = 'true'; nodes.detail.className = 'pv-detail wrap';
+  const listeners: Record<string, (value: any) => void> = {}; const widths: number[] = []; const temporary: boolean[] = []; let undoCalls = 0;
   const bridge = {
-    onPreviewData(fn: (v: any) => void) { listeners.preview = fn; },
-    onAppliedChange(fn: (v: any) => void) { listeners.applied = fn; },
-    onActiveDiff(fn: (v: any) => void) { listeners.active = fn; },
+    onReviewState(fn: (v: any) => void) { listeners.review = fn; },
+    async getReviewState() { return state([]); },
     onChromeState(fn: (v: any) => void) { listeners.chrome = fn; },
-    async applyChange(input: any) { writes.push(input); return { ok: true, filePath: input.filePath }; },
-    async showDiffInEditor(...args: any[]) { shown.push(args); return { ok: true }; },
-    async undoSave() { return { ok: true, collectionId: 'batch', index: 9, filePath: 'src/a.ts' }; },
-    async setPreviewPanel(width: number) { widths.push(width); return { width, visible: width > 0 }; },
-    ...overrides,
+    async undoToolChange() { undoCalls++; return { ok: true }; },
+    async setPreviewPanel(width: number, transient = false) { widths.push(width); temporary.push(transient); return { width, visible: width > 0 }; }, ...overrides,
   };
-  const sandbox = { window: { previewBridge: bridge, innerWidth: 300, changeTree: undefined as any },
-    document: { get activeElement() { return activeElement; },
-      getElementById: (id: string) => nodes[id.slice(3)], createElement: (tag: string) => new Element(tag, onFocus) } };
-  vm.createContext(sandbox); vm.runInContext(read('changeTree.js'), sandbox); vm.runInContext(read('preview.js'), sandbox);
-  return { nodes, writes, shown, widths, model: sandbox.window.changeTree,
-    focused: () => activeElement,
-    preview(blocks = [block(4), block(9)], collectionId = 'batch', notes = [] as string[]) { listeners.preview({ ok: true, collectionId, blocks, notes }); },
-    publish: (event: any) => listeners.applied(event),
-    active: (index: number) => listeners.active(index),
-    chrome: (width: number) => listeners.chrome({ previewWidth: width }),
+  const sandbox = { window: { previewBridge: bridge, innerWidth: 300 }, document: {
+    get activeElement() { return activeElement; }, getElementById: (id: string) => nodes[id.slice(3)],
+    createElement: (tag: string) => new Element(tag, onFocus),
+  } };
+  vm.runInNewContext(read('preview.js'), sandbox);
+  return { nodes, widths, temporary, bridge, focused: () => activeElement, undoCalls: () => undoCalls,
+    publish: (value: ChangeReviewState) => listeners.review(value), chrome: (width: number, maxWidth?: number) => listeners.chrome({ previewWidth: width, previewMaxWidth: maxWidth }),
     rows: () => nodes.list.all(e => e.className.split(' ').includes('pv-file')),
-    detailButton: (text: string) => nodes.detail.all(e => e.tag === 'button' && e.textContent === text)[0],
+    button: (text: string) => nodes.detail.all(e => e.tag === 'button' && e.textContent === text)[0],
   };
 }
 
-it('树按目录文件聚合；筛选后预览仍使用原批次的片段 index', async () => {
-  const ui = setup(); ui.preview([block(4), block(9), block(21, 'docs/readme.md')]);
+it('变更查看没有重复应用或改路径入口；无写入工具时明确显示本批无文件修改', async () => {
+  const ui = setup(); await flush();
+  assert.match(ui.nodes.list.textContent, /本批没有文件修改/); assert.equal(ui.nodes.undo.disabled, true);
+  const html = read('preview.html'); assert.doesNotMatch(html, /pv-apply-all|全部应用|changeTree.js/);
+  assert.doesNotMatch(read('preview.js'), /applyChange|showDiffInEditor|改路径/);
+});
+it('按目录与文件聚合，筛选不改变记录身份，实际增删行和快照均可查看', async () => {
+  const ui = setup(); ui.publish(state([record(), record('edit:1'), record('docs:0', 'docs/readme.md')]));
   assert.equal(ui.nodes.list.all(e => e.className === 'pv-folder').length, 2);
   assert.equal(ui.nodes.list.all(e => e.className === 'pv-file-group').length, 1);
+  assert.equal(ui.nodes.meta.textContent, '2 文件');
   ui.nodes.filter.value = 'README'; await ui.nodes.filter.fire('input');
-  assert.equal(ui.rows().length, 1); assert.equal(ui.rows()[0].dataset.index, '21');
-  await ui.rows()[0].children[0].fire('click');
-  assert.deepEqual(Array.from(ui.shown[0]), ['batch', 21, 'docs/readme.md']);
+  assert.equal(ui.rows().length, 1); assert.equal(ui.rows()[0]?.dataset.id, 'docs:0');
+  await ui.rows()[0]!.children[0]!.fire('click');
+  assert.match(ui.nodes.detail.textContent, /readme.md/); assert.ok(ui.nodes.detail.all(e => e.className === 'pv-line add').length);
+  assert.match(ui.rows()[0]!.textContent, /\+1−1/);
+  await ui.button('修改前')!.fire('click'); assert.match(ui.nodes.detail.textContent, /old\nkeep\n/);
+  await ui.button('修改后')!.fire('click'); assert.match(ui.nodes.detail.textContent, /new\nkeep\n/);
 });
-it('一行替换为十行的范围和增量符合用户的行号预期', () => {
-  const ui = setup(); assert.equal(ui.model.rangeLabel(block(4)), '原 10–10 → 新 10–19（+9 行）');
-  assert.equal(ui.model.rangeLabel({ ...block(4), codeLines: 1, locations: [{ oldRange: { start: 10, end: 10 }, newRange: { start: 10, end: 10 }, lineDelta: 0 }] }), '原 10–10 → 新 10–10（0 行）');
+it('失败和未执行逐文件显示原因，不伪造差异或提供应用按钮', async () => {
+  const ui = setup(); const failed: ChangeReviewRecord = { id: 'edit:0', requestId: 'edit', path: 'a.ts', operation: 'replace', status: 'failed', error: '原文不匹配' };
+  ui.publish(state([failed, { ...failed, id: 'edit:1', path: 'b.ts', status: 'skipped', error: '权限拒绝' }]));
+  await ui.rows()[0]!.children[0]!.fire('click'); assert.match(ui.nodes.detail.textContent, /失败.*原文不匹配/s);
+  assert.equal(ui.button('差异'), undefined); assert.equal(ui.nodes.undo.disabled, true);
+  await ui.rows()[1]!.children[0]!.fire('click'); assert.match(ui.nodes.detail.textContent, /未执行.*权限拒绝/s);
 });
-it('触及相同行号也可减少换行，行内删除不能虚报减少一行', () => {
-  const ui = setup();
-  assert.equal(ui.model.rangeLabel({ ...block(4), locations: [{ oldRange: { start: 1, end: 1 }, newRange: { start: 1, end: 1 }, lineDelta: -1 }] }), '原 1–1 → 新 1–1（-1 行）');
-  assert.equal(ui.model.rangeLabel({ ...block(4), locations: [{ oldRange: { start: 1, end: 1 }, newRange: null, lineDelta: 0 }] }), '原 1–1 → 新 删除该区域（0 行）');
+it('广播保留用户选中项、快照选项及滚动位置，且不会抢走编辑器或网页焦点', async () => {
+  const ui = setup(); ui.publish(state([record()]));
+  assert.equal(ui.focused(), null); const button = ui.rows()[0]!.children[0]!; button.focus(); await button.fire('click');
+  assert.equal(ui.focused(), ui.nodes.navigate);
+  await ui.button('修改前')!.fire('click'); ui.button('修改前')!.focus();
+  ui.nodes.list.scrollTop = 20; ui.nodes.detail.scrollTop = 70;
+  ui.publish(state([record(), record('edit:1', 'b.ts')]));
+  assert.equal(ui.focused(), ui.button('修改前')); assert.equal(ui.nodes.list.scrollTop, 20); assert.equal(ui.nodes.detail.scrollTop, 70);
+  assert.equal(ui.button('修改前')!.attrs['aria-pressed'], 'true');
 });
-it('明确新建操作使用创建入口，缺失元数据保持阻塞', async () => {
-  const ui = setup(); const created = { ...block(4, 'new/a.ts'), operation: 'create', range: null, locations: [], fileExists: false, hints: ['目标文件不存在，应用时将创建新文件'] };
-  assert.equal(ui.model.rangeLabel(created), '新增文件 · 10 行');
-  assert.equal(ui.model.rangeLabel({ ...created, operation: undefined, filePath: '' }), '信息待补充 · 10 行');
-  assert.equal(ui.model.rangeLabel({ ...created, operation: undefined, applicable: false }), '信息待补充 · 10 行');
-  ui.preview([created, { ...block(9, 'missing.ts', false), fileExists: false }]);
-  await ui.rows()[0].children[0].fire('click'); assert.ok(ui.detailButton('创建文件'));
-  await ui.detailButton('创建文件').fire('click'); assert.equal(ui.writes.length, 1);
-  assert.ok(ui.detailButton('已应用')); assert.doesNotMatch(ui.nodes.detail.textContent, /目标文件不存在/);
-  await ui.rows()[1].children[0].fire('click'); assert.equal(ui.detailButton('创建文件'), undefined);
-  assert.match(ui.nodes.detail.textContent, /内容不匹配/);
+it('新批次清理选择并直接展示新批快照，旧广播及延迟初次读取不能覆盖新状态', async () => {
+  let resolve: (state: ChangeReviewState) => void = () => {};
+  const ui = setup({ getReviewState: () => new Promise(yes => { resolve = yes; }) });
+  ui.publish(state([record()], 2)); await ui.rows()[0]!.children[0]!.fire('click');
+  ui.nodes.detail.scrollTop = 70;
+  ui.publish(state([record('next:0', 'next.ts')], 3)); assert.match(ui.nodes.detail.textContent, /next.ts/);
+  assert.equal(ui.nodes.detail.scrollTop, 0); assert.equal(ui.nodes.detail.all(e => e.className === 'pv-record applied active').length, 0);
+  ui.publish(state([record()], 2)); resolve(state([record()], 1)); await flush();
+  assert.equal(ui.rows()[0]?.dataset.id, 'next:0');
 });
-it('同文件多片段撤销只复位精确身份；旧批次和无身份广播不污染当前树', () => {
-  const ui = setup(); ui.preview();
-  ui.publish({ kind: 'applied', collectionId: 'batch', index: 4 });
-  ui.publish({ kind: 'applied', collectionId: 'batch', index: 9 });
-  ui.publish({ kind: 'undone', collectionId: 'old', index: 4, filePath: 'src/a.ts' });
-  ui.publish({ kind: 'undone', filePath: 'src/a.ts' });
-  assert.ok(ui.rows().every(e => e.className.includes('done')));
-  ui.publish({ kind: 'undone', collectionId: 'batch', index: 9 });
-  assert.ok(ui.rows()[0].className.includes('done')); assert.ok(!ui.rows()[1].className.includes('done'));
+it('撤销复用工具入口，广播更新状态且保留实际快照，失败清楚反馈并可重试', async () => {
+  const ui = setup(); ui.publish(state([record()])); await ui.rows()[0]!.children[0]!.fire('click');
+  await ui.nodes.undo.fire('click'); assert.equal(ui.undoCalls(), 1); assert.match(ui.nodes.status.textContent, /已撤销/);
+  ui.publish(state([{ ...record(), status: 'undone' }])); assert.equal(ui.nodes.undo.disabled, true);
+  assert.match(ui.nodes.detail.textContent, /已撤销/); assert.ok(ui.button('修改前'));
+  const failed = setup({ undoToolChange: async () => ({ ok: false, error: '文件已在应用后修改' }) });
+  failed.publish(state([record()])); await failed.nodes.undo.fire('click');
+  assert.match(failed.nodes.status.textContent, /文件已在应用后修改/); assert.equal(failed.nodes.undo.disabled, false);
 });
-it('集中详情保留改路径；批量应用采用改后路径且跳过已应用的片段', async () => {
-  const ui = setup(); ui.preview(); await ui.rows()[1].children[0].fire('click');
-  await ui.detailButton('改路径').fire('click');
-  const input = ui.nodes.detail.all(e => e.className === 'pv-path')[0];
-  input.value = 'src/correct.ts'; await input.fire('input');
-  assert.equal(ui.nodes['apply-all'].disabled, true);
-  await input.fire('keydown', { key: 'Enter' });
-  assert.deepEqual(Array.from(ui.shown.at(-1)), ['batch', 9, 'src/correct.ts']);
-  assert.equal(ui.nodes['apply-all'].disabled, false);
-  ui.publish({ kind: 'applied', collectionId: 'batch', index: 4 });
-  await ui.nodes['apply-all'].fire('click');
-  assert.equal(ui.writes.length, 1); assert.equal(ui.writes[0].index, 9); assert.equal(ui.writes[0].filePath, 'src/correct.ts');
-  assert.ok(ui.rows()[1].className.includes('done'));
-});
-it('全部应用含筛选外条目；失败不会中断后续片段，且始终串行', async () => {
-  let pending = 0; let max = 0; const attempts: number[] = [];
-  const ui = setup({ applyChange: async (input: any) => {
-    pending++; max = Math.max(max, pending); attempts.push(input.index); await Promise.resolve(); pending--;
-    if (input.index === 4) throw new Error('写盘失败'); return { ok: true, filePath: input.filePath };
-  } });
-  ui.preview([block(4), block(9, 'docs/readme.md')]); ui.nodes.filter.value = 'docs'; await ui.nodes.filter.fire('input');
-  await ui.nodes['apply-all'].fire('click');
-  assert.deepEqual(attempts, [4, 9]); assert.equal(max, 1); assert.match(ui.nodes.notes.textContent, /写盘失败/);
-  assert.equal(ui.nodes['apply-all'].disabled, false); assert.equal(ui.nodes.undo.disabled, false);
-});
-it('单次应用拒绝或异常后可重试，阻塞片段可查看原因但没有应用入口', async () => {
-  const ui = setup({ applyChange: async () => { throw new Error('断开'); } });
-  ui.preview([block(4), block(9, 'src/b.ts', false)]);
-  await ui.rows()[0].children[0].fire('click'); await ui.detailButton('应用此片段').fire('click');
-  assert.equal(ui.detailButton('应用此片段').disabled, false); assert.match(ui.nodes.notes.textContent, /断开/);
-  await ui.rows()[1].children[0].fire('click'); assert.equal(ui.detailButton('应用此片段'), undefined);
-  assert.match(ui.nodes.detail.textContent, /内容不匹配/); assert.equal(ui.shown.length, 1);
-});
-it('更换批次时停止旧批次剩余应用，异步结果不把新条目标为已应用', async () => {
-  let resolve: (value: any) => void = () => {}; let calls = 0;
-  const ui = setup({ applyChange: () => { calls++; return new Promise(yes => { resolve = yes; }); } });
-  ui.preview(); const click = ui.nodes['apply-all'].fire('click'); await flush();
-  ui.preview([block(4)], 'new'); resolve({ ok: true, filePath: 'src/a.ts' }); await click;
-  assert.equal(calls, 1); assert.ok(!ui.rows()[0].className.includes('done'));
-});
-it('撤销自身入口与广播幂等，同文件的其他片段维持已应用', async () => {
-  const ui = setup(); ui.preview();
-  for (const index of [4, 9]) ui.publish({ kind: 'applied', collectionId: 'batch', index });
-  await ui.nodes.undo.fire('click'); ui.publish({ kind: 'undone', collectionId: 'batch', index: 9 });
-  assert.ok(ui.rows()[0].className.includes('done')); assert.ok(!ui.rows()[1].className.includes('done'));
-});
-it('列宽可用方向键或拖动调整，主进程返回的真实宽度用于下一次操作', async () => {
+it('列宽方向键、拖动与收起沿用真实主进程返回值', async () => {
   const ui = setup(); ui.chrome(320);
   await ui.nodes.resizer.fire('keydown', { key: 'ArrowLeft' }); assert.equal(ui.widths[0], 340);
   await ui.nodes.resizer.fire('pointerdown', { button: 0, pointerId: 1, screenX: 800 });
-  await ui.nodes.resizer.fire('pointermove', { pointerId: 1, screenX: 760 });
-  await ui.nodes.resizer.fire('pointerup', { pointerId: 1, screenX: 750 });
+  await ui.nodes.resizer.fire('pointermove', { pointerId: 1, screenX: 760 }); await ui.nodes.resizer.fire('pointerup', { pointerId: 1, screenX: 750 });
   assert.equal(ui.widths.at(-1), 390); assert.equal(ui.nodes.resizer.attrs['aria-valuenow'], '390');
+  await ui.nodes.collapse.fire('click'); assert.equal(ui.widths.at(-1), 0);
+});
+it('文件夹折叠在同批广播中保留，新批次重置；空筛选有明确反馈', async () => {
+  const ui = setup(); ui.publish(state([record()]));
+  const folder = ui.nodes.list.all(e => e.className === 'pv-folder')[0]!; folder.open = false; await folder.fire('toggle');
+  ui.publish(state([record()])); assert.equal(ui.nodes.list.all(e => e.className === 'pv-folder')[0]?.open, false);
+  ui.publish(state([record()], 2)); assert.equal(ui.nodes.list.all(e => e.className === 'pv-folder')[0]?.open, true);
+  ui.nodes.filter.value = 'missing'; await ui.nodes.filter.fire('input'); assert.match(ui.nodes.list.textContent, /没有匹配的文件/);
+});
+it('脚本样例按纯文本展示，只有换行变化时不误称完全相同', async () => {
+  const ui = setup(); const value = { ...record(), before: '<script>old()</script>\n', after: '<script>new()</script>\n' };
+  ui.publish(state([{ ...value, diff: diffTexts(value.before, value.after) }])); await ui.rows()[0]!.children[0]!.fire('click');
+  assert.match(ui.nodes.detail.textContent, /<script>new\(\)<\/script>/); assert.equal(ui.nodes.detail.all(e => e.tag === 'script').length, 0);
+  ui.publish(state([{ ...record(), before: 'same\r\n', after: 'same\n', diff: diffTexts('same\r\n', 'same\n') }]));
+  assert.match(ui.nodes.detail.textContent, /仅换行格式/);
 });
 
-it('键盘选中片段后重建树保留同一按钮焦点，activeDiff 广播也不打断键盘操作', async () => {
-  const ui = setup(); ui.preview();
-  const original = ui.rows()[1].children[0]; original.focus();
-  await original.fire('click');
-  const selected = ui.rows()[1].children[0];
-  assert.notEqual(selected, original); assert.equal(ui.focused(), selected);
-  assert.equal(selected.attrs['aria-pressed'], 'true');
-  ui.active(9); assert.equal(ui.focused(), ui.rows()[1].children[0]);
-});
-it('同片段状态广播保留改路径可见态、草稿、焦点和输入光标', async () => {
-  const ui = setup(); ui.preview(); await ui.rows()[1].children[0].fire('click');
-  await ui.detailButton('改路径').fire('click');
-  const original = ui.nodes.detail.all(e => e.className === 'pv-path')[0];
-  original.value = 'src/renamed.ts'; await original.fire('input'); original.setSelectionRange(4, 11);
-  ui.active(9);
-  let input = ui.nodes.detail.all(e => e.className === 'pv-path')[0];
-  assert.notEqual(input, original); assert.equal(input.hidden, false); assert.equal(input.value, 'src/renamed.ts');
-  assert.equal(ui.focused(), input); assert.deepEqual([input.selectionStart, input.selectionEnd], [4, 11]);
-  ui.publish({ kind: 'applied', collectionId: 'batch', index: 4 });
-  input = ui.nodes.detail.all(e => e.className === 'pv-path')[0];
-  assert.equal(input.hidden, false); assert.equal(ui.focused(), input); assert.equal(input.value, 'src/renamed.ts');
-  await input.fire('keydown', { key: 'Escape' });
-  assert.equal(input.hidden, true); assert.equal(ui.focused(), ui.detailButton('改路径'));
-  ui.active(9); assert.equal(ui.nodes.detail.all(e => e.className === 'pv-path')[0].hidden, true);
+it('正文直接连续展示本批所有记录，文件导航只滚到目标并可收起', async () => {
+  const ui = setup(); ui.publish(state([record(), record('edit:1', 'docs/long.md')]));
+  assert.equal(ui.nodes.navigation.hidden, true);
+  assert.equal(ui.nodes.detail.all(e => !!e.dataset.recordId).length, 2);
+  assert.match(ui.nodes.detail.textContent, /src\/a.ts.*docs\/long.md/s);
+  assert.equal(ui.focused(), null);
+  await ui.nodes.navigate.fire('click'); assert.equal(ui.nodes.navigation.hidden, false);
+  await ui.rows()[1]!.children[0]!.fire('click');
+  const target = ui.nodes.detail.all(e => e.dataset.recordId === 'edit:1')[0]!;
+  assert.equal(target.scrolledIntoView, true); assert.equal(ui.nodes.navigation.hidden, true);
+  assert.equal(ui.nodes.navigate.attrs['aria-expanded'], 'false'); assert.equal(ui.focused(), ui.nodes.navigate);
+  await ui.nodes.navigate.fire('click'); await ui.nodes.navigation.fire('keydown', { key: 'Escape' });
+  assert.equal(ui.nodes.navigation.hidden, true); assert.equal(ui.focused(), ui.nodes.navigate);
 });
 
-it('命令单独只读展示完整内容，不计入文件数且批量应用跳过命令和缺失路径块', async () => {
-  const ui = setup();
-  const command = { ...block(12, '', false), kind: 'other', range: null, codeLines: 8,
-    contentText: 'cd backend\nnpm install\nnpm run seed', hints: ['请手动执行'], blockedReason: undefined };
-  ui.preview([block(4), { ...block(9, '', false), range: null }, command] as any);
-  assert.equal(ui.nodes.meta.textContent, '1 文件 · 1 段其他内容 · 1 段待补充');
-  await ui.rows()[2].children[0].fire('click');
-  assert.match(ui.nodes.detail.textContent, /其他内容.*只读/s);
-  assert.match(ui.nodes.detail.textContent, /cd backend\nnpm install\nnpm run seed/);
-  assert.doesNotMatch(ui.nodes.detail.textContent, /阻塞/);
-  assert.equal(ui.detailButton('应用此片段'), undefined); assert.equal(ui.detailButton('改路径'), undefined);
-  assert.equal(ui.shown.length, 0);
-  await ui.nodes['apply-all'].fire('click');
-  assert.deepEqual(ui.writes.map(input => input.index), [4]);
+it('每个文件的修改前后选项独立保留，筛选后恢复仍显示真实快照', async () => {
+  const ui = setup(); ui.publish(state([record(), record('edit:1', 'b.ts')]));
+  await ui.button('修改前')!.fire('click');
+  const sections = ui.nodes.detail.all(e => !!e.dataset.recordId);
+  assert.ok(sections[0]!.all(e => e.tag === 'pre').length);
+  assert.ok(sections[1]!.all(e => e.className === 'pv-line add').length);
+  ui.nodes.filter.value = 'b.ts'; await ui.nodes.filter.fire('input');
+  assert.equal(ui.nodes.detail.all(e => !!e.dataset.recordId).length, 1);
+  assert.equal(ui.nodes.navigate.textContent, '文件 · 筛选中');
+  ui.nodes.filter.value = ''; await ui.nodes.filter.fire('input');
+  assert.equal(ui.button('修改前')!.attrs['aria-pressed'], 'true');
 });
 
-it('其他内容默认折叠，展开后刷新保留状态，新批次重新折叠', async () => {
-  const ui = setup(); const other = { ...block(12, '', false), kind: 'other', range: null, contentText: '<script>example()</script>' };
-  ui.preview([block(4), other] as any);
-  let group = ui.nodes.list.all(e => e.className === 'pv-other')[0];
-  assert.equal(group.open, false);
-  group.open = true; await group.fire('toggle');
-  await ui.rows()[1].children[0].fire('click');
-  assert.equal(ui.nodes.list.all(e => e.className === 'pv-other')[0].open, true);
-  assert.match(ui.nodes.detail.textContent, /<script>example\(\)<\/script>/);
-  ui.publish({ kind: 'applied', collectionId: 'batch', index: 4 });
-  assert.equal(ui.nodes.list.all(e => e.className === 'pv-other')[0].open, true);
-  ui.preview([other] as any, 'new');
-  assert.equal(ui.nodes.list.all(e => e.className === 'pv-other')[0].open, false);
-  assert.equal(ui.nodes['apply-all'].disabled, true);
-});
-it('常驻采集说明移入默认关闭的诊断入口，应用错误仍有可见反馈', async () => {
-  const ui = setup({ applyChange: async () => ({ ok: false, error: '磁盘无法写入' }) });
-  ui.preview([block(4)], 'batch', ['采集策略：latest-reply-container', '字符数：100']);
-  assert.equal(ui.nodes.diagnostics.open, false); assert.equal(ui.nodes.diagnostics.hidden, false);
-  assert.equal(ui.nodes.status.hidden, true); assert.match(ui.nodes.notes.textContent, /采集策略/);
-  ui.nodes.diagnostics.open = true;
-  await ui.rows()[0].children[0].fire('click'); await ui.detailButton('应用此片段').fire('click');
-  assert.equal(ui.nodes.status.hidden, false); assert.match(ui.nodes.status.textContent, /磁盘无法写入/);
-  assert.match(ui.nodes.notes.textContent, /采集策略/); assert.match(ui.nodes.notes.textContent, /磁盘无法写入/);
-  assert.equal(ui.nodes.diagnostics.open, true);
-  ui.preview([block(4)], 'next');
-  assert.equal(ui.nodes.diagnostics.open, false); assert.equal(ui.nodes.status.hidden, true);
+it('长文件未改上下文默认不挂载，主动展开恢复完整行号；同批广播保留展开状态', async () => {
+  const ui = setup(); const oldLines = Array.from({ length: 60 }, (_, i) => 'unchanged-' + (i + 1));
+  const newLines = [...oldLines]; newLines.splice(10, 0, 'inserted'); newLines[41] = 'changed';
+  const before = oldLines.join('\r\n') + '\r\n'; const after = newLines.join('\n') + '\n';
+  const value = { ...record(), before, after, diff: diffTexts(before, after) };
+  ui.publish(state([value]));
+  const blocks = ui.nodes.detail.all(e => e.className === 'pv-context'); assert.equal(blocks.length, 3);
+  assert.ok(blocks.every(e => !e.open)); assert.doesNotMatch(ui.nodes.detail.textContent, /unchanged-1\b/);
+  for (const block of blocks) { block.open = true; await block.fire('toggle'); }
+  const lines = ui.nodes.detail.all(e => e.className.startsWith('pv-line '));
+  const original = lines.filter(e => e.children[0]!.textContent !== '').map(e => [Number(e.children[0]!.textContent), e.children[3]!.textContent]);
+  const updated = lines.filter(e => e.children[1]!.textContent !== '').map(e => [Number(e.children[1]!.textContent), e.children[3]!.textContent]);
+  assert.deepEqual(original, oldLines.map((text, i) => [i + 1, text]));
+  assert.deepEqual(updated, newLines.map((text, i) => [i + 1, text]));
+  ui.nodes.detail.scrollTop = 200; ui.publish(state([value, record('edit:1', 'b.ts')]));
+  assert.equal(ui.nodes.detail.scrollTop, 200);
+  assert.ok(ui.nodes.detail.all(e => e.className === 'pv-context').every(e => e.open));
+  ui.publish(state([value], 2)); assert.ok(ui.nodes.detail.all(e => e.className === 'pv-context').every(e => !e.open));
 });
 
-it('覆盖全文有明确入口，实际范围由服务计算数据显示而不读取AI范围', async () => {
-  const ui = setup();
-  const overwrite = { ...block(4), operation: 'overwrite', codeLines: 3,
-    locations: [{ start: 0, end: 20, oldRange: { start: 1, end: 5 }, newRange: { start: 1, end: 3 } }] };
-  assert.equal(ui.model.rangeLabel(overwrite), '覆盖全文 · 3 行');
-  ui.preview([overwrite]); await ui.rows()[0].children[0].fire('click');
-  assert.ok(ui.detailButton('覆盖全文')); assert.equal(ui.detailButton('应用此片段'), undefined);
-  await ui.detailButton('覆盖全文').fire('click');
-  assert.deepEqual(ui.writes.map(input => [input.collectionId, input.index, input.filePath]), [['batch', 4, 'src/a.ts']]);
+it('默认自动换行可主动关闭，切换不重建快照或改变阅读位置', async () => {
+  const ui = setup(); const value = { ...record(), after: 'very long code '.repeat(300) };
+  ui.publish(state([{ ...value, diff: diffTexts(value.before, value.after) }])); ui.nodes.detail.scrollTop = 81;
+  const section = ui.nodes.detail.children[0];
+  await ui.nodes.wrap.fire('click'); assert.equal(ui.nodes.wrap.attrs['aria-pressed'], 'false');
+  assert.doesNotMatch(ui.nodes.detail.className, /\bwrap\b/);
+  await ui.nodes.wrap.fire('click'); assert.match(ui.nodes.detail.className, /\bwrap\b/);
+  assert.equal(ui.nodes.detail.children[0], section); assert.equal(ui.nodes.detail.scrollTop, 81);
 });
 
-it('改路径必须结束编辑并等待新目标预览成功，期间单条和全部应用均不会写盘', async () => {
-  let finishPreview: (value: any) => void = () => {};
-  const targets: any[] = [];
-  const ui = setup({ showDiffInEditor: (...args: any[]) => {
-    targets.push(args);
-    return args[2] === 'src/new.ts' ? new Promise(resolve => { finishPreview = resolve; }) : Promise.resolve({ ok: true });
-  } });
-  ui.preview([block(4)]); await ui.rows()[0].children[0].fire('click');
-  await ui.detailButton('改路径').fire('click');
-  const input = ui.nodes.detail.all(e => e.className === 'pv-path')[0];
-  input.value = 'src/new.ts'; await input.fire('input');
-  assert.equal(ui.detailButton('应用此片段').disabled, true);
-  await ui.nodes['apply-all'].fire('click'); assert.equal(ui.writes.length, 0);
-  await input.fire('keydown', { key: 'Enter' });
-  assert.deepEqual(targets.at(-1), ['batch', 4, 'src/new.ts']);
-  assert.equal(ui.detailButton('应用此片段').disabled, true);
-  assert.equal(ui.nodes['apply-all'].disabled, true);
-  await ui.detailButton('应用此片段').fire('click');
-  await ui.nodes['apply-all'].fire('click'); assert.equal(ui.writes.length, 0);
-  finishPreview({ ok: true }); await flush();
-  assert.equal(ui.detailButton('应用此片段').disabled, false);
-  assert.equal(ui.nodes['apply-all'].disabled, false);
-  assert.equal(ui.focused(), ui.detailButton('改路径'));
-  await ui.detailButton('应用此片段').fire('click');
-  assert.equal(ui.writes[0]?.filePath, 'src/new.ts');
+it('展开查看遵守窗口最大宽度并以临时模式恢复；无额外空间时禁用', async () => {
+  const ui = setup(); assert.equal(ui.nodes.expand.disabled, true);
+  ui.chrome(300, 620); assert.equal(ui.nodes.expand.disabled, false);
+  await ui.nodes.expand.fire('click'); assert.equal(ui.widths.at(-1), 620); assert.equal(ui.temporary.at(-1), true);
+  assert.equal(ui.nodes.expand.textContent, '恢复宽度'); assert.equal(ui.nodes.expand.attrs['aria-pressed'], 'true');
+  await ui.nodes.expand.fire('click'); assert.equal(ui.widths.at(-1), 300); assert.equal(ui.temporary.at(-1), true);
+  assert.equal(ui.nodes.expand.textContent, '展开查看');
+  ui.chrome(300, 300); assert.equal(ui.nodes.expand.disabled, true);
+  const count = ui.widths.length; await ui.nodes.expand.fire('click'); assert.equal(ui.widths.length, count);
+  ui.chrome(300, 320); await ui.nodes.resizer.fire('keydown', { key: 'ArrowLeft' });
+  assert.equal(ui.widths.at(-1), 320); assert.equal(ui.temporary.at(-1), false);
 });
 
-it('改路径预览失败后保持不可应用，Escape取消草稿并恢复原目标按钮与焦点', async () => {
-  const ui = setup({ showDiffInEditor: async (_collection: string, _index: number, target: string) =>
-    target === 'src/bad.ts' ? { ok: false, error: '新目标原文不匹配' } : { ok: true } });
-  ui.preview([block(4)]); await ui.rows()[0].children[0].fire('click');
-  await ui.detailButton('改路径').fire('click');
-  let input = ui.nodes.detail.all(e => e.className === 'pv-path')[0];
-  input.value = 'src/bad.ts'; await input.fire('input'); await input.fire('keydown', { key: 'Enter' });
-  assert.equal(ui.detailButton('应用此片段').disabled, true);
-  assert.equal(ui.nodes['apply-all'].disabled, true);
-  assert.match(ui.nodes.status.textContent, /新目标原文不匹配/);
-  await ui.detailButton('改路径').fire('click');
-  input = ui.nodes.detail.all(e => e.className === 'pv-path')[0];
-  await input.fire('keydown', { key: 'Escape' });
-  assert.equal(input.hidden, true); assert.equal(input.value, 'src/a.ts');
-  assert.equal(ui.detailButton('应用此片段').disabled, false);
-  assert.equal(ui.nodes['apply-all'].disabled, false);
-  assert.equal(ui.focused(), ui.detailButton('改路径'));
-  await ui.detailButton('应用此片段').fire('click');
-  assert.equal(ui.writes[0]?.filePath, 'src/a.ts');
-});
-
-it('同批次后端重算刷新期间全部应用继续串行，读取当前条目并保留已应用状态', async () => {
-  const attempts: number[] = []; let pending = 0; let max = 0;
-  let ui: ReturnType<typeof setup>;
-  ui = setup({ applyChange: async (input: any) => {
-    pending++; max = Math.max(max, pending); attempts.push(input.index);
-    await Promise.resolve();
-    if (input.index === 4) {
-      ui.preview([block(4), { ...block(9), locations: [{ start: 120, end: 123, oldRange: { start: 19, end: 19 }, newRange: { start: 19, end: 28 } }] }]);
-      ui.publish({ kind: 'applied', collectionId: 'batch', index: 4 });
-    }
-    pending--; return { ok: true, filePath: input.filePath };
-  } });
-  ui.preview(); await ui.nodes['apply-all'].fire('click');
-  assert.deepEqual(attempts, [4, 9]); assert.equal(max, 1);
-  assert.ok(ui.rows().every(row => row.className.includes('done')));
-  assert.match(ui.nodes.status.textContent, /已应用 2 \/ 2/);
-  assert.equal(ui.nodes['apply-all'].textContent, '全部应用');
-});
-
-it('后端重算使剩余SEARCH阻塞时不提交旧条目，独立文件继续应用且显示具体原因', async () => {
-  const attempts: number[] = []; let ui: ReturnType<typeof setup>;
-  ui = setup({ applyChange: async (input: any) => {
-    attempts.push(input.index);
-    if (input.index === 4) ui.preview([block(4), { ...block(9, 'src/a.ts', false), blockedReason: 'SEARCH 匹配多次' }, block(21, 'docs/c.ts')]);
-    return { ok: true, filePath: input.filePath };
-  } });
-  ui.preview([block(4), block(9), block(21, 'docs/c.ts')]);
-  await ui.nodes['apply-all'].fire('click');
-  assert.deepEqual(attempts, [4, 21]);
-  assert.match(ui.nodes.status.title, /SEARCH 匹配多次/);
-  assert.match(ui.nodes.status.textContent, /已应用 2 \/ 3/);
+it('正文占据余下全高，自动换行样式不允许长行撑宽变更列', () => {
+  const html = read('preview.html'); const css = read('preview.css');
+  assert.match(html, /id="pv-navigation"[^>]*hidden/); assert.match(html, /id="pv-detail" class="pv-detail wrap"/);
+  assert.doesNotMatch(css, /max-height:\s*62%/);
+  assert.match(css, /\.pv-detail\s*\{[^}]*flex:\s*1;[^}]*min-height:\s*0;/);
+  assert.match(css, /\.pv-detail\.wrap \.pv-line\s*\{[^}]*min-width:\s*0;/);
 });

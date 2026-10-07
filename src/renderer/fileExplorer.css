@@ -1,0 +1,22 @@
+/* 文件树统一图标、行节奏与分组菜单；布局位置保持不变。 */
+.tree-row { min-height: 28px; gap: 5px; padding-right: 10px; border-radius: 5px; margin: 1px 5px; }
+.tree-twisty { width: 12px; flex: 0 0 12px; font-size: 11px; opacity: .7; }
+.tree-icon { display: inline-flex; width: 17px; height: 17px; flex: 0 0 17px; color: var(--ui-muted); }
+.tree-icon svg { width: 100%; height: 100%; }
+.tree-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.tree-file > .tree-row .tree-label::before { content: none; }
+.tree-icon-folder, .tree-icon-folder-open { color: #d6b976; }
+.tree-icon-typescript, .tree-icon-config { color: #79a9e8; }
+.tree-icon-javascript, .tree-icon-python { color: #dcc66f; }
+.tree-icon-react { color: #79c8df; }
+.tree-icon-vue { color: #7fc5a5; }
+.tree-icon-html, .tree-icon-svelte, .tree-icon-git { color: #dc947c; }
+.tree-icon-style { color: #be9bdf; }
+.tree-icon-markdown, .tree-icon-text { color: #aab8cb; }
+.tree-icon-image { color: #bd9bce; }
+.tree-icon-package, .tree-icon-archive { color: #c5ac87; }
+.tree-icon-terminal, .tree-icon-code { color: #8fbcb3; }
+.file-menu { min-width: 210px; padding: 5px; border-radius: 9px; }
+.file-menu button { border-radius: 4px; padding: 7px 10px; font-size: 13px; }
+.file-menu .file-menu-separator { border: 0; border-top: 1px solid var(--ui-border); margin: 4px 5px; }
+.file-menu .file-menu-danger { color: #e49c94; }

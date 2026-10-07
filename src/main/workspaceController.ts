@@ -1,5 +1,5 @@
 /** 目录和条目操作的串行入口、原生确认及编辑缓冲保护。 */
-import { dialog, ipcMain, shell, type BaseWindow, type WebContents } from 'electron';
+import { clipboard, dialog, ipcMain, shell, type BaseWindow, type WebContents } from 'electron';
 import { CHANNELS, type EditorState, type EntryChangedEvent, type RootInfo } from '../shared/contract';
 import { EditorSession } from './editorSession';
 import { FileManagementService } from './fileManagement';
@@ -79,7 +79,7 @@ export class WorkspaceController {
   register(): string[] {
     const handle = (channel: string, fn: (...args: unknown[]) => unknown) => {
       ipcMain.handle(channel, (event, ...args: unknown[]) => {
-        if (event.sender.id !== this.view.id) return { ok: false, error: '此操作仅供本地编辑器使用' };
+        if (event.sender.id !== this.view.id || event.senderFrame !== this.view.mainFrame) return { ok: false, error: '此操作仅供本地编辑器主页面使用' };
         return fn(...args);
       });
     };
@@ -92,7 +92,7 @@ export class WorkspaceController {
     });
     handle(CHANNELS.editorReply, (id, ok) => ({ ok: typeof id === 'number' && this.editor.reply(id, ok === true) }));
     ipcMain.on(CHANNELS.editorState, (event, raw: unknown) => {
-      if (event.sender.id !== this.view.id || !raw || typeof raw !== 'object') return;
+      if (event.sender.id !== this.view.id || event.senderFrame !== this.view.mainFrame || !raw || typeof raw !== 'object') return;
       const state = raw as EditorState;
       if (state.root !== this.files.getRoot() || (state.path !== null && typeof state.path !== 'string') || !Array.isArray(state.documents)) return;
       if (!state.documents.every(doc => doc && typeof doc.path === 'string' && typeof doc.dirty === 'boolean')) return;
@@ -133,8 +133,49 @@ export class WorkspaceController {
         return result;
       });
     });
+    handle(CHANNELS.deleteEntry, (relative, root) => {
+      if (root !== this.files.getRoot()) return { ok: false, error: '目录已切换，请重新操作' };
+      if (typeof relative !== 'string') return { ok: false, error: '参数不合法' };
+      return this.atRevision(async () => {
+        const source = await this.entries.inspect(relative);
+        if (!source.ok) return source;
+        if (!source.relative) return { ok: false, error: '不能永久删除根目录' };
+        const normalized = source.relative.replace(/\\/g, '/');
+        if (!await this.editor.canLeave(normalized, true)) return { ok: false, error: '已取消永久删除' };
+        const response = await dialog.showMessageBox(this.window, { type: 'warning', title: '永久删除',
+          message: `永久删除“${normalized}”？`, detail: `${source.absolute}\n${source.isDirectory ? '文件夹及其全部内容将被永久删除。' : '文件将被永久删除。'}不会进入回收站，无法通过回收站恢复。相关 AI 变更和撤销记录将失效。`,
+          buttons: ['永久删除', '取消'], defaultId: 1, cancelId: 1, noLink: true });
+        if (response.response !== 0) return { ok: false, error: '已取消永久删除' };
+        if (!this.files.isCurrentRoot(source.rootRevision)) return { ok: false, error: '目录已切换，请重新操作' };
+        const result = await this.entries.delete(normalized, source.identity);
+        if (result.ok && result.oldRelPath) this.entryChanged({ kind: 'deleted', oldRelPath: result.oldRelPath,
+          isDirectory: result.isDirectory === true, revision: this.workspace.getState().revision });
+        return result;
+      });
+    });
+    handle(CHANNELS.revealEntry, (relative, root) => {
+      if (root !== this.files.getRoot()) return { ok: false, error: '目录已切换，请重新操作' };
+      if (typeof relative !== 'string') return { ok: false, error: '参数不合法' };
+      return this.atRevision(async () => {
+        const source = await this.entries.inspect(relative);
+        if (!source.ok) return source;
+        try { shell.showItemInFolder(source.absolute); return { ok: true }; }
+        catch (error) { return { ok: false, error: `无法在资源管理器中显示：${String(error)}` }; }
+      });
+    });
+    handle(CHANNELS.copyEntryPath, (relative, relativeOnly, root) => {
+      if (root !== this.files.getRoot()) return { ok: false, error: '目录已切换，请重新操作' };
+      if (typeof relative !== 'string' || typeof relativeOnly !== 'boolean') return { ok: false, error: '参数不合法' };
+      return this.atRevision(async () => {
+        const source = await this.entries.inspect(relative);
+        if (!source.ok) return source;
+        try { clipboard.writeText(relativeOnly ? source.relative.replace(/\\/g, '/') || '.' : source.absolute); return { ok: true }; }
+        catch (error) { return { ok: false, error: `复制路径失败：${String(error)}` }; }
+      });
+    });
     return [CHANNELS.getRecentRoots, CHANNELS.openRecentRoot, CHANNELS.closeRoot, CHANNELS.confirmLeave,
-      CHANNELS.editorReply, CHANNELS.createEntry, CHANNELS.renameEntry, CHANNELS.trashEntry];
+      CHANNELS.editorReply, CHANNELS.createEntry, CHANNELS.renameEntry, CHANNELS.trashEntry,
+      CHANNELS.deleteEntry, CHANNELS.revealEntry, CHANNELS.copyEntryPath];
   }
 
   private atRevision<T extends { ok: boolean; error?: string }>(operation: () => Promise<T>) {

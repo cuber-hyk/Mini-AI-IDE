@@ -10,6 +10,10 @@
     const clock = window.createToolExecutionClock();
     const permission = document.getElementById('tool-permission');
     const automatic = document.getElementById('tool-automatic');
+    const sendInterval = document.getElementById('tool-send-interval');
+    const intervalDown = document.getElementById('tool-interval-down');
+    const intervalUp = document.getElementById('tool-interval-up');
+    const continueNotice = document.getElementById('tool-continue-notice');
     const dirtyPolicy = document.getElementById('tool-dirty-policy');
     const hint = document.getElementById('tool-permission-hint');
     const count = document.getElementById('tool-count');
@@ -40,6 +44,7 @@
     let feedbackTimer;
     let audioContext;
     let lastBatchError = '';
+    let continuationTimer;
     const statusLabels = {
       running: '执行中', pending_permission: '等待授权', done: '完成', failed: '失败',
       permission_denied: '权限拒绝', cancelled: '已停止', skipped_dependency: '依赖失败，已跳过', unknown: '执行结果未知',
@@ -170,6 +175,9 @@
     function render() {
       permission.disabled = configuring || !state;
       automatic.disabled = configuring || !state;
+      sendInterval.disabled = configuring || !state;
+      intervalDown.disabled = configuring || !state || Number(state.config.sendIntervalSeconds) <= 0;
+      intervalUp.disabled = configuring || !state || Number(state.config.sendIntervalSeconds) >= 300;
       dirtyPolicy.disabled = configuring || !state;
       sound.disabled = configuring || !state;
       autoCopy.disabled = configuring || !state;
@@ -191,13 +199,30 @@
         : state.hasRunningProcesses ? '进程运行中' : state.batchError ? '格式错误' : awaitingContinuation ? '等待续写' : needsAttention ? '需检查' : incomplete ? '有未完成项' : state.results.length ? '已返回' : state.config.automatic ? '等待回复' : '手动采集';
       activity.title = notice;
       activity.classList.toggle('is-error', Boolean(localError || incomplete || needsAttention));
+      if (continuationTimer !== undefined) { clearTimeout(continuationTimer); continuationTimer = undefined; }
+      continueNotice.textContent = '';
       if (!state) { layout.refresh(); return; }
       permission.value = state.config.permission;
-      automatic.checked = state.config.automatic;
+      // 主进程先停止回传再保存配置；显示实际停止状态，避免保存期间开关反跳。
+      automatic.checked = state.config.automatic && (!state.continuation || state.continuation.phase !== 'off');
+      sendInterval.value = String(state.config.sendIntervalSeconds === undefined ? 3 : state.config.sendIntervalSeconds);
+      const continuing = state.continuation;
+      if (continuing && !localMessage) {
+        const labels = { sending: '正在发送结果', waiting_reply: '等待 AI 回复', waiting_user: '等待你回答', paused: '自动已暂停' };
+        if (state.config.automatic && labels[continuing.phase]) activity.textContent = labels[continuing.phase];
+        if (continuing.phase === 'countdown') {
+          const remaining = Math.max(0, Math.ceil((continuing.dueAt - Date.now()) / 1000));
+          activity.textContent = remaining + 's 后发送';
+          if (remaining > 0) continuationTimer = setTimeout(render, Math.min(1000, continuing.dueAt - Date.now()));
+        }
+        activity.title = continuing.message;
+        if (continuing.phase === 'paused') continueNotice.textContent = continuing.message;
+        continueNotice.classList.toggle('is-error', continuing.phase === 'paused');
+      }
       dirtyPolicy.value = state.config.dirtyPolicy;
       sound.checked = state.config.completionSound === true;
       autoCopy.checked = state.config.autoCopyResults === true;
-      copyNotice.textContent = !state.clipboard ? '' : state.clipboard.ok ? '已自动复制本批结果，可粘贴给 AI' : '自动复制失败，请手动重试：' + state.clipboard.error;
+      copyNotice.textContent = !state.clipboard || state.config.automatic && state.clipboard.ok ? '' : state.clipboard.ok ? '已自动复制本批结果，可粘贴给 AI' : '自动复制失败，请手动重试：' + state.clipboard.error;
       copyNotice.classList.toggle('is-error', Boolean(state.clipboard && !state.clipboard.ok));
       hint.textContent = {
         ask: '项目内读取与搜索自动执行；修改与命令由 IDE 请求批准。',
@@ -236,6 +261,21 @@
 
     permission.addEventListener('change', function () { return configure({ permission: permission.value }); });
     automatic.addEventListener('change', function () { return configure({ automatic: automatic.checked }); });
+    sendInterval.addEventListener('change', function () {
+      const seconds = Number(sendInterval.value);
+      if (!sendInterval.value.trim() || !Number.isInteger(seconds) || seconds < 0 || seconds > 300) {
+        localMessage = '发送间隔须为 0–300 秒的整数'; localError = true; render(); return;
+      }
+      return configure({ sendIntervalSeconds: seconds });
+    });
+    [intervalDown, intervalUp].forEach(function (button, index) {
+      button.addEventListener('pointerdown', function (event) { event.preventDefault(); });
+      button.addEventListener('click', function () {
+        if (button.disabled) return;
+        sendInterval.stepUp(index === 0 ? -1 : 1);
+        return configure({ sendIntervalSeconds: Number(sendInterval.value) });
+      });
+    });
     dirtyPolicy.addEventListener('change', function () { return configure({ dirtyPolicy: dirtyPolicy.value }); });
     autoCopy.addEventListener('change', function () { return configure({ autoCopyResults: autoCopy.checked }); });
     sound.addEventListener('change', async function () {

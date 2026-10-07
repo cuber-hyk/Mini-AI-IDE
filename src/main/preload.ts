@@ -34,6 +34,9 @@ const CH = {
   createEntry: 'fs:create-entry',
   renameEntry: 'fs:rename-entry',
   trashEntry: 'fs:trash-entry',
+  deleteEntry: 'fs:delete-entry',
+  revealEntry: 'fs:reveal-entry',
+  copyEntryPath: 'fs:copy-entry-path',
   entryChanged: 'fs:entry-changed',
   confirmLeave: 'editor:confirm-leave',
   editorState: 'editor:state',
@@ -55,13 +58,8 @@ const CH = {
   chromeState: 'ui:chrome-state',
   setSidebarVisible: 'ui:set-sidebar-visible',
   setSidebarWidth: 'ui:set-sidebar-width',
-  showDiffInEditor: 'ui:show-diff-in-editor',
-  stepDiff: 'ui:step-diff',
-  diffData: 'editor:diff-data',
   sidebarChanged: 'ui:sidebar-changed',
   collectReply: 'return:collect',
-  applyChange: 'return:apply',
-  undoSave: 'return:undo',
   rootChanged: 'fs:root-changed',
   rootStale: 'fs:root-stale',
   fileChanged: 'fs:file-changed',
@@ -93,6 +91,9 @@ const bridge = {
   createEntry: (parent: string, name: string, isDirectory: boolean, root: string) => ipcRenderer.invoke(CH.createEntry, parent, name, isDirectory, root),
   renameEntry: (relPath: string, name: string, root: string) => ipcRenderer.invoke(CH.renameEntry, relPath, name, root),
   trashEntry: (relPath: string, root: string) => ipcRenderer.invoke(CH.trashEntry, relPath, root),
+  deleteEntry: (relPath: string, root: string) => ipcRenderer.invoke(CH.deleteEntry, relPath, root),
+  revealEntry: (relPath: string, root: string) => ipcRenderer.invoke(CH.revealEntry, relPath, root),
+  copyEntryPath: (relPath: string, relative: boolean, root: string) => ipcRenderer.invoke(CH.copyEntryPath, relPath, relative, root),
   confirmLeave: (path?: string, root?: string) => ipcRenderer.invoke(CH.confirmLeave, path, root),
   reportEditorState: (state: unknown) => ipcRenderer.send(CH.editorState, state),
   onEditorRequest: (listener: (request: { id: number; kind: 'save'; path: string }) => void) => ipcRenderer.on(CH.editorRequest, (_e, request) => listener(request)),
@@ -124,14 +125,6 @@ const bridge = {
   setSidebarWidth: (width: number) => ipcRenderer.invoke(CH.setSidebarWidth, width),
   /** 请求主进程打开「提示词编辑面板」（面板是独立视图，只能由主进程显示） */
   openPromptPanel: () => ipcRenderer.invoke(CH.openPromptPanel),
-  showDiffInEditor: (collectionId: string, index: number, filePath?: string) =>
-    ipcRenderer.invoke(CH.showDiffInEditor, collectionId, index, filePath),
-  /** 跳到批次内相邻的变更（主进程会同时同步右下角面板的高亮） */
-  stepDiff: (collectionId: string, index: number) =>
-    ipcRenderer.invoke(CH.stepDiff, collectionId, index),
-  onDiffData: (listener: (data: unknown) => void) => {
-    ipcRenderer.on(CH.diffData, (_e, data) => listener(data));
-  },
   onSidebarChanged: (listener: (state: unknown) => void) => {
     ipcRenderer.on(CH.sidebarChanged, (_e, state) => listener(state));
   },
@@ -148,8 +141,6 @@ const bridge = {
     ipcRenderer.on(CH.chromeState, (_e, state) => listener(state));
   },
   collectReply: () => ipcRenderer.invoke(CH.collectReply),
-  applyChange: (input: unknown) => ipcRenderer.invoke(CH.applyChange, input),
-  undoSave: () => ipcRenderer.invoke(CH.undoSave),
   onRootChanged: (listener: (info: unknown) => void) => {
     ipcRenderer.on(CH.rootChanged, (_e, info) => listener(info));
   },

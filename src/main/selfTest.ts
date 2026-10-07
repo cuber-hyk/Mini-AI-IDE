@@ -279,19 +279,15 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     CHANNELS.entryChanged,
     CHANNELS.editorState,
     CHANNELS.editorRequest,
-    CHANNELS.invalidateChanges,
+    CHANNELS.reviewState,
     CHANNELS.promptStatus,
     CHANNELS.setRootInternal,
     CHANNELS.rootChanged,
     CHANNELS.rootStale,
-    CHANNELS.previewData,
-    CHANNELS.diffData,
     CHANNELS.sidebarChanged,
     // 以下三个是后加的，漏在这里会让 E1/E2 误报（用户实测脚本报 missing 却查不到实现）：
     CHANNELS.chromeState,   // → webbar
-    CHANNELS.activeDiff,    // → 预览面板
     CHANNELS.fileChanged,   // → 编辑器（落盘广播）
-    CHANNELS.appliedChange, // → 预览面板（应用/撤销状态同步）
     CHANNELS.openPromptPanel, // → 编辑器（请求打开提示词面板；面板本体是独立视图）
   ];
   const requiredChannels = Object.values(CHANNELS).filter((c) => !oneWayChannels.includes(c));
@@ -303,21 +299,13 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   });
   let preloadSrcCheck: { ok: boolean; detail: string } = { ok: false, detail: '未读取到 preload.js' };
   try {
-    /*
-     * 必须把**三个 preload 一起扫**：现在有四个渲染进程，每个各有自己的窄桥
-     *（editor / webbar / preview，以及 web 视图无 preload）。
-     * 只扫 `preload.js` 会误报 —— 例如 `preview:active-diff` 属于**预览面板**的桥，
-     * 编辑器 preload 里本来就不该出现它，缺了是正确的，断言却判成 FAIL。
-     *
-     * 通道名前缀也放宽到 `preview:`（此前只认 fs|ui|return，
-     * 等于对 preview 侧的通道完全不做漂移检查）。
-     */
+    // 所有本地视图的窄桥一起核对，包括只读变更查看的 review 通道。
     const preloadFiles = ['preload.js', 'previewPreload.js', 'webbarPreload.js', 'promptPreload.js'];
     const literals: string[] = [];
     const perFile: Record<string, string[]> = {};
     for (const f of preloadFiles) {
       const src = fs.readFileSync(path.join(__dirname, f), 'utf8');
-      const found = [...src.matchAll(/'((?:fs|ui|return|preview|editor|tools):[a-z-]+)'/g)].map((m) => m[1] as string);
+      const found = [...src.matchAll(/'((?:fs|ui|return|preview|review|editor|tools):[a-z-]+)'/g)].map((m) => m[1] as string);
       perFile[f] = found;
       literals.push(...found);
     }
@@ -547,26 +535,19 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       }
       add('L9', '预览面板：preview.js 语法可解析', pvParseError === null, pvParseError ?? 'OK');
 
-      /*
-       * L10：面板改为**只列文件**（2026-10-03）。
-       * 原来这里断言"能渲染逐行 diff + 三类行样式"，那条路已经被否掉：
-       * 差异一律内联渲染在左侧编辑器里（见 P 组），面板再画一份就成了重复呈现。
-       */
-      const listsFiles = /pv-file-row/.test(pvJs) && /pv-file-name/.test(pvJs) && /showDiffInEditor/.test(pvJs);
-      const hasFileCss = /\.pv-file-name/.test(pvCss) && /\.pv-detail-actions/.test(pvCss);
-      const noInlineDiff = !/pv-line/.test(pvJs) && !/pv-hunk/.test(pvJs);
-      add('L10', '预览面板：只罗列文件（不渲染逐行 diff）且有对应样式', listsFiles && hasFileCss && noInlineDiff, {
-        listsFiles,
-        hasFileCss,
-        noInlineDiff,
-      });
+      const listsFiles = /pv-file-row/.test(pvJs) && /pv-file-name/.test(pvJs);
+      const snapshotDiff = /record\.diff\.hunks/.test(pvJs) && /\.pv-line\.add/.test(pvCss) && /\.pv-line\.del/.test(pvCss);
+      const noApply = !/applyChange|showDiffInEditor|pv-apply-all/.test(pvJs + pvHtml);
+      add('L10', '变更面板：列出实际修改并只读展示快照差异', listsFiles && snapshotDiff && noApply, { listsFiles, snapshotDiff, noApply });
 
       // 面板通过独立 preload 暴露桥接口，且通道名与主进程一致
       const pvPreload = fs.readFileSync(path.join(__dirname, 'previewPreload.js'), 'utf8');
       const pvBridgeOk =
         /exposeInMainWorld\('previewBridge'/.test(pvPreload) &&
-        pvPreload.includes("'return:apply'") &&
-        pvPreload.includes("'preview:data'") &&
+        pvPreload.includes("'review:get-state'") &&
+        pvPreload.includes("'review:state'") &&
+        pvPreload.includes("'review:undo'") &&
+        !pvPreload.includes("'return:apply'") &&
         pvPreload.includes("'ui:set-preview-panel'");
       add('L11', '预览面板：独立 preload 暴露 narrow bridge 且通道名正确', pvBridgeOk, {
         exposeInMainWorld: /exposeInMainWorld\('previewBridge'/.test(pvPreload),
@@ -976,127 +957,33 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       menuHasShortcut,
     });
 
-    /* ---------------- P 组：内联 diff（差异与原文件整合显示）----------------
-     *
-     * 用户要求（2026-10-03）：diff **不要**左右并排成两个板块，而要整合在原文件上显示。
-     * 这组断言把该形态固化下来，防止将来有人"顺手改回"DiffEditor：
-     *  - P1 不再有第二个 Monaco 宿主（`monaco-diff` / `createDiffEditor` 全部消失）
-     *  - P2 内联标记确实画在**同一个**编辑器上（decorations + view zone）
-     *  - P3 预览期只读，且退出后恢复可编辑
-     *  - P4 预览前校验编辑器内容与 original 一致（防止标记画在错误位置上）
-     *  - P5 右下角面板不再渲染逐行 diff
-     *  - P6 两个视图之间有高亮同步通道（跨进程，靠主进程转发）
-     */
+    /* ---------------- P 组：实际工具变更只读查看 ---------------- */
     const previewJs = fs.readFileSync(path.join(rendererDir, 'preview.js'), 'utf8');
     const previewPreloadJs = fs.readFileSync(path.join(__dirname, 'previewPreload.js'), 'utf8');
+    const reviewJs = fs.readFileSync(path.join(__dirname, 'tools', 'changeReview.js'), 'utf8');
+    const changesJs = fs.readFileSync(path.join(__dirname, 'tools', 'changes.js'), 'utf8');
     const noSecondHost = !/id="monaco-diff"/.test(html) && !/createDiffEditor/.test(js);
-    add('P1', '不再使用第二个 Monaco 宿主（无 monaco-diff / createDiffEditor）', noSecondHost, {
-      hasMonacoDiffHost: /id="monaco-diff"/.test(html),
-      hasCreateDiffEditor: /createDiffEditor/.test(js),
-    });
+    add('P1', '编辑器保持单一 Monaco 宿主', noSecondHost, {});
+    const snapshotRendering = /record\.diff\.hunks/.test(previewJs) && /line\.oldLine/.test(previewJs) && /line\.newLine/.test(previewJs);
+    add('P2', '右侧按执行快照显示增删行和双行号', snapshotRendering, {});
+    const noEditorPreview = !/showDiffInEditor|previewNewFile|applyChange|btn-diff-apply/.test(js + html);
+    add('P3', '查看变更不切换或锁定编辑器、不重复应用', noEditorPreview, {});
+    const actualSnapshots = /before: outcome\.before/.test(changesJs) && /after: outcome\.after/.test(changesJs) && /diffTexts\)\(event\.before, event\.after\)/.test(reviewJs);
+    add('P4', '差异来自实际执行 before/after，而非重新读取编辑器', actualSnapshots, {});
+    add('P5', '变更源码仅作为文本呈现，不能注入 HTML', /result\.textContent = text/.test(previewJs) && !/innerHTML|insertAdjacentHTML/.test(previewJs), {});
+    const reviewSync = /onReviewState/.test(previewJs) && /review:state/.test(previewPreloadJs) && /CHANNELS\.reviewState/.test(mainJs);
+    add('P6', '工具变更通过独立查看桥更新', reviewSync, {});
+    add('P7', '撤销更新真实记录且旧批次不能混入当前查看', /status: 'undone'/.test(changesJs) && /token !== this\.generation/.test(reviewJs) && /structuredClone/.test(reviewJs), {});
 
-    const inlineMechanism =
-      /createDecorationsCollection/.test(js) &&
-      /changeViewZones/.test(js) &&
-      /inline-deleted/.test(js) &&
-      /inline-added/.test(js);
-    add('P2', '差异以行内标记叠加在原编辑器上（decoration + view zone）', inlineMechanism, {
-      usesDecorations: /createDecorationsCollection/.test(js),
-      usesViewZones: /changeViewZones/.test(js),
-      marksDeleted: /inline-deleted/.test(js),
-      marksAdded: /inline-added/.test(js),
-    });
-
-    const readOnlyWhenPreview = /updateOptions\(\{\s*readOnly:\s*true\s*\}\)/.test(js);
-    const restoredOnExit = /updateOptions\(\{\s*readOnly:\s*Boolean\(state\.previewOnly\)\s*\}\)/.test(js);
-    add('P3', '预览期只读、退出后恢复可编辑', readOnlyWhenPreview && restoredOnExit, {
-      readOnlyWhenPreview,
-      restoredOnExit,
-    });
-
-    // 标记画在编辑器内容上，因此必须先确认内容就是 original，否则宁可不画
-    const guardsContent = /model\.getValue\(\) !== original/.test(js);
-    add('P4', '画标记前校验编辑器内容与 original 一致（防止标记错位）', guardsContent, {
-      guardsContent,
-    });
-
-    const noHunkInPanel = !/renderHunk/.test(previewJs) && !/pv-hunk/.test(previewJs);
-    add('P5', '右下角面板只列文件、不再渲染逐行 diff', noHunkInPanel, {
-      stillRendersHunks: /renderHunk/.test(previewJs),
-      stillHasHunkCss: /pv-hunk/.test(previewJs),
-    });
-
-    const highlightSync =
-      /onActiveDiff/.test(previewJs) &&
-      /activeDiff/.test(previewPreloadJs) &&
-      /CHANNELS\.activeDiff/.test(mainJs);
-    add('P6', '编辑器与右下角面板之间有高亮同步通道（跨进程经主进程转发）', highlightSync, {
-      panelListens: /onActiveDiff/.test(previewJs),
-      preloadExposes: /activeDiff/.test(previewPreloadJs),
-      mainForwards: /CHANNELS\.activeDiff/.test(mainJs),
-    });
-
-    /*
-     * P7：应用状态同步。
-     *
-     * 真实缺陷（用户实测）：「在左侧编辑器中应用代码后，右侧底部的采集应用状态没有同步更新」。
-     * 根因：应用有**两个入口** —— ① 预览面板自己的按钮；② 左侧编辑器工具条的「应用此变更」。
-     * 走 ② 时落盘在主进程完成，面板完全不知情，条目一直显示可应用的假状态。
-     * 修法：主进程在落盘成功后广播 `preview:applied`，面板据 index 标「已应用 ✓」。
-     */
-    const appliedSync =
-      /onAppliedChange/.test(previewJs) &&
-      /appliedChange/.test(previewPreloadJs) &&
-      /CHANNELS\.appliedChange/.test(mainJs) &&
-      /model\.applyEvent/.test(previewJs) &&
-      /collectionId/.test(previewJs);
-    add('P7', '应用/撤销状态在两个入口间同步（编辑器应用后面板同步标记）', appliedSync, {
-      panelListens: /onAppliedChange/.test(previewJs),
-      preloadExposes: /appliedChange/.test(previewPreloadJs),
-      mainBroadcasts: /CHANNELS\.appliedChange/.test(mainJs),
-      panelHasHandlers: /model\.applyEvent/.test(previewJs) && /collectionId/.test(previewJs),
-    });
-
-    /* ---------------- Q 组：应用后刷新 / 全部应用 / 选区浮层 / 输入框观感 ----------------
-     *
-     * Q1 是本轮修的一个**真实缺陷**：落盘在主进程、编辑在另一个渲染进程，
-     * `applyChange` 返回后没有任何广播，编辑器一直显示旧内容（用户实测：
-     * "应用后没有及时刷新文件，只有关闭文件重新打开才会显示应用后的代码"）。
-     * 这条断言防止将来把广播删掉、或只改一半（加了通道但没在 handler 里发）。
-     */
-    /*
-     * 注意读的是**仓库里的 .ts 源码**，不是 __dirname 下的编译产物 ——
-     * 自检运行时 __dirname 是 dist/main，那里只有 .js，没有 .ts。
-     *
-     * ⚠️ 这段**必须在最前面**读：Y 组（提示词面板）等后续分组都要用 mainTs/preloadTs，
-     * 而 const 没有提升 —— 放在后面会让自检直接抛 ReferenceError（整份报告变成一条 FAIL）。
-     * 实际读取已上移到本 try 块开头，此处只留说明。
-     */
+    /* ---------------- Q 组：执行后刷新与编辑器交互 ---------------- */
     const hasFileChangedChannel = /fileChanged:\s*'fs:file-changed'/.test(contractTs);
-    const notifiesOnApply = /notifyFileChanged\((?:filePath|alias),\s*outcome\.created\s*\?/.test(mainTs);
-    const notifiesOnUndo = /notifyFileChanged\(result\.filePath,\s*result\.deleted\s*\?/.test(mainTs);
+    const notifiesOnApply = /this\.notify\(alias, outcome\.created/.test(changesJs);
+    const notifiesOnUndo = /this\.notify\(alias, result\.deleted/.test(changesJs);
     const editorListens = /onFileChanged/.test(js) && /onFileChanged/.test(preloadTs);
-    add(
-      'Q1',
-      '落盘后广播 fileChanged、编辑器收到即重读（修复"应用后仍显示旧代码"）',
-      hasFileChangedChannel && notifiesOnApply && notifiesOnUndo && editorListens,
-      { hasFileChangedChannel, notifiesOnApply, notifiesOnUndo, editorListens },
-    );
-
-    /*
-     * Q2：全部应用必须**顺序**执行 —— 每个变更单独做三向校验，
-     * 校验基线是"读文件那一刻的原文"；并发会让两次写入基于同一份基线而互相覆盖。
-     * 同时要求"单条失败不中断整体"（某个文件校验不过，其余仍应能应用）。
-     */
-    const appliesSequentially = /for \(let i = 0; i < blocks\.length; i \+= 1\)/.test(previewJs);
-    const toleratesFailure = /failed\.push/.test(previewJs) && !/Promise\.all/.test(previewJs);
-    const applyAllBound = /applyAllBlocks/.test(previewJs) && /pv-apply-all/.test(previewHtml);
-    add(
-      'Q2',
-      '「全部应用」存在且顺序执行、单条失败不中断（并发会破坏三向校验基线）',
-      appliesSequentially && toleratesFailure && applyAllBound,
-      { appliesSequentially, toleratesFailure, applyAllBound },
-    );
+    add('Q1', '工具写盘及撤销均刷新编辑器文件', hasFileChangedChannel && notifiesOnApply && notifiesOnUndo && editorListens,
+      { hasFileChangedChannel, notifiesOnApply, notifiesOnUndo, editorListens });
+    const onlyToolWrite = !/return:apply|return:undo|showDiffInEditor/.test(previewPreloadJs + preloadTs) && !/pv-apply-all/.test(previewHtml);
+    add('Q2', 'AI 文件修改只有工具执行入口，查看面板没有人工应用入口', onlyToolWrite, {});
 
     // Q3：选区浮动复制按钮 —— 有选区才出现，无选区不显示；仍只写剪贴板不碰网页。
     //

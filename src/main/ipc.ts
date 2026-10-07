@@ -68,15 +68,10 @@ export function registerFileIpc(service: FileService,
     CHANNELS.copyNumberedSnippet,
     CHANNELS.copyWholeFile,
     CHANNELS.collectReply,
-    CHANNELS.applyChange,
-    CHANNELS.undoSave,
     CHANNELS.setPreviewPanel,
     CHANNELS.setWebVisible,
     CHANNELS.setSidebarVisible,
     CHANNELS.setSidebarWidth,
-    CHANNELS.showDiffInEditor,
-    // 「上一个 / 下一个」跳转：渲染进程 → 主进程（要读批次缓存并驱动编辑器视图）
-    CHANNELS.stepDiff,
     // 提示词编辑面板（独立渲染进程）：读状态 / 保存 / 恢复默认 / 关闭 / 打开
     CHANNELS.promptPanelState,
     CHANNELS.savePromptSpec,
@@ -92,16 +87,13 @@ export function registerFileIpc(service: FileService,
    * ⚠️ 这份清单必须与 `index.ts` 里实际的 `ipcMain.handle` 保持同步。
    *
    * 为什么不能靠"运行时反射 ipcMain"：Electron 没有公开的已注册通道查询接口。
-   * 之前这份清单漏了 `stepDiff`，自检 E1 就会误报"通道未注册"——
-   * 而实际上 `index.ts` 早就注册了它。**断言失败时先分清是"实现缺了"还是"清单漂了"**，
-   * 否则会去改本来正确的业务代码。
+   * 自检断言失败时先分清是实现缺失还是清单漂移。
    *
    * 下面这几个是**单向通道**（主进程 → 渲染进程），故意不在此列，
    * 它们由 selfTest.ts 的 `oneWayChannels` 排除：
    *   - chromeState  （→ webbar，网页/预览可见状态）
-   *   - activeDiff   （→ preview面板，当前正在预览第几个变更）
    *   - fileChanged  （→ editor，落盘后广播，编辑器据此重读）
    *   - openPromptPanel（→ editor，请求打开提示词面板；面板本体是独立视图）
-   *   - diffData / sidebarChanged / previewData / rootChanged / rootStale
+   *   - sidebarChanged / reviewState / rootChanged / rootStale
    */
 }

@@ -3,7 +3,7 @@ artifact_type: capability
 status: current
 updated: 2026-10-07
 owner: 胡运宽
-source_of_truth: [docs/adr/2026-10-02-honest-electron-identity.md, docs/adr/2026-10-02-filesystem-permission-model.md, DESIGN.md, design-tokens.json, src/main/windowLayout.ts, src/main/layoutProbe.ts, src/renderer/changeTree.js, src/renderer/editorToolbar.js, src/renderer/ui.css, test/windowLayout.test.ts, test/changeTree.test.ts, test/editorToolbar.test.ts, src/main/index.ts, src/renderer/index.html, src/renderer/style.css, src/renderer/promptComposer.js, test/promptComposer.test.ts, src/renderer/toolPanelLayout.js, test/toolPanelLayout.test.ts, src/main/workspaceController.ts, src/main/workspaceProbe.ts, src/renderer/fileExplorer.js, src/renderer/editorTabs.js, src/renderer/editorWorkspace.js, test/editorWorkspace.test.ts]
+source_of_truth: [src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, tools/verify-web-result-sender.cjs, src/renderer/preview.css, src/main/previewPreload.ts, test/changeTree.test.ts, docs/adr/2026-10-02-honest-electron-identity.md, docs/adr/2026-10-02-filesystem-permission-model.md, DESIGN.md, design-tokens.json, src/main/windowLayout.ts, src/main/layoutProbe.ts, src/main/tools/changeReview.ts, src/renderer/preview.js, src/renderer/editorToolbar.js, src/renderer/ui.css, test/windowLayout.test.ts, test/toolChanges.test.ts, test/editorToolbar.test.ts, src/main/index.ts, src/renderer/index.html, src/renderer/style.css, src/renderer/promptComposer.js, test/promptComposer.test.ts, src/renderer/toolPanelLayout.js, test/toolPanelLayout.test.ts, src/main/workspaceController.ts, src/main/workspaceProbe.ts, src/renderer/fileExplorer.js, src/renderer/fileIcons.js, src/renderer/fileExplorer.css, src/renderer/editorTabs.js, src/renderer/editorWorkspace.js, test/editorWorkspace.test.ts, test/fileExplorer.test.ts, test/fileIcons.test.ts, test/workspaceController.test.ts]
 ---
 
 # 能力：应用外壳与进程架构
@@ -19,7 +19,7 @@ source_of_truth: [docs/adr/2026-10-02-honest-electron-identity.md, docs/adr/2026
 
 Monaco、AI 网页和变更列表保持三列布局。目录恢复与最近 5 项由主进程管理，顶部、菜单和空白编辑区的打开入口汇聚到 `WorkspaceController`；关闭目录后保留最近记录。启动不恢复编辑文件或光标。
 
-文件树顶部提供新建文件、新建文件夹和刷新；条目右键提供新建、改名、移入回收站；空白处右键提供根目录新建文件／文件夹与刷新，F2 改名，Enter／Esc 确认或取消名称输入。创建后的文件打开、文件夹展开；重名失败不覆盖。文件树由 `fileExplorer.js` 管理，各文件缓冲及模型生命周期由 `editorWorkspace.js` 管理，顶部标签由 `editorTabs.js` 管理；标签切换保留草稿、撤销栈和视图位置，重复打开激活已有标签。
+文件树顶部提供新建文件、新建文件夹和刷新；条目右键按创建、资源管理器定位／绝对与相对路径复制、改名／移入回收站／永久删除分组。空白处右键以根目录为目标，不继承此前条目选择，不提供根目录删除。F2 改名，Enter／Esc 确认或取消名称输入；创建后的文件打开、文件夹展开，重名失败不覆盖。`fileExplorer.js` 管理树与菜单，`fileIcons.js` 按特殊文件名与扩展名提供本地 SVG，文件夹区分开合，未知类型通用，`fileExplorer.css` 管理局部样式。各文件缓冲及模型生命周期由 `editorWorkspace.js` 管理，顶部标签由 `editorTabs.js` 管理；标签切换保留草稿、撤销栈和视图位置，重复打开激活已有标签。
 
 关闭未保存标签、切换／关闭目录和退出统一询问“保存／放弃／取消”；保存失败不能继续离开，改名保留草稿并更新保存路径。AI 写盘先检查所有标签中的目标未保存状态；目录切换清理原目录 AI 记录，文件改名／删除仅使相关路径失效。权限、契约及测试入口见 `local-file-access.md`。
 
@@ -36,35 +36,36 @@ Monaco、AI 网页和变更列表保持三列布局。目录恢复与最近 5 �
 
 ## 进程契约
 
-现在共 **5 个 `WebContentsView`**（此前 4 个，提示词设置面板是本轮新增的）：
+现在共 **5 个 `WebContentsView`**：
 
 | 进程 | 职责 | 硬性约束 |
 |---|---|---|
-| **main** | 窗口与分栏布局、IPC 路由、本地文件读取、会话分区配置、提示词设置的持久化、启动自检、安装版软件更新 |绝不发起或代理大模型相关网络请求；**绝不向网页写入任何内容**；更新模块专用网络例外见 `application-update.md` 与 ADR-0005 |
+| **main** | 窗口与分栏布局、IPC 路由、本地文件读取、会话分区配置、提示词设置的持久化、启动自检、安装版软件更新 | 绝不发起或代理大模型相关网络请求；限定结果写入仅由 webResultSender 调度，见结果回传 ADR；更新模块专用网络例外见 `application-update.md` 与 ADR-0005 |
 | **editor renderer**（`persist:editor-ui`） | Monaco 渲染、文件树、编辑与保存、需求输入区 | `nodeIntegration:false`、`contextIsolation:true`、`sandbox:true`；无文件系统能力；CSP `connect-src 'none'` |
-| **webview renderer**（`persist:postcheck`） | 加载目标平台网页 | 顶级独立视图（`WebContentsView`）；程序**只读不写** |
+| **webview renderer**（`persist:postcheck`） | 加载目标平台网页 | 顶级独立视图；无本地桥。隔离世界 1004 只读采集，1005 仅回传当前真实工具结果，不开放任意网页操作 |
 | **webbar renderer**（`persist:editor-ui`） | 网页区顶部 40px 工具条（网页可见）/ 恢复把手（网页隐藏）：只读采集与列显隐 | 只能请求只读采集和切换显隐；不能读写文件或向网页写入内容。**永不隐藏**——它是"把网页叫回来"的常驻入口 |
-| **preview renderer**（`persist:editor-ui`） | 最右侧变更树：文件筛选、片段预览、集中应用与撤销 | 同上；落盘只经主进程精确定位与预览基线复核 |
+| **preview renderer**（`persist:editor-ui`） | 最右侧只读变更查看：文件筛选、实际修改前后差异和执行状态 | 无文件读取／应用入口；撤销请求复用原工具 owner，不能扩大写盘能力 |
 | **prompt renderer**（`persist:editor-ui`） | 提示词设置面板（覆盖式浮层，默认隐藏）：**分页查看/编辑两套版本的「输出格式要求」** | 只能读/写**这一份设置**（5 个通道）；不能读写文件、不能碰网页。**为什么单独开一个视图**：编辑器渲染进程持有文件写权限，而"编辑一段纯文本"不需要任何文件能力——不把提权面顺手扩大 |
 
 ## 布局规则（三列与独立显隐）
 
 ```text
 编辑器（内含目录树）  │  AI 网页               │  变更列表
-目录与短路径         │  采集回复 / 显隐       │  全部应用 / 撤销 / 收起
-文件头 / 复制上下文   │  官方网页原内容         │  文件筛选
-Monaco 编辑与内联预览 │                        │  目录 → 文件 → 片段
-需求输入与提示词控件  │                        │  选中片段详情 / 应用 / 改路径
+目录与短路径         │  采集回复 / 显隐       │  数量 / 撤销 / 展开查看
+文件头 / 复制上下文   │  官方网页               │  可收起导航 / 换行
+Monaco 编辑          │                        │  全高连续差异
+工具结果与需求输入    │                        │  每文件修改前 / 修改后
 ```
 
 - 几何由 `src/main/windowLayout.ts` 的纯 `computeLayout()` 计算，主进程 `relayout()` 统一应用。窗口默认 1600×960，最小 1080×600；编辑器、网页、变更列常规最小宽度分别为 360、420、260px。
 - 编辑器初始占约一半宽度，变更列默认 300px。两处分隔条分别调整编辑器与变更列；宽度持久化。隐藏变更列以 `ui:set-preview-panel(0)` 表达，返回 `{width,visible}`；正数统一表示列宽。
+- 右侧“展开查看”调用 `setPreviewPanel(width, true)` 临时拓宽，可恢复原宽度，不保存临时宽度；按 `chromeState.previewMaxWidth` 保留编辑器与 AI 网页最小预算，无额外空间时禁用。
 - 网页隐藏时，变更列继续显示。工具条变为编辑器与变更列之间的 28px 恢复把手；两列都隐藏时把手仍可恢复网页。主进程不销毁工具条。
 - 网页按钮、恢复把手、视图菜单与 `Ctrl+Shift+A` 汇聚到 `setWebVisible()`；`ui:chrome-state` 向各本地视图同步真实显隐与列宽。变更列可由自身收起按钮关闭，由网页工具条或视图菜单恢复。
 - 目录树开关在编辑器文件头，目录树隐藏后仍可点击；`Ctrl+B` 保留。
 - 复制操作位于编辑器「复制上下文」菜单，保留全文与片段两条链路，支持方向键、Escape、Tab 与外点关闭。路径显示末两级，悬停显示完整路径。
 - 「采集回复」位于 AI 网页顶栏，忙时禁用；失败和无新内容均明确反馈。
-- 变更树按目录/文件分组，同文件多个片段展开子项，显示原→新范围、增删统计及状态。文件筛选不改变批次索引；应用/撤销集中在头部与选中详情区。刷新保留当前控件焦点、路径编辑草稿与光标。
+- 工具结果与需求输入保持左侧。右侧全高正文连续展示当前批次匹配记录，显示实际增删统计、待执行／已修改／失败／未执行／已撤销。文件导航默认收起，窄列打开时覆盖正文、宽列并排，点击滚到目标记录；筛选只影响显示。每文件保留独立差异／修改前／修改后，未改上下文可展开，长行默认自动换行。同批广播保留阅读滚动与有效焦点，不切换左侧文件。工具按权限直接写入，不提供再次应用、改路径或编辑器内联预览；撤销复用原入口。快照只存本轮内存，不进剪贴板或账本。
 - 本地基础样式参见 `DESIGN.md` 和 `design-tokens.json`；构建生成 token CSS，控件复用 `ui.css`。布局探针验证大小窗口和独立显隐，不能以静态示意替代运行时验收。
 
 ### 提示词设置面板（覆盖式浮层）
@@ -82,7 +83,7 @@ Monaco 编辑与内联预览 │                        │  目录 → 文件 �
 ## 关键规则
 
 1. 编辑器与网页视图必须在**不同渲染进程**。
-2. **程序不向网页写入任何内容**：主进程不调度任何注入，对网页的接触只有回程**只读**采集（见 `human-machine-boundary`）。
+2. **网页能力受限**：回程保持只读；automatic 开启后仅唯一 sender 可向当前官网会话空输入框回传本批真实结果。无网页 IPC/文件桥、任意动作接口或草稿覆盖，详见 `human-machine-boundary.md` 与结果回传 ADR。
 3. IPC 只暴露窄接口（声明式参数），不接受任意表达式或任意路径。
 4. **无自动化特征**（A 级判据，必须为零）：不暴露 CDP 调试端口；不引入 Selenium / Puppeteer / Playwright；不设置 `navigator.webdriver`；不注入任何"伪装浏览器身份"的脚本。
 5. **UA 规则（硬性）**：
@@ -171,7 +172,7 @@ Monaco 编辑与内联预览 │                        │  目录 → 文件 �
 | 目录树显隐 | 编辑器顶部条左侧**图标按钮**（高亮=当前可见）+ `Ctrl+B` |
 | 变更列显隐 | 自身收起按钮关闭；网页工具条分栏图标与视图菜单恢复/切换 |
 
-> 操作按区域归属：目录树和复制在编辑器、采集在网页顶栏、应用与撤销在变更列。
+> 操作按区域归属：目录树和复制在编辑器、采集在网页顶栏、实际变更阅读与撤销在变更列；文件修改由工具统一执行。
 
 | **跨容器自己算 Monaco 坐标必然错位 —— 一律用 `IContentWidget`** | 浮层曾挂在编辑器**外部**的 `.editor-wrap` 上，用 `getTopForLineNumber()` / `getOffsetForColumn()` 自己算 `style.left/top`。这两个 API 返回的是**编辑器视口内**坐标，而编辑器自己是独立滚动容器 —— 一滚动两套坐标系就脱节。叠加 `wordWrap`：`end.lineNumber` 是**逻辑行**，但该行可能折成多个**视觉行**，取到的是**第一视觉行**的 top。结果是代码文件"歪着出现"、**markdown 长段落干脆不出现**（用户两次反馈"文本文件没有复制按钮"）。前两轮分别归因于`getPositionAt` 参数类型、原生 `title`，都只修到表象 | 定位**整个交给 Monaco**：用 `editor.addContentWidget()` 注册浮层，`getPosition()` 只返回 `{ position, preference }`（锚在选区末端的行尾 = 用户要的"右端行右上角"），滚动时只调 `editor.layoutContentWidget()`。配套三条：`preference: [ABOVE, BELOW]` 让 Monaco 自己选不遮挡的一侧；`suppressMouseDown: true` 防止点按钮时编辑器抢焦点导致选区丢失（否则复制到的是整篇文件）；显隐走 class，**一个 `style` 都不写** |
 | **`title` 闪烁的根因不是「写多了次」，是「在高频事件里重排 DOM」** | 原生 tooltip 在元素位置/样式**发生任何变化**时失效并重新计时。此前 `place()` 已加了"位置未变就return"，闪烁依旧——因为查找过程中 `onDidChangeCursorSelection` 本来就频繁触发，位置**一直在变**。此时任何一次 `style` 写入都会让旁边查找框的 `Close (Escape)` 面板反复重建（用户两次反馈"仍然有闪烁"）。**只优化写入次数治不了这个** | 断掉因果链，而不是减少次数：改用 `IContentWidget` 后**完全不写 style**，重排不再发生。同时浮层自身也不用 `title`（改 `aria-label`），避免它自己成为下一个闪烁源 |
@@ -188,7 +189,7 @@ Monaco 编辑与内联预览 │                        │  目录 → 文件 �
 
 | 项 | 取值 |
 |---|---|
-| 布局 | 上方文本框占满宽度，下方紧凑操作栏：版本、权限、自动采集、设置和复制；窄列换行 |
+| 布局 | 上方文本框占满宽度，下方紧凑操作栏：版本、权限、自动继续、设置和复制；窄列换行 |
 | 外壳 | 单层低对比边框，聚焦时高亮，不叠加外圈描边 |
 | 高度 | 文本框最小 44px、最大 220px；上限随视口与操作栏实际高度收缩。输入、粘贴、拖入、缩放和操作栏换行后重算，超出上限滚动 |
 | 高度预算 | 输入区最多占视口高度 48%，为操作栏及内边距预留空间；工具面板随输入高度收缩并保留编辑空间，长输入不裁切底部控件 |
@@ -202,7 +203,7 @@ Monaco 编辑与内联预览 │                        │  目录 → 文件 �
 输入区行为由 `src/renderer/promptComposer.js` 唯一负责，`renderer.js` 初始化并接入信息栏。
 工具面板、浮层与高度预算由 `src/renderer/toolPanelLayout.js` 管理，纯摘要由 `src/renderer/toolResultPresentation.js` 管理；权限、执行状态与结果复制接线见 `docs/capabilities/tool-harness.md`。目录树宽度在窄列时钳制，为编辑器保留空间。
 `ui:get-prompt-status` 查询版本及两版自定义布尔值，`ui:prompt-status` 推送相同结构；编辑器不读取提示词全文。
-复制仍由主进程组装并写入系统剪贴板，由用户自己粘贴到 AI 网页并发送。
+需求提示词仍由主进程组装并复制，由用户粘贴到官网并发送；本批工具结果可按 automatic 设置由限定 sender 回传。
 
 ## 代码入口
 

@@ -32,12 +32,17 @@ export const CHANNELS = {
   createEntry: 'fs:create-entry',
   renameEntry: 'fs:rename-entry',
   trashEntry: 'fs:trash-entry',
+  deleteEntry: 'fs:delete-entry',
+  revealEntry: 'fs:reveal-entry',
+  copyEntryPath: 'fs:copy-entry-path',
+  getReviewState: 'review:get-state',
+  reviewState: 'review:state',
+  undoReviewChange: 'review:undo',
   entryChanged: 'fs:entry-changed',
   confirmLeave: 'editor:confirm-leave',
   editorState: 'editor:state',
   editorRequest: 'editor:request',
   editorReply: 'editor:reply',
-  invalidateChanges: 'preview:invalidate',
   /** 查询当前已打开的根目录 */
   getRoot: 'fs:get-root',
   /** 设置根目录（仅供主进程内部/自检使用，渲染进程不暴露此能力） */
@@ -62,31 +67,10 @@ export const CHANNELS = {
   copyNumberedSnippet: 'ui:copy-numbered-snippet',
   /** 把当前打开的**整个文件**（含路径声明与代码围栏）写入剪贴板，作为上下文交给模型 */
   copyWholeFile: 'ui:copy-whole-file',
-  /** 从网页视图**只读**采集最新回复并解析为待应用变更（返回预览，不落盘） */
+  /** 从网页视图只读采集最新回复，按预选权限执行规范工具请求 */
   collectReply: 'return:collect',
-  /** 应用一个已选定的变更（先做预览基线复核；落盘前保留撤销快照） */
-  applyChange: 'return:apply',
-  /** 撤销一次应用（按快照恢复） */
-  undoSave: 'return:undo',
   /** 显示/隐藏最右侧变更列并设置宽度 */
   setPreviewPanel: 'ui:set-preview-panel',
-  /** 主进程 → 最右侧预览面板：推送待预览数据 */
-  previewData: 'preview:data',
-  /**
-   * 主进程 → 最右侧预览面板：当前正在编辑器里预览的是第几个变更。
-   * 两个视图是独立渲染进程（ADR-0002），彼此不能调用，
-   * 用「上一个 / 下一个」在编辑器里跳走后要靠它同步高亮。
-   */
-  activeDiff: 'preview:active-diff',
-  /**
-   * 主进程 → 最右侧预览面板：某个变更**已被应用**（或已撤销）。
-   *
-   * 为什么需要：应用有**两个入口** —— ① 预览面板自己的「应用」按钮；
-   * ② 左侧编辑器内联预览工具条上的「应用此变更」。走 ② 时面板完全不知情，
-   * 条目会一直显示「应用」可用态，与磁盘真实状态脱节（用户实测反馈）。
-   * 两个视图是独立渲染进程（ADR-0002），所以由主进程在落盘成功后统一广播。
-   */
-  appliedChange: 'preview:applied',
   /** 显示/隐藏右侧 AI 网页视图 */
   setWebVisible: 'ui:set-web-visible',
   /** 主进程 → 网页区工具条：当前网页/预览的可见状态 */
@@ -95,10 +79,6 @@ export const CHANNELS = {
   setSidebarVisible: 'ui:set-sidebar-visible',
   /** 调整左侧目录树宽度（像素） */
   setSidebarWidth: 'ui:set-sidebar-width',
-  /** 编辑器 → 主进程：请求在**编辑器内**显示某个变更的 diff */
-  showDiffInEditor: 'ui:show-diff-in-editor',
-  /** 编辑器 → 主进程：跳到批次内的上一个 / 下一个变更（并同步最右侧面板高亮） */
-  stepDiff: 'ui:step-diff',
   /**
    * 主进程 → 编辑器：**磁盘上的文件被回程链路改写了**。
    *
@@ -109,8 +89,6 @@ export const CHANNELS = {
    * 只有用户手动关掉重开才会重新读盘。
    */
   fileChanged: 'fs:file-changed',
-  /** 主进程 → 编辑器：指示进入/退出 diff 视图 */
-  diffData: 'editor:diff-data',
   /** 主进程 → 编辑器：目录树可见性/宽度变化 */
   sidebarChanged: 'ui:sidebar-changed',
   /** 主进程 → 渲染进程：记忆的根目录已失效 */
@@ -584,6 +562,9 @@ export interface EditorBridge {
   createEntry(parent: string, name: string, isDirectory: boolean, root: string): Promise<FileOperationResult>;
   renameEntry(relPath: string, name: string, root: string): Promise<FileOperationResult>;
   trashEntry(relPath: string, root: string): Promise<FileOperationResult>;
+  deleteEntry(relPath: string, root: string): Promise<FileOperationResult>;
+  revealEntry(relPath: string, root: string): Promise<FileOperationResult>;
+  copyEntryPath(relPath: string, relative: boolean, root: string): Promise<FileOperationResult>;
   confirmLeave(path?: string, root?: string): Promise<{ ok: boolean }>;
   reportEditorState(state: EditorState): void;
   onEditorRequest(listener: (request: { id: number; kind: 'save'; path: string }) => void): void;
@@ -643,12 +624,6 @@ export interface EditorBridge {
    * 这里只上报意图，由主进程显示面板并居中摆放。
    */
   openPromptPanel(): Promise<{ ok: boolean }>;
-  /** 请求在编辑器内以 diff 视图显示某个变更 */
-  showDiffInEditor(collectionId: string, index: number, filePath?: string): Promise<{ ok: boolean; error?: string }>;
-  /** 跳到批次内相邻的变更；主进程会同时把最右侧面板的高亮同步过去 */
-  stepDiff(collectionId: string, index: number): Promise<{ ok: boolean; error?: string }>;
-  /** 主进程 → 编辑器：进入（或退出）diff 视图 */
-  onDiffData(listener: (data: EditorDiffPayload) => void): void;
   /** 主进程 → 编辑器：目录树可见性/宽度变化 */
   onSidebarChanged(listener: (state: { visible: boolean; width: number }) => void): void;
   /**
@@ -658,18 +633,8 @@ export interface EditorBridge {
    * 由它显示面板视图并广播一次本事件；编辑器据此点亮工具栏按钮的激活态。
    */
   onOpenPromptPanel(listener: () => void): void;
-  /**
-   * 从网页视图**只读**采集最新回复并解析为待应用变更。
-   * 不落盘、不修改页面；只回传预览数据。
-   */
+  /** 只读采集最新回复，工具权限与执行结果由 IDE 工具入口管理。 */
   collectReply(): Promise<ReturnPreview>;
-  /**
-   * 应用一个变更。主进程会先做预览基线复核，并**保留撤销快照**；
-   * 默认路径下不可能静默覆盖（校验失败即拒绝）。
-   */
-  applyChange(input: ApplyChangeInput): Promise<ApplyChangeResult>;
-  /** 撤销上一次应用（按快照恢复原文） */
-  undoSave(): Promise<UndoResult>;
   onRootChanged(listener: (info: RootInfo) => void): void;
   onFileChanged(listener: (filePath: string, change: 'updated' | 'created' | 'deleted', revision: number, discardDraft?: boolean) => void): void;
   /** 记忆的根目录已失效（被删除/移动）时的通知 */

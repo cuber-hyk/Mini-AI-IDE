@@ -14,11 +14,9 @@
 import { app, BaseWindow, clipboard, dialog, ipcMain, Menu, session, WebContentsView } from 'electron';
 import * as path from 'node:path';
 
-import { CHANNELS, type ApplyChangeInput, type AppliedChangeEvent, type PromptPanelState, type PromptComposerStatus, type PromptVariantState, type SavePromptSpecResult, type ReturnPreview, type RootInfo } from '../shared/contract';
+import { CHANNELS, type PromptPanelState, type PromptComposerStatus, type PromptVariantState, type SavePromptSpecResult, type ReturnPreview, type RootInfo } from '../shared/contract';
 import { buildPrompt, getFormatSpec, resolveFormatSpec, normalizeVariant, MAX_CUSTOM_FORMAT_SPEC_LENGTH, type CustomFormatSpecs, type FormatSpecVariant } from '../shared/formatSpec';
-import { parseModelReply, type ParsedCodeBlock } from '../shared/returnPath';
 import { buildSnippetText, buildWholeFileText } from '../shared/snippet';
-import { diffTexts } from '../shared/diff';
 import { checkUaConsistency, stripSelfDeclarations } from '../shared/userAgent';
 import { FileService } from './fileService';
 import { registerFileIpc } from './ipc';
@@ -27,8 +25,7 @@ import { runSelfTest } from './selfTest';
 import { runDiagnose } from './diagnose';
 import { SettingsStore, PRODUCTION_SETTINGS_FILE, SELF_TEST_SETTINGS_FILE, type Settings } from './settings';
 import { buildContextSummary } from './contextSummary';
-import { ConsumptionStore, sessionKeyOf } from './consumptionStore';
-import { ReturnPathService, type PreparedChange } from './returnPathService';
+import { ReturnPathService } from './returnPathService';
 import { computeLayout, EDITOR_MIN_WIDTH, WEB_MIN_WIDTH, PREVIEW_MIN_WIDTH, PREVIEW_DEFAULT_WIDTH, HANDLE_BAR_WIDTH } from './windowLayout';
 import { runLayoutProbe } from './layoutProbe';
 import { WorkspaceService } from './workspaceService';
@@ -73,23 +70,6 @@ const DIAGNOSE = process.argv.includes('--diagnose');
 const SIDEBAR_MIN_WIDTH = 140;
 const SIDEBAR_MAX_WIDTH = 520;
 const SIDEBAR_DEFAULT_WIDTH = 230;
-
-/** 由文件扩展名推断 Monaco 语言 id（用于 diff 视图的语法高亮） */
-function languageIdFor(relPath: string): string {
-  const ext = (relPath.split('.').pop() ?? '').toLowerCase();
-  const map: Record<string, string> = {
-    ts: 'typescript', tsx: 'typescript', mts: 'typescript', cts: 'typescript',
-    js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript',
-    json: 'json', md: 'markdown', markdown: 'markdown', py: 'python', go: 'go',
-    rs: 'rust', java: 'java', kt: 'kotlin', c: 'c', h: 'cpp', cc: 'cpp', cpp: 'cpp',
-    hpp: 'cpp', cs: 'csharp', php: 'php', swift: 'swift', rb: 'ruby', lua: 'lua',
-    sh: 'shell', bash: 'shell', zsh: 'shell', ps1: 'powershell', bat: 'bat',
-    sql: 'sql', css: 'css', scss: 'scss', less: 'less', html: 'html', htm: 'html',
-    xml: 'xml', yml: 'yaml', yaml: 'yaml', toml: 'ini', ini: 'ini', conf: 'ini',
-    csv: 'plaintext', txt: 'plaintext',
-  };
-  return map[ext] ?? 'plaintext';
-}
 
 /* ------------------------------------------------------------------ *
  * 启动自检数据（供 --self-test 使用）
@@ -541,7 +521,6 @@ async function loadLocalView(
  * 顺序本身不是根因（换顺序失败对象会飘移），但先加载几个小页面、
  * 让它们与编辑器页面错开，可以减少并发创建渲染进程的压力。
  */
-  await loadLocalView(previewView, 'preview.html');
   await loadLocalView(webBarView, 'webbar.html');
   // 提示词面板：同样是本地页面。它的 handler 已在上方注册完毕（见那段注释）。
   await loadLocalView(promptView, 'prompt.html');
@@ -589,68 +568,13 @@ async function loadLocalView(
     return { width: sidebarWidth };
   });
 
-  /**
-   * 在**编辑器内**以内联标记显示某个变更（删除行标红、新增行插在旁边）。
-   * 主进程负责算出两侧完整文本，编辑器只负责渲染。
-   */
-  ipcMain.handle(CHANNELS.showDiffInEditor, (_e, collectionId: unknown, index: unknown, target: unknown) => workspaceController.run(async () => {
-    if (typeof collectionId !== 'string' || typeof index !== 'number' || (target !== undefined && typeof target !== 'string')) {
-      return { ok: false, error: '参数不合法' };
-    }
-    const payload = await buildEditorDiff(collectionId, index, typeof target === 'string' ? target : undefined);
-    if (!payload) {
-      const cached = collections.get(collectionId);
-      const block = cached?.blocks[index];
-      if (cached && block && !cached.invalidated.has(index) && !returnPath.isApplied(block)) {
-        const prepared = await returnPath.prepareChange(block, typeof target === 'string' ? target : cached.previewTargets.get(index)?.path ?? block.filePath);
-        await refreshPreview(collectionId);
-        if (!prepared.ok) return { ok: false, error: prepared.error };
-      }
-      return { ok: false, error: '采集结果已过期或该变更不存在，请重新采集' };
-    }
-    if (!editorView.webContents.isDestroyed()) {
-      editorView.webContents.send(CHANNELS.diffData, payload);
-    }
-    /*
-     * 顺手通知最右侧面板高亮这一条。
-     * 两个视图是独立渲染进程（ADR-0002），彼此不能调用，所以必须经主进程转发；
-     * 否则用「上一个 / 下一个」在编辑器里跳走后，面板高亮会停在原地对不上。
-     */
-    if (!previewView.webContents.isDestroyed()) {
-      previewView.webContents.send(CHANNELS.activeDiff, index);
-    }
-    await refreshPreview(collectionId);
-    return { ok: true };
-  }));
-
-  /**
-   * 编辑器内的「上一个 / 下一个」跳转（由 renderer 在切到相邻变更时调用）。
-   *
-   * 为什么不复用 showDiffInEditor：那是个通用入口（谁都可以请求预览某个变更），
-   * 而这里要额外把高亮同步给最右侧面板；单独一个通道语义更清楚，
-   * 也避免为了同步高亮而给每个调用方都塞一份转发逻辑。
-   */
-  ipcMain.handle(CHANNELS.stepDiff, async (_e, collectionId: unknown, index: unknown) => {
-    if (typeof collectionId !== 'string' || typeof index !== 'number') {
-      return { ok: false, error: '参数不合法' };
-    }
-    const payload = await buildEditorDiff(collectionId, index);
-    if (!payload) return { ok: false, error: '采集结果已过期或该变更不存在，请重新采集' };
-    if (!editorView.webContents.isDestroyed()) {
-      editorView.webContents.send(CHANNELS.diffData, payload);
-    }
-    if (!previewView.webContents.isDestroyed()) {
-      previewView.webContents.send(CHANNELS.activeDiff, index);
-    }
-    return { ok: true };
-  });
-
   /** 变更列按宽度展开/调整；0 收起，实际尺寸由三列几何约束。 */
-  ipcMain.handle(CHANNELS.setPreviewPanel, (_e, width: unknown) => {
+  ipcMain.handle(CHANNELS.setPreviewPanel, (_e, width: unknown, temporary: unknown = false) => {
+    if (typeof temporary !== 'boolean') throw new Error('变更列宽度参数无效');
     const requested = typeof width === 'number' && Number.isFinite(width) ? Math.round(width) : lastPreviewWidth;
     previewWidth = requested > 0 ? Math.max(PREVIEW_MIN_WIDTH, requested) : 0;
     relayout();
-    if (previewWidth > 0) {
+    if (previewWidth > 0 && !temporary) {
       lastPreviewWidth = layout.previewBounds.width;
       previewWidth = lastPreviewWidth;
       settings.update({ previewWidth: lastPreviewWidth });
@@ -658,103 +582,6 @@ async function loadLocalView(
     buildApplicationMenu();
     return { width: layout.previewBounds.width, visible: previewWidth > 0 };
   });
-
-  /** 把预览数据推给最右侧面板 */
-  function pushPreviewToPanel(preview: unknown): void {
-    if (!previewView.webContents.isDestroyed()) {
-      previewView.webContents.send(CHANNELS.previewData, preview);
-    }
-  }
-
-  function previewBlock(block: ParsedCodeBlock, prepared: PreparedChange, index: number): ReturnPreview['blocks'][number] {
-    const locations = prepared.ok ? prepared.locations.map(({ oldRange, newRange, lineDelta }) => ({ oldRange, newRange, lineDelta })) : [];
-    const newParts = block.operation === 'replace' ? (block.edits || []).map(edit => edit.newText) : [block.code];
-    const firstLines = newParts.flatMap((part, partIndex) => part.length
-      ? part.split(/\r\n|\r|\n/).map((text, offset) => ({ lineNo: (locations[partIndex]?.newRange?.start ?? 1) + offset, text })) : []);
-    const hints = block.kind === 'other' ? ['其他内容仅供只读查看，不参与应用；文件修改需明确路径和操作'] : [];
-    if (prepared.ok) hints.push(prepared.mode === 'create' ? '新增文件：预览不写盘，应用时创建文件及缺失父目录' :
-      prepared.mode === 'overwrite' ? '覆盖全文：请核对整个文件差异，预览后文件变化会拒绝写入' : '精确替换：SEARCH 唯一匹配，预览后文件变化会拒绝写入');
-    return { index, ...(block.kind ? { kind: block.kind, contentText: block.code } : {}),
-      ...(block.operation ? { operation: block.operation } : {}), filePath: prepared.ok ? prepared.filePath : block.filePath,
-      pathSource: block.pathSource, range: locations[0]?.oldRange ?? null, locations,
-      codeLines: firstLines.length, codeChars: newParts.reduce((size, part) => size + part.length, 0),
-      firstLines: firstLines.slice(0, 6),
-      moreLines: Math.max(0, firstLines.length - 6), diff: prepared.ok ? diffTexts(prepared.before, prepared.after) : null,
-      fileExists: prepared.ok ? prepared.fileExists : prepared.fileExists === true,
-      fileLines: prepared.ok && prepared.fileExists ? prepared.before.split(/\r\n|\r|\n/).length : null,
-      applicable: prepared.ok && !returnPath.isApplied(block),
-      ...(!prepared.ok && block.kind !== 'other' ? { blockedReason: prepared.error } : {}), hints };
-  }
-
-  async function refreshPreview(collectionId: string): Promise<void> {
-    const cached = collections.get(collectionId);
-    if (!cached?.preview) return;
-    const blocks = [];
-    for (let index = 0; index < cached.blocks.length; index += 1) {
-      const block = cached.blocks[index]!;
-      if (cached.invalidated.has(index)) {
-        blocks.push(previewBlock(block, { ok: false, error: '目标已重命名或删除，请重新采集' }, index));
-        continue;
-      }
-      const target = cached.targets.get(index) ?? cached.previewTargets.get(index)?.path ?? block.filePath;
-      const prepared = returnPath.isApplied(block) && target ? returnPath.getPrepared(block, target) :
-        await returnPath.prepareChange(block, target);
-      blocks.push(previewBlock(block, prepared ?? { ok: false, error: '预览已失效，请重新采集' }, index));
-    }
-    cached.preview = { ...cached.preview, blocks };
-    pushPreviewToPanel(cached.preview);
-  }
-
-  /**
-   * 构造"编辑器内联 diff"所需的两侧完整文本。
-   *
-   * 与预览面板共用同一份预览基线复核：算不出（或校验不过）就返回 null，
-   * 由调用方报错——**不会出现"显示了 diff 但应用会失败"**的情况。
-   *
-   * 附带 `siblings` / `position`：编辑器的「上一个 / 下一个」需要在批次内跳转，
-   * 而 payload 本身只描述单个变更，所以这里顺带把同批次的定位信息一起带上。
-   */
-  async function buildEditorDiff(
-    collectionId: string,
-    index: number, target?: string
-  ): Promise<import('../shared/contract').EditorDiffPayload | null> {
-    const revision = workspace.getState().revision;
-    const cached = collections.get(collectionId);
-    const block = cached?.blocks[index];
-    if (!cached || cached.invalidated.has(index) || !block || !block.filePath || returnPath.isApplied(block)) return null;
-
-    const read = await returnPath.prepareChange(block, target ?? cached.previewTargets.get(index)?.path ?? block.filePath);
-    if (!read.ok || workspace.getState().revision !== revision || cached.invalidated.has(index)) return null;
-    const expected = cached.previewTargets.get(index);
-    if (expected && expected.path === read.filePath.toLowerCase() && expected.exists !== read.fileExists) return null;
-    cached.previewTargets.set(index, { path: read.filePath.toLowerCase(), exists: read.fileExists });
-
-    /* 同批次内可导航的变更（供编辑器「上一个 / 下一个」）。
-     必须在 map 之后按类型收窄：`filePath` 可能是 null，而 `exactOptionalPropertyTypes`
-     下 optional 字段不接受 null。 */
-    const siblings: import('../shared/contract').EditorDiffSibling[] = [];
-    cached.blocks.forEach((b, i) => {
-      if (typeof b.filePath === 'string' && cached.previewTargets.has(i) && !cached.invalidated.has(i) && !returnPath.isApplied(b)) {
-        siblings.push({ collectionId, index: i, filePath: b.filePath });
-      }
-    });
-
-    return {
-      active: true,
-      operation: read.mode,
-      workspaceRevision: revision,
-      filePath: read.filePath,
-      original: read.before,
-      modified: read.after,
-      language: languageIdFor(read.filePath),
-      ...(!read.fileExists ? { newFile: true } : {}),
-      collectionId,
-      index,
-      identical: read.after === read.before,
-      siblings,
-      position: siblings.findIndex((s) => s.index === index),
-    };
-  }
 
   /**
    * 把"输出格式要求"模板写入系统剪贴板。
@@ -795,63 +622,36 @@ async function loadLocalView(
   /** 取工作环境摘要（只读；不含"当前打开的文件"，见 contextSummary 注释） */
   ipcMain.handle(CHANNELS.getContext, () => buildContextSummary(fileService.getRoot()));
 
-  /* ---------------- 回程：采集 → 解析 → 预览 / 应用 / 撤销 ---------------- */
+  /* ---------------- 工具采集与实际文件变更 ---------------- */
   const returnPath = new ReturnPathService(fileService);
-
-  /**
-   * 采集结果缓存：`collectionId` → 解析出的代码块（**含代码本体**）。
-   *
-   * 为什么放主进程而不是回传渲染进程：
-   *  1. 渲染进程不需要（也不应该）经手大块代码文本；
-   *  2. 预览基线由主进程冻结完整原文，应用时复核；渲染进程不能传入或重建旧基线。
-   * 只保留最近若干批，避免长期驻留。
-   */
-  const collections = new Map<string, { blocks: ParsedCodeBlock[]; at: string; replyLength: number; invalidated: Set<number>; targets: Map<number, string>; previewTargets: Map<number, { path: string; exists: boolean }>; preview?: ReturnPreview; invalidPaths: Array<{ path: string; directory: boolean }> }>();
-  const MAX_COLLECTIONS = 5;
-  let collectionSeq = 0;
-
-  /**
-   * 采集消费判定（L2）：一次采集消费一条回复，状态只放主进程内存。
-   *
-   * 为什么不能在页面上做标记：零注入（ADR-0003）要求对网页只读不写，
-   * 因此用**内容指纹**比对实现"同一条回复只消费一次"。详见 consumptionStore.ts。
-   */
-  const consumption = new ConsumptionStore();
 
   let announcedRevision = workspace.getState().revision;
   const workspaceController = new WorkspaceController(win, editorView.webContents, fileService, workspace,
     (info) => {
       if (info.revision !== announcedRevision) {
         announcedRevision = info.revision ?? announcedRevision;
-        collections.clear(); returnPath.clear(); consumption.clear();
+        returnPath.clear();
         tools.reset();
-        editorView.webContents.send(CHANNELS.diffData, { active: false });
-        previewView.webContents.send(CHANNELS.invalidateChanges, { all: true });
       }
       notifyRootChanged(info); buildApplicationMenu();
     },
     (event) => {
-      const target = event.oldRelPath.toLowerCase();
-      const affected = (value: string | null | undefined) => {
-        const candidate = (value ?? '').replace(/\\/g, '/').toLowerCase();
-        return candidate === target || (event.isDirectory && candidate.startsWith(target + '/'));
-      };
-      for (const [id, collection] of collections) {
-        collection.invalidPaths.push({ path: event.oldRelPath, directory: event.isDirectory });
-        const indices: number[] = [];
-        collection.blocks.forEach((block, index) => {
-          if (affected(block.filePath) || affected(collection.targets.get(index)) || affected(collection.previewTargets.get(index)?.path)) {
-            collection.invalidated.add(index); indices.push(index);
-          }
-        });
-        previewView.webContents.send(CHANNELS.invalidateChanges, { collectionId: id, indices, oldRelPath: event.oldRelPath, isDirectory: event.isDirectory });
-      }
       returnPath.invalidate(event.oldRelPath, event.isDirectory);
-      consumption.clear();
+      tools.invalidate(event.oldRelPath, event.isDirectory);
       editorView.webContents.send(CHANNELS.entryChanged, event);
-    }, () => collections.size > 0 || returnPath.undoCount > 0);
+    }, () => tools.getReviewState().records.length > 0 || returnPath.undoCount > 0);
+  let revealedReviewGeneration = -1;
   const tools = await createToolIntegration({
     ipc: ipcMain, editor: editorView.webContents, web: webView.webContents,
+    review: previewView.webContents,
+    notifyReview: state => {
+      if (previewView.webContents.isDestroyed()) return;
+      previewView.webContents.send(CHANNELS.reviewState, state);
+      if (state.generation !== revealedReviewGeneration && state.records.some(record => record.status === 'applied')) {
+        revealedReviewGeneration = state.generation;
+        if (previewWidth <= 0) { previewWidth = lastPreviewWidth; relayout(); buildApplicationMenu(); }
+      }
+    },
     files: fileService, returnPath, workspace: workspaceController,
     storePath: path.join(app.getPath('userData'), SELF_TEST || UI_PROBE || DIAGNOSE ? 'tools-probe.json' : 'tools.json'),
     disabled: SELF_TEST || UI_PROBE || DIAGNOSE,
@@ -862,6 +662,8 @@ async function loadLocalView(
     notifyFile: (relative, change, discard) => notifyFileChanged(relative, change, discard),
     copy: text => clipboard.writeText(text),
   });
+  // 先注册只读变更桥，再加载会立即请求初始状态的面板。
+  await loadLocalView(previewView, 'preview.html');
   updater = createApplicationUpdater({
     window: win,
     disabled: SELF_TEST || UI_PROBE || DIAGNOSE,
@@ -890,9 +692,10 @@ async function loadLocalView(
   ];
 
   /**
-   * 从网页视图**只读**采集最新回复；正式工具交由权限 owner，文件块进入预览。
+   * 从网页视图**只读**采集最新回复，统一交由工具权限 owner 处理。
    * 采集不修改页面，本地工具执行受独立授权约束。
    */
+  let collectionSeq = 0;
   ipcMain.handle(CHANNELS.collectReply, (event): Promise<ReturnPreview> => {
     if (![editorView.webContents, webBarView.webContents].some(view => event.sender === view && event.senderFrame === view.mainFrame)) throw new Error('采集仅供本地视图使用');
     const requestedRevision = workspace.getState().revision;
@@ -959,218 +762,19 @@ async function loadLocalView(
       };
     }
 
-    /*
-     * L2 消费判定：同一条回复只消费一次。
-     *
-     * 必须在**解析之前**判定 —— 判为"无新内容"时不解析、不落缓存、不产生待应用条目，
-     * 否则用户会看到一堆"和上次一模一样"的待应用项，还以为链路坏了。
-     *
-     * `consume()` 把"判断"与"记录"合成一步（原子），避免出现
-     * "某条分支忘了记录 → 同一条回复被反复消费"这类难查的静默缺陷。
-     */
-    if (await tools.accept(collected.replyText, snapshot.completion)) return {
+    await tools.accept(collected.replyText, snapshot.completion);
+    return {
       ok: true, collectionId: emptyId, strategyId: collected.strategyId, strategyDescription: collected.strategyDescription,
-      attempts: collected.attempts, replyText: collected.replyText, notes: ['正式工具批次由 IDE 按预选权限执行；请查看左侧工具结果'], blocks: [],
+      attempts: collected.attempts, replyText: collected.replyText, notes: ['回复已交由 IDE 工具入口处理；请查看工具结果'], blocks: [],
     };
-    const sessionKey = sessionKeyOf(collected.url);
-    const verdict = consumption.consume(sessionKey, collected.replyText);
-    // 排查基建：指纹判定与 URL 是"切目录/新对话后采不到"类问题的两个关键事实——
-    // URL 是否真的换了（会话键）、内容是否与上次完全相同（指纹撞车）都写进终端。
-    process.stdout.write(
-      `[collect] 策略 ${collected.strategyId} · ${collected.replyText.length} 字符 · 会话键 ${sessionKey}` +
-        ` · 指纹 ${verdict.fingerprint}${verdict.consumed ? '（与上次相同 → 判已消费）' : ''}\n`
-    );
-    if (verdict.consumed) {
-      return {
-        ok: true,
-        collectionId: emptyId,
-        strategyId: collected.strategyId,
-        strategyDescription: collected.strategyDescription,
-        attempts: collected.attempts,
-        replyText: collected.replyText,
-        notes: [
-          '最新回复与上次采集内容相同 —— 已采集过，无新内容',
-          `内容指纹 ${verdict.fingerprint}（会话键 ${sessionKey}）`,
-          ...(verdict.previousAt ? [`上次采集于 ${new Date(verdict.previousAt).toLocaleString()}`] : []),
-          // 「会话键」随 URL 变化；换会话后 URL 不同 → 键不同 → 不会被这条记录拦住。
-          // 仍拦住说明 URL（会话）没换、且内容一字不差 —— 把这两个事实都摊给用户。
-          '若页面已产生新内容：AI 需生成**不同**内容才会视为新回复（键＝URL 去参数，判重＝内容指纹）',
-          '若模型已重新生成，请等页面输出完成后再点「采集回复」',
-        ],
-        blocks: [],
-        noNewContent: true,
-      };
-    }
-
-    const parsed = parseModelReply(collected.replyText);
-
-    /*
-     * 诊断信息必须**紧凑**。
-     * 实测教训：早期把"采集到的开头 8 行"整段塞进备注，结果备注占满面板高度，
-     * 列表与其中的「应用」按钮被挤出视口 —— 诊断本身把界面搞坏了。
-     * 现在只给一行摘要：规模 + 首行（截断）。
-     */
-    const collectedLines = collected.replyText.split(/\r\n|\r|\n/);
-    const fenceMarkCount = (collected.replyText.match(/^[ \t]*(?:`{3,}|~{3,})/gm) ?? []).length;
-    const firstLine = (collectedLines[0] ?? '').slice(0, 60);
-    const parseNotes = [
-      ...parsed.notes,
-      `采集：策略 ${collected.strategyId} · ${collected.replyText.length} 字符 / ${collectedLines.length} 行 · 围栏标记 ${fenceMarkCount} 处`,
-      `首行：${firstLine}${(collectedLines[0] ?? '').length > 60 ? '…' : ''}`,
-    ];
-
-    const collectionId = emptyId;
-    collections.set(collectionId, { blocks: parsed.blocks, at: collected.collectedAt, replyLength: collected.replyText.length, invalidated: new Set(), targets: new Map(), previewTargets: new Map(), invalidPaths: [] });
-    while (collections.size > MAX_COLLECTIONS) {
-      const oldest = collections.keys().next();
-      if (oldest.done) break;
-      returnPath.forget(collections.get(oldest.value)!.blocks);
-      collections.delete(oldest.value);
-    }
-
-    const preparedBatch = await returnPath.prepareBatch(parsed.blocks);
-    const blocks = parsed.blocks.map((block, index) => {
-      const prepared = preparedBatch[index]!;
-      if (prepared.ok) collections.get(collectionId)!.previewTargets.set(index, { path: prepared.filePath.toLowerCase(), exists: prepared.fileExists });
-      return previewBlock(block, prepared, index);
-    });
-
-    const previewResult: ReturnPreview = {
-      ok: true,
-      collectionId,
-      strategyId: collected.strategyId,
-      strategyDescription: collected.strategyDescription,
-      attempts: collected.attempts,
-      replyText: collected.replyText,
-      notes: parseNotes,
-      blocks,
-    };
-    collections.get(collectionId)!.preview = previewResult;
-    // 排查基建：每个块的路径/区间/可应用性一行写清——"采集到了但全被阻塞"的场景
-    //（典型：切换目录后模型回显的文件在新根目录下不存在）从此在终端直接可读。
-    const applicableCount = blocks.filter((b) => b.applicable).length;
-    const blockedDetail = blocks
-      .filter((b) => !b.applicable && b.kind !== 'other')
-      .map((b) => `${b.filePath ?? '(未确定路径)'}:${b.blockedReason ?? '未知'}`)
-      .join('；');
-    process.stdout.write(
-      `[collect] 解析 ${parsed.blocks.length} 块，可应用 ${applicableCount} 个` +
-        `${blockedDetail.length > 0 ? `；阻塞 → ${blockedDetail}` : ''}\n`
-    );
-
-    // 推到最右侧预览面板，并把面板显示出来（用户建议的位置：不压编辑器高度）
-    if (previewWidth <= 0) {
-      previewWidth = lastPreviewWidth;
-      relayout();
-    }
-    pushPreviewToPanel(previewResult);
-
-    /*
-     * 采集成功后**自动把第一个可应用的变更送进编辑器**（Monaco DiffEditor）。
-     *
-     * 为什么必须自动（用户实测反馈："diff 还是在最右侧，没有在编辑器中渲染"）：
-     * 之前的 `showDiffInEditor` 链路是通的，但**唯一调用点在最右侧面板的按钮上**——
-     * 等于要求用户先看面板、再点一次按钮，才看得到 diff。主流编辑器的行为是
-     * "变更出现在哪就在哪看"，所以这里在采集返回时直接进编辑器。
-     *
-     * 仍然复用 `buildEditorDiff`：它带同一份预览基线复核，
-     * 因此**不会出现"编辑器里显示了 diff、点应用却失败"**的情况。
-     * 校验不过（文件已变 / 区间非法）就跳过自动打开，理由留给面板显示。
-     */
-    const firstApplicable = blocks.find((b) => b.applicable);
-    if (firstApplicable && !editorView.webContents.isDestroyed()) {
-      const payload = await buildEditorDiff(collectionId, firstApplicable.index);
-      if (payload) {
-        editorView.webContents.send(CHANNELS.diffData, payload);
-      }
-    }
-    return previewResult;
     });
   });
-  /**
-   * 应用一个变更。
-   *
-   * 由 `collectionId` + `index` 引用主进程缓存里的代码块（渲染进程不转手代码文本）。
-   * 主进程在首次预览时冻结完整原文及目录版本——
-   * 这样预览基线复核才有可信基线；此后文件若被改动，校验必然失败并拒绝写入。
-   */
-  ipcMain.handle(CHANNELS.applyChange, (_e, input: unknown) => workspaceController.run(async () => {
-    const raw = (input ?? {}) as Partial<ApplyChangeInput>;
-    if (typeof raw.collectionId !== 'string' || typeof raw.index !== 'number' || typeof raw.filePath !== 'string') {
-      return { ok: false, error: '参数不合法：需要 collectionId / index / filePath' };
-    }
-
-    const cached = collections.get(raw.collectionId);
-    if (!cached) {
-      return { ok: false, error: '采集结果已过期（只保留最近几批），请重新点「采集回复」' };
-    }
-    const block = cached.blocks[raw.index];
-    if (cached.invalidated.has(raw.index)) return { ok: false, error: '目标已重命名或删除，请重新采集' };
-    if (!block) {
-      return { ok: false, error: `代码块序号 ${raw.index} 不存在于该批次中` };
-    }
-
-    const requestedPath = raw.filePath.trim();
-    if (requestedPath.length === 0) return { ok: false, error: '目标文件路径为空' };
-    const filePath = path.relative(fileService.getRoot() ?? '', path.resolve(fileService.getRoot() ?? '', requestedPath)).replace(/\\/g, '/');
-    const normalizedTarget = filePath.toLowerCase();
-    if (cached.invalidPaths.some((entry) => normalizedTarget === entry.path.toLowerCase() || (entry.directory && normalizedTarget.startsWith(entry.path.toLowerCase() + '/')))) {
-      return { ok: false, error: '目标已重命名或删除，请重新采集' };
-    }
-    const draft = await tools.prepareDirty(filePath);
-    if (!draft.allowed) return { ok: false, error: '用户停止修改，磁盘与未保存内容均保留' };
-
-    const outcome = await returnPath.applyChange({
-      source: { collectionId: raw.collectionId, index: raw.index }, filePath, block,
-    });
-    if (outcome.ok) {
-      cached.targets.set(raw.index, filePath);
-      for (const alias of draft.aliases) notifyFileChanged(alias, outcome.created ? 'created' : 'updated', draft.discard);
-      /*
-       * 同步最右侧预览面板：应用有**两个入口**（面板按钮 / 编辑器工具条），
-       * 走编辑器那条时面板不知情，会一直显示「应用」可用态（用户实测反馈）。
-       * 主进程在落盘成功后统一广播，两个入口都覆盖。
-       */
-      notifyChangeState({ kind: 'applied', collectionId: raw.collectionId, index: raw.index, filePath });
-    }
-    if (!outcome.ok) consumption.clear();
-    await refreshPreview(raw.collectionId);
-    return outcome;
-  }));
-
   /** 通知编辑器：磁盘上的这个文件刚被改写了（成功落盘后才调用） */
   function notifyFileChanged(filePath: string, change: 'updated' | 'created' | 'deleted' = 'updated', discardDraft = false) {
     if (!editorView.webContents.isDestroyed()) {
       editorView.webContents.send(CHANNELS.fileChanged, filePath, change, workspace.getState().revision, discardDraft);
     }
   }
-
-  /** 通知最右侧预览面板：某个变更的状态变了（应用成功 / 被撤销） */
-  function notifyChangeState(event: AppliedChangeEvent) {
-    if (!previewView.webContents.isDestroyed()) {
-      previewView.webContents.send(CHANNELS.appliedChange, event);
-    }
-  }
-
-  ipcMain.handle(CHANNELS.undoSave, () => workspaceController.run(async () => {
-    if (workspaceController.editor.hasDirty) return { ok: false, error: '请先保存未保存的编辑内容再撤销 AI 变更' };
-    const result = await returnPath.undoLast();
-    if (result.ok && result.collectionId !== undefined && result.index !== undefined) {
-      collections.get(result.collectionId)?.targets.delete(result.index);
-    }
-    // 撤销也是改写磁盘，同样要通知编辑器刷新
-    if (result.ok && result.filePath) {
-      notifyFileChanged(result.filePath, result.deleted ? 'deleted' : 'updated');
-      // 并让预览面板把对应条目恢复成「可应用」，否则撤销后按钮仍显示「已应用 ✓」
-      notifyChangeState({
-        kind: 'undone', filePath: result.filePath,
-        ...(result.collectionId !== undefined ? { collectionId: result.collectionId } : {}),
-        ...(result.index !== undefined ? { index: result.index } : {}),
-      });
-    }
-    if (result.ok && result.collectionId) await refreshPreview(result.collectionId);
-    return result;
-  }));
 
   /**
    * 把编辑器选中原文组装为只读上下文并写入剪贴板。
@@ -1625,26 +1229,6 @@ async function loadLocalView(
           `判定：${h?.verdict ?? '未知'}；测量按钮数：${Array.isArray(h?.buttons) ? h.buttons.length : 0}\n`
       );
       app.exit(editable && wraps && layoutOk && h?.ok === true && h?.anyMultiLineHover === false ? 0 : 1);
-      return;
-    }
-
-    // 差异视图实测（仅在 `--test-diff` 时做）：确认 Monaco DiffEditor 真能创建并拿到两侧模型
-    if (process.argv.includes('--test-diff')) {
-      const sample = 'const a = 1;\nconst b = 2;\n';
-      const changed = 'const a = 1;\nconst b = 22;\nconst c = 3;\n';
-      let diffProbe: unknown = null;
-      try {
-        diffProbe = await editorView.webContents.executeJavaScript(
-          `typeof window.__uiDiffProbe === "function" ? window.__uiDiffProbe(${JSON.stringify(sample)}, ${JSON.stringify(changed)}) : null`,
-          true
-        );
-      } catch (err) {
-        diffProbe = { ok: false, error: err instanceof Error ? err.message : String(err) };
-      }
-      process.stdout.write(`\n===== 差异视图探针 =====\n${JSON.stringify(diffProbe, null, 2)}\n`);
-      const d = diffProbe as { ok?: boolean } | null;
-      process.stdout.write(`[ui-probe] 编辑器内差异视图可用：${d?.ok ? '是' : '否'}\n`);
-      app.exit(editable && wraps && layoutOk && d?.ok === true ? 0 : 1);
       return;
     }
 

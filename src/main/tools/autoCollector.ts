@@ -16,6 +16,8 @@ export class AutoCollector {
   }
   reset(): void { this.revision++; this.pending = false; this.userTurn = false; this.waiting = undefined; this.baseline = true; this.observedGenerating = false; this.scope = ''; this.last = ''; }
   noteUserTurn(): void { this.userTurn = true; this.waiting = undefined; }
+  /** 未确认的自动发送不能授权下一轮；保留已见正文基线，真人新动作可再关联。 */
+  cancelTurn(): void { this.revision++; this.pending = false; this.userTurn = false; this.waiting = undefined; this.observedGenerating = false; }
   acknowledge(url: string, text: string): void { this.revision++; this.userTurn = false; this.waiting = undefined; this.scope = url; this.last = text; this.baseline = false; this.observedGenerating = false; }
   dispose(): void { this.disposed = true; this.pending = false; this.revision++; }
   async tick(): Promise<void> {

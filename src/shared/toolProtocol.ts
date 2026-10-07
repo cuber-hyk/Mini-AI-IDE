@@ -7,11 +7,12 @@ export interface ToolRequest { id: string; tool: ToolName; args: Record<string, 
 export interface ToolBatch { protocol_version: 1; batch_id: string; requests: ToolRequest[] }
 export type PermissionMode = 'ask' | 'rules' | 'full';
 export type DirtyPolicy = 'ask' | 'continue' | 'stop';
-export interface ToolConfig { permission: PermissionMode; automatic: boolean; dirtyPolicy: DirtyPolicy; completionSound: boolean; autoCopyResults: boolean }
+export interface ToolConfig { permission: PermissionMode; automatic: boolean; dirtyPolicy: DirtyPolicy; completionSound: boolean; autoCopyResults: boolean; sendIntervalSeconds: number }
 export interface ToolResult { batch_id: string; request_id: string; tool: ToolName; status: 'running' | 'pending_permission' | 'done' | 'failed' | 'permission_denied' | 'cancelled' | 'skipped_dependency' | 'unknown'; data?: unknown; error?: string; started_at?: number; finished_at?: number }
 /** 批次不能通过校验时，尚无可信调用身份；不伪造工具名或请求 ID。 */
 export interface ToolBatchError { status: 'failed'; error: string }
-export interface ToolState { config: ToolConfig; results: ToolResult[]; message: string; busy: boolean; canUndo?: boolean; hasRunningProcesses?: boolean; batchError?: ToolBatchError; clipboard?: { id: number; ok: boolean; error?: string }; completion?: { id: number; batch_id: string; outcome: 'success' | 'error'; cancelled?: boolean } }
+export interface ToolContinuationState { phase: 'off' | 'waiting_tools' | 'countdown' | 'sending' | 'waiting_reply' | 'waiting_user' | 'paused'; message: string; dueAt?: number }
+export interface ToolState { config: ToolConfig; results: ToolResult[]; message: string; busy: boolean; canUndo?: boolean; hasRunningProcesses?: boolean; batchError?: ToolBatchError; clipboard?: { id: number; ok: boolean; error?: string }; completion?: { id: number; batch_id: string; outcome: 'success' | 'error'; cancelled?: boolean }; continuation?: ToolContinuationState }
 export type ProtocolParse = { kind: 'none' } | { kind: 'error'; error: string } | { kind: 'batch'; batch: ToolBatch };
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const id = (v: unknown): v is string => typeof v === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}$/.test(v);

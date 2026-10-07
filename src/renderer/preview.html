@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'none'; img-src 'self' data:" />
-    <title>变更列表</title>
+    <title>变更查看</title>
     <link rel="stylesheet" href="./ui-tokens.css" />
     <link rel="stylesheet" href="./ui.css" />
     <link rel="stylesheet" href="./preview.css" />
@@ -12,22 +12,23 @@
     <div id="pv-resizer" role="separator" tabindex="0" aria-label="调整变更列宽度" aria-orientation="vertical" aria-valuemin="260" aria-valuemax="820" aria-valuenow="300" title="拖动调整宽度，方向键调整"></div>
     <header class="pv-head">
       <span class="pv-title">变更</span>
-      <span id="pv-meta" class="pv-meta">尚未采集</span>
-      <button id="pv-apply-all" type="button" class="ui-button primary" title="依次应用本批次全部待应用片段，包含筛选外的文件">全部应用</button>
-      <button id="pv-undo" type="button" class="ui-button ui-icon" title="撤销上一次应用" aria-label="撤销上一次应用">↶</button>
+      <span id="pv-meta" class="pv-meta">0 文件</span>
+      <button id="pv-undo" type="button" class="ui-button ui-icon" title="撤销最近一次工具修改" aria-label="撤销最近一次工具修改" disabled>↶</button>
+      <button id="pv-expand" type="button" class="ui-button" title="临时拓宽变更列" aria-pressed="false" disabled>展开查看</button>
       <button id="pv-collapse" type="button" class="ui-button ui-icon" title="收起变更列" aria-label="收起变更列">›</button>
     </header>
-    <div class="pv-filter-wrap"><input id="pv-filter" class="pv-filter" type="search" placeholder="筛选文件…" aria-label="筛选变更文件" spellcheck="false" /></div>
+    <div class="pv-controls">
+      <button id="pv-navigate" type="button" class="ui-button" aria-controls="pv-navigation" aria-expanded="false" title="显示或收起文件导航">文件</button>
+      <button id="pv-wrap" type="button" class="ui-button" aria-pressed="true" title="长代码和 Markdown 自动换行">自动换行</button>
+    </div>
     <div id="pv-status" class="pv-status" role="status" aria-live="polite" hidden></div>
-    <details id="pv-diagnostics" class="pv-diagnostics" hidden>
-      <summary>诊断信息</summary>
-      <div id="pv-notes" class="pv-notes"></div>
-    </details>
-    <ul id="pv-list" class="pv-list" aria-label="变更文件">
-      <li class="pv-empty">采集 AI 回复后，变更会显示在这里。</li>
-    </ul>
-    <section id="pv-detail" class="pv-detail" aria-label="当前片段" hidden></section>
-    <script src="./changeTree.js"></script>
+    <main class="pv-workspace">
+      <nav id="pv-navigation" class="pv-navigation" aria-label="变更文件导航" hidden>
+        <div class="pv-filter-wrap"><input id="pv-filter" class="pv-filter" type="search" placeholder="筛选文件…" aria-label="筛选变更文件" spellcheck="false" /></div>
+        <ul id="pv-list" class="pv-list" aria-label="变更文件"></ul>
+      </nav>
+      <section id="pv-detail" class="pv-detail wrap" aria-label="实际变更快照"></section>
+    </main>
     <script src="./preview.js"></script>
   </body>
 </html>

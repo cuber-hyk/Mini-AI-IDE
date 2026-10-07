@@ -10,6 +10,7 @@
     <link rel="stylesheet" href="./ui-tokens.css" />
     <link rel="stylesheet" href="./ui.css" />
     <link rel="stylesheet" href="./style.css" />
+    <link rel="stylesheet" href="./fileExplorer.css" />
     <link rel="stylesheet" href="./applicationUpdate.css" />
     <link rel="stylesheet" href="./toolHarness.css" />
   </head>
@@ -85,19 +86,7 @@
               <button id="btn-snippet" type="button" role="menuitem" tabindex="-1" title="复制选中内容，含文件路径与真实行号">复制选中片段</button>
             </div>
           </div>
-          <!-- diff 标记的操作条。差异**内联渲染在编辑器里**（原地标红/绿），
-               不是一个独立的对比面板 —— 所以这里只放"这个文件有变更"的说明与操作。 -->
-          <span id="diff-actions" class="diff-actions" hidden>
-            <span class="diff-tag" title="编辑器里的红色/绿色标记就是这个文件的变更">变更预览</span>
-            <span id="diff-label" class="diff-label"></span>
-            <button id="btn-diff-prev" type="button" aria-label="上一个被改动的文件" title="上一个被改动的文件">‹</button>
-            <button id="btn-diff-next" type="button" aria-label="下一个被改动的文件" title="下一个被改动的文件">›</button>
-            <button id="btn-diff-apply" type="button" class="primary">应用此变更</button>
-            <button id="btn-diff-close" type="button">退出预览</button>
-          </span>
         </div>
-        <!-- 普通编辑视图。内联 diff 就画在这个编辑器上（decoration + view zone），
-             **不再有第二个 Monaco 宿主**：用户看到的始终是同一个编辑器、同一份真实文件内容。 -->
         <div id="editor-tabs" class="editor-tabs" role="tablist" aria-label="打开的文件" hidden></div>
         <div id="monaco" class="monaco"></div>
         <div id="workspace-welcome" class="workspace-welcome" hidden></div>
@@ -111,7 +100,7 @@
     <section id="tool-dock" class="tool-dock" aria-label="工具结果面板">
     <div id="tool-resizer" class="tool-resizer" role="separator" aria-label="调整工具面板高度" aria-orientation="horizontal" aria-valuemin="80" aria-valuemax="260" aria-valuenow="160" tabindex="0" title="拖动调整高度；方向键调整，双击复位" hidden></div>
     <details id="tool-panel" class="tool-panel">
-      <summary class="tool-panel-summary"><span>工具结果</span><span id="tool-count" class="tool-count">0 项</span><span id="tool-activity" class="tool-activity"></span><span id="tool-completion-notice" class="tool-completion-notice" role="status" aria-live="polite" aria-atomic="true"></span><span id="tool-copy-notice" class="tool-completion-notice" role="status" aria-live="polite"></span><span id="tool-sound-notice" class="tool-sound-notice" role="status" aria-live="polite"></span></summary>
+      <summary class="tool-panel-summary"><span>工具结果</span><span id="tool-count" class="tool-count">0 项</span><span id="tool-activity" class="tool-activity"></span><span id="tool-completion-notice" class="tool-completion-notice" role="status" aria-live="polite" aria-atomic="true"></span><span id="tool-continue-notice" class="tool-completion-notice" role="status" aria-live="polite"></span><span id="tool-copy-notice" class="tool-completion-notice" role="status" aria-live="polite"></span><span id="tool-sound-notice" class="tool-sound-notice" role="status" aria-live="polite"></span></summary>
       <div id="tool-panel-body" class="tool-panel-body">
         <p id="tool-message" class="tool-message" role="status" aria-live="polite" aria-atomic="true">正在读取工具状态…</p>
         <div id="tool-results" class="tool-results" aria-label="工具调用结果"></div>
@@ -157,7 +146,7 @@
             <option value="rules">按规则自动</option>
             <option value="full">完全访问权限</option>
           </select>
-          <label class="tool-auto-label"><input id="tool-automatic" type="checkbox" disabled /> 自动采集并执行</label>
+          <label class="tool-auto-label" title="自动采集、执行并发送本批结果；关闭不会中断本轮工具"><input id="tool-automatic" type="checkbox" disabled /> 自动继续</label>
         </div>
         <span class="spacer"></span>
         <div id="tool-settings-wrap" class="tool-settings-wrap">
@@ -167,6 +156,14 @@
           <section id="tool-settings-panel" class="tool-settings-panel" role="dialog" aria-modal="false" aria-labelledby="tool-settings-heading" tabindex="-1" hidden>
             <div class="tool-settings-head"><strong id="tool-settings-heading">工具与提示词</strong><button id="tool-settings-close" type="button" class="ui-icon" aria-label="关闭设置">×</button></div>
             <div class="tool-settings-body">
+              <label for="tool-send-interval">自动发送间隔（秒）</label>
+              <div class="tool-interval">
+                <input id="tool-send-interval" class="tool-select" type="number" min="0" max="300" step="1" value="3" disabled />
+                <div class="tool-interval-actions">
+                  <button id="tool-interval-down" type="button" class="ui-button" aria-label="减少自动发送间隔一秒" title="减少 1 秒" disabled>−</button>
+                  <button id="tool-interval-up" type="button" class="ui-button" aria-label="增加自动发送间隔一秒" title="增加 1 秒" disabled>+</button>
+                </div>
+              </div>
               <label for="tool-dirty-policy">目标文件有未保存内容时</label>
               <select id="tool-dirty-policy" class="tool-select" disabled>
                 <option value="ask">每次询问</option>
@@ -192,6 +189,7 @@
     <script src="./applicationUpdate.js"></script>
     <script src="./editorWorkspace.js"></script>
     <script src="./editorTabs.js"></script>
+    <script src="./fileIcons.js"></script>
     <script src="./fileExplorer.js"></script>
     <script src="./renderer.js"></script>
     <script src="./toolResultPresentation.js"></script>

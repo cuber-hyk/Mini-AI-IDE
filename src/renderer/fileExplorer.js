@@ -44,13 +44,15 @@
         row.tabIndex = 0; row.setAttribute('role', 'treeitem'); row.setAttribute('aria-selected', 'false');
         row.title = entry.relPath;
         const twisty = node('span', 'tree-twisty', entry.isDirectory ? '▸' : '');
-        row.appendChild(twisty); row.appendChild(node('span', 'tree-label', entry.name)); li.appendChild(row);
+        const icon = node('span'); window.fileIcons.render(icon, entry.name, entry.isDirectory, expanded.has(entry.relPath));
+        row.appendChild(twisty); row.appendChild(icon); row.appendChild(node('span', 'tree-label', entry.name)); li.appendChild(row);
         container.appendChild(li);
         let children;
         async function toggle() {
           const open = !expanded.has(entry.relPath);
           if (open) expanded.add(entry.relPath); else expanded.delete(entry.relPath);
           row.setAttribute('aria-expanded', String(open)); twisty.textContent = open ? '▾' : '▸'; children.hidden = !open;
+          window.fileIcons.render(icon, entry.name, true, open);
           if (open) await load(entry.relPath, children, epoch, root);
         }
         if (entry.isDirectory) {
@@ -153,16 +155,27 @@
       select(entry);
       hideMenu(); menu = node('div', 'file-menu'); menu.setAttribute('role', 'menu');
       const actions = [ ['新建文件', function () { void create(false); }], ['新建文件夹', function () { void create(true); }] ];
-      if (entry) actions.push(['重命名', function () { void rename(entry); }], ['移入回收站', async function () { if (!fail(await bridge.trashEntry(entry.relPath, root))) await refresh(false); }]);
-      else actions.push(['刷新目录', function () { void refresh(false); }]);
-      actions.forEach(function (item) { const button = node('button', '', item[0]); button.type = 'button'; button.setAttribute('role', 'menuitem');
-        button.addEventListener('click', function () { hideMenu(); Promise.resolve(item[1]()).catch(function (error) { info(String(error), true); }); }); menu.appendChild(button); });
+      const relative = entry ? entry.relPath : '';
+      actions.push(null,
+        ['在文件资源管理器中显示', async function () { fail(await bridge.revealEntry(relative, root)); }],
+        ['复制绝对路径', async function () { if (!fail(await bridge.copyEntryPath(relative, false, root))) info('已复制绝对路径'); }],
+        ['复制相对路径', async function () { if (!fail(await bridge.copyEntryPath(relative, true, root))) info('已复制相对路径'); }]);
+      if (entry) actions.push(null, ['重命名', function () { void rename(entry); }],
+        ['移入回收站', async function () { if (!fail(await bridge.trashEntry(entry.relPath, root))) await refresh(false); }],
+        ['永久删除…', async function () { if (!fail(await bridge.deleteEntry(entry.relPath, root))) await refresh(false); }, 'file-menu-danger']);
+      else actions.push(null, ['刷新目录', function () { void refresh(false); }]);
+      actions.forEach(function (item) {
+        if (!item) { const separator = node('div', 'file-menu-separator'); separator.setAttribute('role', 'separator'); menu.appendChild(separator); return; }
+        const button = node('button', item[2] || '', item[0]); button.type = 'button'; button.setAttribute('role', 'menuitem');
+        button.addEventListener('click', function () { hideMenu();
+          if (root !== options.getRoot()) return info('目录已切换，请重新操作', true);
+          Promise.resolve(item[1]()).catch(function (error) { info(String(error), true); }); }); menu.appendChild(button); });
       document.body.appendChild(menu); const rect = menu.getBoundingClientRect();
       menu.style.left = Math.max(0, Math.min(x, window.innerWidth - rect.width)) + 'px';
       menu.style.top = Math.max(0, Math.min(y, window.innerHeight - rect.height)) + 'px';
       menu.firstChild.focus(); menu.addEventListener('keydown', function (event) {
         if (event.key === 'Escape' || event.key === 'Tab') { hideMenu(); const row = entry && rowFor(entry.relPath); (row || tree).focus(); }
-        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); const buttons = Array.from(menu.children); const at = buttons.indexOf(document.activeElement); buttons[(at + (event.key === 'ArrowDown' ? 1 : buttons.length - 1)) % buttons.length].focus(); }
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); const buttons = Array.from(menu.children).filter(function (item) { return item.tagName === 'BUTTON'; }); const at = buttons.indexOf(document.activeElement); buttons[(at + (event.key === 'ArrowDown' ? 1 : buttons.length - 1)) % buttons.length].focus(); }
       });
     }
     document.addEventListener('pointerdown', function (event) { if (menu && !menu.contains(event.target)) hideMenu(); });

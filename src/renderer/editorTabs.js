@@ -21,9 +21,9 @@
         const item = document.createElement('div'); item.className = 'editor-tab';
         item.classList.toggle('active', doc.path === activePath); item.classList.toggle('dirty', doc.dirty);
         const tab = document.createElement('button'); tab.type = 'button'; tab.className = 'editor-tab-label';
-        tab.dataset.path = doc.path; tab.textContent = doc.path.split('/').pop() + (doc.previewOnly ? '（新增预览）' : ''); tab.title = doc.path + (doc.previewOnly ? '（新增文件预览，尚未创建）' : doc.dirty ? '（未保存）' : '');
+        tab.dataset.path = doc.path; tab.textContent = doc.path.split('/').pop(); tab.title = doc.path + (doc.dirty ? '（未保存）' : '');
         tab.setAttribute('role', 'tab'); tab.setAttribute('aria-selected', String(doc.path === activePath));
-        tab.setAttribute('aria-controls', 'monaco'); tab.setAttribute('aria-label', doc.path + (doc.previewOnly ? '，新增文件预览' : doc.dirty ? '，未保存' : ''));
+        tab.setAttribute('aria-controls', 'monaco'); tab.setAttribute('aria-label', doc.path + (doc.dirty ? '，未保存' : ''));
         tab.tabIndex = doc.path === activePath ? 0 : -1;
         tab.addEventListener('click', function () { void options.open(doc.path); });
         tab.addEventListener('keydown', function (event) {

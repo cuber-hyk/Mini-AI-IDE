@@ -4,8 +4,10 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { parseModelReply, splitFences } from '../shared/returnPath';
+import { parseModelReply } from '../shared/returnPath';
 import type { ReturnPreview } from '../shared/contract';
+import type { ToolRequest, ToolState } from '../shared/toolProtocol';
+import type { ChangeReviewState } from './tools/changeReview';
 import type { WorkspaceController } from './workspaceController';
 
 export function configureWorkspaceProbe(): string {
@@ -77,41 +79,6 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     check('目录历史同步到最近列表', controller.workspace.getState().recentRoots[0] === b && controller.workspace.getState().recentRoots[1] === a);
     // 回到 A 并使用树内输入新建文件夹及其内部文件。
     choice = 1; await controller.openRecent(1); await waitFor("Boolean(document.querySelector('#tree .tree-row[data-rel-path=\"sub\"]'))");
-    fs.writeFileSync(path.join(a, 'keep.txt'), 'keep original');
-    const fixture = path.join(directory, 'reply.html');
-    fs.writeFileSync(fixture, '<!doctype html><meta charset="utf-8"><main class="ds-markdown"><h3>文件：a.txt</h3><h3>操作：覆盖全文</h3><pre><code>A changed</code></pre><h3>文件：keep.txt</h3><h3>操作：覆盖全文</h3><pre><code>keep changed</code></pre></main>');
-    // 加载自有静态测试页面；采集仍调用生产只读脚本，绝不改官方页面 DOM。
-    await web.loadURL(pathToFileURL(fixture).href);
-    const collected = await evaluate<{ ok: boolean; collectionId: string; blocks: Array<{ index: number; filePath: string }> }>('window.editorBridge.collectReply()');
-    check('真实回程链路解析两个文件', collected.ok && collected.blocks.length === 2 && collected.blocks.some(block => block.filePath === 'a.txt') && collected.blocks.some(block => block.filePath === 'keep.txt'), collected.blocks.map((block) => block.filePath));
-    const first = collected.blocks.find((block) => block.filePath === 'a.txt'); const keep = collected.blocks.find((block) => block.filePath === 'keep.txt');
-    if (first && keep) {
-      await evaluate("document.querySelector('#tree .tree-row[data-rel-path=\"a.txt\"]').click()");
-      check('AI 目标文件已打开', await waitFor("document.getElementById('file-name').textContent === 'a.txt'")); await pause();
-      await evaluate("window.monaco.editor.getEditors()[0].getModel().setValue('new local draft')"); await pause();
-      await evaluate("document.getElementById('file-refresh').click()"); await waitFor("Boolean(document.querySelector('#tree .tree-row[data-rel-path=\"keep.txt\"]'))");
-      await evaluate("document.querySelector('#tree .tree-row[data-rel-path=\"keep.txt\"]').click()"); await waitFor("document.getElementById('file-name').textContent === 'keep.txt'"); await pause();
-      const dirtyTarget = await evaluate<{ ok: boolean }>(`window.editorBridge.applyChange(${JSON.stringify({ collectionId: collected.collectionId, index: first.index, filePath: path.join(a, 'a.txt') })})`);
-      check('AI 绝对路径不能覆盖非活动标签草稿', !dirtyTarget.ok && fs.readFileSync(path.join(a, 'a.txt'), 'utf8') === 'draft A', dirtyTarget);
-      await evaluate("document.querySelector('#editor-tabs [role=tab][data-path=\"a.txt\"]').click()");
-      await evaluate("window.monaco.editor.getEditors()[0].getModel().setValue('draft A')"); await pause();
-      const applied = await evaluate<{ ok: boolean }>(`window.editorBridge.applyChange(${JSON.stringify({ collectionId: collected.collectionId, index: first.index, filePath: 'a.txt' })})`);
-      check('AI 应用写入当前目录', applied.ok && fs.readFileSync(path.join(a, 'a.txt'), 'utf8') === 'A changed');
-      const renamed = await evaluate<{ ok: boolean }>(`window.editorBridge.renameEntry('a.txt','moved.txt',${JSON.stringify(a)})`);
-      const expired = await evaluate<{ ok: boolean }>(`window.editorBridge.applyChange(${JSON.stringify({ collectionId: collected.collectionId, index: first.index, filePath: 'a.txt' })})`);
-      check('改名后旧路径变更和撤销记录失效', renamed.ok && !expired.ok && !(await evaluate<{ ok: boolean }>('window.editorBridge.undoSave()')).ok);
-      const kept = await evaluate<{ ok: boolean }>(`window.editorBridge.applyChange(${JSON.stringify({ collectionId: collected.collectionId, index: keep.index, filePath: 'keep.txt' })})`);
-      check('不受改名影响的片段仍可应用', kept.ok && fs.readFileSync(path.join(a, 'keep.txt'), 'utf8') === 'keep changed');
-      await pause(); await evaluate("document.querySelector('#editor-tabs [role=tab][data-path=\"keep.txt\"]').click()");
-      check('AI 写回刷新非活动已保存标签', await waitFor("document.getElementById('file-name').textContent === 'keep.txt'") && await evaluate("window.monaco.editor.getEditors()[0].getModel().getValue() === 'keep changed'"));
-      choice = 0; await controller.openRecent(1);
-      const stale = await evaluate<{ ok: boolean }>(`window.editorBridge.applyChange(${JSON.stringify({ collectionId: collected.collectionId, index: keep.index, filePath: 'a.txt' })})`);
-      const oldSave = await evaluate<{ ok: boolean }>(`window.editorBridge.writeFile('a.txt','bad old save',${JSON.stringify(a)})`);
-      const oldSnippet = await evaluate<{ ok: boolean }>(`window.editorBridge.copyNumberedSnippet(${JSON.stringify({ root: a, relPath: 'a.txt', text: 'old snippet', startLine: 1 })})`);
-      check('延迟旧片段不能污染新目录基线', !oldSnippet.ok);
-      check('切换目录拒绝旧批次、撤销及延迟保存', !stale.ok && !oldSave.ok && !(await evaluate<{ ok: boolean }>('window.editorBridge.undoSave()')).ok && fs.readFileSync(path.join(b, 'a.txt'), 'utf8') === 'B original');
-      await controller.openRecent(1); await waitFor("Boolean(document.querySelector('#tree .tree-row[data-rel-path=\"sub\"]'))");
-    }
     await evaluate("document.getElementById('folder-new').click()");
     check('新建名称输入框可用', await waitFor("Boolean(document.querySelector('.tree-name-input'))"));
     await evaluate("const input=document.querySelector('.tree-name-input'); input.value='notes'; input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));");
@@ -133,7 +100,7 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     await evaluate("document.querySelector('.tree-name-input').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))");
     check('Esc 取消改名不改变文件与草稿', fs.existsSync(path.join(a, 'notes/renamed.md')) && await evaluate("!document.querySelector('.tree-name-input') && window.monaco.editor.getEditors()[0].getModel().getValue() === 'unsaved note'"));
     await evaluate("document.querySelector('#tree .tree-row[data-rel-path=\"notes/renamed.md\"]').dispatchEvent(new KeyboardEvent('keydown',{key:'F10',shiftKey:true,bubbles:true}))");
-    check('键盘可打开文件右键菜单', await waitFor("document.querySelectorAll('.file-menu [role=menuitem]').length === 4"));
+    check('键盘可打开文件右键菜单', await waitFor("Array.from(document.querySelectorAll('.file-menu [role=menuitem]')).some(button => button.textContent === '永久删除…')"));
     await evaluate("document.querySelector('.file-menu').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))");
     await evaluate("document.getElementById('file-new').click()"); await waitFor("Boolean(document.querySelector('.tree-name-input'))");
     await evaluate("const input=document.querySelector('.tree-name-input'); input.value='renamed.md'; input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));");
@@ -142,7 +109,7 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     const renamedFolder = await evaluate<{ ok: boolean }>(`window.editorBridge.renameEntry('notes','renamed-notes',${JSON.stringify(a)})`);
     check('文件夹改名更新内部文件路径并保留草稿', renamedFolder.ok && await waitFor("document.getElementById('file-name').textContent === 'renamed-notes/renamed.md'") && await evaluate("window.monaco.editor.getEditors()[0].getModel().getValue() === 'unsaved note'"));
     await evaluate("document.getElementById('tree').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:40,clientY:250}))");
-    check('树空白右键显示根目录三项菜单', await waitFor("document.querySelectorAll('.file-menu [role=menuitem]').length === 3"));
+    check('树空白右键提供新建与路径操作', await waitFor("document.querySelectorAll('.file-menu [role=menuitem]').length >= 6"));
     await evaluate("document.querySelector('.file-menu [role=menuitem]').click()"); await waitFor("Boolean(document.querySelector('.tree-name-input'))");
     await evaluate("const input=document.querySelector('.tree-name-input'); input.value='root-file.txt'; input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));");
     check('空白菜单新建到根目录而非此前选中文件夹', await waitFor("document.getElementById('file-name').textContent === 'root-file.txt'") && fs.existsSync(path.join(a, 'root-file.txt')) && !fs.existsSync(path.join(a, 'renamed-notes/root-file.txt')));
@@ -160,173 +127,156 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     check('改名后保存确实写向新路径', savedRenamed.ok && fs.readFileSync(path.join(a, 'renamed-notes/renamed.md'), 'utf8') === 'unsaved note' && !fs.existsSync(path.join(a, 'notes')));
     const deleted = await evaluate<{ ok: boolean }>(`window.editorBridge.trashEntry('renamed-notes/renamed.md', ${JSON.stringify(a)})`);
     check('删除只关闭受影响标签并切回剩余文件', deleted.ok && !fs.existsSync(path.join(a, 'renamed-notes/renamed.md')) && await waitFor("document.getElementById('file-name').textContent === 'root-file.txt' && document.querySelectorAll('#editor-tabs [role=tab]').length === 1"));
-    const creationFixture = path.join(directory, 'creation-reply.html');
-    fs.writeFileSync(creationFixture, '<!doctype html><meta charset="utf-8"><main class="ds-markdown"><h3>文件：generated/deep/new.ts</h3>\n<h3>操作：新建</h3>\n<pre><code>const created = 1;\nconst second = 2;</code></pre><h3>文件：race.txt</h3>\n<h3>操作：新建</h3>\n<pre><code>AI creation</code></pre></main>');
-    await web.loadURL(pathToFileURL(creationFixture).href);
-    const creation = await evaluate<{ ok: boolean; collectionId: string; blocks: Array<{ index: number; filePath: string; applicable: boolean; fileExists: boolean; diff: { added: number; removed: number } }> }>('window.editorBridge.collectReply()');
-    const fresh = creation.blocks.find(block => block.filePath === 'generated/deep/new.ts');
-    const race = creation.blocks.find(block => block.filePath === 'race.txt');
-    check('缺失文件采集可应用且标为新增', creation.ok && Boolean(fresh && fresh.applicable && !fresh.fileExists), creation.blocks);
-    if (fresh && race) {
-      check('新增预览打开虚拟标签和只读模型', await waitFor("document.getElementById('file-name').textContent === 'generated/deep/new.ts'") && await evaluate("window.monaco.editor.getEditors()[0].getModel().getValue() === '' && window.monaco.editor.getEditors()[0].getRawOptions().readOnly === true && document.querySelectorAll('#editor-tabs [role=tab]').length === 2"));
-      check('新增预览纯绿色且按钮为创建文件', await waitFor("document.querySelectorAll('.inline-added').length === 2 && document.getElementById('btn-diff-apply').textContent === '创建文件'") && await evaluate("document.querySelectorAll('.inline-deleted').length === 0"));
-      check('采集及虚拟预览不提前创建目录', !fs.existsSync(path.join(a, 'generated')) && !fs.existsSync(path.join(a, 'race.txt')));
-      await evaluate("document.getElementById('btn-diff-close').click()");
-      check('退出新增预览释放标签且保留原文件', await waitFor("document.getElementById('file-name').textContent === 'root-file.txt' && document.querySelectorAll('#editor-tabs [role=tab]').length === 1") && !fs.existsSync(path.join(a, 'generated')));
-      await evaluate(`window.editorBridge.showDiffInEditor(${JSON.stringify(creation.collectionId)},${fresh.index})`);
-      await waitFor("document.getElementById('file-name').textContent === 'generated/deep/new.ts'");
-      await evaluate("document.getElementById('btn-diff-apply').click()");
-      check('创建按钮实际写入文件及多级目录', await waitFor("window.monaco.editor.getEditors()[0].getModel().getValue() === 'const created = 1;\\nconst second = 2;'") && fs.readFileSync(path.join(a, fresh.filePath), 'utf8') === 'const created = 1;\nconst second = 2;');
-      check('创建后虚拟标签转为真实可编辑标签', await evaluate("window.monaco.editor.getEditors()[0].getRawOptions().readOnly === false && document.querySelectorAll('#editor-tabs [role=tab]').length === 2"));
-      check('创建后目录树自动刷新', await waitFor("Boolean(document.querySelector('#tree .tree-row[data-rel-path=\"generated\"]'))"));
-      const undone = await evaluate<{ ok: boolean; deleted?: boolean; index?: number }>('window.editorBridge.undoSave()');
-      check('撤销新增删除文件及本次空目录', undone.ok && undone.deleted === true && undone.index === fresh.index && !fs.existsSync(path.join(a, 'generated')));
-      check('撤销只关闭新增标签并刷新树', await waitFor("document.getElementById('file-name').textContent === 'root-file.txt' && document.querySelectorAll('#editor-tabs [role=tab]').length === 1 && !document.querySelector('#tree .tree-row[data-rel-path=\"generated\"]')"));
-      const reapplied = await evaluate<{ ok: boolean; created?: boolean }>(`window.editorBridge.applyChange(${JSON.stringify({ collectionId: creation.collectionId, index: fresh.index, filePath: fresh.filePath })})`);
-      check('撤销后同一片段可重新创建', reapplied.ok && reapplied.created === true);
-      await waitFor("document.getElementById('file-name').textContent === 'generated/deep/new.ts'");
-      await evaluate('window.editorBridge.undoSave()');
-      await waitFor("document.getElementById('file-name').textContent === 'root-file.txt'");
-      const retargeted = await evaluate<{ ok: boolean; reason?: string }>(`window.editorBridge.applyChange(${JSON.stringify({ collectionId: creation.collectionId, index: race.index, filePath: 'root-file.txt' })})`);
-      check('新增改路径不能变成覆盖已有文件', !retargeted.ok && retargeted.reason === 'target-exists' && fs.readFileSync(path.join(a, 'root-file.txt'), 'utf8') === '');
-      fs.writeFileSync(path.join(a, race.filePath), 'external content');
-      const conflict = await evaluate<{ ok: boolean; reason?: string }>(`window.editorBridge.applyChange(${JSON.stringify({ collectionId: creation.collectionId, index: race.index, filePath: race.filePath })})`);
-      check('预览后出现同名文件拒绝覆盖', !conflict.ok && conflict.reason === 'target-changed' && fs.readFileSync(path.join(a, race.filePath), 'utf8') === 'external content');
-    }
-    // 从历史用户样本保留全文生成的新建协议样本按 Markdown 的语义 DOM 渲染，覆盖采集→关联→完整创建→撤销。
-    const backendReply = fs.readFileSync(path.join(app.getAppPath(), 'test/fixtures/backend-foundation-explicit-reply.md'), 'utf8');
+    // 所有工具修改从自有静态回复经过真实采集/权限/执行；右侧仅查看实际快照。
+    await evaluate("window.editorBridge.setToolConfig({permission:'full',automatic:false,dirtyPolicy:'stop',autoCopyResults:false,sendIntervalSeconds:3})");
+    await evaluate("document.getElementById('tool-settings-toggle').click()");
+    await waitFor("!document.getElementById('tool-settings-panel').hidden && document.getElementById('tool-send-interval').value === '3'");
+    await evaluate("document.getElementById('tool-interval-up').click()");
+    check('自绘增加按钮保存间隔，仍使用统一工具设置入口', await waitFor("document.getElementById('tool-send-interval').value === '4' && !document.getElementById('tool-interval-down').disabled && window.editorBridge.getToolState().then(state => state.config.sendIntervalSeconds === 4)"));
+    await evaluate("document.getElementById('tool-interval-down').click()");
+    check('自绘减少按钮按一秒调整', await waitFor("window.editorBridge.getToolState().then(state => state.config.sendIntervalSeconds === 3)"));
+    await evaluate("window.editorBridge.setToolConfig({sendIntervalSeconds:0})");
+    check('间隔下界禁用减少，不能降到负数', await waitFor("document.getElementById('tool-interval-down').disabled"));
+    await evaluate("window.editorBridge.setToolConfig({sendIntervalSeconds:300})");
+    check('间隔上界禁用增加', await waitFor("document.getElementById('tool-interval-up').disabled"));
+    await evaluate("window.editorBridge.setToolConfig({sendIntervalSeconds:3})");
+    await waitFor("document.getElementById('tool-send-interval').value === '3'");
+    await evaluate("document.getElementById('tool-send-interval').focus()");
+    fs.writeFileSync(path.join(directory, 'interval-control.png'), (await view.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG());
+    await evaluate("document.getElementById('tool-settings-close').click()");
+    let batchSeq = 0;
+    const fixture = path.join(directory, 'tool-reply.html');
     const escapeHtml = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    const markup: string[] = []; let offset = 0;
-    const appendProse = (text: string) => {
-      for (const line of text.split(/\r\n|\r|\n/)) {
-        const heading = /^(#{1,6})\s+(.*)$/.exec(line);
-        markup.push(heading ? `<h${heading[1]!.length}>${escapeHtml(heading[2]!)}</h${heading[1]!.length}>`
-          : /^---$/.test(line) ? '<hr>' : `<p>${escapeHtml(line)}</p>`);
-      }
+    const loadReply = async (text: string) => {
+      fs.writeFileSync(fixture, '<!doctype html><meta charset="utf-8"><main class="ds-markdown"><pre><code class="language-mini-ai-tools">' + escapeHtml(text) + '</code></pre></main>');
+      await web.loadURL(pathToFileURL(fixture).href);
+      choice = 0;
+      return evaluate<ReturnPreview>('window.editorBridge.collectReply()');
     };
-    for (const fence of splitFences(backendReply)) {
-      appendProse(backendReply.slice(offset, fence.start));
-      markup.push(`<pre><code class="language-${fence.info}">${escapeHtml(fence.body)}</code></pre>`); offset = fence.end;
-    }
-    appendProse(backendReply.slice(offset));
-    const backendFixture = path.join(directory, 'backend-reply.html');
-    fs.writeFileSync(backendFixture, '<!doctype html><meta charset="utf-8"><main class="ds-markdown">' + markup.join('\n') + '</main>');
-    await web.loadURL(pathToFileURL(backendFixture).href);
-    const backend = await evaluate<ReturnPreview>('window.editorBridge.collectReply()');
-    const expected = parseModelReply(backendReply).blocks;
-    check('真实回复五文件与命令逐块关联', backend.ok && backend.blocks.length === 6 &&
-      backend.blocks.every((block, index) => block.filePath === expected[index]!.filePath && block.operation === expected[index]!.operation), backend.blocks.map(block => ({ file: block.filePath, operation: block.operation, lines: block.codeLines, kind: block.kind })));
-    check('操作全文实际行数保留，不使用 AI 定位行号', JSON.stringify(backend.blocks.map(block => block.codeLines)) === '[35,18,4,109,84,5]');
-    check('五个新文件可应用，命令只读', backend.blocks.filter(block => block.applicable).length === 5 && backend.blocks[5]?.kind === 'other' && !backend.blocks[5].applicable);
-    await pause();
-    check('预览统计只计文件与其他内容', await previewEvaluate("document.getElementById('pv-meta').textContent === '5 文件 · 1 段其他内容'"));
-    check('采集诊断默认关闭且无常驻状态区', await previewEvaluate("!document.getElementById('pv-diagnostics').open && document.getElementById('pv-status').hidden && document.getElementById('pv-diagnostics').getBoundingClientRect().height <= document.querySelector('#pv-diagnostics > summary').getBoundingClientRect().height + 2"));
-    await previewEvaluate("document.querySelector('#pv-diagnostics > summary').click()"); await pause();
-    check('诊断入口可展开查看采集信息', await previewEvaluate("document.getElementById('pv-diagnostics').open && document.getElementById('pv-notes').textContent.includes('采集：策略') && document.getElementById('pv-notes').getBoundingClientRect().height > 0"));
-    await previewEvaluate("document.querySelector('#pv-diagnostics > summary').click()");
-    check('其他内容默认折叠', await previewEvaluate("Boolean(document.querySelector('.pv-other')) && !document.querySelector('.pv-other').open && !document.getElementById('pv-list').textContent.includes('未指定文件')"));
-    await previewEvaluate("document.querySelector('.pv-other > summary').click()"); await pause();
-    await previewEvaluate("document.querySelector('.pv-other .pv-select').click()"); await pause();
-    check('展开其他内容可查看完整五行命令，无应用或改路径入口', await previewEvaluate("document.querySelector('.pv-other').open && document.querySelector('.pv-content').textContent.split('\\n').length === 5 && document.querySelector('.pv-content').textContent.includes('npm run seed') && !document.querySelector('#pv-detail button')"));
-    check('多文件采集预览不创建目录', !fs.existsSync(path.join(a, 'ecommerce-demo')));
-    const shellAttempt = await evaluate<{ ok: boolean; reason?: string }>(`window.editorBridge.applyChange(${JSON.stringify({ collectionId: backend.collectionId, index: 5, filePath: 'commands.sh' })})`);
-    check('只读命令不能通过应用接口创建文件', !shellAttempt.ok && shellAttempt.reason === 'read-only-content' && !fs.existsSync(path.join(a, 'commands.sh')));
-    let createdFiles = 0; let correctFiles = 0;
-    for (const block of backend.blocks.filter(block => block.applicable)) {
-      const result = await evaluate<{ ok: boolean }>(`window.editorBridge.applyChange(${JSON.stringify({ collectionId: backend.collectionId, index: block.index, filePath: block.filePath })})`);
-      if (result.ok) {
-        createdFiles++;
-        if (fs.readFileSync(path.join(a, block.filePath!), 'utf8') === expected[block.index]!.code.replace(/\r\n|\r/g, '\n')) correctFiles++;
+    const collect = async (requests: ToolRequest[]) => {
+      const batchId = 'workspace-' + (++batchSeq);
+      const collected = await loadReply(JSON.stringify({ protocol_version: 1, batch_id: batchId, requests }));
+      if (!collected.ok || collected.blocks.length) throw new Error('工具采集未走统一入口：' + JSON.stringify(collected));
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const state = await evaluate<ToolState>('window.editorBridge.getToolState()');
+        if (!state.busy && state.results.length === requests.length && state.results.every(result => result.batch_id === batchId)) { await pause(); return state; }
+        if (state.batchError) throw new Error(state.batchError.error);
+        await pause();
       }
-    }
-    check('五文件各写入完整且正确的内容', createdFiles === 5 && correctFiles === 5, { createdFiles, correctFiles });
-    for (let i = 0; i < createdFiles; i++) await evaluate('window.editorBridge.undoSave()');
-    check('批次新建撤销恢复目录不存在', !fs.existsSync(path.join(a, 'ecommerce-demo')));
-    await waitFor("document.getElementById('file-name').textContent === 'root-file.txt'");
-    // 复制过片段也不能为后续缺失元数据的块兜底。
+      throw new Error('工具批次未结束：' + batchId);
+    };
+    const reviewState = () => previewEvaluate<ChangeReviewState>('window.previewBridge.getReviewState()');
+    const apply = (id: string, changes: unknown[]): ToolRequest => ({ id, tool: 'apply_changes', args: { changes } });
+    const undo = () => previewEvaluate<{ ok: boolean; error?: string }>('window.previewBridge.undoToolChange()');
+    check('旧人工应用桥已移除，右侧只有查看与工具撤销', await evaluate<boolean>("['applyChange','undoSave','showDiffInEditor','stepDiff','onDiffData'].every(name => !(name in window.editorBridge))") && await previewEvaluate<boolean>("!('applyChange' in window.previewBridge) && typeof window.previewBridge.getReviewState === 'function'"));
+    fs.writeFileSync(path.join(a, 'keep.txt'), 'keep original');
+    const changed = await collect([apply('write', [{ path: 'a.txt', operation: 'overwrite', content: 'A changed' }, { path: 'keep.txt', operation: 'overwrite', content: 'keep changed' }])]);
+    const written = await reviewState();
+    check('真实工具采集直接修改两文件，无需人工应用', changed.results[0]?.status === 'done' && fs.readFileSync(path.join(a, 'a.txt'), 'utf8') === 'A changed' && fs.readFileSync(path.join(a, 'keep.txt'), 'utf8') === 'keep changed');
+    check('右侧记录实际执行前后快照与增删统计', written.records.length === 2 && written.records.every(record => record.status === 'applied' && typeof record.before === 'string' && typeof record.after === 'string' && record.diff) && written.records[0]?.before === 'draft A' && written.records[0]?.after === 'A changed', written.records);
+    const beforeView = await evaluate('document.getElementById("file-name").textContent');
+    check('右侧默认连续显示本批文件，差异正文占满高度且导航收起', await previewEvaluate("document.querySelectorAll('article[data-record-id]').length === 2 && document.getElementById('pv-navigation').hidden && document.getElementById('pv-detail').getBoundingClientRect().height > innerHeight * .8"));
+    await previewEvaluate("document.getElementById('pv-navigate').click(); document.querySelector('.pv-select').click()");
+    check('查看差异不抢走编辑焦点文件，无重复应用按钮', await evaluate('document.getElementById("file-name").textContent') === beforeView && await previewEvaluate("Boolean(document.querySelector('.pv-diff')) && !Array.from(document.querySelectorAll('button')).some(button => /应用|创建文件/.test(button.textContent))"));
+    check('文件树类型图标实际可见，文件夹开合图标独立于展开箭头', await evaluate("Boolean(document.querySelector('.tree-icon svg')) && Boolean(document.querySelector('.tree-icon-folder, .tree-icon-folder-open'))"));
+    fs.writeFileSync(path.join(directory, 'review.png'), (await preview.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG());
+    const ordinaryWidth = await previewEvaluate<number>('innerWidth');
+    const persistedWidth = JSON.parse(fs.readFileSync(path.join(directory, 'settings.json'), 'utf8')).previewWidth;
+    await previewEvaluate("document.getElementById('pv-expand').click()");
+    for (let i = 0; i < 100 && await previewEvaluate<number>('innerWidth') <= ordinaryWidth; i++) await pause();
+    check('主动展开变更阅读扩大空间，临时宽度不保存', await previewEvaluate<number>('innerWidth') > ordinaryWidth && JSON.parse(fs.readFileSync(path.join(directory, 'settings.json'), 'utf8')).previewWidth === persistedWidth);
+    fs.writeFileSync(path.join(directory, 'review-expanded.png'), (await preview.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG());
+    await previewEvaluate("document.getElementById('pv-expand').click()");
+    for (let i = 0; i < 100 && await previewEvaluate<number>('innerWidth') !== ordinaryWidth; i++) await pause();
+    check('恢复阅读后回到原变更列宽度', await previewEvaluate<number>('innerWidth') === ordinaryWidth);
+    await evaluate("document.querySelector('#tree .tree-row[data-rel-path=\"root-file.txt\"]').dispatchEvent(new KeyboardEvent('keydown',{key:'F10',shiftKey:true,bubbles:true}))");
+    await waitFor("Boolean(document.querySelector('.file-menu'))");
+    fs.writeFileSync(path.join(directory, 'file-menu.png'), (await view.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG());
+    await evaluate("document.querySelector('.file-menu').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))");
+    const copiedPath = await evaluate<{ ok: boolean }>(`window.editorBridge.copyEntryPath('root-file.txt',true,${JSON.stringify(a)})`);
+    check('路径复制来自真实受限桥', copiedPath.ok && await clipboard.readText() === 'root-file.txt');
+    fs.writeFileSync(path.join(a, 'delete-test.txt'), 'only temporary fixture');
+    const permanent = await evaluate<{ ok: boolean }>(`window.editorBridge.deleteEntry('delete-test.txt',${JSON.stringify(a)})`);
+    check('额外永久删除通过真实确认桥删除临时文件', permanent.ok && !fs.existsSync(path.join(a, 'delete-test.txt')));
+    fs.writeFileSync(path.join(a, 'a.txt'), 'external content');
+    const frozen = await reviewState();
+    check('用户继续编辑磁盘不改写执行时快照', frozen.records[0]?.before === 'draft A' && frozen.records[0]?.after === 'A changed');
+    fs.writeFileSync(path.join(a, 'a.txt'), 'A changed');
+    check('右侧撤销沿用工具 owner，并逐项恢复原文', (await undo()).ok && (await undo()).ok && fs.readFileSync(path.join(a, 'a.txt'), 'utf8') === 'draft A' && fs.readFileSync(path.join(a, 'keep.txt'), 'utf8') === 'keep original' && (await reviewState()).records.every(record => record.status === 'undone'));
+
     await evaluate("document.getElementById('file-refresh').click()");
-    await waitFor("Boolean(document.querySelector('#tree .tree-row[data-rel-path=\"keep.txt\"]'))");
-    await evaluate("document.querySelector('#tree .tree-row[data-rel-path=\"keep.txt\"]').click()");
-    await waitFor("document.getElementById('file-name').textContent === 'keep.txt'");
-    await evaluate(`window.editorBridge.copyNumberedSnippet(${JSON.stringify({ root: a, relPath: 'keep.txt', text: 'keep changed', startLine: 1 })})`);
-    const incompleteFixture = path.join(directory, 'incomplete-reply.html');
-    fs.writeFileSync(incompleteFixture, '<!doctype html><meta charset="utf-8"><main class="ds-markdown"><h3>文件：keep.txt</h3><pre><code class="language-text">wrong overwrite</code></pre><hr><h3>范围：1-1</h3><pre><code class="language-ts">const unknown = 1;</code></pre><hr><h3>文件：valid/new.ts</h3><h3>操作：新建</h3><pre><code class="language-ts">const valid = 1;</code></pre></main>');
-    await web.loadURL(pathToFileURL(incompleteFixture).href);
-    const incomplete = await evaluate<ReturnPreview>('window.editorBridge.collectReply()');
-    check('复制上下文不回填缺失操作或路径，旧范围明确拒绝', incomplete.blocks.length === 3 && !incomplete.blocks[0]!.applicable && incomplete.blocks[0]!.range === null && incomplete.blocks[1]!.filePath === null && !incomplete.blocks[1]!.applicable && incomplete.blocks[2]!.applicable, incomplete.blocks.map(block => ({ file: block.filePath, range: block.range, applicable: block.applicable })));
-    check('编辑器导航跳过缺失元数据条目', await waitFor("document.getElementById('file-name').textContent === 'valid/new.ts' && document.getElementById('btn-diff-prev').disabled && document.getElementById('btn-diff-next').disabled"));
-    for (const index of [0, 1]) {
-      const result = await evaluate<{ ok: boolean }>(`window.editorBridge.applyChange(${JSON.stringify({ collectionId: incomplete.collectionId, index, filePath: 'keep.txt' })})`);
-      check('缺失元数据应用入口拒绝块' + index, !result.ok && fs.readFileSync(path.join(a, 'keep.txt'), 'utf8') === 'keep changed');
-    }
-    const valid = await evaluate<{ ok: boolean }>(`window.editorBridge.applyChange(${JSON.stringify({ collectionId: incomplete.collectionId, index: 2, filePath: 'valid/new.ts' })})`);
-    check('缺失元数据不阻塞同批次有效文件', valid.ok && fs.readFileSync(path.join(a, 'valid/new.ts'), 'utf8') === 'const valid = 1;');
-    if (valid.ok) {
-      fs.renameSync(path.join(a, 'valid/new.ts'), path.join(a, 'valid/original.ts'));
-      fs.writeFileSync(path.join(a, 'valid/new.ts'), 'const valid = 1;');
-      const identityUndo = await evaluate<{ ok: boolean }>('window.editorBridge.undoSave()');
-      check('新建撤销拒绝外部替换的同名同内容文件', !identityUndo.ok && fs.readFileSync(path.join(a, 'valid/new.ts'), 'utf8') === 'const valid = 1;');
-      fs.unlinkSync(path.join(a, 'valid/new.ts')); fs.renameSync(path.join(a, 'valid/original.ts'), path.join(a, 'valid/new.ts'));
-      const restoredUndo = await evaluate<{ ok: boolean; deleted?: boolean }>('window.editorBridge.undoSave()');
-      check('移回本次创建对象后撤销记录可重试', restoredUndo.ok && restoredUndo.deleted === true && !fs.existsSync(path.join(a, 'valid')));
-    }
-    // 新协议定位、已展示基线和自己的成功写入推进，用自有静态网页走真实 IPC。
+    await waitFor("Boolean(document.querySelector('#tree .tree-row[data-rel-path=\"a.txt\"]'))");
+    await evaluate("document.querySelector('#tree .tree-row[data-rel-path=\"a.txt\"]').click()");
+    await waitFor("document.getElementById('file-name').textContent === 'a.txt'");
+    await evaluate("window.monaco.editor.getEditors()[0].getModel().setValue('new local draft')"); await pause();
+    await evaluate("document.querySelector('#editor-tabs [role=tab][data-path=\"root-file.txt\"]').click()");
+    const dirty = await collect([apply('dirty-stop', [{ path: path.join(a, 'a.txt'), operation: 'overwrite', content: 'AI C' }])]);
+    check('工具绝对路径同样尊重非活动标签草稿的停止策略', dirty.results[0]?.status === 'failed' && fs.readFileSync(path.join(a, 'a.txt'), 'utf8') === 'draft A');
+    await evaluate("document.querySelector('#editor-tabs [role=tab][data-path=\"a.txt\"]').click()");
+    check('停止修改保留未保存内容 B', await waitFor("document.getElementById('file-name').textContent === 'a.txt'") && await evaluate("window.monaco.editor.getEditors()[0].getModel().getValue() === 'new local draft'"));
+    await evaluate("window.editorBridge.setToolConfig({dirtyPolicy:'continue'})");
+    const continued = await collect([apply('dirty-continue', [{ path: 'a.txt', operation: 'overwrite', content: 'AI C' }])]);
+    check('继续策略用 AI 的 C 替换磁盘 A 与草稿 B，编辑器同步干净内容', continued.results[0]?.status === 'done' && fs.readFileSync(path.join(a, 'a.txt'), 'utf8') === 'AI C' && await waitFor("window.monaco.editor.getEditors()[0].getModel().getValue() === 'AI C' && !document.getElementById('dirty-flag').textContent"));
+    const renamed = await evaluate<{ ok: boolean }>(`window.editorBridge.renameEntry('a.txt','moved.txt',${JSON.stringify(a)})`);
+    check('改名后旧路径撤销失效，不重建旧文件', renamed.ok && !(await undo()).ok && !fs.existsSync(path.join(a, 'a.txt')) && fs.readFileSync(path.join(a, 'moved.txt'), 'utf8') === 'AI C');
+    choice = 0; await controller.openRecent(1);
+    const oldSave = await evaluate<{ ok: boolean }>(`window.editorBridge.writeFile('a.txt','bad old save',${JSON.stringify(a)})`);
+    const oldSnippet = await evaluate<{ ok: boolean }>(`window.editorBridge.copyNumberedSnippet(${JSON.stringify({ root: a, relPath: 'a.txt', text: 'old snippet', startLine: 1 })})`);
+    check('切换项目清理变更与撤销，旧保存和片段不能污染新根', !oldSave.ok && !oldSnippet.ok && !(await undo()).ok && (await reviewState()).records.length === 0 && fs.readFileSync(path.join(b, 'a.txt'), 'utf8') === 'B original');
+    await controller.openRecent(1); await waitFor("Boolean(document.querySelector('#tree .tree-row[data-rel-path=\"root-file.txt\"]'))");
+    await evaluate("document.querySelector('#tree .tree-row[data-rel-path=\"root-file.txt\"]').click()"); await waitFor("document.getElementById('file-name').textContent === 'root-file.txt'");
+
+    const createdText = 'const created = 1;\nconst second = 2;';
+    const created = await collect([apply('create', [{ path: 'generated/deep/new.ts', operation: 'create', content: createdText }])]);
+    const creationReview = await reviewState();
+    check('工具新建直接创建多级目录，右侧为空原文到完整新文', created.results[0]?.status === 'done' && fs.readFileSync(path.join(a, 'generated/deep/new.ts'), 'utf8') === createdText && creationReview.records[0]?.before === '' && creationReview.records[0]?.after === createdText);
+    check('新建后的编辑器为真实可编辑模型，目录树同步刷新', await waitFor("document.getElementById('file-name').textContent === 'generated/deep/new.ts' && window.monaco.editor.getEditors()[0].getOption(window.monaco.editor.EditorOption.readOnly) === false && Boolean(document.querySelector('#tree .tree-row[data-rel-path=\"generated\"]'))"));
+    check('撤销新增删除本次文件和空目录并关闭对应标签', (await undo()).ok && !fs.existsSync(path.join(a, 'generated')) && await waitFor("document.getElementById('file-name').textContent === 'root-file.txt' && !document.querySelector('#tree .tree-row[data-rel-path=\"generated\"]')"));
+    const empty = await collect([apply('empty', [{ path: 'empty-created.txt', operation: 'create', content: '' }])]);
+    check('工具可创建真正空文件并撤销为不存在', empty.results[0]?.status === 'done' && fs.readFileSync(path.join(a, 'empty-created.txt'), 'utf8') === '' && (await undo()).ok && !fs.existsSync(path.join(a, 'empty-created.txt')));
+    fs.writeFileSync(path.join(a, 'race.txt'), 'external content');
+    const conflict = await collect([apply('race', [{ path: 'race.txt', operation: 'create', content: 'wrong' }])]);
+    check('新建遇到同名外部文件拒绝覆盖，右侧明确失败且没有虚构差异', conflict.results[0]?.status === 'failed' && fs.readFileSync(path.join(a, 'race.txt'), 'utf8') === 'external content' && (await reviewState()).records.every(record => record.status !== 'applied' && record.before === undefined));
+
     const protocolFile = path.join(a, 'protocol.txt');
     const protocolBefore = 'head\nfirst();\nmid\nsecond();\ntail\n';
     fs.writeFileSync(protocolFile, protocolBefore);
-    await evaluate("document.getElementById('file-refresh').click()");
-    await waitFor("Boolean(document.querySelector('#tree .tree-row[data-rel-path=\"protocol.txt\"]'))");
-    await evaluate("document.querySelector('#tree .tree-row[data-rel-path=\"protocol.txt\"]').click()");
-    await waitFor("document.getElementById('file-name').textContent === 'protocol.txt'");
+    await evaluate("document.getElementById('file-refresh').click()"); await waitFor("Boolean(document.querySelector('#tree .tree-row[data-rel-path=\"protocol.txt\"]'))");
+    await evaluate("document.querySelector('#tree .tree-row[data-rel-path=\"protocol.txt\"]').click()"); await waitFor("document.getElementById('file-name').textContent === 'protocol.txt'");
     const copiedText = '\n\tunsaved text  \n\n';
     await evaluate(`window.monaco.editor.getEditors()[0].getModel().setValue(${JSON.stringify(copiedText)})`); await pause();
     const copiedWhole = await evaluate<{ ok: boolean; snippet: string }>(`window.editorBridge.copyWholeFile(${JSON.stringify({ root: a, relPath: 'protocol.txt', text: copiedText })})`);
-    check('全文复制来自 Monaco 草稿而非磁盘，保留所有空白且只读', copiedWhole.ok && parseModelReply(await clipboard.readText()).blocks[0]?.code === copiedText && parseModelReply(copiedWhole.snippet).blocks[0]?.kind === 'other' && fs.readFileSync(protocolFile, 'utf8') === protocolBefore);
+    check('全文复制来自 Monaco 草稿，保留所有空白且只读', copiedWhole.ok && parseModelReply(await clipboard.readText()).blocks[0]?.code === copiedText && parseModelReply(copiedWhole.snippet).blocks[0]?.kind === 'other' && fs.readFileSync(protocolFile, 'utf8') === protocolBefore);
     await evaluate(`window.monaco.editor.getEditors()[0].getModel().setValue(${JSON.stringify(protocolBefore)})`); await pause();
-    const editHtml = (file: string, oldText: string, newText: string) =>
-      '<h3>文件：' + escapeHtml(file) + '</h3><p>操作：替换</p><pre><code>' + escapeHtml(['<<<<<<< SEARCH', oldText, '=======', newText, '>>>>>>> REPLACE'].join('\n')) + '</code></pre>';
-    const protocolFixture = path.join(directory, 'protocol-reply.html');
-    const loadProtocolReply = async (html: string) => {
-      fs.writeFileSync(protocolFixture, '<!doctype html><meta charset="utf-8"><main class="ds-markdown">' + html + '</main>');
-      await web.loadURL(pathToFileURL(protocolFixture).href);
-      return evaluate<ReturnPreview>('window.editorBridge.collectReply()');
-    };
-    await previewEvaluate('window.__protocolPreview = null; window.previewBridge.onPreviewData(data => { window.__protocolPreview = data; })');
-    const twoEdits = await loadProtocolReply(editHtml('protocol.txt', 'first();', 'first();\ninserted();') + editHtml('protocol.txt', 'second();', 'secondDone();'));
-    check('同文件两段 SEARCH 根据同一原文独立唯一定位', twoEdits.blocks.length === 2 && twoEdits.blocks.every(block => block.applicable && block.operation === 'replace') && twoEdits.blocks[0]?.locations?.[0]?.oldRange?.start === 2 && twoEdits.blocks[1]?.locations?.[0]?.oldRange?.start === 4, twoEdits.blocks);
-    const upper = await evaluate<{ ok: boolean }>(`window.editorBridge.applyChange(${JSON.stringify({ collectionId: twoEdits.collectionId, index: 0, filePath: 'protocol.txt' })})`);
-    await pause();
-    check('上方插入成功后下方预览真实范围重算为第五行', upper.ok && await previewEvaluate("window.__protocolPreview && window.__protocolPreview.blocks[1].locations[0].oldRange.start === 5"));
-    const lower = await evaluate<{ ok: boolean }>(`window.editorBridge.applyChange(${JSON.stringify({ collectionId: twoEdits.collectionId, index: 1, filePath: 'protocol.txt' })})`);
-    check('下方继续应用保留上方插入与未修改的末尾换行', lower.ok && fs.readFileSync(protocolFile, 'utf8') === 'head\nfirst();\ninserted();\nmid\nsecondDone();\ntail\n');
-    const undoLower = await evaluate<{ ok: boolean }>('window.editorBridge.undoSave()');
-    const undoUpper = await evaluate<{ ok: boolean }>('window.editorBridge.undoSave()');
-    check('同文件两操作按顺序撤销，准确恢复完整原文', undoLower.ok && undoUpper.ok && fs.readFileSync(protocolFile, 'utf8') === protocolBefore);
-    const stale = await loadProtocolReply(editHtml('protocol.txt', 'first();', 'stale replacement();'));
-    const externalText = protocolBefore + 'external change\n'; fs.writeFileSync(protocolFile, externalText);
-    const staleApply = await evaluate<{ ok: boolean; reason?: string }>(`window.editorBridge.applyChange(${JSON.stringify({ collectionId: stale.collectionId, index: 0, filePath: 'protocol.txt' })})`);
-    check('预览后外部改动拒绝写入，不重建基线覆盖外部内容', !staleApply.ok && staleApply.reason === 'target-changed' && fs.readFileSync(protocolFile, 'utf8') === externalText, staleApply);
+    const replaced = await collect([apply('replace', [{ path: 'protocol.txt', operation: 'replace', edits: [{ old_string: 'first();', new_string: 'first();\ninserted();' }, { old_string: 'second();', new_string: 'secondDone();' }] }])]);
+    check('同一请求多对唯一原文替换保留全文和末尾换行', replaced.results[0]?.status === 'done' && fs.readFileSync(protocolFile, 'utf8') === 'head\nfirst();\ninserted();\nmid\nsecondDone();\ntail\n');
+    check('工具撤销准确恢复多对修改前的完整原文', (await undo()).ok && fs.readFileSync(protocolFile, 'utf8') === protocolBefore);
     fs.writeFileSync(path.join(a, 'repeated.txt'), 'same\nsame\n');
-    const mismatches = await loadProtocolReply(editHtml('protocol.txt', 'missing original', 'wrong') + editHtml('repeated.txt', 'same', 'wrong'));
-    check('原文零次和多次匹配均显示具体阻塞，两个文件保持不变', mismatches.blocks.length === 2 && mismatches.blocks.every(block => !block.applicable) && mismatches.blocks[0]?.blockedReason?.includes('不匹配') === true && mismatches.blocks[1]?.blockedReason?.includes('多次') === true && fs.readFileSync(protocolFile, 'utf8') === externalText && fs.readFileSync(path.join(a, 'repeated.txt'), 'utf8') === 'same\nsame\n', mismatches.blocks);
-    const legacy = await loadProtocolReply('<h3>文件：protocol.txt</h3><h3>范围：1-1</h3><pre><code>legacy content</code></pre>');
-    const legacyApply = await evaluate<{ ok: boolean }>(`window.editorBridge.applyChange(${JSON.stringify({ collectionId: legacy.collectionId, index: 0, filePath: 'protocol.txt' })})`);
-    check('旧行号回复有可见新版格式诊断且应用入口拒绝', legacy.blocks.length === 1 && !legacy.blocks[0]!.applicable && Boolean(legacy.blocks[0]!.blockedReason) && !legacyApply.ok && fs.readFileSync(protocolFile, 'utf8') === externalText, legacy.blocks);
-    const empty = await loadProtocolReply('<h3>文件：empty-created.txt</h3><p>操作：新建</p><pre><code></code></pre>');
-    const emptyApply = await evaluate<{ ok: boolean; created?: boolean }>(`window.editorBridge.applyChange(${JSON.stringify({ collectionId: empty.collectionId, index: 0, filePath: 'empty-created.txt' })})`);
-    check('明确空代码框可预览并创建真正空文件', empty.blocks[0]?.applicable === true && empty.blocks[0]?.codeChars === 0 && emptyApply.ok && emptyApply.created === true && fs.readFileSync(path.join(a, 'empty-created.txt'), 'utf8') === '', empty.blocks);
-    const emptyUndo = await evaluate<{ ok: boolean; deleted?: boolean }>('window.editorBridge.undoSave()');
-    check('空文件创建可撤销且仅删除本次对象', emptyUndo.ok && emptyUndo.deleted === true && !fs.existsSync(path.join(a, 'empty-created.txt')));
-    const retarget = await loadProtocolReply('<h3>文件：retarget-a.txt</h3><p>操作：新建</p><pre><code>retarget content</code></pre>');
-    const movedPreview = await evaluate<{ ok: boolean }>(`window.editorBridge.showDiffInEditor('${retarget.collectionId}', 0, 'retarget-b.txt')`);
-    const movedApply = await evaluate<{ ok: boolean }>(`window.editorBridge.applyChange(${JSON.stringify({ collectionId: retarget.collectionId, index: 0, filePath: 'retarget-b.txt' })})`);
-    const movedUndo = await evaluate<{ ok: boolean }>('window.editorBridge.undoSave()');
-    const nextPreview = await evaluate<{ ok: boolean }>(`window.editorBridge.showDiffInEditor('${retarget.collectionId}', 0, 'retarget-c.txt')`);
-    check('撤销后重新改目标，右列预览采用新路径而不是历史应用路径', movedPreview.ok && movedApply.ok && movedUndo.ok && nextPreview.ok && await previewEvaluate("window.__protocolPreview.blocks[0].filePath === 'retarget-c.txt'"));
-    const nextApply = await evaluate<{ ok: boolean }>(`window.editorBridge.applyChange(${JSON.stringify({ collectionId: retarget.collectionId, index: 0, filePath: 'retarget-c.txt' })})`);
-    check('再次修改目标的实际写入与预览一致，撤销恢复不存在', nextApply.ok && fs.readFileSync(path.join(a, 'retarget-c.txt'), 'utf8') === 'retarget content' && !fs.existsSync(path.join(a, 'retarget-b.txt')) && (await evaluate<{ ok: boolean }>('window.editorBridge.undoSave()')).ok);
-    const missingCode = await loadProtocolReply('<h3>文件：missing-code.txt</h3><p>操作：新建</p>');
-    check('最新回复只有头部不会借用历史空文件代码，缺失围栏明确阻塞', missingCode.blocks.length === 1 && !missingCode.blocks[0]!.applicable && !fs.existsSync(path.join(a, 'missing-code.txt')), missingCode.blocks);
+    const mismatches = await collect([apply('zero', [{ path: 'protocol.txt', operation: 'replace', edits: [{ old_string: 'missing original', new_string: 'wrong' }] }]), apply('many', [{ path: 'repeated.txt', operation: 'replace', edits: [{ old_string: 'same', new_string: 'wrong' }] }]), apply('valid', [{ path: 'valid/new.ts', operation: 'create', content: 'const valid = 1;' }])]);
+    const mixedReview = await reviewState();
+    check('零次及多次匹配分别失败，同批独立有效修改仍执行', mismatches.results.map(result => result.status).join(',') === 'failed,failed,done' && mixedReview.records.map(record => record.status).join(',') === 'failed,failed,applied' && fs.readFileSync(protocolFile, 'utf8') === protocolBefore && fs.readFileSync(path.join(a, 'repeated.txt'), 'utf8') === 'same\nsame\n', mixedReview.records);
+    fs.renameSync(path.join(a, 'valid/new.ts'), path.join(a, 'valid/original.ts')); fs.writeFileSync(path.join(a, 'valid/new.ts'), 'const valid = 1;');
+    check('新增撤销核对文件对象身份，同名同内容外部重建不能删除', !(await undo()).ok && fs.existsSync(path.join(a, 'valid/new.ts')));
+    fs.unlinkSync(path.join(a, 'valid/new.ts')); fs.renameSync(path.join(a, 'valid/original.ts'), path.join(a, 'valid/new.ts'));
+    check('移回本次创建对象后可重试撤销', (await undo()).ok && !fs.existsSync(path.join(a, 'valid')));
+    const read = await collect([{ id: 'read', tool: 'read_file', args: { path: 'protocol.txt' } }]);
+    check('查询批次清空上批差异，工具结果仍正常', read.results[0]?.status === 'done' && (await reviewState()).records.length === 0 && await previewEvaluate("document.getElementById('pv-meta').textContent === '0 文件'"));
+    const invalid = await loadReply('{"protocol_version":1,"batch_id":"broken","requests":[');
+    check('无效 JSON 由工具结果给出明确批次错误，不写盘', invalid.ok && await waitFor("window.editorBridge.getToolState().then(state => Boolean(state.batchError && state.batchError.error.includes('JSON')))") && fs.readFileSync(protocolFile, 'utf8') === protocolBefore);
+    // 正式入口拒绝旧文件块，不能借历史上下文触发第二条人工写盘路径。
+    fs.writeFileSync(fixture, '<!doctype html><meta charset="utf-8"><main class="ds-markdown"><h3>文件：protocol.txt</h3><h3>操作：覆盖全文</h3><pre><code>legacy content</code></pre></main>');
+    await web.loadURL(pathToFileURL(fixture).href); await evaluate('window.editorBridge.collectReply()');
+    check('旧文件修改格式明确拒绝且磁盘保留', await waitFor("window.editorBridge.getToolState().then(state => Boolean(state.batchError && state.batchError.error.includes('不再支持')))") && fs.readFileSync(protocolFile, 'utf8') === protocolBefore);
+    // 用户实际反馈为长 Markdown：验证真实 Chromium 换行，不用短代码行代替。
+    const longReport = '## 实验报告\n\n' + '输入大小、经典配置与实际实验的差异。'.repeat(40) + '\n\n' + 'a_very_long_identifier_'.repeat(35) + '\n';
+    fs.writeFileSync(path.join(a, 'report.md'), '旧报告\n');
+    await collect([apply('report', [{ path: 'report.md', operation: 'overwrite', content: longReport }])]);
+    check('长 Markdown 默认换行且差异不横向溢出', await previewEvaluate("document.getElementById('pv-detail').classList.contains('wrap') && document.getElementById('pv-detail').scrollWidth <= document.getElementById('pv-detail').clientWidth + 1 && document.querySelector('.pv-line-text').getBoundingClientRect().width > 0"));
+    await previewEvaluate("document.getElementById('pv-wrap').click()");
+    check('关闭自动换行后长代码可横向查看', await previewEvaluate("!document.getElementById('pv-detail').classList.contains('wrap') && Array.from(document.querySelectorAll('.pv-diff')).some(box => box.scrollWidth > box.clientWidth)"));
+    await previewEvaluate("document.getElementById('pv-wrap').click(); document.getElementById('pv-expand').click()"); await pause();
+    fs.writeFileSync(path.join(directory, 'report-expanded.png'), (await preview.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG());
+    await previewEvaluate("document.getElementById('pv-expand').click()"); await pause();
     // 多标签仅来自隔离目录，以真实 Chromium 滚动与 CSS 伪元素验证标签条。
     const tabPaths = Array.from({ length: 10 }, (_, i) => 'scroll-tab-' + i + '.txt');
     for (const relative of tabPaths) fs.writeFileSync(path.join(a, relative), relative);

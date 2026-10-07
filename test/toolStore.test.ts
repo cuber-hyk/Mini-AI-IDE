@@ -19,11 +19,11 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
 
 test('settings persist selected permission, automatic collection, unsaved policy and optional completion sound', async t => {
   const { filePath, store } = await fixture(t);
-  assert.deepEqual(store.getConfig(), { permission: 'ask', automatic: false, dirtyPolicy: 'ask', completionSound: false, autoCopyResults: true });
+  assert.deepEqual(store.getConfig(), { permission: 'ask', automatic: false, dirtyPolicy: 'ask', completionSound: false, autoCopyResults: true, sendIntervalSeconds: 3 });
   await Promise.all([store.configure({ permission: 'full' }), store.configure({ automatic: true }), store.configure({ dirtyPolicy: 'continue' }), store.configure({ completionSound: true })]);
   const reopened = new ToolStore(filePath);
   await reopened.ready();
-  assert.deepEqual(reopened.getConfig(), { permission: 'full', automatic: true, dirtyPolicy: 'continue', completionSound: true, autoCopyResults: true });
+  assert.deepEqual(reopened.getConfig(), { permission: 'full', automatic: true, dirtyPolicy: 'continue', completionSound: true, autoCopyResults: true, sendIntervalSeconds: 3 });
   await reopened.configure({ completionSound: false });
   const muted = new ToolStore(filePath);
   await muted.ready();
@@ -34,7 +34,7 @@ test('settings persist selected permission, automatic collection, unsaved policy
 
 test('invalid configuration cannot broaden or erase permissions', async t => {
   const { store } = await fixture(t);
-  for (const patch of [null, { permission: 'admin' }, { permission: undefined }, { automatic: 'true' }, { dirtyPolicy: undefined }, { completionSound: 'true' }, { completionSound: 1 }, { completionSound: null }, { completionSound: undefined }, { autoCopyResults: 'true' }, { root: 'C:/' }]) {
+  for (const patch of [null, { permission: 'admin' }, { permission: undefined }, { automatic: 'true' }, { dirtyPolicy: undefined }, { completionSound: 'true' }, { completionSound: 1 }, { completionSound: null }, { completionSound: undefined }, { autoCopyResults: 'true' }, { sendIntervalSeconds: -1 }, { sendIntervalSeconds: 301 }, { sendIntervalSeconds: 1.5 }, { sendIntervalSeconds: '3' }, { sendIntervalSeconds: undefined }, { root: 'C:/' }]) {
     await assert.rejects(store.configure(patch));
   }
   assert.equal(store.getConfig().permission, 'ask');
@@ -49,13 +49,24 @@ test('opening settings saved before sound was introduced defaults to silence and
   const saved = JSON.parse(await fs.readFile(filePath, 'utf8'));
   delete saved.config.completionSound;
   delete saved.config.autoCopyResults;
+  delete saved.config.sendIntervalSeconds;
   await fs.writeFile(filePath, JSON.stringify(saved));
   const reopened = new ToolStore(filePath);
   await reopened.ready();
-  assert.deepEqual(reopened.getConfig(), { permission: 'full', automatic: true, dirtyPolicy: 'stop', completionSound: false, autoCopyResults: true });
+  assert.deepEqual(reopened.getConfig(), { permission: 'full', automatic: true, dirtyPolicy: 'stop', completionSound: false, autoCopyResults: true, sendIntervalSeconds: 3 });
   assert.deepEqual(reopened.getRules(directory), [{ fingerprint: 'existing-script', action: 'deny' }]);
   assert.deepEqual(reopened.getEntries(), store.getEntries());
   assert.equal((await reopened.reserve(directory, 'chat', batch)).kind, 'duplicate');
+});
+
+test('发送间隔保存整数秒，不引入轮次数量设置，也不影响权限或去重记录', async t => {
+  const { directory, filePath, store } = await fixture(t);
+  await store.reserve(directory, 'chat', batch);
+  await store.configure({ sendIntervalSeconds: 0 }); assert.equal(store.getConfig().sendIntervalSeconds, 0);
+  await store.configure({ sendIntervalSeconds: 300 });
+  const reopened = new ToolStore(filePath); await reopened.ready();
+  assert.equal(reopened.getConfig().sendIntervalSeconds, 300); assert.deepEqual(reopened.getEntries(), store.getEntries());
+  await assert.rejects(reopened.configure({ rounds: 10 }));
 });
 
 test('invalid persisted completion sound is rejected without resetting existing permission or ledger', async t => {

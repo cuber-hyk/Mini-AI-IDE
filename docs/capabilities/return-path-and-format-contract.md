@@ -1,20 +1,20 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-06
+updated: 2026-10-07
 owner: 胡运宽
-source_of_truth: [docs/adr/2026-10-06-native-tool-harness-boundary.md, src/shared/toolProtocol.ts, src/shared/formatSpec.ts, src/shared/returnPath.ts, src/main/replyCollector.ts, src/main/tools/changes.ts, src/main/tools/integration.ts, src/main/returnPathService.ts, src/main/fileService.ts, src/renderer/editorWorkspace.js, test/replyCollector.test.ts, test/toolProtocol.test.ts, test/toolChanges.test.ts, test/formatSpec.test.ts, test/toolSamples.test.ts]
+source_of_truth: [docs/adr/2026-10-06-native-tool-harness-boundary.md, src/shared/toolProtocol.ts, src/shared/formatSpec.ts, src/shared/returnPath.ts, src/main/replyCollector.ts, src/main/tools/changes.ts, src/main/tools/changeReview.ts, src/main/tools/integration.ts, src/main/returnPathService.ts, src/main/previewPreload.ts, src/main/fileService.ts, src/renderer/preview.js, src/renderer/editorWorkspace.js, test/replyCollector.test.ts, test/toolProtocol.test.ts, test/toolChanges.test.ts, test/formatSpec.test.ts, test/toolSamples.test.ts]
 ---
 
-# 能力：工具修改与回程应用
+# 能力：工具修改与变更查看
 
 ## 职责与唯一输出
 
-AI 的实际文件读取、修改和命令统一输出一个顶层 mini-ai-tools JSON 批次，格式、参数及拒绝规则由 shared/toolProtocol.ts 定义。普通解释、讨论和引用资料不执行。手动采集也拒绝旧文件操作文本，不退回另一条可写盘协议；网页独立、无文件 IPC，采集只读，粘贴与发送由用户完成。九类工具及权限见 tool-harness.md。
+AI 的实际文件读取、修改和命令统一输出一个顶层 mini-ai-tools JSON 批次，格式、参数及拒绝规则由 shared/toolProtocol.ts 定义。普通解释、讨论和引用资料不执行。手动采集也拒绝旧文件操作文本，不退回另一条可写盘协议；网页独立、无文件 IPC，采集只读；开启自动继续时按限定回传边界发送真实工具结果，关闭或暂停时粘贴与发送由用户完成。九类工具及权限见 tool-harness.md。
 
 apply_changes 使用 changes，每项含 path 和 operation。replace 提供 edits 中的 old_string/new_string；create/overwrite 提供完整 content，可为空。替换原文必须非空、真实、唯一且不重叠；同文件所有修改集中在一条请求。JSON 字符串正确转义换行、引号和反斜杠，正文按字面保存。
 
-同批次路径及真实目标别名冲突先检查，在任何请求产生副作用前拒绝。依赖只决定前置成功后的执行顺序，不提供输出插值。需要读取或进程 ID 时，AI 应先请求工具，等用户返回真实结果后再生成下一批。
+同批次路径及真实目标别名冲突先检查，在任何请求产生副作用前拒绝。依赖只决定前置成功后的执行顺序，不提供输出插值。需要读取或进程 ID 时，AI 应先请求工具，等 IDE 自动回传或用户手动返回真实结果后再生成下一批。
 
 replyCollector 只读还原代码正文及语言：读取 code/pre 的 language-* 类名，或同一单代码框内、正文之前的独立工具栏语言标签。到回复根或多个代码框边界停止，不从正文提及、普通 JSON 或其他代码框补写正式协议。缺少明确语言仍作为资料。
 
@@ -38,7 +38,15 @@ tools/changes.ts 将工具参数转换为 ReturnPathService 的内部编辑模�
 
 成功写盘后通知打开文档及真实路径别名，刷新内容和目录树；只有用户批准替换草稿时允许丢弃旧草稿，异步读取期间的新编辑仍需保护。失败保留真实错误和已经完成的写入事实，不假称跨文件原子提交。
 
-工具修改保留最多 20 项内存撤销，使用唯一源身份避免撤销另一条人工变更。已有文件撤销复核当前内容为此次 after；新增撤销核对文件和本次创建目录身份，只移除匹配的文件及空目录。失败保留快照，部分清理错误明确返回。未保存内容或目录切换不能被撤销绕过，撤销不跨重启保存。
+工具修改保留最多 20 项内存撤销，使用唯一源身份避免撤销另一条人工变更。已有文件撤销复核当前内容为此次 after；新增撤销核对文件和本次创建目录身份，只移除匹配的文件及空目录。失败保留快照，部分清理错误明确返回。未保存内容、项目或会话切换不能被撤销绕过，撤销不跨重启保存。改名／删除移除相关路径及后代的撤销记录，其他目标仍可撤销；已完成的执行快照继续呈现原事实。旧会话未启动的排队修改拒绝执行，已启动修改的迟到写入不进入新会话撤销记录。
+
+## 本批实际变更查看
+
+`apply_changes` 按预选权限直接执行，右侧展示执行时捕获的真实 before/after 与差异。查看不再要求用户应用，不提供改路径、重新应用或编辑器内联预览，不打开或替换左侧当前文档。每项显示待执行、已修改、失败、未执行或已撤销；部分写入保留各项真实结果，失败项不伪造成功快照。
+
+`ChangeReviewOwner` 只持有当前项目、会话和批次的内存快照；新轮、切换项目／会话或销毁清理，迟到事件按代次拒绝，后续编辑不污染已捕获的差异。不重新读盘猜测修改前内容，不持久化源码，不把查看快照放入 `tool_results`、剪贴板或去重账本；授权的外部文件只展示该次工具记录，不扩大编辑器文件桥。
+
+右侧按目录／文件分组并支持路径筛选，选中后可查看差异、修改前或修改后全文；统计来自实际 diff。`review:get-state` 和 `review:state` 提供快照查询与广播，仅对应本地查看视图；`review:undo` 复用原工具撤销 owner，不产生第二个文件写入入口。按钮撤销最近一次工具修改，沿用同项目／会话内最多 20 项的撤销栈，不是选中条目的重写入口。撤销后同步已撤销状态，快照仍用于查看原执行事实。批次 ID 内容冲突或执行前停止时，待执行项明确显示未执行，不永久等待。
 
 ## 验证与限制
 

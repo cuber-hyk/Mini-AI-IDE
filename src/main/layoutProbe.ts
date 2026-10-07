@@ -33,7 +33,7 @@ export async function runLayoutProbe(input: {
         return ids.every(inView);
       })()`);
       const previewControls = !previewVisible || await input.preview.webContents.executeJavaScript(`(() => {
-        return ['pv-apply-all','pv-undo','pv-collapse'].every(id => {
+        return ['pv-undo','pv-collapse'].every(id => {
           const r = document.getElementById(id).getBoundingClientRect();
           return r.width > 0 && r.left >= 0 && r.right <= innerWidth && r.bottom <= innerHeight;
         });

@@ -5,7 +5,9 @@ interface HarnessOptions {
   store: ToolStore;
   root: () => string | null;
   session: () => string;
-  execute: (root: string, request: ToolRequest, started: (data: unknown) => void) => Promise<unknown>;
+  execute: (root: string, request: ToolRequest, started: (data: unknown) => void, selection: ToolSelection) => Promise<unknown>;
+  selected?: (selection: ToolSelection | null) => void;
+  stopped?: (selection: ToolSelection, error: string) => void;
   authorize: (root: string, request: ToolRequest) => Promise<'once' | 'remember' | 'deny'>;
   describe: (root: string, request: ToolRequest) => Promise<{ external: boolean; fingerprint: string }>;
   /** 只做静态全批冲突校验，不读取未经授权的目标。 */
@@ -13,10 +15,12 @@ interface HarnessOptions {
   changed: (state: ToolState) => void;
   snapshotProcess?: (id: string) => unknown;
 }
-interface BatchSelection {
+export interface ToolSelection {
   root: string;
   session: string;
   batch: ToolBatch;
+}
+interface BatchSelection extends ToolSelection {
   executed?: boolean;
   notified?: boolean;
   cancelled?: boolean;
@@ -52,6 +56,10 @@ export class ToolHarness {
     return { config: this.options.store.getConfig(), results, message: this.message, busy: this.waiting > 0, ...(this.diagnostic ? { batchError: { status: 'failed' as const, error: this.diagnostic.text } } : {}), ...(this.completion ? { completion: { ...this.completion } } : {}) };
   }
   get state(): ToolState { return this.getState(); }
+  matchesBatch(batch: ToolBatch): boolean {
+    this.getCopyResults();
+    return !!this.selection && JSON.stringify(this.selection.batch) === JSON.stringify(batch);
+  }
   getCopyResults(): ToolResult[] {
     const selection = this.selection;
     if (selection && (this.options.root() !== selection.root || this.options.session() !== selection.session)) this.clearResults();
@@ -108,13 +116,14 @@ export class ToolHarness {
     if (!this.selection || this.selection.root !== root || this.selection.session !== session || JSON.stringify(this.selection.batch) !== JSON.stringify(parsed.batch)) {
       this.clearResults();
       this.selection = { root, session, batch: parsed.batch };
+      this.options.selected?.(this.selection);
     }
     const selection = this.selection;
     const generation = this.generation;
     this.waiting++;
     this.publish();
     const run = this.queue.then(() => this.runBatch(root, session, generation, parsed.batch, selection));
-    const finish = run.catch(error => { this.report(`工具批次停止：${errorText(error)}；未确认状态不会自动重试`); }).finally(() => {
+    const finish = run.catch(error => { this.options.stopped?.(selection, errorText(error)); this.report(`工具批次停止：${errorText(error)}；未确认状态不会自动重试`); }).finally(() => {
       this.waiting--;
       this.getCopyResults();
       if (this.selection === selection) this.finishSelection();
@@ -126,10 +135,13 @@ export class ToolHarness {
 
   private async runBatch(root: string, session: string, generation: number, batch: ToolBatch, selection: BatchSelection): Promise<void> {
     await this.options.store.ready();
-    if (!this.current(root, session, generation)) { this.report('项目、会话已变化或批次已停止；未执行'); return; }
+    if (!this.current(root, session, generation)) { this.options.stopped?.(selection, '项目、会话已变化或批次已停止；未执行'); this.report('项目、会话已变化或批次已停止；未执行'); return; }
     // 在任何副作用及权限对话框之前落盘；落盘失败则整个批次不执行。
     const reservation = await this.options.store.reserve(root, session, batch);
-    if (reservation.kind === 'conflict') { this.report(`批次 ${batch.batch_id} 的 ID 被不同内容复用；未执行`); return; }
+    if (reservation.kind === 'conflict') {
+      const message = `批次 ${batch.batch_id} 的 ID 被不同内容复用；未执行`;
+      this.options.stopped?.(selection, message); this.report(message); return;
+    }
     const entry: SelectedEntry = { ...reservation.entry, selection };
     if (reservation.kind === 'duplicate') {
       this.restore(entry);
@@ -233,7 +245,7 @@ export class ToolHarness {
     if (!this.current(root, session, generation)) return this.cancelRequest(entry, request);
     this.show(entry, request, { status: 'running', started_at: Date.now() });
     let data: unknown;
-    try { data = await this.options.execute(root, request, started => this.show(entry, request, { status: 'running', data: started })); }
+    try { data = await this.options.execute(root, request, started => this.show(entry, request, { status: 'running', data: started }), entry.selection); }
     catch (error) { await this.record(entry, request, { status: 'failed', error: errorText(error) }); return 'failed'; }
     const process = data as { status?: string; timed_out?: boolean } | null;
     const status = request.tool === 'run_command' && process?.status === 'stopped' && !process.timed_out ? 'cancelled' : failedData(request, data) ? 'failed' : 'done';
@@ -290,6 +302,7 @@ export class ToolHarness {
   private clearResults(): void {
     // 只释放展示与复制正文，ToolStore 的防重放状态继续保留。
     this.selection = null;
+    this.options.selected?.(null);
     this.results = [];
     this.completion = undefined;
     this.diagnostic = null;

@@ -202,7 +202,7 @@ it('全文复制使用当前 Monaco 草稿与完整上下文；无选区回到�
   const handlers = renderer.slice(renderer.indexOf('  async function copyWholeFileContext()'), renderer.indexOf("  el.btnSnippet.addEventListener('click'"));
   const whole: any[] = []; const snippets: any[] = []; let selected = false;
   const text = '\n  unsaved draft  \r\n\n';
-  const state = { root: 'C:/root', currentPath: 'a.txt', previewOnly: false, editor: {
+  const state: { root: string; currentPath: string | null; editor: any } = { root: 'C:/root', currentPath: 'a.txt', editor: {
     getModel: () => ({ getValue: () => text, getValueInRange: () => '  \n\t' }),
     getSelection: () => ({ isEmpty: () => !selected, startLineNumber: 6 }),
   } };
@@ -217,6 +217,6 @@ it('全文复制使用当前 Monaco 草稿与完整上下文；无选区回到�
   assert.equal(await sandbox.copyNumberedSelection(true), true); assert.equal(whole.length, 2); assert.equal(snippets.length, 0);
   selected = true; assert.equal(await sandbox.copyNumberedSelection(false), true);
   assert.equal(snippets[0].text, '  \n\t'); assert.equal(snippets[0].startLine, 6);
-  state.previewOnly = true; assert.equal(await sandbox.copyWholeFileContext(), false); assert.equal(await sandbox.copyNumberedSelection(true), false);
+  state.currentPath = null; assert.equal(await sandbox.copyWholeFileContext(), false); assert.equal(await sandbox.copyNumberedSelection(true), false);
   assert.equal(whole.length, 2); assert.equal(snippets.length, 1);
 });
