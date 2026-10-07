@@ -1,62 +1,68 @@
-/** 明确操作输出协议的唯一模板源；设置面板默认资源由构建生成。 */
-import { buildSnippetText, buildWholeFileText, fenceFor, languageHintFor } from './snippet';
+/** 唯一工具输出协议的模板源；设置面板默认资源由构建生成。 */
+import { buildSnippetText, buildWholeFileText, fenceFor } from './snippet';
+import { TOOL_PROTOCOL_PROMPT, type ToolRequest } from './toolProtocol';
 
-interface SpecExample {
-  title: string;
-  note: string;
-  input: string;
-  output: string;
-  inShort: boolean;
+interface SpecExample { title: string; note: string; input: string; output: string; inShort: boolean }
+function request(id: string, tool: ToolRequest['tool'], args: ToolRequest['args'], depends_on?: string[]): ToolRequest {
+  return { id, tool, args, ...(depends_on ? { depends_on } : {}) };
 }
-function operation(path: string, kind: '替换' | '新建' | '覆盖全文', body: string): string {
-  const fence = fenceFor(body);
-  return ['### 文件：' + path, '### 操作：' + kind, fence + languageHintFor(path), body, fence].join('\n');
+function batch(id: string, requests: ToolRequest[]): string {
+  return ['```mini-ai-tools', JSON.stringify({ protocol_version: 1, batch_id: id, requests }), '```'].join('\n');
 }
-function pair(oldText: string, newText: string): string {
-  return ['<<<<<<< SEARCH', oldText, '=======', newText, '>>>>>>> REPLACE'].join('\n');
+function replace(path: string, old_string: string, new_string: string): ToolRequest {
+  return request('edit', 'apply_changes', { changes: [{ path, operation: 'replace', edits: [{ old_string, new_string }] }] });
 }
 function context(path: string, body: string, whole = false): string {
   return whole ? buildWholeFileText(path, body).text : buildSnippetText({ relPath: path, text: body, startLine: 1 }).text;
 }
 const examples: SpecExample[] = [
-  { title: '局部替换', note: 'SEARCH 必须逐字来自原文；新内容行数可增加，IDE 自行计算位置。', inShort: true,
+  { title: '局部替换', note: '原文逐字匹配；输出实际修改请求。', inShort: true,
     input: context('src/counter.ts', 'let n = 0;'),
-    output: operation('src/counter.ts', '替换', pair('let n = 0;', 'let n = 0;\nexport function inc() {\n  return ++n;\n}')) },
-  { title: '新建文件', note: '只创建不存在的路径；围栏中是完整新文件内容，不包 SEARCH。', inShort: true,
-    input: '请新建 src/util/format.ts，导出日期格式化函数。',
-    output: operation('src/util/format.ts', '新建', 'export function formatDate(d: Date): string {\n  return d.toISOString().slice(0, 10);\n}') },
-  { title: '覆盖全文', note: '明确请求整体修改时输出全文；复制完整原文不自动意味着覆盖。', inShort: true,
-    input: context('src/config.ts', 'export const A = 1;\nexport const B = 2;', true),
-    output: operation('src/config.ts', '覆盖全文', 'export const A = 1;\nexport const B = 2;\nexport const C = 3;') },
-  { title: 'Markdown 内嵌代码块', note: '内层围栏原样保留；外层围栏至少四个反引号。', inShort: true,
-    input: context('docs/notes.md', '# 说明\n\n```python\ndef foo():\n    pass\n```'),
-    output: operation('docs/notes.md', '替换', pair('def foo():\n    pass', 'def foo():\n    return 1')) },
-  { title: '纯文本文件', note: '.txt 可不写语言标注，保留原文空白。', inShort: true,
-    input: context('docs/summary.txt', '第一行纯文本。'),
-    output: operation('docs/summary.txt', '替换', pair('第一行纯文本。', '第一行纯文本。\n第二行纯文本。')) },
-  { title: '普通讨论不落文件', note: '没有修改需求时，不加文件、操作头；命令及示例是只读内容。', inShort: true,
-    input: '冒泡排序的时间复杂度是多少？', output: '平均和最坏情况为 O(n²)，空间复杂度为 O(1)。' },
-  { title: '插入内容', note: '用真实原文作为 SEARCH，在 REPLACE 保留原文并追加内容。', inShort: false,
-    input: context('src/hello.ts', 'export const greeting = "hello";'),
-    output: operation('src/hello.ts', '替换', pair('export const greeting = "hello";', 'export const greeting = "hello";\nexport const language = "zh";')) },
-  { title: '删除内容', note: '空 REPLACE 表示删除；SEARCH 非空，不能用空 SEARCH 插入。', inShort: false,
-    input: context('src/debug.ts', 'console.log("debug");\n'),
-    output: operation('src/debug.ts', '替换', pair('console.log("debug");\n', '')) },
-  { title: '同文件多处替换', note: '一个块内可放多个完整替换对；各 SEARCH 在同一原文中唯一且不重叠，一次应用。', inShort: false,
+    output: batch('example-replace', [replace('src/counter.ts', 'let n = 0;', 'let n = 1;')]) },
+  { title: '新建文件', note: '目标不存在，content 为完整文本。', inShort: true,
+    input: '新建 src/util/format.ts，导出日期格式化函数。',
+    output: batch('example-create', [request('create', 'apply_changes', { changes: [{ path: 'src/util/format.ts', operation: 'create', content: 'export function formatDate(d: Date): string {\n  return d.toISOString().slice(0, 10);\n}' }] })]) },
+  { title: '覆盖全文', note: '用户已明确要求整体修改；覆盖存在的文件。', inShort: true,
+    input: '增加 C，整体替换该文件。\n' + context('src/config.ts', 'export const A = 1;\nexport const B = 2;', true),
+    output: batch('example-overwrite', [request('write', 'apply_changes', { changes: [{ path: 'src/config.ts', operation: 'overwrite', content: 'export const A = 1;\nexport const B = 2;\nexport const C = 3;' }] })]) },
+  { title: '查询项目和目录', note: '不知道项目结构时先查询，拿到结果再决定修改。', inShort: true,
+    input: '了解项目根目录、src 结构和 TypeScript 文件。',
+    output: batch('example-project', [request('info', 'get_project_info', {}), request('tree', 'list_directory', { path: 'src', depth: 2, limit: 100 }), request('find', 'search_files', { pattern: '**/*.ts', limit: 100 })]) },
+  { title: '读取文件和搜索内容', note: '行范围只用于查询；search_text 是字面匹配。', inShort: true,
+    input: '查看 README.md 前三行，找项目中的 TODO。',
+    output: batch('example-read', [request('read', 'read_file', { path: 'README.md', start_line: 1, end_line: 3 }), request('search', 'search_text', { query: 'TODO', context: 1, limit: 20 })]) },
+  { title: '普通讨论不调用工具', note: '解释和代码示例均不执行；示例不要标记为正式请求。', inShort: true,
+    input: '演示如何复制数组再排序，给一个普通代码示例。',
+    output: '先复制数组，再按数值排序，不改变原数组。以下代码仅用于解释：\n```javascript\nconst sorted = [...values].sort((a, b) => a - b);\n```' },
+  { title: '插入与删除', note: '插入保留真实原文，删除使用空 new_string。', inShort: false,
+    input: context('src/hello.ts', 'export const greeting = "hello";') + '\n\n' + context('src/debug.ts', 'console.log("debug");\n'),
+    output: batch('example-insert-delete', [request('edit', 'apply_changes', { changes: [
+      { path: 'src/hello.ts', operation: 'replace', edits: [{ old_string: 'export const greeting = "hello";', new_string: 'export const greeting = "hello";\nexport const language = "zh";' }] },
+      { path: 'src/debug.ts', operation: 'replace', edits: [{ old_string: 'console.log("debug");\n', new_string: '' }] },
+    ] })]) },
+  { title: '同文件多处替换', note: '同文件集中一条请求，所有 old_string 基于同一原文且不重叠。', inShort: false,
     input: context('src/options.ts', 'const size = 1;\nconst enabled = false;'),
-    output: operation('src/options.ts', '替换', pair('const size = 1;', 'const size = 2;') + '\n' + pair('const enabled = false;', 'const enabled = true;')) },
-  { title: '.env 与无扩展名文件', note: '每个文件重新声明文件与操作头；不从上一块继承路径或操作。', inShort: false,
-    input: context('.env', 'PORT=3000') + '\n\n' + context('LICENSE', '旧许可说明'),
-    output: operation('.env', '替换', pair('PORT=3000', 'PORT=4000')) + '\n\n' + operation('LICENSE', '覆盖全文', '新的许可说明') },
-  { title: '内容包含更长围栏', note: '内容有四个连续反引号时外层加长，结尾与开头同长度。', inShort: false,
+    output: batch('example-multiple', [request('edit', 'apply_changes', { changes: [{ path: 'src/options.ts', operation: 'replace', edits: [
+      { old_string: 'const size = 1;', new_string: 'const size = 2;' }, { old_string: 'const enabled = false;', new_string: 'const enabled = true;' },
+    ] }] })]) },
+  { title: 'Markdown 内嵌围栏', note: '围栏只是 JSON 字符串内容，完整保留原文。', inShort: false,
     input: context('docs/fences.md', '````text\n原文\n````', true),
-    output: operation('docs/fences.md', '覆盖全文', '````text\n新内容\n````') },
-  { title: '空文件与只读命令', note: '空新建或覆盖也须完整围栏；运行命令不附修改元数据。', inShort: false,
-    input: '请新建 empty.txt 空文件，并说明查看目录的命令。',
-    output: operation('empty.txt', '新建', '') + '\n\n仅供手动执行的命令：\n````powershell\nGet-ChildItem\n````' },
-  { title: '错误示例：残缺替换对（不可应用）', note: '下面故意缺少 REPLACE 闭合标记，不能这样输出；请给完整替换对。', inShort: false,
-    input: context('src/broken.ts', 'const a = 1;'),
-    output: operation('src/broken.ts', '替换', '<<<<<<< SEARCH\nconst a = 1;\n=======\nconst a = 2;') },
+    output: batch('example-markdown', [request('write', 'apply_changes', { changes: [{ path: 'docs/fences.md', operation: 'overwrite', content: '# 说明\n\n````text\n新内容\n````' }] })]) },
+  { title: '无扩展名与空文件', note: '每个目标明确路径；允许 content 为空。', inShort: false,
+    input: context('.env', 'PORT=3000') + '\n\n' + context('LICENSE', '旧许可说明') + '\n请同时新建 empty.txt 空文件。',
+    output: batch('example-empty', [request('edit', 'apply_changes', { changes: [
+      { path: '.env', operation: 'replace', edits: [{ old_string: 'PORT=3000', new_string: 'PORT=4000' }] },
+      { path: 'LICENSE', operation: 'overwrite', content: '新的许可说明' }, { path: 'empty.txt', operation: 'create', content: '' },
+    ] })]) },
+  { title: '前台与后台命令', note: '显式指定 shell 和超时；后台 process_id 由真实结果提供。', inShort: false,
+    input: '先打印 ready，再后台每秒打印一次 tick。',
+    output: batch('example-command', [request('ready', 'run_command', { command: 'Write-Output "ready"', shell: 'powershell', timeout_ms: 5000 }), request('watch', 'run_command', { command: 'while ($true) { Write-Output "tick"; Start-Sleep -Seconds 1 }', shell: 'powershell', background: true }, ['ready'])]) },
+  { title: '修改成功后运行 Bash', note: '依赖只保证前置成功；失败时后续命令跳过。Bash 须在本机可用。', inShort: false,
+    input: '新建 smoke.sh 打印 ok，然后使用 Bash 验证。',
+    output: batch('example-dependency', [request('create', 'apply_changes', { changes: [{ path: 'smoke.sh', operation: 'create', content: 'printf "ok\\n"\n' }] }), request('check', 'run_command', { command: 'bash smoke.sh', shell: 'bash', timeout_ms: 5000 }, ['create'])]) },
+  { title: '读取并停止已知进程', note: '只使用 IDE 上一轮返回的 process_id；cursor 也来自真实结果。', inShort: false,
+    input: '上一轮工具结果：{"process_id":"process-123","cursor":0,"status":"running"}。读取输出后停止该进程。',
+    output: batch('example-process', [request('output', 'get_process_output', { process_id: 'process-123', cursor: 0, limit: 1000 }), request('stop', 'stop_process', { process_id: 'process-123' }, ['output'])]) },
 ];
 function displayed(text: string): string {
   const fence = '`'.repeat(Math.max(5, fenceFor(text).length));
@@ -68,29 +74,8 @@ function renderExamples(short: boolean): string {
     '【我给你的】', displayed(example.input), '【你该给我的】', displayed(example.output),
   ].join('\n')).join('\n\n');
 }
-const core = [
-  '【输入/输出格式要求】',
-  '我提供的是只读原文上下文；你输出的是明确的修改操作。不要把上下文头照抄成修改指令。',
-  '每个修改块必须紧邻声明 ### 文件：相对路径 和 ### 操作：替换／新建／覆盖全文（只能选其中一个）。',
-  '然后用至少四个反引号围栏承载内容，成对闭合，开头与结尾同长度。内容中最长连续反引号超过围栏时，外层比它多一个。',
-  '替换：围栏内依次写独立标记行 <<<<<<< SEARCH、原文、=======、新内容、>>>>>>> REPLACE。一个块可含多个完整替换对。',
-  'SEARCH 必须逐字复制上下文中的真实原文，非空且在目标原文中唯一匹配。保留缩进、Tab、空格、首尾空行与末尾换行；不改写，不加行号，不用省略号。',
-  '原文不存在匹配或出现多次时，请先请求补充上下文；不能猜测位置、模糊匹配或改掉所有匹配。',
-  '新建：目标必须不存在，围栏内直接给完整文件文本；覆盖全文：目标必须存在，围栏内直接给修改后的全文。两者不包装 SEARCH／REPLACE，允许空文件，但不能缺失围栏。',
-  '无需提供定位行号或范围，IDE 根据原文计算；旧行号协议不可应用。一次操作中的替换对不能重叠；同文件覆盖全文不能与其他操作混用，新建不能重复。',
-  '文件与操作头必须在围栏外，且每个块重新声明。命令、流程图、普通示例与讨论不带修改元数据；不冒充文件变更。',
-  '语言标注仅用于显示：.ts→typescript、.py→python、.json→json、.md→markdown；.txt／无扩展名可留空，.env→bash。正文里的路径注释属于内容，不能擅自剥除。',
-  '输出完整内容；无法一次输出时请分多轮，每轮交付一个完整操作，不用省略号、不提交半段围栏或替换对。',
-].join('\n');
-const details = [
-  '补充规则：插入使用一段真实 SEARCH，在 REPLACE 中保留它并追加；删除使用空 REPLACE。每个正文与后面的标记／闭合围栏间多一个结构性换行，正文自己的末尾换行仍须保留。',
-  '多个文件各自给完整头部；同文件多个围栏是独立操作，全部 SEARCH 根据同一原文校验，不能搜索前一 REPLACE 刚生成的内容。',
-  '若真实正文含独立的 SEARCH／分隔线／REPLACE 标记而产生歧义，请对该文件改用明确的覆盖全文，不猜测标记归属。新建／覆盖全文正文内的协议示例按字面保存。',
-  '重复原文请补选更多上下文来获得唯一匹配；不足以判断时先提问。覆盖全文会完整显示 diff，请核对是否遗漏原有内容。',
-  '格式错误示例（不可应用）：缺少操作头、操作名称未知、未闭合围栏、残缺替换对、空 SEARCH、混入旧范围头。不要使用这些格式；IDE 会显示诊断，不自动修正。',
-].join('\n');
-export const FORMAT_SPEC_SHORT = [core, '示例（输入 → 输出）', renderExamples(true)].join('\n\n');
-export const FORMAT_SPEC_FULL = [core, details, '示例（输入 → 输出）', renderExamples(false)].join('\n\n');
+export const FORMAT_SPEC_SHORT = [TOOL_PROTOCOL_PROMPT, '工具示例（输入 → 输出；外层围栏内是演示，不执行）', renderExamples(true)].join('\n\n');
+export const FORMAT_SPEC_FULL = [TOOL_PROTOCOL_PROMPT, '工具示例（输入 → 输出；外层围栏内是演示，不执行）', renderExamples(false)].join('\n\n');
 
 export type FormatSpecVariant = 'short' | 'full';
 
@@ -122,11 +107,10 @@ export interface CustomFormatSpecs {
  * 取最终使用的「输出格式要求」。
  *
  * 生效规则（**分版本、各自独立**）：
- *   当前版本的自定义非空 → 用该自定义；
+ *   当前版本的自定义非空 → 强制工具协议 + 该自定义原文；
  *   否则 → 回落该版本的内置默认。
  *
- * 这就是"用户可以改系统 prompt"的全部机制：**只影响拼进 prompt 的格式段**，
- * 其余固定文案（## 用户需求 / ## 工作环境 …）仍由程序生成，保证提示词骨架始终可被解析。
+ * 自定义原文仍保留在尾部，作为表达风格补充；强制工具协议不能被自定义移除。
  *
  * 未设置或只写了空白时回落内置默认（见 settings.ts 的 load()：空串视同未设置）。
  *
@@ -137,7 +121,12 @@ export function resolveFormatSpec(customs: CustomFormatSpecs | null | undefined,
   const v = normalizeVariant(variant);
   const raw = customs ? (v === 'full' ? customs.full : customs.short) : null;
   const trimmed = typeof raw === 'string' ? raw.trim() : '';
-  return trimmed.length > 0 ? (raw as string) : getFormatSpec(v);
+  return trimmed.length > 0 ? withToolProtocol(raw as string) : getFormatSpec(v);
+}
+
+/** 所有格式复制和 prompt 组装共用同一执行约定，内置模板不重复包装。 */
+function withToolProtocol(text: string): string {
+  return text.startsWith(TOOL_PROTOCOL_PROMPT) ? text : TOOL_PROTOCOL_PROMPT + '\n\n' + text;
 }
 
 export function getFormatSpec(variant: FormatSpecVariant = 'short'): string {
@@ -161,7 +150,7 @@ export interface BuildPromptInput {
   /** 用户在应用内输入框里写的需求（唯一由人写的部分） */
   requirement: string;
   context: PromptContext;
-  /** 输出格式要求；传入空字符串则不附 */
+  /** 输出格式补充；强制工具协议始终附带 */
   formatSpec: string;
   /** 可选：要改的文件路径（用户手填），会单独成段 */
   targetFiles?: string[];
@@ -195,10 +184,7 @@ export function buildPrompt(input: BuildPromptInput): string {
     parts.push(`## 要改的文件\n${input.targetFiles.map((f) => `- ${f}`).join('\n')}`);
   }
 
-  if (input.formatSpec.trim().length > 0) {
-    parts.push(input.formatSpec);
-  }
-
+  parts.push(withToolProtocol(input.formatSpec));
   return parts.join('\n\n');
 }
 

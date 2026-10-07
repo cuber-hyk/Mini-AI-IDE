@@ -28,6 +28,7 @@ function element(variant = '') {
 function setup(overrides: Record<string, unknown> = {}) {
   const input = element(); const short = element('short'); const full = element('full');
   const sw = element(); const copy = element(); const custom = element();
+  const actions = { offsetHeight: 30 };
   sw.querySelectorAll = () => [short, full];
   let current: Status = { variant: 'full', shortIsCustom: false, fullIsCustom: true };
   let listener: (status: Status) => void = () => {};
@@ -37,7 +38,7 @@ function setup(overrides: Record<string, unknown> = {}) {
   const messages: Array<{ text: string; warn: boolean }> = [];
   const writes: string[] = [];
   const nodes: Record<string, unknown> = {
-    requirement: input, 'variant-switch': sw, 'btn-copy-prompt': copy, 'prompt-custom': custom,
+    requirement: input, 'variant-switch': sw, 'btn-copy-prompt': copy, 'prompt-custom': custom, 'prompt-actions': actions,
   };
   const bridge = {
     async getPromptStatus() { return current; },
@@ -48,6 +49,7 @@ function setup(overrides: Record<string, unknown> = {}) {
   };
   const sandbox = {
     window: {
+      innerHeight: 960,
       requestAnimationFrame(fn: () => void) { fn(); },
       addEventListener(_name: string, fn: () => void) { resized = fn; },
       setTimeout(fn: () => void) { timer = fn; return 1; },
@@ -55,12 +57,14 @@ function setup(overrides: Record<string, unknown> = {}) {
       setupPromptComposer: undefined as unknown as (bridge: unknown, info: unknown) => void,
     },
     ResizeObserver: class { constructor(fn: () => void) { observer = fn; } observe() {} },
-    document: { getElementById: (id: string) => nodes[id] },
+    Event: class { constructor(readonly type: string) {} },
+    document: { getElementById: (id: string) => nodes[id], dispatchEvent() {} },
   };
   vm.createContext(sandbox);
   vm.runInContext(source, sandbox);
   sandbox.window.setupPromptComposer(bridge, (text: string, warn = false) => messages.push({ text, warn }));
   return { input, short, full, sw, copy, custom, messages, writes,
+    narrow() { sandbox.window.innerHeight = 600; actions.offsetHeight = 80; resized(); },
     publish(next: Status) { current = next; listener(next); },
     resize() { resized(); }, observe() { observer(); }, expire() { timer?.(); },
   };
@@ -151,6 +155,11 @@ it('长输入到上限后滚动；删除与宽度变化后收缩，观察高度�
   ui.input.scrollHeight = 400; ui.observe(); assert.equal(ui.input.style.height, '104px');
   ui.input.clientWidth = 300; ui.observe(); assert.equal(ui.input.style.height, '220px');
   ui.input.scrollHeight = 40; ui.input.fire('input'); assert.equal(ui.input.style.height, '44px');
+});
+
+it('窄窗口操作栏换行后压缩长输入，常用控件仍保留高度预算', async () => {
+  const ui = setup(); await flush(); ui.input.scrollHeight = 1000; ui.narrow();
+  assert.equal(ui.input.style.height, '160px'); assert.equal(ui.input.style.overflowY, 'auto');
 });
 
 function panelFixture(fail = false) {

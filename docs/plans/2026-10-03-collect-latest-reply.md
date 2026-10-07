@@ -1,7 +1,15 @@
+---
+artifact_type: plan
+status: active
+created: 2026-10-03
+updated: 2026-10-07
+owner: 胡运宽
+source_of_truth: [src/main/replyCollector.ts, src/main/consumptionStore.ts, test/replyCollector.test.ts, test/returnPathService.test.ts]
+---
+
 # 采集策略重设计：只采最新回复 + 消费判定
 
-- date: 2026-10-03
-- status: done（2026-10-03 实现完成：L1–L5 全落地，单测 153 → 171，build/typecheck 全绿；待真实页面实测确认 P3-5）
+- 实现记录：2026-10-03 L1–L5 全落地，单测 153 → 171，build/typecheck 全绿；当时仍保留 P3-5 真实页面实测工作。
 - 来源：用户实测反馈（两轮对话后采集拿到旧回复；最新回复的 markdown 嵌套围栏未被采集）
 
 ## 1. 现象与根因

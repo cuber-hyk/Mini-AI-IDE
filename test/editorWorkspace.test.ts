@@ -3,6 +3,16 @@ import * as fs from 'node:fs';
 import * as vm from 'node:vm';
 import { it } from 'node:test';
 
+it('批准丢弃 B 后读取 C，磁盘 C 同步为编辑器 C 并清除 dirty；停止保留 B', async () => {
+  const f = await fixture(); f.state.currentText = 'B'; f.workspace.report();
+  f.readLater(async () => ({ ok: true, text: 'C' }));
+  assert.equal(await f.workspace.reload('a.txt', false, false), false);
+  assert.equal(f.state.currentText, 'B');
+  assert.equal(await f.workspace.reload('a.txt', false, false, true), true);
+  assert.equal(f.state.currentText, 'C'); assert.equal(f.state.savedText, 'C');
+  assert.equal(f.report().documents[0].dirty, false); assert.equal(f.writes.length, 0);
+});
+
 async function fixture(path = 'a.txt') {
   const state = { root: 'A', currentPath: null as string | null, currentText: '', savedText: '' };
   let leave = true; let write = true; let writeLater: any; let read: any = async () => ({ ok: true, text: 'saved', encoding: 'utf8' });

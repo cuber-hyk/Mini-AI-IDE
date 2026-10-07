@@ -1,6 +1,6 @@
 # Context Map — 上下文路由
 
-给代理用的路由表：做哪类任务时，**先读什么、别读什么**。默认上下文不得指向计划、审计或归档目录。
+给代理用的路由表：做哪类任务时，**先读什么、别读什么**。默认上下文不得指向计划、审计或归档目录（not read by default）。
 
 ## 默认上下文（任何任务先读）
 
@@ -11,6 +11,14 @@
 | 3 | `docs/capabilities/` 下相关能力文档 | 模块当前事实与边界 |
 
 ## 按任务类型路由
+
+通用工具协作先读 `docs/capabilities/tool-harness.md`、`docs/adr/2026-10-06-native-tool-harness-boundary.md`；入口为 `src/shared/toolProtocol.ts`、`src/main/tools/integration.ts`，执行及状态 owner 为同目录 files/processes/changes/harness/store/autoCollector，只读回复状态/快照为 replyObservation，隔离世界变化通知与真实发送动作标记由 replyChangeWatcher 管理，UI 为 `src/renderer/toolHarness.js`。结束控件现场诊断可由用户在 IDE 内嵌 AI 网页 Console 手动执行 `tools/inspect-reply-state.js` 并返回结构文本。
+
+工具本地 UI 的尺寸、浮层、焦点和拖动由 `src/renderer/toolPanelLayout.js` 管理，纯结果摘要由 `src/renderer/toolResultPresentation.js` 管理；样式为 `src/renderer/toolHarness.css`，状态接线仍为 `toolHarness.js`。对应验收为 `test/toolPanelLayout.test.ts`、`test/toolResultPresentation.test.ts`、`test/toolHarnessUi.test.ts`。
+
+继续生成的共用只读控件谓词由 `src/main/tools/replyContinuation.ts` 管理，供 replyObservation 的中断状态与 replyChangeWatcher 的真实续写动作使用；等待及补全调度由 autoCollector 管理。回归入口为 `test/deepseekReplyState.test.ts`、`test/replyChangeWatcher.test.ts`、`test/toolAutoCollector.test.ts`、`test/replyObservation.test.ts`、`test/toolIntegration.test.ts`。
+
+需要工具协议测试原文时读 `docs/工具调用测试样例.md`，验证 owner 为 `test/toolSamples.test.ts`；样例不作为当前能力或默认上下文。
 
 | 任务类型 | 读这些 | 不要读 |
 |---|---|---|
@@ -74,3 +82,5 @@
 - 本文件**不得**把默认上下文指向 `docs/plans/`、`docs/audits/` 或任何 `archived/` 目录。
 - 引用的路径必须真实存在。
 - 脚手架阶段的例外：能力文档的 `source_of_truth` 曾同时列出活跃计划（因当时尚无实现代码）。**P2 落地后已改为以代码为主**；后续实现完成时，能力文档的 `source_of_truth` 应指向代码与测试，计划仅作为过程证据（清理由 `/dev-distill` 执行）。
+
+JSON 解析定位由 `src/shared/toolJsonDiagnostic.ts` 负责；本地执行秒数由 `src/renderer/toolExecutionClock.js` 负责；主进程完成事件的自动复制与提示由 `src/main/tools/resultClipboard.ts` 负责。回归入口为 `test/toolJsonDiagnostic.test.ts`、`test/toolExecutionClock.test.ts`、`test/toolResultClipboard.test.ts`、`test/toolExecutionIntegration.test.ts`。

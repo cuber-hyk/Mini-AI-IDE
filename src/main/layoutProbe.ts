@@ -1,5 +1,7 @@
 /** 三列本地 UI 的运行时验收；仅在 --ui-probe 调用，不访问官方网页 DOM。 */
 import type { BaseWindow, WebContentsView } from 'electron';
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 
 export async function runLayoutProbe(input: {
   win: BaseWindow;
@@ -7,6 +9,7 @@ export async function runLayoutProbe(input: {
   webbar: WebContentsView;
   preview: WebContentsView;
   configure: (webVisible: boolean, previewVisible: boolean) => void;
+  captureDirectory?: string;
 }): Promise<{ ok: boolean; cases: unknown[] }> {
   const originalSize = input.win.getSize();
   const cases: unknown[] = [];
@@ -24,7 +27,7 @@ export async function runLayoutProbe(input: {
         bar.x + bar.width === preview.x && preview.x + preview.width === w &&
         input.webbar.getVisible() && input.preview.getVisible() === previewVisible;
       const controls = await input.editor.webContents.executeJavaScript(`(() => {
-        const ids = ['btn-open', 'btn-copy-context', 'btn-copy-prompt', 'file-new', 'folder-new', 'file-refresh'];
+        const ids = ['btn-open', 'btn-copy-context', 'btn-copy-prompt', 'file-new', 'folder-new', 'file-refresh', 'tool-permission', 'tool-automatic'];
         const inView = id => { const r = document.getElementById(id).getBoundingClientRect();
           return r.width > 0 && r.left >= 0 && r.right <= innerWidth && r.bottom <= innerHeight; };
         return ids.every(inView);
@@ -43,7 +46,15 @@ export async function runLayoutProbe(input: {
       })()`);
       const pass = geometry && controls === true && previewControls === true && webbarControls === true;
       ok = ok && pass;
-      cases.push({ width, webVisible, previewVisible, editor, bar, preview, geometry, controls, previewControls, webbarControls, pass });
+      let screenshot: string | undefined;
+      let screenshotError: string | undefined;
+      if (input.captureDirectory) {
+        await fs.mkdir(input.captureDirectory, { recursive: true });
+        screenshot = path.join(input.captureDirectory, `${width}-${webVisible}-${previewVisible}.png`);
+        try { await fs.writeFile(screenshot, (await input.editor.webContents.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG()); }
+        catch (error) { screenshot = undefined; screenshotError = String(error); }
+      }
+      cases.push({ width, webVisible, previewVisible, editor, bar, preview, geometry, controls, previewControls, webbarControls, pass, ...(screenshot ? { screenshot } : {}), ...(screenshotError ? { screenshotError } : {}) });
     }
   } finally {
     input.win.setSize(originalSize[0]!, originalSize[1]!);

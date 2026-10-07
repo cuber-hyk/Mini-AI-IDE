@@ -8,6 +8,8 @@ source_of_truth: [electron-builder.config.cjs, scripts/package-win.mjs, scripts/
 
 # 能力：Windows 打包与分发
 
+ADR gate：现有 x64 打包、资源目录与图标生成属于可重新构建的实现约定，无需新增 ADR；GitHub 分发与更新边界依据已接受的 `docs/adr/2026-10-05-application-update-source-and-boundary.md`。
+
 > 一句话：把仓库源码打成两个可直接双击的 Windows x64 产物 —— NSIS 安装程序与免安装单文件 exe。
 > 入口：`pnpm run package:win`（编译 → 类型检查 → 图标校验 → 打包 → 发布产物一致性校验）。本地打包固定 `--publish never`，不会上传 GitHub。
 > 快速验证（只解包不压缩）：`pnpm run package:win --dir`。

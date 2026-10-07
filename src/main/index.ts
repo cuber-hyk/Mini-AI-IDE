@@ -27,7 +27,6 @@ import { runSelfTest } from './selfTest';
 import { runDiagnose } from './diagnose';
 import { SettingsStore, PRODUCTION_SETTINGS_FILE, SELF_TEST_SETTINGS_FILE, type Settings } from './settings';
 import { buildContextSummary } from './contextSummary';
-import { collectReply } from './replyCollector';
 import { ConsumptionStore, sessionKeyOf } from './consumptionStore';
 import { ReturnPathService, type PreparedChange } from './returnPathService';
 import { computeLayout, EDITOR_MIN_WIDTH, WEB_MIN_WIDTH, PREVIEW_MIN_WIDTH, PREVIEW_DEFAULT_WIDTH, HANDLE_BAR_WIDTH } from './windowLayout';
@@ -37,6 +36,7 @@ import { WorkspaceController } from './workspaceController';
 import { configureWorkspaceProbe, runWorkspaceProbe } from './workspaceProbe';
 import { createApplicationUpdater, type ApplicationUpdater } from './appUpdater';
 import { registerApplicationUpdateIpc } from './applicationUpdateIpc';
+import { createToolIntegration, readAutoReply, registerToolShutdown } from './tools/integration';
 
 /* ------------------------------------------------------------------ *
  * 常量
@@ -824,6 +824,7 @@ async function loadLocalView(
       if (info.revision !== announcedRevision) {
         announcedRevision = info.revision ?? announcedRevision;
         collections.clear(); returnPath.clear(); consumption.clear();
+        tools.reset();
         editorView.webContents.send(CHANNELS.diffData, { active: false });
         previewView.webContents.send(CHANNELS.invalidateChanges, { all: true });
       }
@@ -849,6 +850,18 @@ async function loadLocalView(
       consumption.clear();
       editorView.webContents.send(CHANNELS.entryChanged, event);
     }, () => collections.size > 0 || returnPath.undoCount > 0);
+  const tools = await createToolIntegration({
+    ipc: ipcMain, editor: editorView.webContents, web: webView.webContents,
+    files: fileService, returnPath, workspace: workspaceController,
+    storePath: path.join(app.getPath('userData'), SELF_TEST || UI_PROBE || DIAGNOSE ? 'tools-probe.json' : 'tools.json'),
+    disabled: SELF_TEST || UI_PROBE || DIAGNOSE,
+    ask: async (title, detail, buttons, checkboxLabel) => dialog.showMessageBox(win, {
+      type: 'question', title, message: title, detail, buttons, defaultId: buttons.length - 1,
+      cancelId: buttons.length - 1, ...(checkboxLabel ? { checkboxLabel, checkboxChecked: false } : {}),
+    }),
+    notifyFile: (relative, change, discard) => notifyFileChanged(relative, change, discard),
+    copy: text => clipboard.writeText(text),
+  });
   updater = createApplicationUpdater({
     window: win,
     disabled: SELF_TEST || UI_PROBE || DIAGNOSE,
@@ -868,6 +881,7 @@ async function loadLocalView(
     }),
   });
   const registeredChannels = [
+    ...tools.channels,
     ...registerApplicationUpdateIpc(ipcMain, editorView.webContents, updater),
     ...registerFileIpc(fileService, {
       chooseRoot: () => workspaceController.chooseRoot(), getState: () => workspace.getState(),
@@ -876,10 +890,11 @@ async function loadLocalView(
   ];
 
   /**
-   * 从网页视图**只读**采集最新回复并解析为待预览变更。
-   * 不落盘、不修改页面（ADR-0003/0004）。
+   * 从网页视图**只读**采集最新回复；正式工具交由权限 owner，文件块进入预览。
+   * 采集不修改页面，本地工具执行受独立授权约束。
    */
-  ipcMain.handle(CHANNELS.collectReply, (): Promise<ReturnPreview> => {
+  ipcMain.handle(CHANNELS.collectReply, (event): Promise<ReturnPreview> => {
+    if (![editorView.webContents, webBarView.webContents].some(view => event.sender === view && event.senderFrame === view.mainFrame)) throw new Error('采集仅供本地视图使用');
     const requestedRevision = workspace.getState().revision;
     return workspaceController.run(async () => {
     const emptyId = `c${(collectionSeq += 1)}`;
@@ -901,10 +916,8 @@ async function loadLocalView(
       };
     }
 
-    const collected = await collectReply({
-      evaluate: (script) => webView.webContents.executeJavaScript(script, true) as Promise<unknown>,
-      currentUrl: () => webView.webContents.getURL(),
-    });
+    const snapshot = await readAutoReply(webView.webContents);
+    const collected = snapshot.collected;
 
     if (collected.strategyId === null || collected.replyText.length === 0) {
       // 排查基建：采集失败最需要知道"每个策略各返回了什么"——策略命中数与错误
@@ -955,6 +968,10 @@ async function loadLocalView(
      * `consume()` 把"判断"与"记录"合成一步（原子），避免出现
      * "某条分支忘了记录 → 同一条回复被反复消费"这类难查的静默缺陷。
      */
+    if (await tools.accept(collected.replyText, snapshot.completion)) return {
+      ok: true, collectionId: emptyId, strategyId: collected.strategyId, strategyDescription: collected.strategyDescription,
+      attempts: collected.attempts, replyText: collected.replyText, notes: ['正式工具批次由 IDE 按预选权限执行；请查看左侧工具结果'], blocks: [],
+    };
     const sessionKey = sessionKeyOf(collected.url);
     const verdict = consumption.consume(sessionKey, collected.replyText);
     // 排查基建：指纹判定与 URL 是"切目录/新对话后采不到"类问题的两个关键事实——
@@ -1100,14 +1117,15 @@ async function loadLocalView(
     if (cached.invalidPaths.some((entry) => normalizedTarget === entry.path.toLowerCase() || (entry.directory && normalizedTarget.startsWith(entry.path.toLowerCase() + '/')))) {
       return { ok: false, error: '目标已重命名或删除，请重新采集' };
     }
-    if (workspaceController.editor.isDirty(normalizedTarget)) return { ok: false, error: '目标文件有未保存的修改，请先保存再应用' };
+    const draft = await tools.prepareDirty(filePath);
+    if (!draft.allowed) return { ok: false, error: '用户停止修改，磁盘与未保存内容均保留' };
 
     const outcome = await returnPath.applyChange({
       source: { collectionId: raw.collectionId, index: raw.index }, filePath, block,
     });
     if (outcome.ok) {
       cached.targets.set(raw.index, filePath);
-      notifyFileChanged(filePath, outcome.created ? 'created' : 'updated');
+      for (const alias of draft.aliases) notifyFileChanged(alias, outcome.created ? 'created' : 'updated', draft.discard);
       /*
        * 同步最右侧预览面板：应用有**两个入口**（面板按钮 / 编辑器工具条），
        * 走编辑器那条时面板不知情，会一直显示「应用」可用态（用户实测反馈）。
@@ -1121,9 +1139,9 @@ async function loadLocalView(
   }));
 
   /** 通知编辑器：磁盘上的这个文件刚被改写了（成功落盘后才调用） */
-  function notifyFileChanged(filePath: string, change: 'updated' | 'created' | 'deleted' = 'updated') {
+  function notifyFileChanged(filePath: string, change: 'updated' | 'created' | 'deleted' = 'updated', discardDraft = false) {
     if (!editorView.webContents.isDestroyed()) {
-      editorView.webContents.send(CHANNELS.fileChanged, filePath, change, workspace.getState().revision);
+      editorView.webContents.send(CHANNELS.fileChanged, filePath, change, workspace.getState().revision, discardDraft);
     }
   }
 
@@ -1550,6 +1568,7 @@ async function loadLocalView(
     const g = geometry as { ok?: boolean; editorFills?: boolean; promptVisible?: boolean } | null;
     const columns = await runLayoutProbe({
       win, editor: editorView, webbar: webBarView, preview: previewView,
+      captureDirectory: path.join(app.getPath('temp'), 'Mini-AI-IDE-tool-preview'),
       configure: (web, preview) => {
         webVisible = web;
         previewWidth = preview ? lastPreviewWidth : 0;
@@ -1650,6 +1669,12 @@ async function loadLocalView(
   }
 
   // 退出保护和软件更新不等待 AI 网页联网成功。
+  registerToolShutdown(app, () => workspaceController.run(async () => {
+    if (!closeApproved && !updater?.installing && !await workspaceController.editor.canLeave()) return false;
+    closeApproved = true;
+    // 菜单退出也先关闭窗口，停止清理期间新增编辑或工具请求。
+    if (!win.isDestroyed()) win.close(); return true;
+  }), () => tools.dispose(), error => process.stderr.write(`[tools] 退出时停止命令失败：${String(error)}\n`));
   win.on('close', (event) => {
     // 仅安装进行中复用更新器的离开批准；安装失败恢复普通退出保护。
     if (closeApproved || updater?.installing || SELF_TEST || UI_PROBE || DIAGNOSE) return;

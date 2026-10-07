@@ -1,9 +1,9 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-05
+updated: 2026-10-07
 owner: 胡运宽
-source_of_truth: [docs/adr/2026-10-02-honest-electron-identity.md, docs/adr/2026-10-02-filesystem-permission-model.md, DESIGN.md, design-tokens.json, src/main/windowLayout.ts, src/main/layoutProbe.ts, src/renderer/changeTree.js, src/renderer/editorToolbar.js, src/renderer/ui.css, test/windowLayout.test.ts, test/changeTree.test.ts, test/editorToolbar.test.ts, src/main/index.ts, src/renderer/index.html, src/renderer/style.css, src/renderer/promptComposer.js, test/promptComposer.test.ts, src/main/workspaceController.ts, src/main/workspaceProbe.ts, src/renderer/fileExplorer.js, src/renderer/editorTabs.js, src/renderer/editorWorkspace.js, test/editorWorkspace.test.ts]
+source_of_truth: [docs/adr/2026-10-02-honest-electron-identity.md, docs/adr/2026-10-02-filesystem-permission-model.md, DESIGN.md, design-tokens.json, src/main/windowLayout.ts, src/main/layoutProbe.ts, src/renderer/changeTree.js, src/renderer/editorToolbar.js, src/renderer/ui.css, test/windowLayout.test.ts, test/changeTree.test.ts, test/editorToolbar.test.ts, src/main/index.ts, src/renderer/index.html, src/renderer/style.css, src/renderer/promptComposer.js, test/promptComposer.test.ts, src/renderer/toolPanelLayout.js, test/toolPanelLayout.test.ts, src/main/workspaceController.ts, src/main/workspaceProbe.ts, src/renderer/fileExplorer.js, src/renderer/editorTabs.js, src/renderer/editorWorkspace.js, test/editorWorkspace.test.ts]
 ---
 
 # 能力：应用外壳与进程架构
@@ -75,8 +75,8 @@ Monaco 编辑与内联预览 │                        │  目录 → 文件 �
   窗口 resize 时只重算它自己 —— **不调 `relayout()`**，否则打开面板就会把用户拖好的分栏宽度悄悄改掉。
 - 显示/隐藏靠 `setVisible` + `bounds` 移到屏幕外的零尺寸位置（`PROMPT_HIDDEN_BOUNDS`）；关闭后把键盘焦点交还编辑器。
 - **在 `addChildView` 顺序里最后添加**（最上层），否则会被编辑器/网页盖住。
-- **三个入口汇聚到 `showPromptPanel()`**：① 设置菜单的「修改提示词…」；② 文件菜单的同名行（用户可能从任一菜单找）；③ 编辑器工具栏的齿轮。快捷键 `CmdOrCtrl+Shift+P`。
-  显示后主进程广播 `ui:open-prompt-panel` 给编辑器，由它点亮齿轮的激活态（面板是独立进程，编辑器看不到它）。
+- **三个入口汇聚到 `showPromptPanel()`**：① 设置菜单的「修改提示词…」；② 文件菜单的同名行；③ 输入区设置浮层的「编辑提示词与格式要求」。快捷键 `CmdOrCtrl+Shift+P`。
+  显示后主进程广播 `ui:open-prompt-panel` 给编辑器，由它点亮提示词编辑入口的激活态（面板是独立进程，编辑器看不到它）。
 - 面板文案明确写清"改的是**输出格式要求那一段**"，因为 `## 用户需求 / ## 工作环境 / ## 目录结构` 是由程序生成、不应由用户改的骨架。
 
 ## 关键规则
@@ -188,18 +188,19 @@ Monaco 编辑与内联预览 │                        │  目录 → 文件 �
 
 | 项 | 取值 |
 |---|---|
-| 布局 | 上方文本框占满宽度，下方独立操作栏；左侧版本切换、设置齿轮，右侧复制按钮 |
+| 布局 | 上方文本框占满宽度，下方紧凑操作栏：版本、权限、自动采集、设置和复制；窄列换行 |
 | 外壳 | 单层低对比边框，聚焦时高亮，不叠加外圈描边 |
-| 高度 | 文本框最小 44px、最大 220px；输入、粘贴、拖入与宽度变化后重算，超出上限滚动 |
-| 高度预算 | `.prompt-bar` 可收缩，最小 125px，包含输入框、操作栏、间距、内边距与边框；优先让编辑区让出高度 |
+| 高度 | 文本框最小 44px、最大 220px；上限随视口与操作栏实际高度收缩。输入、粘贴、拖入、缩放和操作栏换行后重算，超出上限滚动 |
+| 高度预算 | 输入区最多占视口高度 48%，为操作栏及内边距预留空间；工具面板随输入高度收缩并保留编辑空间，长输入不裁切底部控件 |
 | 版本切换 | 「简洁 / 完整」分段控件，点击按钮或聚焦容器后按 Space / Enter 切换；主进程持久化 `formatSpecVariant`，重启后恢复 |
-| 开关改什么 | 复制提示词时使用的输出格式要求；简洁为 6 个示例，完整为 8 个示例逐条详解；两版自定义互不影响 |
+| 开关改什么 | 复制提示词时使用的输出格式要求；简洁为 6 个示例，完整为 13 个示例；两版自定义互不影响 |
 | 自定义标记 | 当前版本有非空自定义提示词时显示小圆点，悬停说明；主进程保存、清空、恢复默认与切换后广播布尔状态 |
-| 提示词设置 | 操作栏齿轮打开原有独立视图；菜单入口与 Ctrl+Shift+P 保留 |
+| 提示词设置 | 操作栏齿轮打开工具设置浮层，其中提示词编辑按钮打开原有独立视图；菜单入口与 Ctrl+Shift+P 保留 |
 | 复制反馈 | 固定宽度的紧凑按钮，成功暂显「已复制」；失败提示原因并恢复可操作，需求为空时聚焦输入框 |
 | 状态一致性 | 启动读取真实状态；切换或复制期间阻止重复操作；切换失败保留实际版本，状态未知时禁止复制 |
 
 输入区行为由 `src/renderer/promptComposer.js` 唯一负责，`renderer.js` 初始化并接入信息栏。
+工具面板、浮层与高度预算由 `src/renderer/toolPanelLayout.js` 管理，纯摘要由 `src/renderer/toolResultPresentation.js` 管理；权限、执行状态与结果复制接线见 `docs/capabilities/tool-harness.md`。目录树宽度在窄列时钳制，为编辑器保留空间。
 `ui:get-prompt-status` 查询版本及两版自定义布尔值，`ui:prompt-status` 推送相同结构；编辑器不读取提示词全文。
 复制仍由主进程组装并写入系统剪贴板，由用户自己粘贴到 AI 网页并发送。
 

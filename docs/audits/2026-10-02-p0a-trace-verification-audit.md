@@ -2,15 +2,10 @@
 artifact_type: audit
 status: active
 created: 2026-10-02
-updated: 2026-10-02
+updated: 2026-10-07
 owner: 胡运宽
 scope: P0a 自动化特征核验（默认 Electron 构建、未打补丁、未伪装）
-source_of_truth:
-  - docs/plans/2026-10-02-mini-ai-ide-poc.md
-  - docs/adr/2026-10-02-zero-injection-and-automation-trace-baseline.md
-  - docs/adr/2026-10-02-honest-electron-identity.md
-  - tools/trace-verifier/
-  - docs/audits/2026-10-02-p0a-trace-verification-raw.json
+source_of_truth: ["docs/plans/2026-10-02-mini-ai-ide-poc.md","docs/adr/2026-10-02-zero-injection-and-automation-trace-baseline.md","docs/adr/2026-10-02-honest-electron-identity.md","tools/trace-verifier/","docs/audits/2026-10-02-p0a-trace-verification-raw.json"]
 ---
 
 # P0a 自动化特征核验报告
@@ -82,7 +77,7 @@ source_of_truth:
 | P0A-2 | Medium | verified | 核验工具初版把"UA 同时含 Chrome 与 Electron 标记"误判为 C 级内部矛盾，属判据定义错误；会导致误报并可能诱导实施被禁止的 UA 伪装 | 首次运行 `summary.cFailures = [C1]`；修正后 `cFailures = []`；推理见本报告「判据修正记录」 | docs/plans/2026-10-02-mini-ai-ide-poc.md（P0a） | task/20261002-p0a-trace-verifier | 修正判据后重跑两次，C1/C2 均 `PASS` | 判据已修正并留档，无后续动作 |
 | P0A-3 | Medium | verified | 运行环境存在三个会静默破坏 Electron 启动/安装的陷阱：`ELECTRON_RUN_AS_NODE=1` 使 Electron 以 Node 模式启动（无窗口、无输出、退出码异常）；默认 GitHub Releases 源在本机 pnpm 环境下 `fetch failed`；pnpm 默认拦截 `postinstall` 导致二进制未下载 | 首次运行无任何输出且退出码缺失；`node_modules\electron\path.txt` 不存在；改用镜像并手动执行 `install.js` 后成功（245,726,208 bytes） | docs/plans/2026-10-02-mini-ai-ide-poc.md（P0a） | task/20261002-p0a-trace-verifier | 清空 `ELECTRON_RUN_AS_NODE` 后两次运行均正常出报告；`tools/install-electron.ps1` 已固化镜像与清理步骤并实测通过 | 已由 `tools/install-electron.ps1` 与复现步骤固化，无后续动作 |
 | P0A-4 | Low | verified | B 级差异清单已建立：`window.chrome` 成员缺失、`userAgentData.brands` 无 `Google Chrome`、UA 含 Electron 标记、内核落后本机 Chrome 两个主版本 | 同上报告 `bLevel.browserSurface` 与 `bLevel.electronDisclosure` | docs/plans/2026-10-02-mini-ai-ide-poc.md（P0a） | task/20261002-p0a-trace-verifier | 逐项在报告中留档；按 ADR-0003 不作为修补任务 | 留档完成。**后续复核结果**：UA 中的 Electron 标记已按 P0B-3 结论移除；`window.chrome` 与 `userAgentData` 差异**保留**（实测未被据此报警） |
-| P0A-5 | Medium | **verified** | 平台是否对 Electron 客户端做针对性拦截 | 原为待验证项 | docs/plans/2026-10-02-mini-ai-ide-poc.md（P0b） | task/20261002-p0b-reachability-harness | P0b 基线实测：**未**出现针对性拦截（无验证码、无 4xx/5xx、登录与对话正常）；唯一告警已定位并消除 | 已由 P0b 关闭，结论见 `docs/audits/2026-10-02-p0b-reachability-audit.md` |
+| P0A-5 | Medium | verified | 平台是否对 Electron 客户端做针对性拦截 | 原为待验证项 | docs/plans/2026-10-02-mini-ai-ide-poc.md（P0b） | task/20261002-p0b-reachability-harness | P0b 基线实测：**未**出现针对性拦截（无验证码、无 4xx/5xx、登录与对话正常）；唯一告警已定位并消除 | 已由 P0b 关闭，结论见 `docs/audits/2026-10-02-p0b-reachability-audit.md` |
 
 ## 结论
 

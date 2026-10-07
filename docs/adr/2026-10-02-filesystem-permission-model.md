@@ -2,11 +2,9 @@
 artifact_type: adr
 status: accepted
 created: 2026-10-02
-updated: 2026-10-02
+updated: 2026-10-07
 owner: 胡运宽
-source_of_truth:
-  - https://www.electronjs.org/docs/latest/tutorial/web-embeds
-  - https://www.electronjs.org/docs/latest/api/web-contents-view
+source_of_truth: ["https://www.electronjs.org/docs/latest/tutorial/web-embeds","https://www.electronjs.org/docs/latest/api/web-contents-view"]
 ---
 
 # ADR-0002：文件系统权限归主进程，渲染进程零磁盘访问

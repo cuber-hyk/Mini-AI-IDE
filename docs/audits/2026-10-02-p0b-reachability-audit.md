@@ -2,16 +2,10 @@
 artifact_type: audit
 status: active
 created: 2026-10-02
-updated: 2026-10-02
+updated: 2026-10-07
 owner: 胡运宽
 scope: P0b 可达性与登录实测（真实访问 chat.deepseek.com，全人工操作）
-source_of_truth:
-  - docs/plans/2026-10-02-mini-ai-ide-poc.md
-  - docs/adr/2026-10-02-zero-injection-and-automation-trace-baseline.md
-  - docs/adr/2026-10-02-honest-electron-identity.md
-  - tools/reachability-probe/
-  - docs/audits/2026-10-02-p0b-reachability-raw.json
-  - docs/audits/2026-10-02-p0b-experiment-noident.json
+source_of_truth: ["docs/plans/2026-10-02-mini-ai-ide-poc.md","docs/adr/2026-10-02-zero-injection-and-automation-trace-baseline.md","docs/adr/2026-10-02-honest-electron-identity.md","tools/reachability-probe/","docs/audits/2026-10-02-p0b-reachability-raw.json","docs/audits/2026-10-02-p0b-experiment-noident.json"]
 ---
 
 # P0b 可达性与登录实测报告
@@ -74,7 +68,7 @@ source_of_truth:
 |---|---|---|---|---|---|---|---|---|
 | P0B-1 | High | verified | 平台**可识别**本客户端非官方产品，并在登录页展示明确警告：「使用环境异常…建议您使用我们的官方产品」 | 报告 `challenges[0].excerpt` 逐字记录；用户确认在登录页看到该警告 | docs/plans/2026-10-02-mini-ai-ide-poc.md（P0b） | task/20261002-p0b-reachability-harness | 报告时间戳 09:14:20 命中，URL 为 `/sign_in` | 已确认，转由 P0B-3 定位触发点 |
 | P0B-2 | High | verified | 尽管出现警告，**平台未做阻断**：登录成功、会话有效、对话正常、无验证码挑战、无 4xx/5xx | 报告 `summary`（challengesDetected=2、httpErrors=0、loadFailed=0）；Cookie 含 `ds_session_id`；用户截图显示正常对话 | docs/plans/2026-10-02-mini-ai-ide-poc.md（P0b） | task/20261002-p0b-reachability-harness | 09:15:22 回到聊天页、09:15:50 进入会话；`thirdPartyHosts` 无验证码挑战回调 | 结论：当前为"提示级"而非"拦截级" |
-| P0B-3 | High | **verified** | **警告触发点已定位**：由 UA 中**自报**的 `Electron/<ver>` 与应用名标记引起，而非 `window.chrome` 缺失、`userAgentData` 缺 `Google Chrome`、TLS 差异或账号/IP 因素 | 受控实验报告 `docs/audits/2026-10-02-p0b-experiment-noident.json`：单变量生效（`variant.effective` 与运行时 `sessionFacts.userAgent` 逐字一致、均不含 `Electron/`），警告在登录页**不再出现**（基线为 2 条命中，实验仅 1 条且为短信验证码文案误命中）；用户确认"没有警告了" | docs/plans/2026-10-02-mini-ai-ide-poc.md（P1） | task/20261002-p0b-reachability-harness | 登录成功、对话正常、0 个 4xx/5xx；`window.chrome` / `userAgentData` / TLS **未做任何改动**却未触发警告 | 已关闭。结论写入 ADR-0001「受控实验结论与 UA 规则」并成为实现约束 |
+| P0B-3 | High | verified | **警告触发点已定位**：由 UA 中**自报**的 `Electron/<ver>` 与应用名标记引起，而非 `window.chrome` 缺失、`userAgentData` 缺 `Google Chrome`、TLS 差异或账号/IP 因素 | 受控实验报告 `docs/audits/2026-10-02-p0b-experiment-noident.json`：单变量生效（`variant.effective` 与运行时 `sessionFacts.userAgent` 逐字一致、均不含 `Electron/`），警告在登录页**不再出现**（基线为 2 条命中，实验仅 1 条且为短信验证码文案误命中）；用户确认"没有警告了" | docs/plans/2026-10-02-mini-ai-ide-poc.md（P1） | task/20261002-p0b-reachability-harness | 登录成功、对话正常、0 个 4xx/5xx；`window.chrome` / `userAgentData` / TLS **未做任何改动**却未触发警告 | 已关闭。结论写入 ADR-0001「受控实验结论与 UA 规则」并成为实现约束 |
 | P0B-4 | Medium | verified | 目标平台在我们的环境内实际运行第三方**风控与设备指纹**服务（风控云验证码 + 设备指纹采集），且网关侧存在华为云 WAF | `thirdPartyHosts` 含 `captcha1.fengkongcloud.cn`、`castatic.fengkongcloud.cn`、`fp-it-acc.portal101.cn`；Cookie 含 `HWWAFSESTIME`/`HWWAFSESID` | docs/plans/2026-10-02-mini-ai-ide-poc.md（P0b） | task/20261002-p0b-reachability-harness | 基线报告与实验报告的 `thirdPartyHosts` 全量清单**均为同一组**（实验组也照常加载） | 已留档；后续若检测强度上升，这些域是首要观察对象 |
 | P0B-5 | Low | verified | 工具结论字段 `signal` 过于保守：命中"验证/异常"关键词即报 `blocking-signal-observed`，但实际可能为**非阻断警告**（基线登录与对话均成功） | 报告 `summary.signal = blocking-signal-observed`，而同报告 `httpErrors=0`、`loadFailed=0`，且人工确认使用正常 | docs/plans/2026-10-02-mini-ai-ide-poc.md（P0b） | task/20261002-p0b-reachability-harness | 对比 `summary` 各字段与人工观察 | 已知偏差：`signal` 仅作提示，判定须结合人工观察与 `httpErrors`/`loadFailed`；已在手册结果判定表中说明 |
 | P0B-6 | **High** | verified | **告警消除未引入新的矛盾**：实验后风控服务照常运行，但平台未再判定环境异常 | 实验报告 `thirdPartyHosts` 与基线**完全一致**（风控云验证码、设备指纹、华为云 WAF 均在）；`window.chrome`、`userAgentData`、TLS 未做任何改动 | docs/plans/2026-10-02-mini-ai-ide-poc.md（P1） | task/20261002-p0b-reachability-harness | 实验组：警告消失、登录成功、对话正常、0 个 4xx/5xx | 已关闭。含义：差别是"被看见了但未被标为异常"，而非"没被看见" |

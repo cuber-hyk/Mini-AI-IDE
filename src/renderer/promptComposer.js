@@ -8,9 +8,10 @@ window.setupPromptComposer = function (bridge, setInfo) {
   };
   (function setupRequirementAutoGrow() {
     const MIN_H = 44;  // 2 行（含上下 padding，见下面 BOX_PAD 的说明）
-    const MAX_H = 220; // 10 行（= CSS 的 min/max-height，两处必须一致）
+    const MAX_H = 220; // 与 CSS 对应的基础上限，实际高度还受操作栏预算限制。
 
     let lastWidth = -1;   // 上一次测量时的内容宽度
+    let lastActionsHeight = -1;
 
     // scrollHeight 已包含 padding；额外留 4px 保持输入底部的呼吸空间。
     const BOX_PAD = 4;
@@ -25,21 +26,26 @@ window.setupPromptComposer = function (bridge, setInfo) {
       ta.style.maxHeight = 'none';
       // 保留既有自动增高范围与底部余量。
       const contentH = ta.scrollHeight + BOX_PAD;
-      const wanted = Math.min(Math.max(contentH, MIN_H), MAX_H);
+      const reserved = document.getElementById('prompt-actions').offsetHeight + 48;
+      const limit = Math.max(MIN_H, Math.min(MAX_H, Math.floor(window.innerHeight * .48) - reserved));
+      const wanted = Math.min(Math.max(contentH, MIN_H), limit);
       ta.style.height = wanted + 'px';
       ta.style.minHeight = MIN_H + 'px';
-      ta.style.maxHeight = MAX_H + 'px';
+      ta.style.maxHeight = limit + 'px';
       // 到上限才滚动；未到上限时用 hidden，避免出现两条无意义的滚动条痕迹
-      ta.style.overflowY = contentH > MAX_H ? 'auto' : 'hidden';
+      ta.style.overflowY = contentH > limit ? 'auto' : 'hidden';
+      document.dispatchEvent(new Event('prompt-size-changed'));
     }
 
-    /** 宽度变了才重算高度 —— RO 回调里必须走这条，否则改height 会自激成死循环 */
+    /** 宽度或操作栏高度变了才重算；忽略自身 height 变化，避免 RO 自激。 */
     function growIfWidthChanged() {
       const ta = el.requirement;
       if (!ta) return;
       const w = ta.clientWidth;
-      if (w === lastWidth) return; // 宽度没变：多半是 grow() 自己触发的回调，直接跳过
+      const actionsHeight = document.getElementById('prompt-actions').offsetHeight;
+      if (w === lastWidth && actionsHeight === lastActionsHeight) return;
       lastWidth = w;
+      lastActionsHeight = actionsHeight;
       grow();
     }
 
@@ -68,6 +74,7 @@ window.setupPromptComposer = function (bridge, setInfo) {
         window.requestAnimationFrame(growIfWidthChanged);
       });
       ro.observe(el.requirement);
+      ro.observe(document.getElementById('prompt-actions'));
     }
 
     // 首次测量放到 rAF 之后：等 flex 布局定下来、字体就位，再量第一次。

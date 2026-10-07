@@ -991,7 +991,7 @@
     void enterDiff(payload);
   });
 
-  bridge.onFileChanged(async function (filePath, change, revision) {
+  bridge.onFileChanged(async function (filePath, change, revision, discardDraft) {
     if (typeof filePath !== 'string' || filePath.length === 0) return;
     if (revision !== workspaceRevision) return;
     if (change === 'deleted') {
@@ -1012,8 +1012,8 @@
     if (change === 'created') {
       await loadTree();
       if (revision !== workspaceRevision) return;
-      if (!await editorWorkspace.reload(filePath, false, false) && revision === workspaceRevision) await editorWorkspace.open(filePath);
-    } else await editorWorkspace.reload(filePath, false, false);
+      if (!await editorWorkspace.reload(filePath, false, false, discardDraft) && revision === workspaceRevision) await editorWorkspace.open(filePath);
+    } else await editorWorkspace.reload(filePath, false, false, discardDraft);
   });
 
   bridge.onSidebarChanged(function (s) {

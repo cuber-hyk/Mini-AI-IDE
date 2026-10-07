@@ -1,10 +1,11 @@
 ---
 artifact_type: adr-template
 is_template: true
-status: proposed        # 模板文件：真实 ADR 的 status 只用 proposed | accepted | archived
+status: proposed
 created: 2026-10-02
-updated: 2026-10-02
+updated: 2026-10-07
 owner: 胡运宽
+source_of_truth: [AGENTS.md]
 ---
 
 # ADR 模板
@@ -16,10 +17,11 @@ owner: 胡运宽
 ```markdown
 ---
 artifact_type: adr
-status: proposed        # proposed | accepted | archived
+status: proposed
 created: YYYY-MM-DD
 updated: YYYY-MM-DD
 owner: <姓名>
+source_of_truth: [<实现或测试路径>]
 ---
 
 # ADR-NNNN：<一句话决策>

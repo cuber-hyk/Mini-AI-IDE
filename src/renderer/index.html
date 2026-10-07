@@ -11,6 +11,7 @@
     <link rel="stylesheet" href="./ui.css" />
     <link rel="stylesheet" href="./style.css" />
     <link rel="stylesheet" href="./applicationUpdate.css" />
+    <link rel="stylesheet" href="./toolHarness.css" />
   </head>
   <body>
     <header class="toolbar">
@@ -107,6 +108,27 @@
       <div id="resizer" class="resizer" title="拖动调整左右宽度"></div>
     </main>
 
+    <section id="tool-dock" class="tool-dock" aria-label="工具结果面板">
+    <div id="tool-resizer" class="tool-resizer" role="separator" aria-label="调整工具面板高度" aria-orientation="horizontal" aria-valuemin="80" aria-valuemax="260" aria-valuenow="160" tabindex="0" title="拖动调整高度；方向键调整，双击复位" hidden></div>
+    <details id="tool-panel" class="tool-panel">
+      <summary class="tool-panel-summary"><span>工具结果</span><span id="tool-count" class="tool-count">0 项</span><span id="tool-activity" class="tool-activity"></span><span id="tool-completion-notice" class="tool-completion-notice" role="status" aria-live="polite" aria-atomic="true"></span><span id="tool-copy-notice" class="tool-completion-notice" role="status" aria-live="polite"></span><span id="tool-sound-notice" class="tool-sound-notice" role="status" aria-live="polite"></span></summary>
+      <div id="tool-panel-body" class="tool-panel-body">
+        <p id="tool-message" class="tool-message" role="status" aria-live="polite" aria-atomic="true">正在读取工具状态…</p>
+        <div id="tool-results" class="tool-results" aria-label="工具调用结果"></div>
+      </div>
+    </details>
+    <div class="tool-result-actions">
+      <button id="tool-copy" type="button" class="ui-button" disabled>复制本批结果</button>
+      <div id="tool-more-wrap" class="tool-more-wrap">
+        <button id="tool-more-toggle" type="button" class="ui-icon" aria-label="工具结果设置与操作" title="工具结果设置与操作（自动复制、撤销）" aria-haspopup="dialog" aria-expanded="false" aria-controls="tool-more">⋯</button>
+        <div id="tool-more" class="tool-more" role="dialog" aria-label="工具结果设置与操作" hidden>
+          <label class="tool-auto-label" title="本批工具全部执行结束后复制整批结果一次，由你粘贴发送"><input id="tool-auto-copy" type="checkbox" disabled /> 工具完成后自动复制</label>
+          <button id="tool-undo" type="button" disabled>撤销工具修改</button>
+        </div>
+      </div>
+    </div>
+    </section>
+
     <!-- 变更列表在右侧独立视图（见 preview.html），输入区仍属于编辑器。 -->
     <footer class="prompt-bar">
       <div class="prompt-shell">
@@ -118,25 +140,48 @@
           placeholder="描述你想修改的内容…"
           spellcheck="false"
         ></textarea>
-        <div class="prompt-actions">
+        <div id="prompt-actions" class="prompt-actions">
           <div class="prompt-options">
             <div class="variant-switch" id="variant-switch" role="switch" aria-checked="false"
-                 tabindex="0" title="切换提示词的详细程度：简洁版（6 个示例）/ 完整版（8 个示例 + 逐条详解）。点击或按空格切换">
+                 tabindex="0" title="切换提示词的详细程度：简洁版（6 个示例）/ 完整版（13 个示例）。点击或按空格切换">
               <span class="variant-thumb" aria-hidden="true"></span>
               <button type="button" class="variant-opt" data-variant="short" aria-pressed="true">简洁</button>
               <button type="button" class="variant-opt" data-variant="full" aria-pressed="false">完整</button>
             </div>
             <span id="prompt-custom" class="prompt-custom" title="当前使用自定义版本" role="img" aria-label="当前使用自定义版本" hidden></span>
-            <button id="btn-settings" type="button" class="icon-btn" aria-label="提示词设置" title="提示词设置 · 修改发给模型的输出格式要求（Ctrl+Shift+P）">
-              <svg viewBox="0 0 16 16" aria-hidden="true">
-                <circle cx="8" cy="8" r="2.4" />
-                <path d="M8 1.6v1.9M8 12.5v1.9M1.6 8h1.9M12.5 8h1.9M3.5 3.5l1.35 1.35M11.15 11.15l1.35 1.35M12.5 3.5l-1.35 1.35M4.85 11.15L3.5 12.5" />
-              </svg>
-            </button>
           </div>
-          <button id="btn-copy-prompt" type="button" class="primary" aria-live="polite" title="组装完整提示词（需求 + 工作环境 + 目录结构 + 格式要求）到剪贴板，由你自己粘贴到右侧网页">
-            复制提示词
+        <div class="tool-controls">
+          <label class="tool-permission-label" for="tool-permission" title="工具执行权限">◇</label>
+          <select id="tool-permission" class="tool-select" aria-label="工具执行权限" aria-describedby="tool-permission-hint" disabled>
+            <option value="ask">请求批准</option>
+            <option value="rules">按规则自动</option>
+            <option value="full">完全访问权限</option>
+          </select>
+          <label class="tool-auto-label"><input id="tool-automatic" type="checkbox" disabled /> 自动采集并执行</label>
+        </div>
+        <span class="spacer"></span>
+        <div id="tool-settings-wrap" class="tool-settings-wrap">
+          <button id="tool-settings-toggle" type="button" class="ui-icon" aria-label="工具与提示词设置" title="工具与提示词设置" aria-haspopup="dialog" aria-expanded="false" aria-controls="tool-settings-panel">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.4"/><path d="M8 1.6v1.9M8 12.5v1.9M1.6 8h1.9M12.5 8h1.9M3.5 3.5l1.35 1.35M11.15 11.15l1.35 1.35M12.5 3.5l-1.35 1.35M4.85 11.15L3.5 12.5"/></svg>
           </button>
+          <section id="tool-settings-panel" class="tool-settings-panel" role="dialog" aria-modal="false" aria-labelledby="tool-settings-heading" tabindex="-1" hidden>
+            <div class="tool-settings-head"><strong id="tool-settings-heading">工具与提示词</strong><button id="tool-settings-close" type="button" class="ui-icon" aria-label="关闭设置">×</button></div>
+            <div class="tool-settings-body">
+              <label for="tool-dirty-policy">目标文件有未保存内容时</label>
+              <select id="tool-dirty-policy" class="tool-select" disabled>
+                <option value="ask">每次询问</option>
+                <option value="continue">继续：采用 AI 的修改结果</option>
+                <option value="stop">停止修改</option>
+              </select>
+              <p>“继续”采用 AI 基于磁盘原文生成的修改，替换未保存草稿。</p>
+              <label class="tool-auto-label"><input id="tool-completion-sound" type="checkbox" disabled /> 工具完成音效</label>
+              <button id="tool-clear-rules" type="button" class="ui-button" disabled>清除本项目已记住规则</button>
+              <button id="btn-settings" type="button" class="ui-button" title="编辑提示词与格式要求（Ctrl+Shift+P）">编辑提示词与格式要求</button>
+              <span id="tool-permission-hint" class="tool-permission-hint"></span>
+            </div>
+          </section>
+        </div>
+          <button id="btn-copy-prompt" type="button" class="primary" aria-live="polite" title="复制完整提示词，由你粘贴并发送到 AI 网页">复制提示词</button>
         </div>
       </div>
     </footer>
@@ -149,5 +194,9 @@
     <script src="./editorTabs.js"></script>
     <script src="./fileExplorer.js"></script>
     <script src="./renderer.js"></script>
+    <script src="./toolResultPresentation.js"></script>
+    <script src="./toolPanelLayout.js"></script>
+    <script src="./toolExecutionClock.js"></script>
+    <script src="./toolHarness.js"></script>
   </body>
 </html>

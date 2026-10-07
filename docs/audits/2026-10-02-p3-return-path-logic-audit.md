@@ -2,16 +2,10 @@
 artifact_type: audit
 status: active
 created: 2026-10-02
-updated: 2026-10-02
+updated: 2026-10-07
 owner: 胡运宽
 scope: P3（回程解析器、格式模板、应用计算、目录记忆、行号片段替换、只读采集与应用/撤销）
-source_of_truth:
-  - docs/adr/2026-10-02-return-path-contract-and-trust-boundary.md
-  - docs/capabilities/return-path-and-format-contract.md
-  - src/shared/returnPath.ts
-  - src/shared/formatSpec.ts
-  - src/main/replyCollector.ts
-  - src/main/returnPathService.ts
+source_of_truth: ["docs/adr/2026-10-02-return-path-contract-and-trust-boundary.md","docs/capabilities/return-path-and-format-contract.md","src/shared/returnPath.ts","src/shared/formatSpec.ts","src/main/replyCollector.ts","src/main/returnPathService.ts"]
 ---
 
 # P3 核验报告（回程链路）
@@ -51,7 +45,7 @@ P3 分两段，**两段均已实现**：
 | P3-2 | Medium | verified | 路径清洗把**下划线**当强调符删掉，`train_caption.py` 被读成 `traincaption.py` —— 而 Windows 代码库中带下划线的文件名极常见 | 测试 "识别「文件名：」式指引" 实得 `traincaption.py` | docs/plans/2026-10-02-mini-ai-ide-poc.md（P3） | — | 只清理 `*` 与反引号，保留下划线；测试通过 | 已修复 |
 | P3-3 | Medium | verified | 标题识别过宽/过窄的两次纠偏：① 曾把"请把 `src/c.ts` 改成："这类**正文句子**误判为标题行，抢占了"唯一候选"线索；② 收紧后又把 `**path**` 这类**整行强调**形态漏掉 | 测试 "(c) 全文唯一候选路径被采用" 曾得 `preceding-heading`；"(b)" 与 "识别加粗路径" 相继失败 | docs/plans/2026-10-02-mini-ai-ide-poc.md（P3） | — | 现规则：仅当整行具备标题形态（Markdown 标题/列表项/带标签/整行强调）时才视为标题行；正文句交给"唯一候选"线索 | 已修复并固化为测试用例 |
 | P3-4 | Low | verified | "插入到光标处"的换行规则存在歧义（VS Code 的粘贴是逐字插入，不补换行；但代码块补换行更可读） | 测试对 `'abc'` + 光标 3 的期望先写错，经复核后确定规则 | docs/plans/2026-10-02-mini-ai-ide-poc.md（P3） | — | 规则明确并写入代码注释：光标左侧非行首/换行则补前导换行，右侧有内容且非换行则补尾随换行；两种情形各有测试 | 已澄清。因默认路径是 **diff 预览**，用户落盘前能看到确切结果 |
-| P3-5 | **High** | **open** | **采集策略尚未在真实页面验证**：4 套候选策略（markdown 容器 / 语义属性 / pre 聚合 / 全页兜底）只在**合成页面运行器**上验证过（自检 K1/K2），真实 DeepSeek 页面的结构可能全部不命中 | 自检 K1/K2 用假运行器通过；真实页面需用户实操 | docs/plans/2026-10-02-mini-ai-ide-poc.md（P3 第二阶段） | — | **待办**：用户在已登录会话里点「采集回复」，依据面板中的诊断输出（页面标题/文本长度/是否含围栏/各选择器命中数）判断是否需要补策略；随后用真实回复统计解析识别率 | 待关闭。已预置诊断能力，使"没采到"能直接定位是选择器过期还是页面无输出 |
+| P3-5 | **High** | open | **采集策略尚未在真实页面验证**：4 套候选策略（markdown 容器 / 语义属性 / pre 聚合 / 全页兜底）只在**合成页面运行器**上验证过（自检 K1/K2），真实 DeepSeek 页面的结构可能全部不命中 | 自检 K1/K2 用假运行器通过；真实页面需用户实操 | docs/plans/2026-10-02-mini-ai-ide-poc.md（P3 第二阶段） | — | **待办**：用户在已登录会话里点「采集回复」，依据面板中的诊断输出（页面标题/文本长度/是否含围栏/各选择器命中数）判断是否需要补策略；随后用真实回复统计解析识别率 | 待关闭。已预置诊断能力，使"没采到"能直接定位是选择器过期还是页面无输出 |
 | P3-6 | Medium | verified | 片段替换的校验基线**必须由读文件的一方提供**。早期设计让渲染进程转手代码与区间，则"复制时的原文"无处可取，三向校验形同虚设 | 实现时发现 `applyChange` 若只接收 `code/range`，主进程无法知道"用户当初复制的是哪几行" | docs/plans/2026-10-02-mini-ai-ide-poc.md（P3 第二阶段） | — | 改为：`collectReply` 在主进程缓存解析结果（`collectionId` → 代码块），渲染进程只传 `collectionId + index + filePath`；片段替换时主进程**在读文件的同一时刻**抓取该区间内容作为基线 | 已修复。附带收益：渲染进程不再经手大块代码文本，权限面更小 |
 | P3-7 | Medium | verified | 采集失败时若只报"没采到"，无法区分"选择器过期"与"页面确实没输出"，只能靠猜 | 目标站点结构会变，而我们**不能改页面**去适配 | docs/plans/2026-10-02-mini-ai-ide-poc.md（P3 第二阶段） | — | 新增 `DIAGNOSTIC_SCRIPT`：只读探测页面标题、可见文本长度、是否含围栏、各候选选择器命中数，并给出判断结论 | 已实现并接入预览面板 |
 | P3-8 | Low | verified | "应用全部"与"逐条确认"的取舍：批量落盘更省事，但违背"默认预览、逐条确认" | 设计权衡 | docs/plans/2026-10-02-mini-ai-ide-poc.md（P3 第二阶段） | — | 「应用全部」保留按钮但**明确提示需逐条确认**，不做批量静默落盘 | 已按 ADR-0004 方案 A 处置 |

@@ -2,8 +2,9 @@
 artifact_type: adr
 status: accepted
 created: 2026-10-02
-updated: 2026-10-02
+updated: 2026-10-07
 owner: 胡运宽
+source_of_truth: [src/shared/userAgent.ts, src/main/index.ts, test/limits-and-ua.test.ts, docs/audits/2026-10-02-p0b-experiment-noident.json]
 ---
 
 # ADR-0001：不伪造、不自报、内部自洽（原题「采用如实 Electron 身份」）

@@ -1,72 +1,47 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-05
+updated: 2026-10-06
 owner: 胡运宽
-source_of_truth: [docs/adr/2026-10-02-return-path-contract-and-trust-boundary.md, docs/adr/2026-10-02-zero-injection-and-automation-trace-baseline.md, src/shared/returnPath.ts, src/shared/formatSpec.ts, src/main/returnPathService.ts, src/main/fileService.ts, src/renderer/editorWorkspace.js, test/fileService.test.ts, test/editorWorkspace.test.ts, src/main/replyCollector.ts, test/replyCollector.test.ts, src/main/index.ts, src/renderer/renderer.js, test/returnPath.test.ts, test/returnPathService.test.ts, test/inlineDiff.test.ts, test/formatSpec.test.ts, src/main/workspaceController.ts, src/main/workspaceProbe.ts]
+source_of_truth: [docs/adr/2026-10-06-native-tool-harness-boundary.md, src/shared/toolProtocol.ts, src/shared/formatSpec.ts, src/shared/returnPath.ts, src/main/replyCollector.ts, src/main/tools/changes.ts, src/main/tools/integration.ts, src/main/returnPathService.ts, src/main/fileService.ts, src/renderer/editorWorkspace.js, test/replyCollector.test.ts, test/toolProtocol.test.ts, test/toolChanges.test.ts, test/formatSpec.test.ts, test/toolSamples.test.ts]
 ---
 
-# 能力：明确编辑协议与回程应用
+# 能力：工具修改与回程应用
 
-## 职责与边界
+## 职责与唯一输出
 
-回程由人工点击触发：只读读取最新网页回复，解析为操作或附属内容，提供差异预览，经用户确认写回本地。网页保持独立渲染进程，没有文件 IPC；程序不写网页、不自动发送、不执行回复中的命令。复制只写系统剪贴板，由用户自行粘贴。
+AI 的实际文件读取、修改和命令统一输出一个顶层 mini-ai-tools JSON 批次，格式、参数及拒绝规则由 shared/toolProtocol.ts 定义。普通解释、讨论和引用资料不执行。手动采集也拒绝旧文件操作文本，不退回另一条可写盘协议；网页独立、无文件 IPC，采集只读，粘贴与发送由用户完成。九类工具及权限见 tool-harness.md。
 
-## 唯一推荐输出
+apply_changes 使用 changes，每项含 path 和 operation。replace 提供 edits 中的 old_string/new_string；create/overwrite 提供完整 content，可为空。替换原文必须非空、真实、唯一且不重叠；同文件所有修改集中在一条请求。JSON 字符串正确转义换行、引号和反斜杠，正文按字面保存。
 
-每个修改块紧邻声明 `### 文件：相对路径`、`### 操作：替换|新建|覆盖全文`，随后使用至少四个反引号的成对围栏；正文含更长反引号时加长。语言只用于显示。路径支持点文件及无扩展名文件，最终通过主进程白名单。
+同批次路径及真实目标别名冲突先检查，在任何请求产生副作用前拒绝。依赖只决定前置成功后的执行顺序，不提供输出插值。需要读取或进程 ID 时，AI 应先请求工具，等用户返回真实结果后再生成下一批。
 
-| 操作 | 围栏内容 | 前提 |
-|---|---|---|
-| 替换 | 一个或多个完整 SEARCH／REPLACE 对 | 已有文件中每段非空 SEARCH 唯一精确匹配，所有原区间不重叠 |
-| 新建 | 完整文件文本，可为空 | 文件不存在，应用时排他创建及补齐缺失父目录 |
-| 覆盖全文 | 完整文件文本，可为空 | 文件存在，展示完整差异并复核预览原文 |
-
-替换标记必须独占一行：`<<<<<<< SEARCH`、`=======`、`>>>>>>> REPLACE`。SEARCH 逐字取自原文；REPLACE 可以增减长度，空 REPLACE 表示删除。插入通过保留真实上下文并追加内容实现。一个块内的各对按同一原文定位，全部成功后一次写入、一次撤销。新建及覆盖全文的正文按字面处理，不解释其中的协议标记。
-
-定位仅统一 CRLF／CR／LF，不忽略空白、缩进或 Tab，不剥行号，不进行模糊或全部匹配替换。未修改部分保留原字符，替换文本采用原文件换行风格。零次匹配提示原文不一致；多次匹配提示增加上下文；歧义标记、重叠或残缺结构阻塞，不自动修复。
-
-缺失路径／操作、冲突标题、未闭合围栏和旧范围格式保留诊断，不猜测文件或写入模式。旧 `### 范围` 仅用于提示更新格式。相邻普通正文、章节和上一代码框阻断元数据关联；不由当前文件、其他块、正文提及或复制选区回填。完全没有修改线索的命令、图示、代码示例与明确上下文块归为 `kind: other`，只读且默认折叠。
+replyCollector 只读还原代码正文及语言：读取 code/pre 的 language-* 类名，或同一单代码框内、正文之前的独立工具栏语言标签。到回复根或多个代码框边界停止，不从正文提及、普通 JSON 或其他代码框补写正式协议。缺少明确语言仍作为资料。
 
 ## 复制与提示词
 
-选区和全文分别输出 `### 上下文文件：路径` 与 `### 上下文：原文片段|完整原文`，不附操作或定位行号。复制当前 Monaco 文本，包括未保存草稿、空白和尾换行；全文不暗示覆盖请求。空白选区保留，空全文可复制。本地反馈行数不进入协议。
+选区和全文输出只读上下文头，保留当前 Monaco 草稿、空白、空文件及末尾换行，不含执行操作或定位行号。复制全文不暗示覆盖。实际读取工具使用磁盘内容，AI 必须区别草稿与执行时原文。
 
-SHORT 6 个示例，FULL 13 个示例，两版共享协议骨架。示例由真实解析与计算测试验证，包含明确失败的反例。`shared/formatSpec.ts` 是唯一默认来源，构建生成 `formatSpecDefaults.js` 给提示词面板使用；菜单、底部复制、恢复默认使用同一版本解析入口。
+shared/formatSpec.ts 是唯一默认来源：简洁版 6 个示例、完整版 13 个示例均使用工具协议，普通讨论示例只含解释。构建生成 formatSpecDefaults.js。菜单、复制格式要求、复制提示词经过同一个有效格式入口，始终保留强制执行协议。
 
-两版自定义原文、草稿及版本设置独立保存，不自动改写。设置面板和自定义标记提醒检查新格式；恢复默认先载入当前版，再由用户保存。用户自行把新版要求粘贴到已有网页对话，不自动转换或重发历史回复。
+自定义设置与两版草稿原文独立保存；有效提示词将其逐字附为补充，不能取消执行协议或权限管理。恢复默认由用户保存；新版要求由用户手动粘贴到已有网页对话，IDE 不改写或重发历史回复。
 
-## 预览与应用
+## 修改 owner 与原文基线
 
-`ReturnPathService.prepareChange` 统一生成规范路径、before、after、存在状态、操作类型、实际字符区间与行范围。首次预览冻结完整原文和根目录版本；再次准备只核对，不接受外部变化作为新基线。应用不能在入口临时捕获基线，必须使用已经准备的目标。
+tools/changes.ts 将工具参数转换为 ReturnPathService 的内部编辑模型。内部模型用于计算、基线和撤销，不是第二套 AI 回复格式。定位仅统一 CRLF/CR/LF，不忽略空白、缩进或 Tab，不进行模糊、全部匹配或自动剥行号替换。未修改部分保留原字符，替换文本采用原文件换行风格。零次或多次匹配要求重新获取原文或补上下文。
 
-采集时统一检查同文件重叠、重复新建和覆盖全文混合操作。冲突块不能写入，其他独立文件仍可用。同文件独立替换支持逐条及串行全部应用；IDE 自己成功写入或撤销后推进已知原文，重算未应用操作的位置及适用性。剩余 SEARCH 失效或不唯一时停止该操作；不能隐式定位到前一轮生成内容。
+本请求先准备全部变更，再处理所有真实目标别名对应的未保存内容，然后逐项写入。准备冻结原文及根目录版本；应用复核，不能把外部变化临时接纳为新基线。用户继续则采用 AI 结果 C，替换草稿 B；停止保留磁盘 A 与草稿 B，不先保存 B、不合并 B。处理策略可保存。
 
-应用仍保护所有打开标签的未保存草稿、目录版本及改名／删除失效。渲染进程只传 `collectionId + index + filePath`，不能决定正文或写盘坐标。人工改目标路径后必须先重新预览该目标，不能绕过缺失模型元数据的阻塞。失败后允许重新采集同一回复。
+已有文件使用 r+ 打开并复核预期原文、文件身份及目录版本，不静默重建消失目标。新增排他创建，并逐级检查父目录、链接、越界及身份；外部授权目标使用隔离 FileService，不扩大编辑器文件桥。文件查询、修改及目录切换通过 WorkspaceController 的明确 owner 管理。
 
-已有文件写入通过 `r+` 打开并复核预期原文、文件身份及目录版本，不静默重建已消失目标。此检查缩短竞态窗口，不提供跨进程文件锁。新增逐级校验最近存在祖先；权限错误、链接、非目录父级、越界不视为缺失。根目录下链接父级不支持新增，根目录本身可为合法 junction。
+## 更新编辑器与撤销
 
-## UI 与撤销
+成功写盘后通知打开文档及真实路径别名，刷新内容和目录树；只有用户批准替换草稿时允许丢弃旧草稿，异步读取期间的新编辑仍需保护。失败保留真实错误和已经完成的写入事实，不假称跨文件原子提交。
 
-编辑器使用 Monaco 公开装饰及 view zones 展示内联删除／新增，预览只读且原文不变；绘制前必须与 payload.original 一致。新增使用虚拟只读标签和绿色完整内容，按钮为“创建文件”；覆盖全文按钮明确写“覆盖全文”。局部范围由实际匹配计算，可显示原 10–10 → 新 10–19（+9 行），多对显示位置列表，删除明确显示删除区域。
-
-右侧按目录／文件组织，筛选仅改变显示，同文件展开片段。应用和撤销集中在详情；完整采集说明默认折叠在诊断入口，失败保留可见反馈。其他内容不计文件数、不参与全部应用。刷新保留焦点、路径草稿和折叠状态；同批次结果刷新不终止全部应用，更换批次则停止旧批次剩余操作。
-
-每次写入保留内存快照，最多 20 条，关联批次／片段及根目录。已有文件撤销要求当前原文等于该次 after；新建撤销还核对 dev/ino/birthtimeMs 和链接状态，只删除仍匹配的文件及本次创建、身份一致且为空的目录。失败保留快照，清理部分失败给出警告。同文件操作按顺序撤销，不影响其他标签及草稿。
-
-## 采集与生命周期
-
-采集按既有三种只读策略读取文档序最后回复。DOM 重建逐块文件／操作／上下文标题，代码正文保留原 textContent，排除复制、下载控件；空代码框不丢弃。最新回复没有代码时不退回历史代码。消费指纹只避免重复处理；应用失败允许重新采集核对。
-
-目录、条目、AI 应用和撤销由 WorkspaceController 串行执行。切换或关闭目录清空批次、基线、预览及快照；改名／删除只使对应路径及后代失效，包括人工修正目标。旧目录事件不能污染新目录。
+工具修改保留最多 20 项内存撤销，使用唯一源身份避免撤销另一条人工变更。已有文件撤销复核当前内容为此次 after；新增撤销核对文件和本次创建目录身份，只移除匹配的文件及空目录。失败保留快照，部分清理错误明确返回。未保存内容或目录切换不能被撤销绕过，撤销不跨重启保存。
 
 ## 验证与限制
 
-- `returnPath.test.ts`：协议、唯一匹配、多个原区间、歧义、无损空白／换行和显示范围。
-- `returnPathService.test.ts`、`fileService.test.ts`：真实临时文件的存在性、基线、连续操作、写入、身份及撤销保护。
-- `replyCollector.test.ts`：逐块元数据与最新回复、空框、无损采集。
-- `snippet.test.ts`、`formatSpec.test.ts`、`promptComposer.test.ts`：实际复制与模板示例执行、分版本配置。
-- `changeTree.test.ts`、`inlineDiff.test.ts`：操作显示、焦点、只读内容、串行应用与内联显示。
-- `verify:workspace`、`verify:prompt`、`verify:range`、inline 工具与启动自检：只操作本地离线样例，不自动操作官方网页。
+formatSpec.test.ts 实际解析并执行示例的查询和修改；toolProtocol/toolIntegration 回归验证手动入口不接受旧格式；toolChanges/FileService/ReturnPathService 测试验证原文、别名、草稿、写入与撤销。docs/工具调用测试样例.md 提供 35 场景，toolSamples.test.ts 直接读取其原文并实际执行关键工具。
 
-离线样例不能保证任意网页版本的命中率或模型遵守率。采集重建围栏不能证明全文未被 AI 截断；覆盖全文需人工核对完整差异。精确匹配只证明目标定位，不证明代码符合需求。跨文件全部应用不是原子事务，内存撤销不跨重启保存。
+离线样例不能保证任意网页版本的结束状态或模型遵守率，权限弹窗、Monaco 草稿和真实网页需手测。原文核验不提供跨进程文件锁；逐文件写盘后遇到系统错误可能部分成功。唯一匹配证明定位，不能证明生成代码符合用户需求。

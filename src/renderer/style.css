@@ -779,7 +779,8 @@ body {
 
 .sidebar {
   width: 230px;
-  min-width: 160px;
+  min-width: min(160px, calc(100% - 180px));
+  max-width: calc(100% - 180px);
   border-right: 1px solid var(--border);
   background: #191c22;
   display: flex;

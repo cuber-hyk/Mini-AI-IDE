@@ -8,6 +8,8 @@ source_of_truth: [docs/adr/2026-10-02-filesystem-permission-model.md, src/main/f
 
 # 能力：本地文件访问
 
+通用工具有独立授权路径，详见 `tool-harness.md`；完全访问或明确批准可访问项目外目标，工具不能扩大本能力的编辑器文件 IPC 根目录。
+
 > 本节记录当前行为；测试数量与结果以当次运行报告为准。
 
 ## 职责

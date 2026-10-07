@@ -1,61 +1,84 @@
-/** 提示词示例须由真实解析与应用执行，不能只匹配关键字。 */
+/** 提示词示例经过正式解析和真实文件工具，示例包装本身不可执行。 */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { computeApply, parseModelReply } from '../src/shared/returnPath';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { parseModelReply } from '../src/shared/returnPath';
 import { FORMAT_SPEC_FULL, FORMAT_SPEC_SHORT, MAX_CUSTOM_FORMAT_SPEC_LENGTH, getFormatSpec, normalizeVariant, resolveFormatSpec, buildPrompt } from '../src/shared/formatSpec';
+import { TOOL_PROTOCOL_PROMPT, TOOL_NAMES, parseToolBatch } from '../src/shared/toolProtocol';
+import { FileService } from '../src/main/fileService';
+import { ReturnPathService } from '../src/main/returnPathService';
+import { ToolChanges } from '../src/main/tools/changes';
+import { ToolFiles } from '../src/main/tools/files';
 
 function unwrapped(text: string): string {
   const lines = text.trim().split('\n'); const fence = lines.shift();
   assert.match(fence || '', /^`{5,}$/); assert.equal(lines.pop(), fence);
   return lines.join('\n');
 }
-test('两版共用明确三操作协议，废止 AI 定位行号，围栏成对且自适应', () => {
+const expected: Record<string, string> = {
+  'src/counter.ts': 'let n = 1;',
+  'src/util/format.ts': 'export function formatDate(d: Date): string {\n  return d.toISOString().slice(0, 10);\n}',
+  'src/config.ts': 'export const A = 1;\nexport const B = 2;\nexport const C = 3;',
+  'src/hello.ts': 'export const greeting = "hello";\nexport const language = "zh";',
+  'src/debug.ts': '', 'src/options.ts': 'const size = 2;\nconst enabled = true;',
+  'docs/fences.md': '# 说明\n\n````text\n新内容\n````',
+  '.env': 'PORT=4000', LICENSE: '新的许可说明', 'empty.txt': '', 'smoke.sh': 'printf "ok\\n"\n',
+};
+test('两版工具示例完整可解析，包装及原文上下文只读，实际文件操作符合用户意图', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'format-tool-examples-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const seenTools = new Set<string>();
   for (const spec of [FORMAT_SPEC_SHORT, FORMAT_SPEC_FULL]) {
-    assert.match(spec, /### 文件：/); assert.match(spec, /### 操作：/);
-    assert.match(spec, /替换／新建／覆盖全文/); assert.match(spec, /SEARCH/); assert.match(spec, /REPLACE/);
-    assert.match(spec, /逐字/); assert.match(spec, /唯一匹配/); assert.match(spec, /至少四个反引号/);
-    assert.match(spec, /成对闭合/); assert.match(spec, /同长度/); assert.match(spec, /多一个/);
-    assert.doesNotMatch(spec, /### 范围：|照抄范围|原末行|行首写行号/);
-    assert.match(spec, /分多轮/);
-    const counts = new Map<number, number>();
-    for (const fence of spec.match(/`{3,}/g) || []) counts.set(fence.length, (counts.get(fence.length) || 0) + 1);
-    assert.ok([...counts.values()].every(value => value % 2 === 0));
-  }
-  assert.equal((FORMAT_SPEC_SHORT.match(/示例 \d+｜/g) || []).length, 6);
-  assert.equal((FORMAT_SPEC_FULL.match(/示例 \d+｜/g) || []).length, 13);
-});
-test('两版所有输出示例通过真实 parser 和 computeApply，上下文保持只读', () => {
-  for (const spec of [FORMAT_SPEC_SHORT, FORMAT_SPEC_FULL]) {
-    const operations = new Set<string>();
-    for (const example of spec.split(/示例 \d+｜/).slice(1)) {
+    assert.equal(parseToolBatch(spec).kind, 'none', '复制完整提示词不能执行其中的示例');
+    assert.equal((spec.match(/示例 \d+｜/g) || []).length, spec === FORMAT_SPEC_SHORT ? 6 : 13);
+    for (const [index, example] of spec.split(/示例 \d+｜/).slice(1).entries()) {
       const input = unwrapped(example.split('【我给你的】')[1]!.split('【你该给我的】')[0]!);
       const output = unwrapped(example.split('【你该给我的】')[1]!);
-      const inputs = parseModelReply(input).blocks;
-      assert.ok(inputs.every(block => !block.operation), '复制原文不能成为写入操作');
-      const blocks = parseModelReply(output).blocks;
-      if (example.startsWith('错误示例')) {
-        assert.equal(blocks.length, 1); assert.ok(blocks[0]!.validationError);
-        assert.equal(computeApply(inputs[0]!.code, blocks[0]!).ok, false);
-        continue;
+      assert.equal(parseToolBatch(input).kind, 'none');
+      const parsed = parseToolBatch(output);
+      if (example.startsWith('普通讨论')) { assert.equal(parsed.kind, 'none'); continue; }
+      assert.equal(parsed.kind, 'batch', example.split('\n')[0] + ': ' + JSON.stringify(parsed));
+      if (parsed.kind !== 'batch') continue;
+      const folder = path.join(root, (spec === FORMAT_SPEC_SHORT ? 'short-' : 'full-') + index);
+      await fs.mkdir(path.join(folder, 'src'), { recursive: true });
+      await fs.writeFile(path.join(folder, 'README.md'), '项目\nTODO first\nlast\n');
+      await fs.writeFile(path.join(folder, 'src/main.ts'), 'TODO first\n');
+      for (const block of parseModelReply(input).blocks) {
+        assert.equal(block.operation, undefined, '原文不能成为修改请求');
+        const file = [...input.slice(0, block.start).matchAll(/^### 上下文文件：(.+)$/gm)].at(-1)?.[1];
+        if (file) { await fs.mkdir(path.dirname(path.join(folder, file)), { recursive: true }); await fs.writeFile(path.join(folder, file), block.code); }
       }
-      for (const block of blocks) {
-        if (!block.operation) { assert.equal(block.kind, 'other'); continue; }
-        operations.add(block.operation);
-        assert.equal(block.validationError, undefined);
-        const context = inputs.find(context => {
-          const paths = [...input.slice(0, context.start).matchAll(/^### 上下文文件：(.+)$/gm)];
-          return paths.at(-1)?.[1] === block.filePath;
-        });
-        const result = computeApply(block.operation === 'create' ? '' : context!.code, block);
-        assert.equal(result.ok, true, example.split('\n')[0] + ': ' + JSON.stringify(result));
-        if (result.ok) {
-          assert.equal(result.mode, block.operation);
-          assert.doesNotMatch(result.text, /<<<<<<< SEARCH|>>>>>>> REPLACE/);
-          if (block.operation !== 'replace') assert.equal(result.text, block.code);
+      const files = new FileService(); files.setRoot(folder);
+      const changes = new ToolChanges(files, new ReturnPathService(files), () => false, async () => true, () => {});
+      const queries = new ToolFiles();
+      for (const req of parsed.batch.requests) {
+        seenTools.add(req.tool);
+        if (req.tool === 'apply_changes') {
+          const result = await changes.execute(folder, req) as { status: string };
+          assert.equal(result.status, 'done');
+          for (const change of req.args.changes as { path: string }[]) assert.equal(await fs.readFile(path.join(folder, change.path), 'utf8'), expected[change.path], change.path);
+        } else if (['get_project_info', 'list_directory', 'search_files', 'read_file', 'search_text'].includes(req.tool)) {
+          const result = await queries.execute(folder, req.tool, req.args) as any;
+          if (req.tool === 'read_file') assert.equal(result.content, '1: 项目\n2: TODO first\n3: last\n');
+          if (req.tool === 'search_files') assert.ok(result.files.includes('src/main.ts'));
+          if (req.tool === 'search_text') assert.ok(result.matches.some((m: any) => m.path === 'README.md'));
         }
       }
     }
-    assert.deepEqual([...operations].sort(), ['create', 'overwrite', 'replace']);
+  }
+  assert.deepEqual([...seenTools].sort(), [...TOOL_NAMES].sort(), '完整版覆盖所有正式工具');
+});
+test('任何格式复制和 prompt 组装都提供唯一协议，冲突自定义原文仍逐字保留', () => {
+  const custom = '\n自定义：请只输出普通文件代码块。\n';
+  const resolved = resolveFormatSpec({ short: custom });
+  assert.ok(resolved.startsWith(TOOL_PROTOCOL_PROMPT)); assert.ok(resolved.endsWith(custom));
+  const context = { root: null, tree: null, environment: null };
+  for (const formatSpec of [resolved, FORMAT_SPEC_SHORT, FORMAT_SPEC_FULL, custom, '']) {
+    const prompt = buildPrompt({ requirement: '修改', context, formatSpec });
+    assert.equal(prompt.split(TOOL_PROTOCOL_PROMPT).length - 1, 1);
+    assert.ok(prompt.endsWith(formatSpec));
   }
 });
 test('自定义格式原文（含前后空行）组装后逐字保留', () => {
@@ -85,13 +108,14 @@ test('resolveFormatSpec：未设置或只有空白 → 一律回落该版本内�
   assert.equal(resolveFormatSpec({ full: '' }, 'full'), FORMAT_SPEC_FULL);
 });
 
-test('resolveFormatSpec：有自定义内容时原样返回（逐字，不做任何加工）', () => {
-  const custom = '【输出格式要求｜我的版本】\n1. 只输出代码，不要解释\n2. 用 ### 文件： 标注';
-  assert.equal(resolveFormatSpec({ short: custom }), custom);
+test('resolveFormatSpec：自定义内容逐字保留为强制协议后的补充', () => {
+  const custom = '【表达风格｜我的版本】\n1. 说明保持简洁\n2. 注释使用中文';
+  assert.ok(resolveFormatSpec({ short: custom }).endsWith(custom));
+  assert.ok(resolveFormatSpec({ short: custom }).startsWith(TOOL_PROTOCOL_PROMPT));
   // 前后有空白时保留原文（只在**判断是否为空**时 trim，不 trim 返回值 ——
   // 用户可能有意用前后空行控制提示词里的段落间距）
   const padded = '\n\n' + custom + '\n\n';
-  assert.equal(resolveFormatSpec({ short: padded }), padded);
+  assert.ok(resolveFormatSpec({ short: padded }).endsWith(padded));
 });
 
 test('resolveFormatSpec：简洁版与完整版的自定义互不影响（分版本隔离）', () => {
@@ -100,13 +124,15 @@ test('resolveFormatSpec：简洁版与完整版的自定义互不影响（分版
   const f = '完整版自定义';
   assert.equal(resolveFormatSpec({ short: s, full: null }, 'full'), FORMAT_SPEC_FULL);
   assert.equal(resolveFormatSpec({ short: null, full: f }, 'short'), FORMAT_SPEC_SHORT);
-  assert.equal(resolveFormatSpec({ short: s, full: f }, 'short'), s);
-  assert.equal(resolveFormatSpec({ short: s, full: f }, 'full'), f);
+  assert.ok(resolveFormatSpec({ short: s, full: f }, 'short').endsWith(s));
+  assert.ok(!resolveFormatSpec({ short: s, full: f }, 'short').includes(f));
+  assert.ok(resolveFormatSpec({ short: s, full: f }, 'full').endsWith(f));
+  assert.ok(!resolveFormatSpec({ short: s, full: f }, 'full').includes(s));
 });
 
 test('resolveFormatSpec：variant 只在回落默认时起作用', () => {
   assert.equal(resolveFormatSpec(null, 'full'), FORMAT_SPEC_FULL);
-  assert.equal(resolveFormatSpec({ full: '自定义' }, 'full'), '自定义');
+  assert.ok(resolveFormatSpec({ full: '自定义' }, 'full').endsWith('自定义'));
   // 完整版有自定义、但当前是简洁版 → 简洁版走自己的默认（不被完整版影响）
   assert.equal(resolveFormatSpec({ full: '自定义' }, 'short'), FORMAT_SPEC_SHORT);
 });

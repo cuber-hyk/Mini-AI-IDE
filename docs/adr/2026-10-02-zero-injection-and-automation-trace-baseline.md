@@ -2,8 +2,9 @@
 artifact_type: adr
 status: accepted
 created: 2026-10-02
-updated: 2026-10-02
+updated: 2026-10-07
 owner: 胡运宽
+source_of_truth: [src/main/replyCollector.ts, src/main/index.ts, src/main/selfTest.ts, tools/trace-verifier/, docs/audits/2026-10-02-p0a-trace-verification-raw.json]
 ---
 
 # ADR-0003：零注入（程序不向网页写入任何内容）；验收判据是"无自动化特征"

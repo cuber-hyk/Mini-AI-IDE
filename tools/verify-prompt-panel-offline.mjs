@@ -190,6 +190,7 @@ check(
 
 const distSpec = require(path.join(root, 'dist/shared/formatSpec.js'));
 const { resolveFormatSpec, getFormatSpec, buildPrompt } = distSpec;
+const { TOOL_PROTOCOL_PROMPT } = require(path.join(root, 'dist/shared/toolProtocol.js'));
 
 check(
   'Z1',
@@ -206,9 +207,9 @@ const customShort = '【用户自定义格式要求·简洁】\n1. 只输出代�
 const customFull = '【用户自定义格式要求·完整】\n1. 只输出代码\n2. 附上解释';
 check(
   'Z2',
-  'resolveFormatSpec：有自定义内容 → 原样返回（逐字，不做任何加工）',
-  resolveFormatSpec({ short: customShort }, 'short') === customShort &&
-    resolveFormatSpec({ full: customFull }, 'full') === customFull,
+  'resolveFormatSpec：自定义原文保留，并且不能移除强制工具协议',
+  resolveFormatSpec({ short: customShort }, 'short') === TOOL_PROTOCOL_PROMPT + '\n\n' + customShort &&
+    resolveFormatSpec({ full: customFull }, 'full') === TOOL_PROTOCOL_PROMPT + '\n\n' + customFull,
   null
 );
 
@@ -219,8 +220,8 @@ check(
   'resolveFormatSpec：简洁版与完整版的自定义互不影响（分版本隔离）',
   resolveFormatSpec({ short: customShort, full: null }, 'full') === getFormatSpec('full') &&
     resolveFormatSpec({ short: null, full: customFull }, 'short') === getFormatSpec('short') &&
-    resolveFormatSpec({ short: customShort, full: customFull }, 'short') === customShort &&
-    resolveFormatSpec({ short: customShort, full: customFull }, 'full') === customFull,
+    resolveFormatSpec({ short: customShort, full: customFull }, 'short') === TOOL_PROTOCOL_PROMPT + '\n\n' + customShort &&
+    resolveFormatSpec({ short: customShort, full: customFull }, 'full') === TOOL_PROTOCOL_PROMPT + '\n\n' + customFull,
   {
     fullUnaffectedByShort: resolveFormatSpec({ short: customShort, full: null }, 'full') === getFormatSpec('full'),
     shortUnaffectedByFull: resolveFormatSpec({ short: null, full: customFull }, 'short') === getFormatSpec('short'),
@@ -247,18 +248,21 @@ const assembledFull = buildPrompt({
 });
 check(
   'Z3',
-  '组装后的 prompt 真的带上了自定义内容（且固定骨架不变）',
+  '组装后的 prompt 保留自定义原文和需求骨架，默认与自定义均含一次强制工具协议',
   assembled.includes(customShort) &&
-    // 用自定义时，内置默认的那句开场白不得残留
+    // 自定义替代内置示例补充，强制工具协议独立保留且不重复。
     !assembled.includes(getFormatSpec('short')) &&
-    // 用默认时，内置默认标题必须在
-    assembledDefault.includes('【输入/输出格式要求】') &&
+    assembledDefault.includes(getFormatSpec('short')) &&
+    assembled.split(TOOL_PROTOCOL_PROMPT).length === 2 &&
+    assembledDefault.split(TOOL_PROTOCOL_PROMPT).length === 2 &&
+    assembledFull.split(TOOL_PROTOCOL_PROMPT).length === 2 &&
     /## 用户需求/.test(assembled) &&
     /## 工作环境/.test(assembled),
   {
     hasCustom: assembled.includes(customShort),
     hasDefaultInCustomRun: assembled.includes(getFormatSpec('short')),
-    hasDefaultTitle: assembledDefault.includes('【输入/输出格式要求】'),
+    hasDefaultSpec: assembledDefault.includes(getFormatSpec('short')),
+    protocolCopies: [assembled, assembledDefault, assembledFull].map(text => text.split(TOOL_PROTOCOL_PROMPT).length - 1),
   }
 );
 
@@ -459,10 +463,12 @@ await (async () => {
     'requirement': makeEl('requirement', { style: {}, clientWidth: 500, scrollHeight: 44 }),
     'btn-copy-prompt': makeEl('btn-copy-prompt'),
     'prompt-custom': makeEl('prompt-custom'),
+    'prompt-actions': { offsetHeight: 30 },
   };
   const ctx = {
-    window: { requestAnimationFrame: (fn) => fn(), addEventListener() {} },
-    document: { getElementById: (id) => nodes[id] },
+    window: { innerHeight: 960, requestAnimationFrame: (fn) => fn(), addEventListener() {} },
+    Event: class { constructor(type) { this.type = type; } },
+    document: { getElementById: (id) => nodes[id], dispatchEvent() {} },
     console,
   };
   vm.createContext(ctx);

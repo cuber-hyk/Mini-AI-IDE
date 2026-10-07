@@ -130,13 +130,13 @@
       } finally { closing = false; }
     }
 
-    async function reload(path, confirm, focus) {
+    async function reload(path, confirm, focus, discardDraft) {
       sync(); const doc = documents.get(key(path));
       if (!doc) return focus ? open(path) : false;
       const root = state.root; const epoch = generation; const request = ++doc.reading;
       const navigation = focus ? ++openRequest : openRequest;
       try {
-        if (doc.text !== doc.savedText) {
+        if (doc.text !== doc.savedText && discardDraft !== true) {
           if (!confirm || !(await bridge.confirmLeave(doc.path, root)).ok) return false;
           if (!sameDocument(doc, root, epoch)) return false;
         }

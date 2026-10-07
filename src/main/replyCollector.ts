@@ -62,13 +62,41 @@ const COLLECT_HELPERS = `
     var f = fenceFor(src);
     return f + (lang || '') + '\\n' + src + '\\n' + f;
   };
-  // 从一个 <pre> 取语言标注（取不到就不标，不伪造）
+  // 只读取该代码框的明确语言标注；正文和其他代码框不能回填协议。
   var langOf = function (pre) {
     try {
       var codeEl = pre.querySelector('code');
-      var holder = codeEl || pre;
-      var m = /language-([\\w+#-]+)/.exec((holder.className || '').toString());
-      return m && m[1] ? m[1] : '';
+      var holders = [codeEl, pre].filter(Boolean);
+      for (var h = 0; h < holders.length; h += 1) {
+        var m = /(?:^|\\s)language-([\\w+#-]+)(?=\\s|$)/.exec(String(holders[h].className || ''));
+        if (m) return m[1];
+      }
+      // 网页可把语言放在 pre 外的独立工具栏。只在单代码框局部向上查找，
+      // 到 markdown 回复根停止；只读取位于正文分支之前的工具栏叶子标签。
+      var branch = pre;
+      for (var depth = 0; branch.parentElement && depth < 3; depth += 1) {
+        var box = branch.parentElement;
+        if (/markdown/.test(String(box.className || '')) || box.querySelectorAll('pre').length !== 1) break;
+        var children = Array.from(box.children || []);
+        var labels = [];
+        var readLabel = function (node) {
+          var tag = String(node.tagName || '').toUpperCase();
+          if (/^(BUTTON|SVG|PRE|CODE|SCRIPT|STYLE)$/.test(tag) || node.getAttribute && node.getAttribute('role') === 'button') return;
+          var nested = Array.from(node.children || []);
+          if (nested.length) { nested.forEach(readLabel); return; }
+          var label = String(node.textContent || '').trim();
+          if (/^[\\w+#-]+$/.test(label) && !/^(copy|download|run)$/i.test(label)) labels.push(label);
+        };
+        for (var i = 0; i < children.indexOf(branch); i += 1) {
+          var header = children[i];
+          if (header.tagName === 'HEADER' || /(?:^|[\\s_-])(?:toolbar|banner|header)(?:$|[\\s_-])/.test(String(header.className || ''))) readLabel(header);
+        }
+        var unique = Array.from(new Set(labels));
+        if (unique.length === 1) return unique[0];
+        if (unique.length > 1) return '';
+        branch = box;
+      }
+      return '';
     } catch (e) { return ''; }
   };
   // 正文用于元数据读取时可以清理展示性空白；代码正文必须逐字保留。

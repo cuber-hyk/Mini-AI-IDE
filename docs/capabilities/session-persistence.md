@@ -1,13 +1,9 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-02
+updated: 2026-10-07
 owner: 胡运宽
-source_of_truth:
-  - docs/adr/2026-10-02-honest-electron-identity.md
-  - docs/adr/2026-10-02-zero-injection-and-automation-trace-baseline.md
-  - docs/plans/2026-10-02-mini-ai-ide-poc.md
-  - tools/reachability-probe/main.js
+source_of_truth: ["docs/adr/2026-10-02-honest-electron-identity.md","docs/adr/2026-10-02-zero-injection-and-automation-trace-baseline.md","tools/reachability-probe/main.js","src/main/index.ts","src/main/diagnose.ts","src/main/selfTest.ts","test/limits-and-ua.test.ts"]
 ---
 
 # 能力：会话与登录持久化

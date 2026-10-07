@@ -17,6 +17,7 @@ import { describe, it } from 'node:test';
 import vm from 'node:vm';
 
 import { COLLECT_STRATEGIES, collectReply, normalizeStrategyOutput } from '../src/main/replyCollector';
+import { parseToolBatch } from '../src/shared/toolProtocol';
 
 /** 取指定策略脚本（按 id，避免下标写死） */
 function scriptOf(id: string): string {
@@ -202,6 +203,39 @@ describe('采集策略脚本（只读 DOM）', () => {
       const text = runScript(id, pageOf([{ node: container }]))[0] as string;
       assert.equal(text, '### 文件：src/clean.ts\n\n### 操作：新建\n\n````typescript\n\tcorrect();  \n\n````');
     }
+  });
+
+  it('正式工具语言只出现在代码框工具栏时，三套采集策略仍保留协议和完整 JSON', () => {
+    const container = fakeEl('div', 'ds-markdown');
+    const chrome = link(container, fakeEl('div', 'code-block'));
+    link(chrome, fakeEl('div', 'toolbar', 'mini-ai-tools 复制 下载', [fakeEl('span', '', 'mini-ai-tools'), fakeEl('button', '', '复制'), fakeEl('button', '', '下载')]));
+    const source = JSON.stringify({ protocol_version: 1, batch_id: 'visible-language', requests: [{ id: 'create', tool: 'apply_changes', args: { changes: [{ path: 'tool-samples/中文 空格.txt', operation: 'create', content: '第一行\nTODO literal a.*\n第三行\n' }] } }] });
+    link(chrome, fakeEl('pre', '', source, [fakeEl('code', '', source)]));
+    for (const id of ALL_STRATEGIES) {
+      const text = runScript(id, pageOf([{ node: container }]))[0] as string;
+      assert.equal(text, '````mini-ai-tools\n' + source + '\n````', id);
+      assert.equal(parseToolBatch(text).kind, 'batch', id);
+    }
+  });
+
+  it('正文提及协议、代码正文及另一代码框的标签不能给普通 JSON 授权', () => {
+    const source = JSON.stringify({ protocol_version: 1, batch_id: 'discussion', requests: [{ id: 'query', tool: 'get_project_info', args: {} }] });
+    const container = fakeEl('div', 'ds-markdown');
+    link(container, fakeEl('p', '', 'mini-ai-tools'));
+    const earlier = link(container, fakeEl('div', 'code-block'));
+    link(earlier, fakeEl('div', 'toolbar', 'mini-ai-tools', [fakeEl('span', '', 'mini-ai-tools')]));
+    link(earlier, fakeEl('pre', '', '示例资料', [fakeEl('code', 'language-text', '示例资料')]));
+    const latest = link(container, fakeEl('div', 'code-block'));
+    link(latest, fakeEl('div', 'toolbar', 'json 复制', [fakeEl('span', '', 'json'), fakeEl('button', '', '复制')]));
+    link(latest, fakeEl('pre', '', source, [fakeEl('code', '', source)]));
+    for (const id of ALL_STRATEGIES) {
+      const text = runScript(id, pageOf([{ node: container }]))[0] as string;
+      assert.equal(parseToolBatch(text).kind, 'none', id);
+      assert.ok(text.includes('````json\n' + source), id);
+    }
+    const noLabel = fakeEl('div', 'ds-markdown');
+    link(noLabel, fakeEl('pre', '', source, [fakeEl('code', '', source)]));
+    assert.equal(parseToolBatch(runScript('latest-reply-container', pageOf([{ node: noLabel }]))[0]!).kind, 'none', '不能从 JSON 结构猜测正式协议');
   });
 
   it('没有 code 子节点时无法证明 pre 首尾空行属于结构，必须原样保留', () => {

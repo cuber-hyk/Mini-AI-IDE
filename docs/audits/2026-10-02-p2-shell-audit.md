@@ -2,16 +2,10 @@
 artifact_type: audit
 status: active
 created: 2026-10-02
-updated: 2026-10-02
+updated: 2026-10-07
 owner: 胡运宽
 scope: P2 外壳实现核验（三视图架构、会话复用、文件访问 IPC、渲染进程隔离）
-source_of_truth:
-  - docs/plans/2026-10-02-mini-ai-ide-poc.md
-  - docs/adr/2026-10-02-filesystem-permission-model.md
-  - docs/adr/2026-10-02-honest-electron-identity.md
-  - docs/capabilities/app-shell.md
-  - docs/capabilities/local-file-access.md
-  - src/main/selfTest.ts
+source_of_truth: ["docs/plans/2026-10-02-mini-ai-ide-poc.md","docs/adr/2026-10-02-filesystem-permission-model.md","docs/adr/2026-10-02-honest-electron-identity.md","docs/capabilities/app-shell.md","docs/capabilities/local-file-access.md","src/main/selfTest.ts"]
 ---
 
 # P2 外壳实现核验报告
@@ -58,16 +52,16 @@ source_of_truth:
 | P2-4 | Medium | verified | Monaco 会定义 `window.require`，若按"存在即 Node 泄漏"判定会产生**假阳性**；实际是 AMD loader | 自检 D4 曾报 `nodeGlobals: ["require"]` | docs/plans/2026-10-02-mini-ai-ide-poc.md（P2） | — | 新增 D10：以 `require.config`（AMD）与 `require.resolve`（Node）区分，观测 `requireKind: "amd"`；D4 改为只检查非 require 的 Node 全局 | 已修复；已写入陷阱表 |
 | P2-5 | Low | verified | Monaco 的 web worker 在 `file://` + CSP 下被阻止，回退主线程执行；控制台报错但**不影响语法高亮与编辑** | 渲染进程控制台：`Creating a worker from 'blob:file:///...' violates ... script-src`；随后 `Could not create web worker(s). Falling back to loading web worker code in main thread` | docs/plans/2026-10-02-mini-ai-ide-poc.md（P2，后续增强） | — | 编辑与高亮可用；自检 D1/D2 PASS | 接受为已知取舍。若后续需要语言服务（补全/诊断），需改为本地 HTTP 承载渲染进程或打包 worker |
 | P2-6 | Low | verified | 构建脚本不能用 `fs.cpSync`：在本项目执行环境报 `EIO` | `copy-static.mjs` 首次运行失败，`errno: 5, code: 'EIO', syscall: 'cp'` | docs/plans/2026-10-02-mini-ai-ide-poc.md（P2） | — | 改为显式 `mkdirSync` + `writeFileSync` 递归复制，154 个文件复制成功 | 已修复 |
-| P2-7 | Medium | **open** | **UI 目视与右侧网页加载未验证**：执行沙箱限制子进程对外网络，Electron 内的对外请求会挂起，因此无法在此环境确认界面观感 | 沙箱内 `loadURL` 无 `did-finish-load`（与 P0b 同一现象） | docs/plans/2026-10-02-mini-ai-ide-poc.md（P2） | — | 用户实测（截图）：左右并排 ✅、打开目录/文件树/编辑 ✅、无「使用环境异常」告警 ✅；**分隔条不可拖动 ❌**、**未登录 ❌** | 部分关闭：UI 与告警已确认；分隔条缺陷与登录态问题分别转 P2-8 / P2-9 |
+| P2-7 | Medium | open | **UI 目视与右侧网页加载未验证**：执行沙箱限制子进程对外网络，Electron 内的对外请求会挂起，因此无法在此环境确认界面观感 | 沙箱内 `loadURL` 无 `did-finish-load`（与 P0b 同一现象） | docs/plans/2026-10-02-mini-ai-ide-poc.md（P2） | — | 用户实测（截图）：左右并排 ✅、打开目录/文件树/编辑 ✅、无「使用环境异常」告警 ✅；**分隔条不可拖动 ❌**、**未登录 ❌** | 部分关闭：UI 与告警已确认；分隔条缺陷与登录态问题分别转 P2-8 / P2-9 |
 | P2-8 | Medium | verified | **分隔条不可拖动**：原实现用一个独立 `WebContentsView` 覆盖在边界上（4px），它不接收拖动事件，视觉上像分隔条但完全无响应；且跨渲染进程无法在右侧网页上方取得鼠标事件 | 用户实测报告"中间分隔条不可拖动"；代码审查：`dividerView` 只设置了 bounds 与 hover 样式，无任何拖动逻辑 | docs/plans/2026-10-02-mini-ai-ide-poc.md（P2） | — | 改为**编辑器页面自身 DOM** 上的分隔条：`pointerdown` + `setPointerCapture` → `ui:set-split` → 主进程约束最小宽度后设界并回传实际值；双击复位 45%。自检 E1/E2 覆盖新通道；**待用户复验拖动** | 已修复并纳入自检；复验由用户完成 |
-| P2-9 | **High** | **verified** | 本应用分区内登录态检查曾误报缺失：早期诊断**只查 cookie**（找 `ds_session_id`），而 **DeepSeek 的会话实际存放在 `localStorage`**（`userToken`、`settingsJwt`、`__appKit_userInfo` 等），cookie 里只有设备指纹 `smidV2` 与 `.thumbcache_*` | 修正后 `npm run diagnose`：`verdict: SESSION_OK`、落点 `https://chat.deepseek.com/`（未跳登录页）、`localStorage` 34 项含 `userToken`(92)、`settingsJwt`(409)、`__appKit_userInfo`(71) | docs/plans/2026-10-02-mini-ai-ide-poc.md（P2） | — | 用户在应用内登录一次后，诊断得 `SESSION_OK`（退出码 0）；网络失败 0 条 | 已关闭。判据改为"cookie 或页面存储任一命中即视为有会话"，并把"落点是否登录页"作为独立信号；结论写入 `session-persistence` 能力文档 |
+| P2-9 | **High** | verified | 本应用分区内登录态检查曾误报缺失：早期诊断**只查 cookie**（找 `ds_session_id`），而 **DeepSeek 的会话实际存放在 `localStorage`**（`userToken`、`settingsJwt`、`__appKit_userInfo` 等），cookie 里只有设备指纹 `smidV2` 与 `.thumbcache_*` | 修正后 `npm run diagnose`：`verdict: SESSION_OK`、落点 `https://chat.deepseek.com/`（未跳登录页）、`localStorage` 34 项含 `userToken`(92)、`settingsJwt`(409)、`__appKit_userInfo`(71) | docs/plans/2026-10-02-mini-ai-ide-poc.md（P2） | — | 用户在应用内登录一次后，诊断得 `SESSION_OK`（退出码 0）；网络失败 0 条 | 已关闭。判据改为"cookie 或页面存储任一命中即视为有会话"，并把"落点是否登录页"作为独立信号；结论写入 `session-persistence` 能力文档 |
 | P2-11 | Medium | verified | 早期"跨应用迁移 profile 导致会话丢失"的结论**只对 cookie 成立**：会话本体在 `localStorage`，而 localStorage 按 origin 隔离并落在分区目录内；因此分区不变 + 同源访问即可跨重启保持 | 迁移后 cookie 减少但 localStorage 完整；`SESSION_OK` | docs/plans/2026-10-02-mini-ai-ide-poc.md（P2） | — | 诊断输出中 `cookie=无` 而 `页面存储=有（userToken, ...）` | 已更正文档表述：迁移 profile 会丢 cookie，但会话载体是 localStorage；两者分开说明 |
 | P2-12 | **High** | verified | **"上次打开的目录"记忆看起来没生效**：顺序错误 —— 主进程先 `await loadFile()` 再恢复目录，而渲染进程**在页面加载完成时就调用 `getRoot()`**，因此永远拿不到恢复后的值。功能代码是对的，但恢复结果从未到达界面 | 用户报告"目录打开没有记忆，还是需要重复打开"；代码审查确认 `loadFile` 在恢复之前 | docs/plans/2026-10-02-mini-ai-ide-poc.md（P3） | — | 把根目录决策**移到 `loadFile` 之前**；新增 `--test-restore` 模式，用**两次进程启动**验证：第 1 次写设置，第 2 次启动断言恢复结果。自检 H1–H3 PASS（`startupRoot === 期望值`），自检项 35 → 38 | 已修复并纳入自检。**教训：跨进程协作里"副作用发生在消费者之后"是静默失效的重灾区**（与 P2-1/P2-2 同类） |
 | P2-13 | **High** | verified | **左侧编辑器实际不可编辑**：`readOnly: true` 常驻，而"输入即解除只读"的逻辑挂在 `document` 的 `keydown` 上 —— **Monaco 获得焦点后会吞掉键盘事件**，该监听器永不触发，等于死代码。用户表现：只能看，不能改 | 用户反馈"编辑器好像只有只读，不能编辑、删除"；代码审查确认监听器在 `document` 层 | docs/plans/2026-10-02-mini-ai-ide-poc.md（P3） | — | 删除 `readOnly` 与那段死代码，**默认可编辑**；未保存由文件头白点提示。自检 L3 断言"开启了自动换行与字体行高、且**不存在 `readOnly: true`**" | 已修复。**教训：在错误的层级监听事件 = 逻辑不存在，而代码看起来是"实现过"的** |
 | P2-14 | Medium | verified | **目录树是"进入式"而非"展开式"**：点击文件夹会替换整个列表（等价于资源管理器导航），没有返回上级的途径；且长行不换行、字体拥挤、无行号核对手段 | 用户反馈"点击某个文件夹时不会展开而是进入这个文件夹，导致无法回退到上一级"；代码审查确认 `loadTree(entry.relPath)` 替换列表 | docs/plans/2026-10-02-mini-ai-ide-poc.md（P3） | — | 改为可展开树（懒加载子节点、展开状态按根目录记忆）；`wordWrap: 'on'` + 字体栈 + 行高；预览面板显示**应用后会落在文件里的真实行号**。自检 L1/L4/L5 覆盖 | 已修复并纳入自检 |
 | P2-15 | **High** | verified | **编辑器与所有按钮完全不工作**（用户第二次报告"老样子：无法编辑、无换行"）：`el` 元素结构体**漏列了 `btnCollect` / `preview` / `previewNotes` 等整套预览面板引用** —— 加面板时只写了 `getElementById`，忘了放进结构体。脚本执行到绑定处访问 `undefined.addEventListener` **抛异常并中断整个 IIFE**，于是 Monaco 从未被创建、所有按钮事件也没绑上 | 运行时探针捕获：`Uncaught TypeError: Cannot read properties of undefined (reading 'addEventListener')` at renderer.js:620；探针同时报 `ready: false, reason: "编辑器尚未创建"`。**注意此前的自检 L1 全部通过**——它只比对"JS 里出现过的 id ⊆ HTML 的 id"，看不到"结构体漏列字段" | docs/plans/2026-10-02-mini-ai-ide-poc.md（P3） | — | 补齐结构体；新增自检 **L1b**（`el` 键集 vs `el.xxx` 使用集）与 **L1c**（每个绑定 id 都存在）；渲染进程开头加**元素断言**（缺失时立刻报出清单而非炸掉脚本）；新增 `npm run ui-probe` 读回 Monaco 实际选项。**反向验证**：故意删掉 `el.btnCollect`，L1b 立即报 `undeclared: ["btnCollect"]` | 已修复。**教训：渲染进程的 `null` 引用会中断整个脚本，"界面看着正常"与"脚本跑完了"是两件事；静态检查必须覆盖结构体完整性，不能只覆盖 id 存在性** |
 | P2-16 | Low | verified | 窄窗口下工具栏按钮文字折成两行（"采集回复"→"采集回/复"） | 用户截图 | docs/plans/2026-10-02-mini-ai-ide-poc.md（P3） | — | `.toolbar button` 补 `white-space: nowrap` + `flex: 0 0 auto` | 已修复 |
-| P2-7 | Medium | **verified** | UI 目视与真实站点加载 | 沙箱限制子进程对外网络，无法在此环境目视 | docs/plans/2026-10-02-mini-ai-ide-poc.md（P2） | — | 用户实测：左右并排 ✅、打开目录/文件树/编辑 ✅、**无「使用环境异常」告警** ✅、登录后 `SESSION_OK` ✅ | 已关闭。分隔条缺陷见 P2-8 |
+| P2-7 | Medium | verified | UI 目视与真实站点加载 | 沙箱限制子进程对外网络，无法在此环境目视 | docs/plans/2026-10-02-mini-ai-ide-poc.md（P2） | — | 用户实测：左右并排 ✅、打开目录/文件树/编辑 ✅、**无「使用环境异常」告警** ✅、登录后 `SESSION_OK` ✅ | 已关闭。分隔条缺陷见 P2-8 |
 | P2-10 | Low | verified | 用户看到的 SSL 报错**不是**登录失败原因：`localhost.weixin.qq.com:13013-13015/14013-14015` 的 `ERR_CONNECTION_CLOSED` 是微信扫码 SDK 探测本机微信客户端；`support.weixin.qq.com` 的 `ERR_BLOCKED_BY_ORB` 是 Chromium 对图片响应的正常拦截 | `npm run diagnose` 的 `webRequestFailures`：12 条全部属于上述两类，无一条指向 DeepSeek 接口 | docs/plans/2026-10-02-mini-ai-ide-poc.md（P2） | — | 诊断结论与落点一致（LOGIN 页而非网络错误页）；DeepSeek 主文档加载成功 | 已澄清，无需处置。为避免以后误判，新增 `npm run diagnose` 把网络失败与登录态分开报告 |
 
 ## 结论

@@ -1,0 +1,81 @@
+/* 紧凑工具面板与常用输入控件，仅作用于本地编辑器。 */
+.prompt-bar { flex: 0 0 auto; min-height: 0; max-height: 48vh; overflow-y: auto; padding: 8px; }
+.prompt-shell { background: var(--ui-surface); border-color: var(--ui-border); padding: 10px 12px; }
+.prompt-actions { flex-wrap: wrap; justify-content: flex-start; gap: 7px 10px; }
+.prompt-options { gap: 6px; }
+.tool-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+.tool-permission-label { color: var(--ui-muted); font-size: 15px; }
+.tool-select { height: var(--ui-control-height); max-width: 100%; border: 1px solid var(--ui-border); border-radius: var(--ui-radius); padding: 0 6px; color: var(--ui-text); background: var(--ui-surface); font: inherit; font-size: 12px; }
+.tool-controls .tool-select { border-color: transparent; padding-left: 0; }
+.tool-select:focus-visible, .tool-panel summary:focus-visible, .tool-auto-label input:focus-visible, .tool-more button:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 2px; }
+.tool-select:disabled { opacity: .45; }
+.tool-auto-label { display: flex; align-items: center; gap: 6px; white-space: nowrap; color: var(--ui-muted); font-size: 12px; cursor: pointer; }
+.tool-auto-label input { appearance: none; position: relative; width: 28px; height: 16px; margin: 0; border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-bg); cursor: pointer; }
+.tool-auto-label input::before { content: ''; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%; background: var(--ui-muted); }
+.tool-auto-label input:checked { background: var(--ui-accent); border-color: var(--ui-accent); }
+.tool-auto-label input:checked::before { left: 14px; background: var(--ui-text); }
+.tool-auto-label input:disabled { opacity: .45; cursor: default; }
+.tool-settings-wrap > .ui-icon { background: transparent; border-color: transparent; color: var(--ui-muted); }
+.tool-settings-wrap svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.3; }
+.tool-settings-panel, .tool-more { position: fixed; z-index: 110; border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-surface); box-shadow: 0 12px 36px #0006; overflow: auto; }
+.tool-settings-panel { width: min(330px, calc(100vw - 16px)); padding: 14px; max-height: calc(100vh - 16px); }
+.tool-settings-panel[hidden], .tool-more[hidden], .tool-message[hidden], .tool-resizer[hidden], .tool-result-actions [hidden] { display: none; }
+.tool-settings-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.tool-settings-head .ui-icon { border: 0; background: transparent; }
+.tool-settings-body { display: flex; flex-direction: column; align-items: stretch; gap: 10px; font-size: 12px; color: var(--ui-text); }
+.tool-settings-body p, .tool-permission-hint { margin: 0; color: var(--ui-muted); font-size: 12px; line-height: 1.6; }
+.tool-settings-body .tool-select { width: 100%; }
+.tool-settings-body .tool-auto-label { padding: 5px 0; color: var(--ui-text); }
+.tool-settings-body .ui-button { text-align: left; }
+.tool-permission-hint { border-top: 1px solid var(--ui-border); padding-top: 10px; }
+.tool-dock { position: relative; flex: 0 0 auto; min-width: 0; background: var(--ui-bg); border-top: 1px solid var(--ui-border); }
+.tool-resizer { position: absolute; top: -3px; left: 0; right: 0; height: 6px; cursor: ns-resize; touch-action: none; z-index: 1; }
+.tool-resizer:hover, .tool-resizer:focus-visible, .tool-resizer.dragging { background: var(--ui-accent); outline: none; }
+.tool-panel { min-width: 0; }
+.tool-panel-summary { min-height: 38px; padding: 9px 145px 8px 10px; cursor: pointer; color: var(--ui-text); line-height: 20px; }
+.tool-result-time { margin-left: 7px; color: var(--ui-muted); font-variant-numeric: tabular-nums; }
+.tool-completion-notice.is-error { color: var(--warn); }
+.tool-count { margin-left: 8px; color: var(--ui-muted); font-size: 12px; }
+.tool-activity { margin-left: 8px; color: var(--ui-muted); font-size: 12px; }
+.tool-completion-notice, .tool-sound-notice { display: block; font-size: 12px; overflow-wrap: anywhere; }
+.tool-completion-notice:empty, .tool-sound-notice:empty { display: none; }
+.tool-completion-notice { color: var(--ui-success); }
+.tool-sound-notice, .completion-error .tool-completion-notice { color: var(--warn); }
+.tool-panel.has-completion > summary { box-shadow: inset 3px 0 var(--ui-success); animation: tool-completion-glow .55s ease-out; }
+.tool-panel.has-completion.completion-error > summary { box-shadow: inset 3px 0 var(--warn); }
+.has-completion .tool-completion-notice { animation: tool-completion-enter .22s ease-out; }
+@keyframes tool-completion-glow { from { background: var(--ui-surface); } to { background: transparent; } }
+@keyframes tool-completion-enter { from { opacity: .4; transform: translateY(2px); } to { opacity: 1; transform: translateY(0); } }
+@media (prefers-reduced-motion: reduce) { .tool-panel.has-completion > summary, .has-completion .tool-completion-notice { animation: none; } }
+.tool-result-actions { position: absolute; top: 5px; right: 8px; display: flex; align-items: center; gap: 6px; }
+.tool-result-actions .ui-button, .tool-result-actions .ui-icon { height: 28px; font-size: 12px; }
+.tool-result-actions .ui-icon { width: 28px; background: transparent; border-color: transparent; font-size: 20px; }
+.tool-more { width: min(210px, calc(100vw - 16px)); padding: 5px; }
+.tool-more .tool-auto-label { padding: 9px 10px; color: var(--ui-text); }
+.tool-more button { display: block; width: 100%; border: 0; background: transparent; color: var(--ui-text); padding: 8px 10px; text-align: left; font: inherit; cursor: pointer; border-radius: var(--ui-radius); }
+.tool-more button:hover:not(:disabled) { background: var(--ui-bg); }
+.tool-more button:disabled { opacity: .45; cursor: default; }
+.tool-panel-body { height: var(--tool-body-height, 160px); overflow-y: auto; padding: 0 10px 8px; }
+.tool-message { margin: 0 0 8px; padding: 7px 0; color: var(--ui-muted); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tool-message.is-error, .tool-activity.is-error { color: var(--warn); }
+.tool-result { border-top: 1px solid var(--ui-border); }
+.tool-result > summary { display: grid; grid-template-columns: minmax(85px, auto) minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 9px 2px; cursor: pointer; font-size: 12px; list-style: none; }
+.tool-result > summary::after { content: '›'; color: var(--ui-muted); grid-column: 3; grid-row: 1; }
+.tool-result[open] > summary::after { content: '⌄'; }
+.tool-result-label { grid-column: 1; grid-row: 1; color: var(--ui-text); }
+.tool-result-target { grid-column: 2; grid-row: 1; min-width: 0; color: var(--ui-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-result-status { grid-column: 1; grid-row: 2; color: var(--ui-muted); }
+.tool-result-status[data-status="done"] { color: var(--ui-success); }
+.tool-result-status[data-status="failed"], .tool-result-status[data-status="permission_denied"], .tool-result-status[data-status="unknown"] { color: var(--warn); }
+.tool-result-detail { grid-column: 2; grid-row: 2; min-width: 0; color: var(--ui-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-command-stop { grid-column: 3; grid-row: 2; height: 26px; padding: 0 7px; color: var(--warn); font-size: 12px; white-space: nowrap; }
+.tool-batch-error pre { color: var(--warn); }
+.tool-result pre { margin: 0 0 8px; padding: 10px; border-radius: var(--ui-radius); background: var(--ui-surface); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+@media (min-width: 620px) {
+  .tool-result > summary { grid-template-columns: 90px minmax(0, 1fr) auto minmax(0, 1fr) auto 10px; }
+  .tool-result-status { grid-column: 3; grid-row: 1; }
+  .tool-result-detail { grid-column: 4; grid-row: 1; }
+  .tool-command-stop { grid-column: 5; grid-row: 1; }
+  .tool-result > summary::after { grid-column: 6; }
+}
+@media (max-width: 580px) { .prompt-actions > .spacer { display: none; } .prompt-actions .primary { margin-left: auto; } }

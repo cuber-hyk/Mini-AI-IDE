@@ -224,7 +224,9 @@ export class ReturnPathService {
   }
 
   /** 撤销最近一次应用 */
-  async undoLast(): Promise<UndoResult> {
+  async undoLast(expectedSource?: { collectionId: string; index: number }): Promise<UndoResult> {
+    const latest = this.snapshots.at(-1);
+    if (expectedSource && (!latest?.source || latest.source.collectionId !== expectedSource.collectionId || latest.source.index !== expectedSource.index)) return { ok: false, error: '最新变更不属于此工具记录，请先处理其后的修改' };
     const snap = this.snapshots.pop();
     if (!snap) return { ok: false, error: '没有可撤销的变更' };
     if (snap.root !== this.files.getRoot()) return { ok: false, error: '撤销记录属于其他目录，已失效' };

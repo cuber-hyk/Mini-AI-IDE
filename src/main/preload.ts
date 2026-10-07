@@ -19,6 +19,8 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 /** 与 src/shared/contract.ts 的 CHANNELS 必须逐字一致（自检会校验） */
 const CH = {
+  getToolState: 'tools:get-state', setToolConfig: 'tools:set-config', toolState: 'tools:state',
+  copyToolResults: 'tools:copy-results', cancelTools: 'tools:cancel', stopToolCommand: 'tools:stop-command', clearToolRules: 'tools:clear-rules', undoToolChange: 'tools:undo',
   getUpdateState: 'ui:get-update-state',
   checkForUpdate: 'ui:check-for-update',
   downloadUpdate: 'ui:download-update',
@@ -70,6 +72,14 @@ const CH = {
   setFormatSpecVariant: 'ui:set-format-spec-variant',
 } as const;
 const bridge = {
+  getToolState: () => ipcRenderer.invoke(CH.getToolState),
+  setToolConfig: (config: unknown) => ipcRenderer.invoke(CH.setToolConfig, config),
+  onToolState: (listener: (state: unknown) => void) => ipcRenderer.on(CH.toolState, (_e, state) => listener(state)),
+  copyToolResults: () => ipcRenderer.invoke(CH.copyToolResults),
+  cancelTools: () => ipcRenderer.invoke(CH.cancelTools),
+  stopToolCommand: (target: unknown) => ipcRenderer.invoke(CH.stopToolCommand, target),
+  clearToolRules: () => ipcRenderer.invoke(CH.clearToolRules),
+  undoToolChange: () => ipcRenderer.invoke(CH.undoToolChange),
   getUpdateState: () => ipcRenderer.invoke(CH.getUpdateState),
   checkForUpdate: () => ipcRenderer.invoke(CH.checkForUpdate),
   downloadUpdate: () => ipcRenderer.invoke(CH.downloadUpdate),
@@ -150,8 +160,8 @@ const bridge = {
    * 订阅「磁盘文件被回程链路改写」。
    * 落盘在主进程、编辑在另一个渲染进程，不广播的话编辑器就一直显示旧内容。
    */
-  onFileChanged: (listener: (filePath: string, change: 'updated' | 'created' | 'deleted', revision: number) => void) => {
-    ipcRenderer.on(CH.fileChanged, (_e, filePath, change, revision) => listener(filePath, change, revision));
+  onFileChanged: (listener: (filePath: string, change: 'updated' | 'created' | 'deleted', revision: number, discardDraft?: boolean) => void) => {
+    ipcRenderer.on(CH.fileChanged, (_e, filePath, change, revision, discardDraft) => listener(filePath, change, revision, discardDraft));
   },
 };
 

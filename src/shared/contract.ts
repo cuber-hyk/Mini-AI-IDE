@@ -7,8 +7,17 @@
 import type { TextMeta } from './limits';
 import type { FormatSpecVariant } from './formatSpec';
 import type { ApplicationUpdateState } from './applicationUpdate';
+import type { ToolConfig, ToolState } from './toolProtocol';
 
 export const CHANNELS = {
+  getToolState: 'tools:get-state',
+  setToolConfig: 'tools:set-config',
+  toolState: 'tools:state',
+  copyToolResults: 'tools:copy-results',
+  cancelTools: 'tools:cancel',
+  stopToolCommand: 'tools:stop-command',
+  clearToolRules: 'tools:clear-rules',
+  undoToolChange: 'tools:undo',
   getUpdateState: 'ui:get-update-state',
   checkForUpdate: 'ui:check-for-update',
   downloadUpdate: 'ui:download-update',
@@ -554,6 +563,14 @@ export interface EditorDiffSibling {
 
 /** preload 通过 contextBridge 暴露给渲染进程的唯一接口面 */
 export interface EditorBridge {
+  getToolState(): Promise<ToolState>;
+  setToolConfig(config: Partial<ToolConfig>): Promise<ToolState>;
+  onToolState(listener: (state: ToolState) => void): void;
+  copyToolResults(): Promise<{ ok: boolean; error?: string }>;
+  cancelTools(): Promise<ToolState>;
+  stopToolCommand(target: { batch_id: string; request_id: string; process_id: string }): Promise<ToolState>;
+  clearToolRules(): Promise<ToolState>;
+  undoToolChange(): Promise<{ ok: boolean; error?: string }>;
   getUpdateState(): Promise<ApplicationUpdateState>;
   checkForUpdate(): Promise<ApplicationUpdateState>;
   downloadUpdate(): Promise<ApplicationUpdateState>;
@@ -654,7 +671,7 @@ export interface EditorBridge {
   /** 撤销上一次应用（按快照恢复原文） */
   undoSave(): Promise<UndoResult>;
   onRootChanged(listener: (info: RootInfo) => void): void;
-  onFileChanged(listener: (filePath: string, change: 'updated' | 'created' | 'deleted', revision: number) => void): void;
+  onFileChanged(listener: (filePath: string, change: 'updated' | 'created' | 'deleted', revision: number, discardDraft?: boolean) => void): void;
   /** 记忆的根目录已失效（被删除/移动）时的通知 */
   onRootStale(listener: (info: RootInfo) => void): void;
 }

@@ -18,6 +18,7 @@ import * as vm from 'node:vm';
 
 import { CHANNELS } from '../shared/contract';
 import { buildPrompt, getFormatSpec } from '../shared/formatSpec';
+import { parseToolBatch, TOOL_PROTOCOL_PROMPT, type ToolState } from '../shared/toolProtocol';
 import {
   computeApply,
   parseModelReply,
@@ -272,6 +273,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   // 只在 contract.ts 里加常量是**不够**的 —— 自检会误报"未注册 ipcMain 处理器"。
   // 判断依据：代码里只有 `webContents.send(CHANNELS.x)`、没有 `ipcMain.handle(CHANNELS.x)`。
   const oneWayChannels: string[] = [
+    CHANNELS.toolState,
     CHANNELS.updateState,
     CHANNELS.openUpdatePanel,
     CHANNELS.entryChanged,
@@ -315,7 +317,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     const perFile: Record<string, string[]> = {};
     for (const f of preloadFiles) {
       const src = fs.readFileSync(path.join(__dirname, f), 'utf8');
-      const found = [...src.matchAll(/'((?:fs|ui|return|preview|editor):[a-z-]+)'/g)].map((m) => m[1] as string);
+      const found = [...src.matchAll(/'((?:fs|ui|return|preview|editor|tools):[a-z-]+)'/g)].map((m) => m[1] as string);
       perFile[f] = found;
       literals.push(...found);
     }
@@ -358,6 +360,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     const explorerJs = fs.readFileSync(path.join(rendererDir, 'fileExplorer.js'), 'utf8');
     const workspaceJs = fs.readFileSync(path.join(rendererDir, 'editorWorkspace.js'), 'utf8');
     const tabsJs = fs.readFileSync(path.join(rendererDir, 'editorTabs.js'), 'utf8');
+    const toolLayoutJs = fs.readFileSync(path.join(rendererDir, 'toolPanelLayout.js'), 'utf8');
     const js = [editorJs, composerJs, toolbarJs, explorerJs, workspaceJs, tabsJs, updateJs].join('\n');
     const css = fs.readFileSync(path.join(rendererDir, 'style.css'), 'utf8');
     /*
@@ -432,6 +435,18 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       if (id === 'update-close') return !/getElementById\('update-close'\)\.addEventListener\('click'/.test(updateJs);
       const explorerKey: Record<string, string> = { 'file-new': 'newFile', 'folder-new': 'newFolder', 'file-refresh': 'refresh' };
       if (explorerKey[id]) return !new RegExp(`options\\.${explorerKey[id]}\\.addEventListener\\('click'`).test(explorerJs);
+      if (id.startsWith('tool-')) {
+        if (id === 'tool-settings-toggle' || id === 'tool-more-toggle') {
+          const registered = id === 'tool-settings-toggle'
+            ? /popup\('tool-settings-wrap', 'tool-settings-toggle', 'tool-settings-panel', 'tool-settings-close'\)/.test(toolLayoutJs)
+            : /popup\('tool-more-wrap', 'tool-more-toggle', 'tool-more'\)/.test(toolLayoutJs);
+          return !registered || !/trigger\.addEventListener\('click'/.test(toolLayoutJs);
+        }
+        if (id === 'tool-settings-close') return !/getElementById\(closeId\)\.addEventListener\('click'/.test(toolLayoutJs) || !/popup\('tool-settings-wrap', 'tool-settings-toggle', 'tool-settings-panel', 'tool-settings-close'\)/.test(toolLayoutJs);
+        const toolJs = fs.readFileSync(path.join(rendererDir, 'toolHarness.js'), 'utf8');
+        const declaration = new RegExp(`const (\\w+) = document\\.getElementById\\('${id}'\\)`).exec(toolJs);
+        return !declaration || !new RegExp(`\\b${declaration[1]}\\.addEventListener\\(`).test(toolJs);
+      }
       const key = toCamel(id);
       const declared = elKeys.some((k) => k.key === key);
       const bound = new RegExp(`\\bel\\.${key}\\.addEventListener\\(`).test(js);
@@ -737,7 +752,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       const settingsMenu = /label:\s*'设置'/.test(mainTs) && /label:\s*'修改提示词…'/.test(mainTs);
       const gearInEditor = /id="btn-settings"/.test(html) && /el\.btnSettings\.addEventListener\('click'/.test(js);
       const gearOpensPanel = /bridge\.openPromptPanel\(\)/.test(js) && /openPromptPanel:\s*'ui:open-prompt-panel'/.test(preloadTs);
-      add('Y7', '入口齐备：Settings 菜单「修改提示词…」+ 编辑器工具栏齿轮（均通往同一面板）', settingsMenu && gearInEditor && gearOpensPanel, {
+      add('Y7', '提示词编辑入口齐备：设置菜单及工具设置浮层（均通往同一面板）', settingsMenu && gearInEditor && gearOpensPanel, {
         settingsMenu,
         gearInEditor,
         gearOpensPanel,
@@ -926,20 +941,13 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       buttonText: copyBtnText,
     });
 
-    /*
-     * O5：采集后**自动**进编辑器 diff —— 主进程里必须存在"采集即推 diffData"的调用。
-     * 注意匹配编译产物：`CHANNELS` 在 tsc 输出里是 `contract_1.CHANNELS`，故只匹配尾部 `CHANNELS.diffData`。
-     */
+    // 唯一工具入口采用权限与结果状态；实际调用本地 bridge 验证已连接到主进程。
     const mainJs = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
-    const autoDiff =
-      /blocks\.find\(\(b\) => b\.applicable\)/.test(mainJs) &&
-      /firstApplicable/.test(mainJs) &&
-      /\.send\(\s*(?:contract_1\.)?CHANNELS\.diffData/.test(mainJs);
-    add('O5', '采集成功后自动把第一个可应用变更送进编辑器 diff（无需手动点按钮）', autoDiff, {
-      findsApplicable: /blocks\.find\(\(b\) => b\.applicable\)/.test(mainJs),
-      hasFirstApplicable: /firstApplicable/.test(mainJs),
-      sendsDiffData: /\.send\(\s*(?:contract_1\.)?CHANNELS\.diffData/.test(mainJs),
-    });
+    try {
+      const state = await input.editorView.webContents.executeJavaScript('window.editorBridge.getToolState()') as ToolState;
+      add('O5', '本地工具 bridge 返回主进程真实权限与结果状态', ['ask', 'rules', 'full'].includes(state.config.permission) && typeof state.config.automatic === 'boolean' && Array.isArray(state.results),
+        { config: state.config, resultCount: state.results.length });
+    } catch (error) { add('O5', '本地工具 bridge 返回主进程真实权限与结果状态', false, String(error)); }
 
     /*
      * O6：网页隐藏后**必须还能回来**（本项目已犯过一次这个错）。
@@ -1065,7 +1073,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
      * 实际读取已上移到本 try 块开头，此处只留说明。
      */
     const hasFileChangedChannel = /fileChanged:\s*'fs:file-changed'/.test(contractTs);
-    const notifiesOnApply = /notifyFileChanged\(filePath,\s*outcome\.created\s*\?/.test(mainTs);
+    const notifiesOnApply = /notifyFileChanged\((?:filePath|alias),\s*outcome\.created\s*\?/.test(mainTs);
     const notifiesOnUndo = /notifyFileChanged\(result\.filePath,\s*result\.deleted\s*\?/.test(mainTs);
     const editorListens = /onFileChanged/.test(js) && /onFileChanged/.test(preloadTs);
     add(
@@ -1184,47 +1192,36 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       { resetsMinH, releasesMaxH },
     );
 
-    // R5：垂直方向的三处 flex 收缩许可。缺任一条，
-    // 输入框撑高时编辑器不缩 → 底部被推出视口（用户实测"输入框底部有点溢出"）。
-    const wrapAllowsShrink = /\.editor-wrap\s*\{[^}]*min-height:\s*0/.test(css);
-    const promptBarShrinkable = /\.prompt-bar\s*\{[\s\S]*?flex:\s*0\s+1\s+auto/.test(css);
+    // 检查实际级联与几何，避免旧 CSS 中的固定高度掩盖紧凑布局。
+    const promptGeometry = await input.editorView.webContents.executeJavaScript(`(() => {
+      const bar = document.querySelector('.prompt-bar'), rect = bar.getBoundingClientRect();
+      const ids = ['requirement', 'variant-switch', 'tool-permission', 'tool-automatic', 'tool-settings-toggle', 'btn-copy-prompt'];
+      return {
+        editorShrinkable: getComputedStyle(document.querySelector('.editor-wrap')).minHeight === '0px',
+        withinBudget: rect.height <= innerHeight * .48 + 1 && rect.bottom <= innerHeight + 1,
+        controlsVisible: ids.every(id => {
+          const r = document.getElementById(id).getBoundingClientRect();
+          return r.width > 0 && r.height > 0 && r.left >= 0 && r.right <= innerWidth + 1 && r.top >= rect.top && r.bottom <= rect.bottom + 1;
+        })
+      };
+    })()`) as { editorShrinkable: boolean; withinBudget: boolean; controlsVisible: boolean };
     add(
       'R5',
-      '编辑器容器与输入区允许在 flex 中收缩（输入框撑高不顶出视口）',
-      wrapAllowsShrink && promptBarShrinkable,
-      { wrapAllowsShrink, promptBarShrinkable },
+      '输入区处于实际视口预算内，编辑器允许收缩',
+      promptGeometry.editorShrinkable && promptGeometry.withinBudget,
+      promptGeometry,
     );
 
-    // R6：输入区**可缩，但不能缩到内容放不下**。
-    //
-    // 这条规则经过三个版本才收敛，两个方向都踩过：
-    //  · `flex: 0 0 auto`（禁缩）+ min-height: 0 → 无效组合，视口紧张时本区不缩，
-    //    把底部边框顶出可视范围（"启动时底部溢出，拖一下窗口就恢复"）；
-    //  · `flex: 0 1 auto` + `min-height: 0` → 过头了，本区被压到**低于自身内容高度**，
-    //    当时 .prompt-shell 还是 overflow: hidden，于是输入框下沿被裁掉一条
-    //    （用户实测截图"底部输入框溢出了一部分"）。
-    //
-    // 正解：flex 允许收缩，但 min-height 取**内容自然高度**（输入框 + 操作栏 + 内外边距与边框），
-    // 需要让高度时优先压 .layout（它能一路压到 0）。
-    const promptBarBlock = /\.prompt-bar\s*\{([\s\S]*?)\}/.exec(css)?.[1] ?? '';
-    const barShrinkable = /flex:\s*0\s+1\s+auto/.test(promptBarBlock);
-    const barNotHardZero = !/flex:\s*0\s+0\s+auto/.test(promptBarBlock);
-    const barMinHeight = /min-height:\s*(\d+)px/.exec(promptBarBlock)?.[1];
-    // 加入独立操作栏 32px、行间距 8px 和边框 3px。
-    const reqMinForBar = /\.requirement\s*\{([\s\S]*?)\}/.exec(css)?.[1] ?? '';
-    const reqMinPx = Number(/min-height:\s*(\d+)px/.exec(reqMinForBar)?.[1] ?? 0);
-    const expectedBarMin = 8 + 10 + reqMinPx + 8 + 32 + 10 + 10 + 3;
-    const barMinFitsContent = Number(barMinHeight) >= expectedBarMin;
     add(
       'R6',
-      '输入区 flex 可收缩、且 min-height 不小于内容自然高度（不会把自身内容切掉）',
-      barShrinkable && barNotHardZero && barMinFitsContent,
-      { barShrinkable, barNotHardZero, barMinHeight: barMinHeight ?? '未设置', expectedBarMin },
+      '输入框及常用操作在实际布局内可见，未被输入区裁切',
+      promptGeometry.controlsVisible,
+      promptGeometry,
     );
 
     // R6b：外壳不得用 overflow: hidden 静默裁掉输入框。
     // 它曾把"差几像素"变成"看得出来的一条切边"（用户截图里的底部溢出）。
-    // 现在靠 .prompt-bar 的 min-height 保证放得下；宁可有明显溢出也不要静默裁切。
+    // 当前由输入框上限和实际操作栏高度预算保证控件可见。
     //
     // 注意：**必须先去掉 CSS 注释**再断言。注释里为了说明历史会写出 overflow: hidden，
     // 直接匹配原文会被自己的说明文字误伤（实现时踩过）。
@@ -1640,32 +1637,22 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   const parsed = parseModelReply(sampleReply);
   add('F1', '回程解析：每块紧邻文件与明确操作均被识别', parsed.blocks.length === 2 && parsed.blocks[0]?.filePath === 'src/demo.ts' && parsed.blocks[0]?.operation === 'overwrite' && parsed.blocks[1]?.filePath === 'other.py' && parsed.blocks[1]?.operation === 'create', parsed.blocks.map(block => ({ file: block.filePath, operation: block.operation })));
   add('F2', '协议正文中的路径注释按字面保存，不剥除内容', parsed.blocks[1]?.code === '# other.py\nprint("hi")', parsed.blocks[1]?.code);
-  // 执行模板实际输出示例；输入上下文仅用于匹配，不可当作操作。
+  // 全部输出示例采用唯一工具协议；外层示例和输入上下文不能触发执行。
   const templateChecks = (variant: 'short' | 'full') => {
     const fences = splitFences(getFormatSpec(variant)); const operations = new Set<string>();
-    let valid = fences.length % 2 === 0; let rejected = 0;
+    let valid = fences.length > 0 && fences.length % 2 === 0 && parseToolBatch(getFormatSpec(variant)).kind === 'none';
     for (let i = 0; i < fences.length; i += 2) {
-      const inputText = fences[i]!.body;
-      const inputs = parseModelReply(inputText).blocks;
-      const contexts = new Map<string, string>(); let previousEnd = 0;
-      for (const inputFence of splitFences(inputText)) {
-        const heading = /### 上下文文件：([^\r\n]+)/.exec(inputText.slice(previousEnd, inputFence.start));
-        if (heading) contexts.set(heading[1]!.trim(), inputFence.body);
-        previousEnd = inputFence.end;
-      }
-      if (inputs.some(block => block.operation)) valid = false;
-      for (const block of parseModelReply(fences[i + 1]!.body).blocks) {
-        if (!block.operation) { if (block.kind !== 'other') valid = false; continue; }
-        operations.add(block.operation);
-        if (block.validationError) { rejected++; if (computeApply('', block).ok) valid = false; continue; }
-        const original = block.operation === 'create' ? '' : contexts.get(block.filePath!);
-        if (original === undefined || !computeApply(original, block).ok) valid = false;
+      if (parseToolBatch(fences[i]!.body).kind !== 'none') valid = false;
+      const output = parseToolBatch(fences[i + 1]!.body);
+      if (output.kind === 'error') valid = false;
+      if (output.kind === 'batch') for (const request of output.batch.requests) {
+        if (request.tool === 'apply_changes') for (const change of request.args.changes as Array<{ operation: string }>) operations.add(change.operation);
       }
     }
-    return { valid, examples: fences.length / 2, rejected, operations: [...operations].sort() };
+    return { valid, examples: fences.length / 2, operations: [...operations].sort() };
   };
   const shortExamples = templateChecks('short'); const fullExamples = templateChecks('full');
-  add('F3', '两版提示词全部输出示例可解析计算，复制上下文不可写入', shortExamples.valid && fullExamples.valid && shortExamples.rejected === 0 && fullExamples.rejected === 1, { shortExamples, fullExamples });
+  add('F3', '两版提示词全部工具示例合法，外层示例与复制上下文不触发执行', shortExamples.valid && fullExamples.valid, { shortExamples, fullExamples });
 
   /*
    * F3b：格式模板里的**每一段围栏必须自洽成对**。
@@ -1699,25 +1686,21 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
 
   const specAll = getFormatSpec('short') + getFormatSpec('full');
   add('F3c', '格式模板实际覆盖替换、新建、覆盖全文且不输出定位范围', shortExamples.valid && JSON.stringify(shortExamples.operations) === '["create","overwrite","replace"]' && !/### 范围：/.test(specAll), shortExamples);
-  add('F3d', '完整版十三组示例实际验证，有效操作成功且格式错误拒绝', fullExamples.valid && fullExamples.examples === 13 && fullExamples.rejected === 1, fullExamples);
-  add('F3g', '简洁版六组高频示例逐一通过真实解析与计算', shortExamples.valid && shortExamples.examples === 6, shortExamples);
+  add('F3d', '完整版十三组示例统一通过正式工具解析', fullExamples.valid && fullExamples.examples === 13, fullExamples);
+  add('F3g', '简洁版六组高频示例逐一通过正式工具解析', shortExamples.valid && shortExamples.examples === 6, shortExamples);
   add(
     'F3e',
-    '格式模板：不含解析器不认识的 ### 续： 约定 + 保留语言标注对照表',
-    !/###\s*续/.test(specAll) &&
-      /语言标注/.test(specAll) &&
-      /\.ts\s*\/\s*\.tsx\s+typescript|typescript/.test(specAll),
+    '正式工具标记不可由普通 JSON 或旧文件块代替',
+    parseToolBatch('```json\n{"protocol_version":1,"batch_id":"example","requests":[{"id":"info","tool":"get_project_info","args":{}}]}\n```').kind === 'none' && parseToolBatch(sampleReply).kind === 'error',
     {
-      hasContinuation: /###\s*续/.test(specAll),
-      hasLangTable: /语言标注/.test(specAll),
-      hasTsLabel: /typescript/.test(specAll),
+      oldFileReply: parseToolBatch(sampleReply).kind,
     }
   );
   add(
     'F3f',
-    '格式模板：截断场景改为"分多轮给完整文件"，而非中间截断',
-    /分多轮/.test(specAll) && /完整/.test(specAll),
-    { hasMultiRound: /分多轮/.test(specAll), hasFull: /完整/.test(specAll) }
+    '正式工具围栏截断时拒绝，不执行半个请求',
+    parseToolBatch('```mini-ai-tools\n{"protocol_version":1').kind === 'error',
+    { incomplete: parseToolBatch('```mini-ai-tools\n{"protocol_version":1').kind }
   );
 
   const appliedWhole = computeApply('old body', parsed.blocks[0]!);
@@ -1906,7 +1889,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   add(
     'I1',
     'prompt 组装包含需求/工作环境/目录结构/格式要求四段',
-    /## 用户需求/.test(assembled) && /## 工作环境/.test(assembled) && /## 目录结构/.test(assembled) && assembled.endsWith(getFormatSpec('short')) && /### 操作：/.test(assembled),
+    /## 用户需求/.test(assembled) && /## 工作环境/.test(assembled) && /## 目录结构/.test(assembled) && assembled.endsWith(getFormatSpec('short')) && assembled.includes(TOOL_PROTOCOL_PROMPT),
     assembled.slice(0, 120)
   );
   add('I2', '工作环境摘要含真实运行环境与工作目录', ctx.environment.length > 0 && ctx.root === fixtures.root, {
