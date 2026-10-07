@@ -42,31 +42,6 @@ function editor() {
   return { wrap, trigger, menu, root, whole, snippet, doc, toolbar, timers };
 }
 
-it('复制菜单保留复制监听，选项点击关闭菜单并回到入口', async () => {
-  const ui = editor(); let copied = 0;
-  ui.whole.addEventListener('click', () => copied++);
-  await ui.trigger.fire('click');
-  assert.equal(ui.menu.hidden, false); assert.equal(ui.trigger.attrs['aria-expanded'], 'true');
-  assert.equal(ui.whole.focused, true);
-  await ui.whole.fire('click');
-  assert.equal(copied, 1); assert.equal(ui.menu.hidden, true); assert.equal(ui.trigger.focused, true);
-});
-
-it('复制菜单支持方向键、首尾键与 Escape，外点和离开焦点不会抢焦点', async () => {
-  const ui = editor(); const event = (key: string, target: unknown = ui.trigger) => ({ key, target, preventDefault() {} });
-  await ui.trigger.fire('keydown', event('ArrowUp'));
-  assert.equal(ui.snippet.focused, true);
-  await ui.wrap.fire('keydown', event('ArrowDown', ui.snippet)); assert.equal(ui.whole.focused, true);
-  ui.snippet.focused = false;
-  await ui.wrap.fire('keydown', event('End', ui.whole)); assert.equal(ui.snippet.focused, true);
-  await ui.wrap.fire('keydown', event('Escape', ui.snippet)); assert.equal(ui.menu.hidden, true);
-  await ui.trigger.fire('click'); ui.trigger.focused = false;
-  await ui.doc.fire('pointerdown', { target: ui.root });
-  assert.equal(ui.menu.hidden, true); assert.equal(ui.trigger.focused, false);
-  await ui.trigger.fire('click');
-  await ui.wrap.fire('focusout', { relatedTarget: ui.root }); assert.equal(ui.menu.hidden, true);
-});
-
 it('目录路径以末两级显示，完整路径保留在悬停提示', () => {
   const ui = editor(); ui.toolbar.renderRoot('C:\\Users\\胡运宽\\Desktop\\test');
   assert.equal(ui.root.textContent, 'Desktop / test'); assert.equal(ui.root.title, 'C:\\Users\\胡运宽\\Desktop\\test');
@@ -74,26 +49,13 @@ it('目录路径以末两级显示，完整路径保留在悬停提示', () => {
   ui.toolbar.renderRoot('C:\\'); assert.equal(ui.root.textContent, 'C:');
 });
 
-it('Tab 允许离开菜单，Shift+Tab 回到入口，菜单不困住键盘焦点', async () => {
-  const ui = editor(); await ui.trigger.fire('click');
-  let prevented = false;
-  await ui.wrap.fire('keydown', { key: 'Tab', target: ui.whole, shiftKey: false,
-    preventDefault() { prevented = true; } });
-  assert.equal(prevented, false);
-  ui.timers.forEach(fn => fn()); assert.equal(ui.menu.hidden, true);
-  await ui.trigger.fire('click');
-  await ui.wrap.fire('keydown', { key: 'Tab', target: ui.snippet, shiftKey: true,
-    preventDefault() { prevented = true; } });
-  assert.equal(prevented, true); assert.equal(ui.menu.hidden, true); assert.equal(ui.trigger.focused, true);
-});
-
 function webbar(overrides: Record<string, unknown> = {}) {
-  const ids = ['bar', 'btn-web', 'btn-preview-toggle', 'btn-restore', 'btn-collect', 'collect-status'];
+  const ids = ['bar', 'btn-collect', 'collect-status', 'btn-file-restore'];
   const nodes = Object.fromEntries(ids.map(id => [id, node()]));
   let chrome: (value: unknown) => void = () => {};
   const widths: number[] = [];
   const bridge = {
-    async setWebVisible(visible: boolean) { return { visible }; },
+    async restoreFileWorkspace() { return {}; },
     async setPreviewPanel(width: number) { widths.push(width); return { width, visible: width > 0 }; },
     async collectReply() { return { ok: true, blocks: [1, 2] }; },
     onChromeState(fn: typeof chrome) { chrome = fn; },
@@ -106,15 +68,12 @@ function webbar(overrides: Record<string, unknown> = {}) {
   return { nodes, widths, publish(value: unknown) { chrome(value); } };
 }
 
-it('网页隐藏不清空变更列表状态，恢复列表沿用用户宽度', async () => {
-  const ui = webbar(); const preview = ui.nodes['btn-preview-toggle'];
-  ui.publish({ webVisible: true, previewVisible: true, previewWidth: 360 });
-  await ui.nodes['btn-web'].fire('click');
-  for (let i = 0; i < 8; i++) await Promise.resolve();
-  assert.equal(ui.nodes.bar.classList.contains('handle-mode'), true);
-  assert.equal(preview.attrs['aria-pressed'], 'true');
-  await preview.fire('click'); await preview.fire('click');
-  assert.deepEqual(ui.widths, [0, 360]);
+it('官网顶栏只保留采集，不提供网页显隐或 Diff 布局接口', () => {
+  const html = fs.readFileSync(path.join(__dirname, '../src/renderer/webbar.html'), 'utf8');
+  const preload = fs.readFileSync(path.join(__dirname, '../src/main/webbarPreload.ts'), 'utf8');
+  assert.doesNotMatch(html, /id="btn-(web|preview-toggle|restore)"/);
+  assert.doesNotMatch(preload, /setWebVisible|setPreviewPanel/);
+  assert.match(preload, /collectReply/);
 });
 
 it('采集过程中拒绝重复请求，失败恢复按钮并提供可重试的诊断', async () => {
@@ -135,4 +94,13 @@ it('成功采集在网页栏显示变更数量，重复回复提供无新内容�
   const duplicate = webbar({ collectReply: async () => ({ ok: true, noNewContent: true }) });
   await duplicate.nodes['btn-collect'].fire('click');
   assert.match(duplicate.nodes['collect-status'].textContent, /无新内容/);
+});
+
+
+it('文件区收起后恢复入口只在官网顶栏出现，点击只恢复文件区', async () => {
+  let restored = 0;
+  const ui = webbar({ restoreFileWorkspace: async () => { restored++; } });
+  ui.publish({ fileVisible: false }); assert.equal(ui.nodes['btn-file-restore'].hidden, false);
+  await ui.nodes['btn-file-restore'].fire('click'); assert.equal(restored, 1);
+  ui.publish({ fileVisible: true }); assert.equal(ui.nodes['btn-file-restore'].hidden, true);
 });

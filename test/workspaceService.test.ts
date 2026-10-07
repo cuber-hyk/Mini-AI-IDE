@@ -45,9 +45,50 @@ it('最近最多五项，返回数组不能修改存储，非绝对路径不成�
   const f = fixture(t); const roots = Array.from({ length: 7 }, (_, i) => path.join(f.home, 'p' + i));
   roots.forEach((root) => { fs.mkdirSync(root); f.workspace.open(root); });
   assert.deepEqual(f.workspace.getState().recentRoots, roots.slice(-5).reverse());
+  assert.deepEqual(f.workspace.getState().workspaceRoots, roots);
+  f.workspace.open(roots[0]!);
+  assert.deepEqual(f.workspace.getState().workspaceRoots, roots);
+  assert.deepEqual(new SettingsStore('test.json', f.home).get().workspaceRoots, roots);
   const copy = f.settings.get(); copy.recentRoots.length = 0; assert.equal(f.settings.get().recentRoots.length, 5);
+  copy.workspaceRoots.length = 0; assert.equal(f.settings.get().workspaceRoots.length, 7);
   assert.equal(f.workspace.open('relative').ok, false);
   assert.deepEqual(normalizeRecentRoots([f.a, f.a.toUpperCase(), 'relative']), [f.a]);
+});
+
+it('首次从当前和最近目录初始化；明确保存的空工作区不会被历史重新填充', t => {
+  const f = fixture(t);
+  fs.writeFileSync(f.settings.filePath, JSON.stringify({ lastRoot: f.b, recentRoots: [f.a, f.b] }));
+  const migrated = new SettingsStore('test.json', f.home);
+  assert.deepEqual(migrated.get().workspaceRoots, [f.b, f.a]);
+  migrated.update({ workspaceRoots: [] });
+  assert.deepEqual(new SettingsStore('test.json', f.home).get().workspaceRoots, []);
+});
+
+it('移除仅取消注册；失效目录保留，保存失败不会关闭活动项目', t => {
+  const f = fixture(t); f.workspace.open(f.a); f.workspace.open(f.b);
+  fs.rmdirSync(f.a);
+  assert.equal(f.workspace.open(f.a).ok, false);
+  assert.deepEqual(f.workspace.getState().workspaceRoots, [f.a, f.b]);
+  assert.equal(f.workspace.getState().root, f.b);
+  const failing = new WorkspaceService(f.files, { get: () => f.settings.get(), update: () => { throw new Error('模拟存储失败'); } });
+  assert.equal(failing.remove(f.b).ok, false); assert.equal(f.files.getRoot(), f.b);
+  assert.equal(f.workspace.remove(f.a).ok, true); assert.equal(f.files.getRoot(), f.b);
+  assert.equal(f.workspace.remove(f.b).ok, true); assert.equal(f.files.getRoot(), null);
+  assert.ok(fs.statSync(f.b).isDirectory());
+  assert.deepEqual(new SettingsStore('test.json', f.home).get().workspaceRoots, []);
+});
+
+it('新版布局持久化仅保存合法尺寸和显隐，读取返回独立对象', t => {
+  const f = fixture(t);
+  const workspaceLayout = { workspaceWidth: 220, workspaceVisible: true, fileWidth: 640,
+    fileVisible: true, treeWidth: 180, treeVisible: false };
+  f.settings.update({ workspaceLayout });
+  const copy = f.settings.get(); copy.workspaceLayout!.treeWidth = 900;
+  assert.deepEqual(new SettingsStore('test.json', f.home).get().workspaceLayout, workspaceLayout);
+  f.settings.update({ workspaceLayout: { ...workspaceLayout, treeWidth: NaN } });
+  assert.equal(f.settings.get().workspaceLayout, null);
+  fs.writeFileSync(f.settings.filePath, JSON.stringify({ workspaceLayout: { ...workspaceLayout, fileVisible: 'true' } }));
+  assert.equal(new SettingsStore('test.json', f.home).get().workspaceLayout, null);
 });
 it('真实设置写入失败抛错且缓存不先行更新；自检存储不污染另一份设置', (t) => {
   const f = fixture(t); f.settings.update({ lastRoot: f.a });

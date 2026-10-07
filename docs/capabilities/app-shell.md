@@ -3,7 +3,7 @@ artifact_type: capability
 status: current
 updated: 2026-10-07
 owner: 胡运宽
-source_of_truth: [src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, tools/verify-web-result-sender.cjs, src/renderer/preview.css, src/main/previewPreload.ts, test/changeTree.test.ts, docs/adr/2026-10-02-honest-electron-identity.md, docs/adr/2026-10-02-filesystem-permission-model.md, DESIGN.md, design-tokens.json, src/main/windowLayout.ts, src/main/layoutProbe.ts, src/main/tools/changeReview.ts, src/renderer/preview.js, src/renderer/editorToolbar.js, src/renderer/ui.css, test/windowLayout.test.ts, test/toolChanges.test.ts, test/editorToolbar.test.ts, src/main/index.ts, src/renderer/index.html, src/renderer/style.css, src/renderer/promptComposer.js, test/promptComposer.test.ts, src/renderer/toolPanelLayout.js, test/toolPanelLayout.test.ts, src/main/workspaceController.ts, src/main/workspaceProbe.ts, src/renderer/fileExplorer.js, src/renderer/fileIcons.js, src/renderer/fileExplorer.css, src/renderer/editorTabs.js, src/renderer/editorWorkspace.js, test/editorWorkspace.test.ts, test/fileExplorer.test.ts, test/fileIcons.test.ts, test/workspaceController.test.ts]
+source_of_truth: [src/renderer/fileWorkspace.js, test/fileWorkspace.test.ts, docs/adr/2026-10-07-workspace-ui-shell-layout.md, src/main/workspaceLayoutController.ts, src/main/workspaceService.ts, src/renderer/workspaceLayout.js, src/renderer/workspaceNavigation.js, test/workspaceLayoutController.test.ts, src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, tools/verify-web-result-sender.cjs, src/renderer/preview.css, src/main/previewPreload.ts, test/changeTree.test.ts, docs/adr/2026-10-02-honest-electron-identity.md, docs/adr/2026-10-02-filesystem-permission-model.md, DESIGN.md, design-tokens.json, src/main/windowLayout.ts, src/main/layoutProbe.ts, src/main/tools/changeReview.ts, src/renderer/preview.js, src/renderer/editorToolbar.js, src/renderer/ui.css, test/windowLayout.test.ts, test/toolChanges.test.ts, test/editorToolbar.test.ts, src/main/index.ts, src/renderer/index.html, src/renderer/style.css, src/renderer/promptComposer.js, test/promptComposer.test.ts, src/renderer/toolPanelLayout.js, test/toolPanelLayout.test.ts, src/main/workspaceController.ts, src/main/workspaceProbe.ts, src/renderer/fileExplorer.js, src/renderer/fileIcons.js, src/renderer/fileExplorer.css, src/renderer/editorTabs.js, src/renderer/editorWorkspace.js, test/editorWorkspace.test.ts, test/fileExplorer.test.ts, test/fileIcons.test.ts, test/workspaceController.test.ts]
 ---
 
 # 能力：应用外壳与进程架构
@@ -17,7 +17,7 @@ source_of_truth: [src/main/tools/autoContinuation.ts, src/main/tools/webResultSe
 
 ## 目录与文件管理
 
-Monaco、AI 网页和变更列表保持三列布局。目录恢复与最近 5 项由主进程管理，顶部、菜单和空白编辑区的打开入口汇聚到 `WorkspaceController`；关闭目录后保留最近记录。启动不恢复编辑文件或光标。
+左侧常驻工作区列表由 `workspaceNavigation.js` 呈现，支持添加、搜索、切换、当前项目高亮与移除。`workspaceRoots` 按加入顺序持久保存、大小写不敏感去重，不受 `recentRoots` 最近 5 项限制；移除不删除磁盘内容。打开入口汇聚到 `WorkspaceController`，启动恢复上次有效根目录，不恢复编辑文件或光标。切换只改变当前本地项目，官网对话保持原状，不建立会话绑定或后台并行任务。
 
 文件树顶部提供新建文件、新建文件夹和刷新；条目右键按创建、资源管理器定位／绝对与相对路径复制、改名／移入回收站／永久删除分组。空白处右键以根目录为目标，不继承此前条目选择，不提供根目录删除。F2 改名，Enter／Esc 确认或取消名称输入；创建后的文件打开、文件夹展开，重名失败不覆盖。`fileExplorer.js` 管理树与菜单，`fileIcons.js` 按特殊文件名与扩展名提供本地 SVG，文件夹区分开合，未知类型通用，`fileExplorer.css` 管理局部样式。各文件缓冲及模型生命周期由 `editorWorkspace.js` 管理，顶部标签由 `editorTabs.js` 管理；标签切换保留草稿、撤销栈和视图位置，重复打开激活已有标签。
 
@@ -36,37 +36,35 @@ Monaco、AI 网页和变更列表保持三列布局。目录恢复与最近 5 �
 
 ## 进程契约
 
-现在共 **5 个 `WebContentsView`**：
+现在共 **5 个 `WebContentsView`**（下表另列主进程）：
 
 | 进程 | 职责 | 硬性约束 |
 |---|---|---|
 | **main** | 窗口与分栏布局、IPC 路由、本地文件读取、会话分区配置、提示词设置的持久化、启动自检、安装版软件更新 | 绝不发起或代理大模型相关网络请求；限定结果写入仅由 webResultSender 调度，见结果回传 ADR；更新模块专用网络例外见 `application-update.md` 与 ADR-0005 |
-| **editor renderer**（`persist:editor-ui`） | Monaco 渲染、文件树、编辑与保存、需求输入区 | `nodeIntegration:false`、`contextIsolation:true`、`sandbox:true`；无文件系统能力；CSP `connect-src 'none'` |
+| **editor renderer**（`persist:editor-ui`） | 铺满窗口的本地工作区外壳，含项目导航、Monaco、文件树、工具结果与需求编写 | `nodeIntegration:false`、`contextIsolation:true`、`sandbox:true`；无文件系统能力；CSP `connect-src 'none'` |
 | **webview renderer**（`persist:postcheck`） | 加载目标平台网页 | 顶级独立视图；无本地桥。隔离世界 1004 只读采集，1005 仅回传当前真实工具结果，不开放任意网页操作 |
-| **webbar renderer**（`persist:editor-ui`） | 网页区顶部 40px 工具条（网页可见）/ 恢复把手（网页隐藏）：只读采集与列显隐 | 只能请求只读采集和切换显隐；不能读写文件或向网页写入内容。**永不隐藏**——它是"把网页叫回来"的常驻入口 |
-| **preview renderer**（`persist:editor-ui`） | 最右侧只读变更查看：文件筛选、实际修改前后差异和执行状态 | 无文件读取／应用入口；撤销请求复用原工具 owner，不能扩大写盘能力 |
+| **webbar renderer**（`persist:editor-ui`） | 中间网页区顶部工具条：只读采集 | 只能请求只读采集与恢复文件区；不能读写文件或向网页写入内容。不提供网页显隐入口 |
+| **preview renderer**（`persist:editor-ui`） | 右文件区正文的只读变更查看：文件筛选、实际修改前后差异和执行状态；最右目录树不被覆盖 | 无文件读取／应用入口；撤销请求复用原工具 owner，不能扩大写盘能力 |
 | **prompt renderer**（`persist:editor-ui`） | 提示词设置面板（覆盖式浮层，默认隐藏）：**分页查看/编辑两套版本的「输出格式要求」** | 只能读/写**这一份设置**（5 个通道）；不能读写文件、不能碰网页。**为什么单独开一个视图**：编辑器渲染进程持有文件写权限，而"编辑一段纯文本"不需要任何文件能力——不把提权面顺手扩大 |
 
-## 布局规则（三列与独立显隐）
+## 布局规则（项目导航、AI 协作与文件工作区）
 
 ```text
-编辑器（内含目录树）  │  AI 网页               │  变更列表
-目录与短路径         │  采集回复 / 显隐       │  数量 / 撤销 / 展开查看
-文件头 / 复制上下文   │  官方网页               │  可收起导航 / 换行
-Monaco 编辑          │                        │  全高连续差异
-工具结果与需求输入    │                        │  每文件修改前 / 修改后
+多项目工作区 │ AI 官网顶栏                 │ 文件头 / 文件与改动标签
+添加 / 搜索  │ 官网对话与官网输入框          │ 编辑／Diff 正文          │ 项目目录树
+项目列表     │ 本地工具摘要、详情与需求编写    │                         │ （最右）
 ```
 
-- 几何由 `src/main/windowLayout.ts` 的纯 `computeLayout()` 计算，主进程 `relayout()` 统一应用。窗口默认 1600×960，最小 1080×600；编辑器、网页、变更列常规最小宽度分别为 360、420、260px。
-- 编辑器初始占约一半宽度，变更列默认 300px。两处分隔条分别调整编辑器与变更列；宽度持久化。隐藏变更列以 `ui:set-preview-panel(0)` 表达，返回 `{width,visible}`；正数统一表示列宽。
-- 右侧“展开查看”调用 `setPreviewPanel(width, true)` 临时拓宽，可恢复原宽度，不保存临时宽度；按 `chromeState.previewMaxWidth` 保留编辑器与 AI 网页最小预算，无额外空间时禁用。
-- 网页隐藏时，变更列继续显示。工具条变为编辑器与变更列之间的 28px 恢复把手；两列都隐藏时把手仍可恢复网页。主进程不销毁工具条。
-- 网页按钮、恢复把手、视图菜单与 `Ctrl+Shift+A` 汇聚到 `setWebVisible()`；`ui:chrome-state` 向各本地视图同步真实显隐与列宽。变更列可由自身收起按钮关闭，由网页工具条或视图菜单恢复。
-- 目录树开关在编辑器文件头，目录树隐藏后仍可点击；`Ctrl+B` 保留。
-- 复制操作位于编辑器「复制上下文」菜单，保留全文与片段两条链路，支持方向键、Escape、Tab 与外点关闭。路径显示末两级，悬停显示完整路径。
-- 「采集回复」位于 AI 网页顶栏，忙时禁用；失败和无新内容均明确反馈。
-- 工具结果与需求输入保持左侧。右侧全高正文连续展示当前批次匹配记录，显示实际增删统计、待执行／已修改／失败／未执行／已撤销。文件导航默认收起，窄列打开时覆盖正文、宽列并排，点击滚到目标记录；筛选只影响显示。每文件保留独立差异／修改前／修改后，未改上下文可展开，长行默认自动换行。同批广播保留阅读滚动与有效焦点，不切换左侧文件。工具按权限直接写入，不提供再次应用、改路径或编辑器内联预览；撤销复用原入口。快照只存本轮内存，不进剪贴板或账本。
-- 本地基础样式参见 `DESIGN.md` 和 `design-tokens.json`；构建生成 token CSS，控件复用 `ui.css`。布局探针验证大小窗口和独立显隐，不能以静态示意替代运行时验收。
+- `windowLayout.ts` 的 `computeLayout(width, height, options)` 是几何唯一入口，`WorkspaceLayoutController` 应用原生矩形、处理显隐与持久化并广播 `ui:chrome-state`；本地 `workspaceLayout.js` 消费矩形、处理分隔条和 dock 高度测量。
+- 本地 `editorView` 覆盖全窗口作为底层外壳，独立 `webbarView`、`webView` 和 `previewView` 只覆盖各自的精确矩形；网页与本地编辑器仍处于不同渲染进程，不能用 iframe 替代。
+- 布局状态包含 `workspaceWidth/workspaceVisible`、`fileWidth/fileVisible`、`treeWidth/treeVisible`、`dockHeight` 和 `previewVisible`。项目栏、文件区和目录树展开宽度与显隐保存于 `settings.workspaceLayout`；工具区高度和当前改动标签显示状态不进入该持久设置。
+- 默认项目栏 240px、文件区 700px、最右树 190px；实际值由窗口预算钳制。项目栏与文件区隐藏后保留恢复入口，目录树随文件区隐藏但不丢自身显隐偏好；窄窗口先让辅助区域缩小，所有矩形均不得越界或为负。
+- 常规布局中间官网显示，文件区全屏时临时隐藏官网与本地协作 dock，退出后恢复，网页顶栏提供只读采集及文件区收起后的恢复入口；不提供网页显隐按钮、菜单、快捷键或 IPC。dock 展示本批工具摘要、可展开详情、权限、自动继续和按需展开的本地需求编写；官网输入框由官网自身管理，本地需求仍通过统一复制入口使用。
+- 右侧文件与只读“本批改动”使用同一个标签栏和正文区域，项目目录树始终在其右侧。左侧当前工作区决定目录树根；右侧不提供打开目录、开始编辑或最近目录欢迎页。通过本地工具区“查看改动”按需打开改动标签，标签可关闭并重新打开；工具执行完成不自动抢走文件编辑区域；切换文件不重建 Monaco 模型，关闭改动标签不撤销工具操作或丢弃批次结果。原生预览矩形只覆盖正文，不覆盖文件头、工具栏、标签或目录树；切换文件或关闭改动标签回到可编辑文件。主动“展开查看”临时拓宽文件区，关闭或恢复时还原，临时宽度不持久化。
+- Diff 连续展示当前批次真实 before/after、增删统计及逐项执行状态，支持筛选、未改上下文展开与换行；快照不随后续编辑变化，不提供重复应用或第二条写盘路径，撤销复用工具 owner。
+- 项目切换保留当前官网页面，沿用未保存确认和当前工具作用域失效保护；列表注册不增加文件权限。本次不实现会话绑定、每项目独立网页或后台 AI 并行。
+- `ui:set-workspace-layout` 仅接受编辑器主 frame 的白名单字段；webbar 和 preview 保留各自原有窄接口，官网及所有子 frame 不能更改本地布局或文件。实际权限以控制器和 preload 为准。
+- 本地主题参考 deepseek-harness 的中性深灰层级，背景、侧栏、控件、悬停、选中及边界由 `design-tokens.json` 统一定义；Monaco 与提示词面板同源取色，官网 CSS 与主题保持官网自身行为。基础样式参见 `DESIGN.md`、`design-tokens.json` 与 `ui.css`。纯几何、控制器测试及原生布局探针分别覆盖边界、权限/持久化和 Electron 遮挡；验收结果以当次报告为准，不以示意图代替。
 
 ### 提示词设置面板（覆盖式浮层）
 
@@ -97,7 +95,7 @@ Monaco 编辑          │                        │  全高连续差异
 ## 已知边界
 
 - 仅 Windows 10/11 x64。
-- 单窗口、单网页视图；多标签不在范围内。
+- 单窗口、单官网视图、一个当前本地项目；多项目列表不等于多 AI 任务并行，不绑定或自动恢复官网会话。编辑文件标签在同一项目内受支持。
 - **不 patch Chromium 构建**；不追求与官方 Chrome 指纹一致——与 Chrome 的差异（TLS、Canvas/WebGL、字体列表、`window.chrome` 成员、`userAgentData`的 `Google Chrome` 条目等）**只作为知情记录留档，不是修补目标**。
   - 实测依据：P0b 受控实验显示，`window.chrome` 与 `userAgentData` 的差异**存在却没有**触发平台告警；触发告警的只有 UA 中的自报标记。
 - **UA 与会话分区正交**：UA 规则见上方第 5 条；会话分区见 `session-persistence` 能力文档（`persist:postcheck`）。
@@ -116,7 +114,6 @@ Monaco 编辑          │                        │  全高连续差异
 | 用 `document.getElementById` 取 HTML 元素 | 取不到返回 `null`，随后静默失效；**tsc 看不到 HTML** | 自检 L1 静态比对"JS 引用的 id ⊆ HTML 定义的 id" |
 | `renderer.js` 不经 `tsc` | 语法错误只在运行时暴露 | 自检 L2 用 `node:vm` 解析该文件 |
 | **隐藏侧栏时把开关放在侧栏内部** | 侧栏一隐藏，按钮跟着消失，用户**再也点不回来** | 开关必须放在**始终可见**的地方（目录树开关因此放在编辑器顶部条） |
-| **折叠时把开关和被折叠的板一起隐藏** | 网页一隐藏，开关也没了，**再也展不开**（本项目实际犯过，且已写进本表上一行） | 承载开关的视图**永不隐藏**：网页隐藏时工具条贴到窗口右边缘变成竖把手；再加View 菜单勾选项兜底 |
 | **带中文文字的按钮塞进小尺寸圆形按钮** | 「复制 prompt」被折成两行、挤成一团（用户实测截图） | 尺寸与文案必须匹配：药丸形按钮放文字，圆形按钮只放图标 |
 | **同一分区下多个沙箱视图连续 `loadFile` 偶发失败** | `ERR_FAILED (-2)`，且**失败对象会在视图之间飘移**（把 webbar 内容换成 preview 内容、换加载顺序都试过） | 与内容/顺序无关，是渲染进程创建时序问题 → 用 `loadLocalView()` 重试（4 次、递增间隔）吸收 |
 | **AI 沙箱内跑不了 GUI 自检** | `GPU process isn't usable. Goodbye.`（GPU 缓存目录 `AppData\Roaming\mini-ai-ide\GPUPersistentCache` 被占用，GPU 进程反复 `exit_code=-1073741819`） | 这是**环境限制不是代码缺陷**（改动前基线同样失败）。`--disable-gpu` 也无效。代码正确性用 `npm test` + `npm run typecheck` + 静态自检逻辑验证；`npm run self-test` 与 `npm start` 需在普通 PowerShell 跑 |
@@ -159,7 +156,7 @@ Monaco 编辑          │                        │  全高连续差异
 | **多条并列规则若互相冲突、又没给优先级，模型只会折中** | 旧模板同时给了「语言标注跟**文件类型**走（.md→markdown）」与「含反引号就用四反引号」，两条**并列无优先级**。当"文件是 .md"+"只改纯代码行"同时成立时，模型只能自己权衡，结果两头不讨好（用户实测：让 AI 改 .md 里内嵌代码块时格式翻车）。**这类缺陷的根因不是"规则写得不够多"，而是"规则之间没有关系"** —— 再加十条同层规则只会更乱 | **把"要模型推理的规则"换成"要模型照抄的事实"**：新原则 = **输入片段长什么样，输出就照抄同样的围栏结构**（语言标注照抄、围栏行照抄、成对闭合、长度自适应）。模型不必推理"文件类型/含不含围栏行"，只需对齐输入 —— 规则更少、遵守率更高。**推论：当你想给提示词加规则时，先问"这条能不能改成让它照抄某个已存在的东西"** |
 | **同一动作有多个入口时，状态必须由一处统一广播** | 应用有两个入口（预览面板按钮 / 编辑器工具条）。走面板入口时面板自己知道；走编辑器入口时落盘在主进程，而面板是**另一个渲染进程**（ADR-0002）→ 面板一直显示可应用的假状态（用户实测："左侧编辑器应用后，右侧状态没有同步更新"）。**这类缺陷不会报错，只是"看起来没生效"** | 状态变更由**主进程在成功那一刻统一广播**（`preview:applied`），而不是让各入口各自标记。撤销也要广播复位。跨视图的单向通知一律走 `webContents.send`（`oneWayChannels` 名单同步登记），并注意 `tsc` 会把 `CHANNELS.x` 编译成 `contract_1.CHANNELS.x`——在 dist 产物里搜断言必须容忍命名空间前缀 |
 
-## 左侧编辑器与目录树的当前行为
+## 右侧编辑器与目录树的当前行为
 
 | 项 | 取值 |
 |---|---|
@@ -170,9 +167,9 @@ Monaco 编辑          │                        │  全高连续差异
 | 可读性辅助 | 缩进参考线、括号配色、当前行高亮、行号宽度自适应、统一深色滚动条 |
 | 目录树交互 | 点击文件夹原地展开／收起；手动刷新保留有效展开状态，切换根目录清空；点击文件打开或激活已有标签并高亮，切换保留草稿 |
 | 目录树显隐 | 编辑器顶部条左侧**图标按钮**（高亮=当前可见）+ `Ctrl+B` |
-| 变更列显隐 | 自身收起按钮关闭；网页工具条分栏图标与视图菜单恢复/切换 |
+| 编辑／Diff 切换 | 共用文件正文区域；最右目录树保持独立，Diff 为当前批次只读快照 |
 
-> 操作按区域归属：目录树和复制在编辑器、采集在网页顶栏、实际变更阅读与撤销在变更列；文件修改由工具统一执行。
+> 操作按区域归属：项目导航在左侧，采集在中间网页顶栏，工具结果与需求编写在中间 dock，目录树、编辑／Diff 和选区浮动复制在右侧；文件修改由工具统一执行。
 
 | **跨容器自己算 Monaco 坐标必然错位 —— 一律用 `IContentWidget`** | 浮层曾挂在编辑器**外部**的 `.editor-wrap` 上，用 `getTopForLineNumber()` / `getOffsetForColumn()` 自己算 `style.left/top`。这两个 API 返回的是**编辑器视口内**坐标，而编辑器自己是独立滚动容器 —— 一滚动两套坐标系就脱节。叠加 `wordWrap`：`end.lineNumber` 是**逻辑行**，但该行可能折成多个**视觉行**，取到的是**第一视觉行**的 top。结果是代码文件"歪着出现"、**markdown 长段落干脆不出现**（用户两次反馈"文本文件没有复制按钮"）。前两轮分别归因于`getPositionAt` 参数类型、原生 `title`，都只修到表象 | 定位**整个交给 Monaco**：用 `editor.addContentWidget()` 注册浮层，`getPosition()` 只返回 `{ position, preference }`（锚在选区末端的行尾 = 用户要的"右端行右上角"），滚动时只调 `editor.layoutContentWidget()`。配套三条：`preference: [ABOVE, BELOW]` 让 Monaco 自己选不遮挡的一侧；`suppressMouseDown: true` 防止点按钮时编辑器抢焦点导致选区丢失（否则复制到的是整篇文件）；显隐走 class，**一个 `style` 都不写** |
 | **`title` 闪烁的根因不是「写多了次」，是「在高频事件里重排 DOM」** | 原生 tooltip 在元素位置/样式**发生任何变化**时失效并重新计时。此前 `place()` 已加了"位置未变就return"，闪烁依旧——因为查找过程中 `onDidChangeCursorSelection` 本来就频繁触发，位置**一直在变**。此时任何一次 `style` 写入都会让旁边查找框的 `Close (Escape)` 面板反复重建（用户两次反馈"仍然有闪烁"）。**只优化写入次数治不了这个** | 断掉因果链，而不是减少次数：改用 `IContentWidget` 后**完全不写 style**，重排不再发生。同时浮层自身也不用 `title`（改 `aria-label`），避免它自己成为下一个闪烁源 |
@@ -185,14 +182,14 @@ Monaco 编辑          │                        │  全高连续差异
 > 目录树早期实现是"每次列一层、整表替换"，没有返回上级的途径，已被判定为交互缺陷
 > （见审计 P2-13）。改为可展开结构后与主流编辑器一致。
 
-## 底部需求输入区的当前行为
+## 中间本地需求编写区的当前行为
 
 | 项 | 取值 |
 |---|---|
-| 布局 | 上方文本框占满宽度，下方紧凑操作栏：版本、权限、自动继续、设置和复制；窄列换行 |
+| 布局 | 中间 dock 的“编写需求”默认收起，展开显示文本框与复制提示词；紧凑操作栏保留版本、权限、自动继续与设置，窄列换行 |
 | 外壳 | 单层低对比边框，聚焦时高亮，不叠加外圈描边 |
 | 高度 | 文本框最小 44px、最大 220px；上限随视口与操作栏实际高度收缩。输入、粘贴、拖入、缩放和操作栏换行后重算，超出上限滚动 |
-| 高度预算 | 输入区最多占视口高度 48%，为操作栏及内边距预留空间；工具面板随输入高度收缩并保留编辑空间，长输入不裁切底部控件 |
+| 高度预算 | 输入区最多占视口高度 48%，为操作栏及内边距预留空间；工具面板随输入高度收缩并保留官网阅读空间，长输入不裁切底部控件 |
 | 版本切换 | 「简洁 / 完整」分段控件，点击按钮或聚焦容器后按 Space / Enter 切换；主进程持久化 `formatSpecVariant`，重启后恢复 |
 | 开关改什么 | 复制提示词时使用的输出格式要求；简洁为 6 个示例，完整为 13 个示例；两版自定义互不影响 |
 | 自定义标记 | 当前版本有非空自定义提示词时显示小圆点，悬停说明；主进程保存、清空、恢复默认与切换后广播布尔状态 |
@@ -201,7 +198,7 @@ Monaco 编辑          │                        │  全高连续差异
 | 状态一致性 | 启动读取真实状态；切换或复制期间阻止重复操作；切换失败保留实际版本，状态未知时禁止复制 |
 
 输入区行为由 `src/renderer/promptComposer.js` 唯一负责，`renderer.js` 初始化并接入信息栏。
-工具面板、浮层与高度预算由 `src/renderer/toolPanelLayout.js` 管理，纯摘要由 `src/renderer/toolResultPresentation.js` 管理；权限、执行状态与结果复制接线见 `docs/capabilities/tool-harness.md`。目录树宽度在窄列时钳制，为编辑器保留空间。
+工具面板与浮层内部高度预算由 `src/renderer/toolPanelLayout.js` 管理，中间 dock 实测高度由 `src/renderer/workspaceLayout.js` 上报主进程，纯摘要由 `src/renderer/toolResultPresentation.js` 管理；权限、执行状态与结果复制接线见 `docs/capabilities/tool-harness.md`。目录树宽度在窄列时钳制，为编辑器保留空间。
 `ui:get-prompt-status` 查询版本及两版自定义布尔值，`ui:prompt-status` 推送相同结构；编辑器不读取提示词全文。
 需求提示词仍由主进程组装并复制，由用户粘贴到官网并发送；本批工具结果可按 automatic 设置由限定 sender 回传。
 
@@ -233,3 +230,13 @@ Monaco 编辑          │                        │  全高连续差异
 pnpm install
 node scripts/install-electron.mjs   # 走镜像；或从 tools/ 复制已有二进制
 ```
+
+
+### 文件与目录顶栏
+
+文件标签与面板操作位于编辑区首行，项目路径位于第二行；最右目录面板从顶部起显示文件标题、收起按钮、项目路径与创建/刷新操作，目录正文与编辑正文顶边对齐。项目路径由左侧当前工作区同步，超长截断并提供完整悬停路径，不增加目录选择入口。
+
+折叠/恢复使用指向实际侧栏的分栏 SVG；文件区最大化/恢复使用四角 SVG 并同步可读名称与 pressed 状态。文件区全屏临时隐藏官网、网页顶栏与本地工具区，保留左侧项目栏，不改变窗口全屏状态，不持久化临时宽度；恢复与收起回到原宽度。
+
+
+文件工作区收起不保留独立窄条，恢复入口并入中间网页顶栏最右侧，透明背景、悬停底色。`ui:restore-file-workspace` 只允许该本地顶栏的主 frame 恢复文件区，不开放通用布局或网页操作。文件区全屏仅更改显示矩形，不导航/销毁官网，不中断工具；退出恢复原宽度、目录与预览显隐。移除复制上下文菜单与全文复制 bridge，选区浮动按钮仅复制真实选中内容，无全文回退；需要全文时用户在官网描述文件路径，由模型请求本地读取。

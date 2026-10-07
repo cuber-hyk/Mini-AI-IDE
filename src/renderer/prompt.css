@@ -1,3 +1,5 @@
+@import url('./ui-tokens.css');
+
 /*
  * 提示词编辑面板样式。
  *
@@ -8,16 +10,16 @@
  */
 
 :root {
-  --bg: #16181d;
-  --bg-elevated: #1e2128;
-  --bg-sunken: #14161a;
-  --border: #2b2f38;
-  --border-strong: #3a4050;
-  --text: #d8dbe2;
-  --text-dim: #8b93a1;
-  --accent: #5b8def;
+  --bg: var(--ui-bg);
+  --bg-elevated: var(--ui-surface);
+  --bg-sunken: var(--ui-bg);
+  --border: var(--ui-border);
+  --border-strong: var(--ui-border);
+  --text: var(--ui-text);
+  --text-dim: var(--ui-muted);
+  --accent: var(--ui-accent);
   --accent-dim: rgba(91, 141, 239, 0.15);
-  --ok: #4fbf7f;
+  --ok: var(--ui-success);
   --warn: #e0a458;
 }
 
@@ -58,7 +60,7 @@ body {
   gap: 10px;
   height: 44px;
   padding: 0 12px 0 16px;
-  background: linear-gradient(180deg, #252a34, #20242c);
+  background: var(--ui-surface);
   border-bottom: 1px solid var(--border);
 }
 
@@ -141,7 +143,7 @@ body {
   margin-bottom: 9px;
   font-size: 12px;
   line-height: 1.55;
-  color: #bfc6d2;
+  color: var(--ui-text);
 }
 
 .pm-side-list li::before {
@@ -224,7 +226,7 @@ body {
 }
 
 .pm-tab:hover {
-  border-color: #465065;
+  border-color: var(--ui-border);
   color: var(--text);
 }
 
@@ -338,7 +340,7 @@ body {
   resize: none;
   padding: 12px 14px;
   background: var(--bg-sunken);
-  color: #d5dae3;
+  color: var(--ui-text);
   border: 1px solid var(--border);
   border-radius: 8px;
   font: 12.5px/1.65 Consolas, "Cascadia Mono", "Courier New", monospace;
@@ -355,7 +357,7 @@ body {
 }
 
 .pm-editor::placeholder {
-  color: #5c646f;
+  color: var(--ui-muted);
 }
 
 /* 自绘细滚动条：Windows 原生条在深色框里极其扎眼（编辑器里踩过同一个坑） */
@@ -369,13 +371,13 @@ body {
 }
 
 .pm-editor::-webkit-scrollbar-thumb {
-  background: #383e4a;
+  background: var(--ui-control);
   border: 3px solid var(--bg-sunken);
   border-radius: 8px;
 }
 
 .pm-editor::-webkit-scrollbar-thumb:hover {
-  background: #4a5260;
+  background: var(--ui-hover);
 }
 
 .pm-editor::-webkit-scrollbar-corner {
@@ -408,7 +410,7 @@ body {
   gap: 8px;
   padding: 10px 14px;
   border-top: 1px solid var(--border);
-  background: linear-gradient(0deg, #20242c, #232830);
+  background: var(--ui-surface);
 }
 
 .pm-usage {
@@ -426,7 +428,7 @@ body {
   padding: 0 14px;
   border-radius: 6px;
   border: 1px solid var(--border-strong);
-  background: #262a33;
+  background: var(--ui-control);
   color: var(--text);
   font: inherit;
   cursor: pointer;
@@ -457,7 +459,7 @@ body {
 .pm-btn.primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #0d1220;
+  color: var(--ui-bg);
   font-weight: 600;
 }
 

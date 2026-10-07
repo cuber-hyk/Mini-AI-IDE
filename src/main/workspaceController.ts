@@ -49,7 +49,31 @@ export class WorkspaceController {
 
   closeRoot(): Promise<RootInfo> { return this.run(() => this.changeRoot(null)); }
 
-  private async changeRoot(root: string | null): Promise<RootInfo> {
+  openWorkspace(index: number): Promise<RootInfo> {
+    const root = this.workspace.getState().workspaceRoots[index];
+    return this.run(() => {
+      if (!Number.isInteger(index) || !root || !this.workspace.getState().workspaceRoots.includes(root)) {
+        return { ...this.workspace.getState(), ok: false, error: '工作区条目无效，请刷新后重试' };
+      }
+      return this.changeRoot(root);
+    });
+  }
+
+  removeWorkspace(index: number): Promise<RootInfo> {
+    const root = this.workspace.getState().workspaceRoots[index];
+    return this.run(async () => {
+      const before = this.workspace.getState();
+      if (!Number.isInteger(index) || !root || !before.workspaceRoots.includes(root)) {
+        return { ...before, ok: false, error: '工作区条目无效，请刷新后重试' };
+      }
+      if (root.toLowerCase() === before.root?.toLowerCase()) return this.changeRoot(null, root);
+      const result = this.workspace.remove(root);
+      if (result.ok) this.changed(result);
+      return result;
+    });
+  }
+
+  private async changeRoot(root: string | null, removeRoot?: string): Promise<RootInfo> {
     const before = this.workspace.getState();
     if (root !== before.root) {
       if (!await this.editor.canLeave()) return { ...before, ok: false, canceled: true };
@@ -60,7 +84,8 @@ export class WorkspaceController {
         if (response.response !== 0) return { ...before, ok: false, canceled: true };
       }
     }
-    const result = root === null ? this.workspace.close() : this.workspace.open(root);
+    const result = removeRoot !== undefined ? this.workspace.remove(removeRoot)
+      : root === null ? this.workspace.close() : this.workspace.open(root);
     if (result.ok) {
       if (before.revision !== result.revision) this.editor.reset();
       this.changed(result);
@@ -85,6 +110,8 @@ export class WorkspaceController {
     };
     handle(CHANNELS.getRecentRoots, () => this.workspace.getState().recentRoots);
     handle(CHANNELS.openRecentRoot, (index) => typeof index === 'number' ? this.openRecent(index) : { ok: false, error: '参数不合法' });
+    handle(CHANNELS.openWorkspace, (index) => typeof index === 'number' ? this.openWorkspace(index) : { ok: false, error: '参数不合法' });
+    handle(CHANNELS.removeWorkspace, (index) => typeof index === 'number' ? this.removeWorkspace(index) : { ok: false, error: '参数不合法' });
     handle(CHANNELS.closeRoot, () => this.closeRoot());
     handle(CHANNELS.confirmLeave, (path, root) => {
       if (path !== undefined && (typeof path !== 'string' || root !== this.files.getRoot())) return { ok: false };
@@ -173,7 +200,7 @@ export class WorkspaceController {
         catch (error) { return { ok: false, error: `复制路径失败：${String(error)}` }; }
       });
     });
-    return [CHANNELS.getRecentRoots, CHANNELS.openRecentRoot, CHANNELS.closeRoot, CHANNELS.confirmLeave,
+    return [CHANNELS.getRecentRoots, CHANNELS.openRecentRoot, CHANNELS.openWorkspace, CHANNELS.removeWorkspace, CHANNELS.closeRoot, CHANNELS.confirmLeave,
       CHANNELS.editorReply, CHANNELS.createEntry, CHANNELS.renameEntry, CHANNELS.trashEntry,
       CHANNELS.deleteEntry, CHANNELS.revealEntry, CHANNELS.copyEntryPath];
   }

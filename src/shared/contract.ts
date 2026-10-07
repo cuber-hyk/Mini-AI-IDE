@@ -28,6 +28,8 @@ export const CHANNELS = {
   chooseRoot: 'fs:choose-root',
   getRecentRoots: 'fs:recent-roots',
   openRecentRoot: 'fs:open-recent-root',
+  openWorkspace: 'fs:open-workspace',
+  removeWorkspace: 'fs:remove-workspace',
   closeRoot: 'fs:close-root',
   createEntry: 'fs:create-entry',
   renameEntry: 'fs:rename-entry',
@@ -57,6 +59,8 @@ export const CHANNELS = {
   writeFile: 'fs:write-file',
   /** 调整左右分栏比例（拖动分隔条时由编辑器渲染进程上报） */
   setSplit: 'ui:set-split',
+  restoreFileWorkspace: 'ui:restore-file-workspace',
+  setWorkspaceLayout: 'ui:set-workspace-layout',
   /** 把"输出格式要求"模板写入系统剪贴板（**由用户自己粘贴到提示词**，程序绝不注入） */
   copyFormatSpec: 'ui:copy-format-spec',
   /** 组装完整 prompt（需求 + 环境上下文 + 格式要求）并写入剪贴板；仍由用户自己粘贴 */
@@ -65,19 +69,15 @@ export const CHANNELS = {
   getContext: 'ui:get-context',
   /** 把选中原文组装为只读上下文并写入剪贴板 */
   copyNumberedSnippet: 'ui:copy-numbered-snippet',
-  /** 把当前打开的**整个文件**（含路径声明与代码围栏）写入剪贴板，作为上下文交给模型 */
-  copyWholeFile: 'ui:copy-whole-file',
   /** 从网页视图只读采集最新回复，按预选权限执行规范工具请求 */
   collectReply: 'return:collect',
-  /** 显示/隐藏最右侧变更列并设置宽度 */
+  /** 显示/隐藏文件正文中的变更预览并设置宽度 */
   setPreviewPanel: 'ui:set-preview-panel',
-  /** 显示/隐藏右侧 AI 网页视图 */
-  setWebVisible: 'ui:set-web-visible',
-  /** 主进程 → 网页区工具条：当前网页/预览的可见状态 */
+  /** 主进程 → 本地文件工作区：当前布局与预览状态 */
   chromeState: 'ui:chrome-state',
-  /** 显示/隐藏左侧目录树（文件）面板 */
+  /** 显示/隐藏最右目录树（文件）面板 */
   setSidebarVisible: 'ui:set-sidebar-visible',
-  /** 调整左侧目录树宽度（像素） */
+  /** 调整最右目录树宽度（像素） */
   setSidebarWidth: 'ui:set-sidebar-width',
   /**
    * 主进程 → 编辑器：**磁盘上的文件被回程链路改写了**。
@@ -177,6 +177,7 @@ export interface RootInfo {
   canceled?: boolean;
   error?: string;
   recentRoots?: string[];
+  workspaceRoots?: string[];
   revision?: number;
   /** 是否来自"上次打开"的记忆（用于界面提示与失效告知） */
   restored?: boolean;
@@ -207,6 +208,18 @@ export interface EditorState {
 export interface SplitResult {
   /** 主进程实际采用的编辑器宽度（已被最小宽度约束收敛） */
   editorWidth: number;
+}
+
+export interface WorkspaceLayoutPatch {
+  fileMaximized?: boolean;
+  workspaceWidth?: number;
+  workspaceVisible?: boolean;
+  fileWidth?: number;
+  fileVisible?: boolean;
+  treeWidth?: number;
+  treeVisible?: boolean;
+  dockHeight?: number;
+  previewVisible?: boolean;
 }
 
 export interface CopyFormatResult {
@@ -250,24 +263,6 @@ export interface CopySnippetResult {
   startLine?: number;
   endLine?: number;
   error?: string;
-}
-
-export interface CopyWholeFileResult {
-  ok: boolean;
-  /** 写入剪贴板的内容（只读上下文头 + 代码围栏 + 全文） */
-  snippet: string;
-  length: number;
-  relPath?: string;
-  lineCount?: number;
-  /** 使用的围栏（内容含反引号时会自动加长） */
-  fence?: string;
-  error?: string;
-}
-
-export interface CopyWholeFileInput {
-  root: string;
-  relPath: string;
-  text: string;
 }
 
 /* ------------------------------------------------------------------ *
@@ -558,6 +553,8 @@ export interface EditorBridge {
   chooseRoot(): Promise<RootInfo>;
   getRecentRoots(): Promise<string[]>;
   openRecentRoot(index: number): Promise<RootInfo>;
+  openWorkspace(index: number): Promise<RootInfo>;
+  removeWorkspace(index: number): Promise<RootInfo>;
   closeRoot(): Promise<RootInfo>;
   createEntry(parent: string, name: string, isDirectory: boolean, root: string): Promise<FileOperationResult>;
   renameEntry(relPath: string, name: string, root: string): Promise<FileOperationResult>;
@@ -580,6 +577,7 @@ export interface EditorBridge {
   onPromptStatus(listener: (status: PromptComposerStatus) => void): void;
   /** 上报期望的编辑器宽度（像素）；主进程会做最小宽度约束并回传实际值 */
   setSplit(editorWidth: number): Promise<SplitResult>;
+  setWorkspaceLayout(patch: WorkspaceLayoutPatch): Promise<{ ok: boolean }>;
   /**
    * 请求把"输出格式要求"模板写入系统剪贴板。
    * **程序不会把它送进输入框**——需要用户自己粘贴到提示词里（零注入边界，见 ADR-0003）。
@@ -604,18 +602,11 @@ export interface EditorBridge {
    * 用于提供原文上下文：模型以 SEARCH/REPLACE 表达修改，应用前复核完整预览原文。
    */
   copyNumberedSnippet(input: NumberedSnippetInput & { root: string }): Promise<CopySnippetResult>;
-  /**
-   * 把当前打开的**整个文件**（`这个文件是 <路径>` + 代码围栏 + 全文）写入剪贴板。
-   * 用途：把整个文件作为**上下文**交给模型；仍由用户自己粘贴（零注入边界）。
-   */
-  copyWholeFile(input: CopyWholeFileInput): Promise<CopyWholeFileResult>;
   /** 显示/隐藏或调整最右侧变更列（width <= 0 表示隐藏） */
   setPreviewPanel(width: number): Promise<{ width: number; visible: boolean }>;
-  /** 显示/隐藏右侧 AI 网页视图 */
-  setWebVisible(visible: boolean): Promise<{ visible: boolean }>;
   /** 显示/隐藏左侧目录树面板 */
   setSidebarVisible(visible: boolean): Promise<{ visible: boolean }>;
-  /** 调整左侧目录树宽度（像素） */
+  /** 调整最右目录树宽度（像素） */
   setSidebarWidth(width: number): Promise<{ width: number }>;
   /**
    * 请求打开「提示词编辑面板」。

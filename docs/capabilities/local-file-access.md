@@ -3,7 +3,7 @@ artifact_type: capability
 status: current
 updated: 2026-10-07
 owner: 胡运宽
-source_of_truth: [docs/adr/2026-10-02-filesystem-permission-model.md, src/main/fileService.ts, src/main/fileManagement.ts, src/main/workspaceService.ts, src/main/workspaceController.ts, src/main/editorSession.ts, src/main/settings.ts, src/shared/contract.ts, src/main/preload.ts, src/renderer/editorWorkspace.js, src/renderer/editorTabs.js, src/renderer/fileExplorer.js, src/renderer/fileIcons.js, src/renderer/fileExplorer.css, test/workspaceService.test.ts, test/fileManagement.test.ts, test/workspaceController.test.ts, test/fileExplorer.test.ts, test/fileIcons.test.ts, test/editorSession.test.ts, test/editorWorkspace.test.ts, test/fileService.test.ts]
+source_of_truth: [src/renderer/workspaceNavigation.js, docs/adr/2026-10-07-workspace-ui-shell-layout.md, docs/adr/2026-10-02-filesystem-permission-model.md, src/main/fileService.ts, src/main/fileManagement.ts, src/main/workspaceService.ts, src/main/workspaceController.ts, src/main/editorSession.ts, src/main/settings.ts, src/shared/contract.ts, src/main/preload.ts, src/renderer/editorWorkspace.js, src/renderer/editorTabs.js, src/renderer/fileExplorer.js, src/renderer/fileIcons.js, src/renderer/fileExplorer.css, test/workspaceService.test.ts, test/fileManagement.test.ts, test/workspaceController.test.ts, test/fileExplorer.test.ts, test/fileIcons.test.ts, test/editorSession.test.ts, test/editorWorkspace.test.ts, test/fileService.test.ts]
 ---
 
 # 能力：本地文件访问
@@ -29,8 +29,9 @@ source_of_truth: [docs/adr/2026-10-02-filesystem-permission-model.md, src/main/f
 
 ## 目录生命周期
 
-- `WorkspaceService` 负责根目录验证、恢复和最近记录，`WorkspaceController` 是顶部按钮、文件菜单、最近目录及关闭目录的统一入口。
-- 启动仅恢复上次成功打开的目录；最近 5 项按成功打开时间排序、Windows 路径大小写不敏感去重。原目录失效时进入空白状态并提示重新选择；不恢复文件或光标。
+- `WorkspaceService` 负责根目录验证、恢复、最近记录和工作区注册列表，`WorkspaceController` 是项目导航、顶部按钮、文件菜单、最近目录及关闭目录的统一入口。左侧 `workspaceNavigation.js` 按主进程列表索引切换或移除项目，不接受任意路径。
+- 启动仅恢复上次成功打开的目录；`recentRoots` 最近 5 项按成功打开时间排序，`workspaceRoots` 常驻列表按加入顺序保存、不受 5 项限制，均按 Windows 路径大小写不敏感去重。没有工作区列表字段的设置从上次目录与最近目录初始化；显式空列表保持为空。原目录失效时进入空白状态并提示重新选择；不恢复文件或光标。
+- 添加项目通过系统选择目录；移除仅取消工作区注册，不删除磁盘文件，也不清空最近记录。移除活动项目先执行未保存确认，再关闭当前根；取消或保存失败保持原项目与列表。一次只激活一个本地项目，切换不绑定或切换官网会话，不实现后台 AI 并行。
 - 设置以临时文件写入后原子替换，成功后才更新内存和根目录。取消、目录验证失败或持久化失败不切换原目录；关闭目录清空恢复记录，保留历史。
 - 关闭标签检查该文件，切换／关闭目录和退出检查所有未保存标签，提供“保存／放弃／取消”。保存失败或取消保留缓冲；放弃只有在后续操作成功时才替换或清空缓冲。
 - 目录操作、文件操作和 AI 写盘串行执行；保存回执允许在离开确认等待期间完成。请求捕获根目录或版本，旧目录读写结果不得复用到新目录。
@@ -48,11 +49,13 @@ source_of_truth: [docs/adr/2026-10-02-filesystem-permission-model.md, src/main/f
 
 | 通道 | 参数 | 返回 |
 |---|---|---|
-| `fs:choose-root` | 无 | `{ root, recentRoots, revision, ok, canceled?, error? }` |
-| `fs:get-root` | 无 | `{ root, recentRoots, revision }` |
+| `fs:choose-root` | 无 | `{ root, recentRoots, workspaceRoots, revision, ok, canceled?, error? }` |
+| `fs:get-root` | 无 | `{ root, recentRoots, workspaceRoots, revision }` |
 | `fs:recent-roots` | 无 | 主进程保存的最近目录数组 |
 | `fs:open-recent-root` | `index: number` | 目录操作结果 |
 | `fs:close-root` | 无 | 目录操作结果 |
+| `fs:open-workspace` | `index: number` | 打开主进程注册列表中的项目 |
+| `fs:remove-workspace` | `index: number` | 移除注册；不删除磁盘文件 |
 | `fs:list-dir` | `relPath: string` | `{ ok, entries[], truncated, error? }` |
 | `fs:read-file` | `relPath: string` | `{ ok, text?, encoding?, fellBack?, meta?, tooLarge?, limit?, error? }` |
 | `fs:slice-file` | `relPath, startLine, endLine` | `{ ok, text?, startLine?, endLine?, totalLines?, error? }` |
@@ -63,14 +66,13 @@ source_of_truth: [docs/adr/2026-10-02-filesystem-permission-model.md, src/main/f
 | `fs:delete-entry` | `relPath, root` | 独立永久删除，原生确认后返回文件操作结果 |
 | `fs:reveal-entry` | `relPath, root` | 验证目标后在资源管理器中显示 |
 | `fs:copy-entry-path` | `relPath, relative: boolean, root` | 验证目标后复制绝对／相对路径 |
-| `fs:root-changed` | （主进程 → 编辑器） | 根目录、历史、版本 |
+| `fs:root-changed` | （主进程 → 编辑器） | 根目录、最近记录、工作区列表、版本 |
 | `fs:file-changed` | （主进程 → 编辑器）`filePath, updated/created/deleted, revision` | AI 更新重读目标，创建／删除同步标签和文件树，拒绝旧目录事件 |
 | `fs:entry-changed` | （主进程 → 编辑器） | 改名／删除事件、路径、目录标记和版本 |
 | `editor:confirm-leave` | 可选 `path, root`（无参数检查所有文档） | `{ ok }`，是否允许离开 |
 | `editor:state` | （编辑器 → 主进程）`{ root, path, documents: [{ path, dirty }] }` | 单向编辑状态上报 |
 | `editor:request` / `editor:reply` | 保存请求 `{ id, kind: save, path }`／回执 ID 和成功布尔值 | 离开确认的保存回执 |
 | `ui:copy-numbered-snippet` | `{ root, relPath, text, startLine }` | 片段复制结果；目录或当前文件已变化则拒绝，不写入旧片段记忆 |
-| `ui:copy-whole-file` | `{ root, relPath, text }` | 复制当前 Monaco 全文上下文，包含未保存内容；目录或当前文件已变化则拒绝 |
 
 写入和文件管理的 `root` 必须等于当前根目录。文件管理与编辑状态通道仅接受本地编辑器主 frame；网页没有对应 preload。复制路径和资源管理器定位也由主进程验证当前根、真实路径与目标存在性，不接受任意系统路径；空白菜单以根目录为目标，相对根路径复制为 `.`。完整类型以 `src/shared/contract.ts` 为准。
 
@@ -109,7 +111,7 @@ source_of_truth: [docs/adr/2026-10-02-filesystem-permission-model.md, src/main/f
 | `test/pathGuard.test.ts` | `..` 穿越、绝对路径越界、前缀相似目录（`project` vs `project2`）、大小写不敏感、NUL、目录过滤与截断 |
 | `test/limits-and-ua.test.ts` | 元信息统计、上限判定、分片边界、文本扩展名判定、UA 规则 |
 | `test/fileService.test.ts` | 真实文件系统集成：列目录 / 读写 / 回退 / 拒绝 / 越界 / 超限 / 多级新增 / 同名冲突 / 链接 / 新增撤销与回滚 |
-| `test/workspaceService.test.ts` | 恢复、最近 5 项、关闭、失效目录、设置写入失败与测试隔离 |
+| `test/workspaceService.test.ts` | 恢复、最近 5 项、独立常驻工作区、移除不删除、关闭、失效目录、设置写入失败与测试隔离 |
 | `test/fileManagement.test.ts` | 新建、改名、重名不覆盖、回收站独立、永久删除、身份过期、链接／junction 与根目录切换 |
 | `test/workspaceController.test.ts` | 编辑器主 frame、当前根、主进程路径复制／定位、草稿与原生确认取消、两种删除隔离 |
 | `test/editorSession.test.ts`、`test/editorWorkspace.test.ts` | 多文件切换、后台保存及确认、失败保留缓冲、延迟读取、输入变化及所有标签改名删除 |
@@ -122,5 +124,5 @@ source_of_truth: [docs/adr/2026-10-02-filesystem-permission-model.md, src/main/f
 - `src/main/workspaceService.ts`、`src/main/workspaceController.ts`、`src/main/settings.ts` — 目录状态、交互入口与持久化
 - `src/main/editorSession.ts`、`src/renderer/editorWorkspace.js` — 离开确认、保存回执与编辑缓冲
 - `src/renderer/editorTabs.js` — 标签呈现、关闭入口与键盘导航
-- `src/renderer/fileExplorer.js`、`fileIcons.js`、`fileExplorer.css` — 文件树、静态类型图标、名称输入、右键菜单与最近目录
+- `src/renderer/fileExplorer.js`、`fileIcons.js`、`fileExplorer.css` — 文件树、静态类型图标、名称输入与右键菜单
 - `src/shared/encoding.ts`、`src/shared/pathGuard.ts`、`src/shared/limits.ts` — 纯逻辑（可单测）

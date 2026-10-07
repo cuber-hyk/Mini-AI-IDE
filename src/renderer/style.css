@@ -94,12 +94,12 @@ body {
 }
 
 .icon-btn:hover {
-  background: #222834;
+  background: var(--ui-control);
   border-color: var(--border);
 }
 
 .icon-btn:hover svg {
-  stroke: #cdd3dd;
+  stroke: var(--ui-text);
 }
 
 /* 高亮 = 该区域当前可见（与网页区工具条同一语义） */
@@ -151,7 +151,7 @@ body {
   min-height: 168px;
   max-height: 46vh;
   border-top: 1px solid var(--border);
-  background: #12141a;
+  background: var(--ui-bg);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -166,13 +166,13 @@ body {
   align-items: center;
   gap: 8px;
   padding: 6px 10px;
-  background: #1b1f27;
+  background: var(--ui-surface);
   border-bottom: 1px solid var(--border);
 }
 
 .preview-title {
   font-weight: 600;
-  color: #cfd6e4;
+  color: var(--ui-text);
 }
 
 .preview-meta {
@@ -181,7 +181,7 @@ body {
 }
 
 .preview-head button {
-  background: #262a33;
+  background: var(--ui-control);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -224,7 +224,7 @@ body {
   border-radius: 5px;
   padding: 6px 8px;
   margin-bottom: 6px;
-  background: #171a21;
+  background: var(--ui-surface);
 }
 
 .preview-item.blocked {
@@ -241,7 +241,7 @@ body {
 .preview-path {
   flex: 1;
   min-width: 160px;
-  background: #14161b;
+  background: var(--ui-bg);
   color: var(--text);
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -253,7 +253,7 @@ body {
   font-size: 11px;
   padding: 1px 6px;
   border-radius: 999px;
-  background: #262a33;
+  background: var(--ui-control);
   color: var(--text-dim);
 }
 
@@ -273,7 +273,7 @@ body {
 }
 
 .preview-item button:disabled {
-  background: #2a2d34;
+  background: var(--ui-control);
   border-color: var(--border);
   color: var(--text-dim);
   cursor: default;
@@ -289,7 +289,7 @@ body {
 .preview-code {
   margin: 5px 0 0;
   padding: 5px 6px;
-  background: #10131a;
+  background: var(--ui-bg);
   border: 1px solid var(--border);
   border-radius: 4px;
   font-family: 'Cascadia Code', 'Cascadia Mono', Consolas, 'Courier New', monospace;
@@ -304,14 +304,14 @@ body {
   display: inline-block;
   width: 4ch;
   margin-right: 8px;
-  color: #5d6779;
+  color: var(--ui-muted);
   text-align: right;
   user-select: none;
 }
 
 .preview-code-text {
   white-space: pre;
-  color: #cfd6e4;
+  color: var(--ui-text);
 }
 
 .preview-code-more {
@@ -332,8 +332,8 @@ body {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  background: #1e222b;
-  border: 1px solid #333a47;
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-border);
   border-radius: 12px;
   padding: 10px;
   min-height: 0;
@@ -400,7 +400,7 @@ body {
 }
 
 .requirement::placeholder {
-  color: #6b7280;
+  color: var(--ui-muted);
 }
 
 /* ---------------- 提示词版本双段开关 ----------------
@@ -421,8 +421,8 @@ body {
   height: 26px;
   padding: 2px;
   border-radius: 13px;
-  background: #171a21;
-  border: 1px solid #333a47;
+  background: var(--ui-surface);
+  border: 1px solid var(--ui-border);
   cursor: pointer;
   user-select: none;
   /* 与底部对齐（外壳是 align-items: flex-end） */
@@ -431,7 +431,7 @@ body {
 }
 
 .variant-switch:hover {
-  border-color: #465065;
+  border-color: var(--ui-border);
 }
 
 /* 滑块：靠 data-variant 定位，不做位移计算（两段等宽，用 50% 直接切） */
@@ -461,7 +461,7 @@ body {
   border: none;
   border-radius: 11px;
   background: transparent;
-  color: #9aa4b8;
+  color: var(--ui-muted);
   font-size: 12px;
   line-height: 22px;
   white-space: nowrap;
@@ -653,7 +653,7 @@ body {
   min-width: min(160px, calc(100% - 180px));
   max-width: calc(100% - 180px);
   border-right: 1px solid var(--border);
-  background: #191c22;
+  background: var(--ui-surface);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -771,11 +771,11 @@ body {
 }
 
 .tree-row:hover {
-  background: #23272f;
+  background: var(--ui-hover);
 }
 
 .tree-row.active {
-  background: #2b3444;
+  background: var(--ui-selected);
   color: #fff;
 }
 
@@ -826,7 +826,7 @@ body {
 .file-name {
   min-width: 0;
   flex: 1 1 0;
-  color: #cfd6e4;
+  color: var(--ui-text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -834,48 +834,6 @@ body {
 
 .editor-head > .spacer {
   display: none;
-}
-
-.context-menu-wrap {
-  position: relative;
-  flex: 0 0 auto;
-}
-
-.context-menu {
-  position: absolute;
-  z-index: 30;
-  top: calc(100% + 5px);
-  right: 0;
-  min-width: 160px;
-  padding: 4px;
-  border: 1px solid var(--border);
-  border-radius: var(--ui-radius);
-  background: var(--bg-elevated);
-  box-shadow: 0 8px 24px #0006;
-}
-
-.context-menu[hidden] { display: none; }
-
-.context-menu button {
-  display: block;
-  width: 100%;
-  height: var(--ui-control-height);
-  padding: 0 10px;
-  text-align: left;
-  background: transparent;
-  border: none;
-  border-radius: 4px;
-  color: var(--text);
-  font: inherit;
-  cursor: pointer;
-  white-space: nowrap;
-}
-
-.context-menu button:hover,
-.context-menu button:focus-visible {
-  background: #5b8def26;
-  outline: 1px solid var(--accent);
-  outline-offset: -1px;
 }
 
 /* 未保存标记：文件头右侧白点（有改动才显示） */

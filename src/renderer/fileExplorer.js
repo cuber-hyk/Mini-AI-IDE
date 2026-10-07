@@ -1,4 +1,4 @@
-/** 文件树呈现、名称输入及最近目录入口，磁盘操作只经 editorBridge。 */
+/** 文件树呈现与名称输入，磁盘操作只经 editorBridge。 */
 (function () {
   'use strict';
   window.createFileExplorer = function (options) {
@@ -198,17 +198,10 @@
     options.newFolder.addEventListener('click', function () { void create(true); });
     options.refresh.addEventListener('click', function () { void refresh(false); });
 
-    function welcome(roots) {
-      const host = options.welcome; host.textContent = ''; host.hidden = Boolean(options.currentPath());
+    function welcome() {
+      // 项目仅由左侧工作区选择；文件正文没有目录选择入口。
+      options.welcome.textContent = ''; options.welcome.hidden = true;
       options.editor.classList.toggle('empty-editor', !options.currentPath());
-      if (host.hidden) return;
-      host.appendChild(node('h2', '', options.getRoot() ? '选择文件开始编辑' : '打开一个目录开始工作'));
-      const open = node('button', 'ui-button primary', '打开目录…'); open.type = 'button';
-      open.addEventListener('click', async function () { const result = await bridge.chooseRoot(); if (result.error) info(result.error, true); }); host.appendChild(open);
-      if (options.getRoot()) { const file = node('button', 'ui-button', '新建文件'); file.type = 'button'; file.addEventListener('click', function () { void create(false); }); host.appendChild(file); }
-      if (roots.length) { host.appendChild(node('h3', '', '最近目录')); const list = node('ul', 'recent-folders');
-        roots.forEach(function (root, index) { const li = node('li'); const button = node('button', '', root); button.type = 'button'; button.title = root;
-          button.addEventListener('click', async function () { const result = await bridge.openRecentRoot(index); if (result.error) info(result.error, true); }); li.appendChild(button); list.appendChild(li); }); host.appendChild(list); }
       options.newFile.disabled = options.newFolder.disabled = options.refresh.disabled = !options.getRoot();
     }
     function entryChanged(event) {

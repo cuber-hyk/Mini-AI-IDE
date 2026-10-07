@@ -24,9 +24,6 @@
     fileName: document.getElementById('file-name'),
     fileDot: document.getElementById('file-dot'),
     editorTabs: document.getElementById('editor-tabs'),
-    btnOpen: document.getElementById('btn-open'),
-    btnSnippet: document.getElementById('btn-snippet'),
-    btnWholeFile: document.getElementById('btn-whole-file'),
     // 注意：这里**不要**用键名 `monaco`，否则会遮蔽全局的 `window.monaco`（AMD 模块对象），
     // 导致 `window.monaco.editor.createModel` / `createDecorationsCollection` 之类的调用难以排查。
     monacoHost: document.getElementById('monaco'),
@@ -79,7 +76,6 @@
     editor: null,
     selectionBubbleReady: false, // 选区浮层复制按钮是否已挂载（幂等保护）
     /** 右侧 AI 网页当前是否显示（由主进程广播同步） */
-    webVisible: true,
     /** 回程预览面板当前是否显示 */
     previewVisible: false,
   };
@@ -150,8 +146,9 @@
      * 回程预览已移到右下角独立面板，因此这里不再测量预览面板。
      */
     const editorRect = rectOf(el.monacoHost);
-    const promptRect = rectOf(el.btnCopyPrompt);
-    const toolbarRect = rectOf(document.getElementById('btn-open'));
+    const requirementPanel = document.getElementById('requirement-panel');
+    const promptRect = rectOf(requirementPanel.open ? el.btnCopyPrompt : requirementPanel.querySelector('summary'));
+    const toolbarRect = rectOf(document.getElementById('workspace-add'));
 
     const promptVisible = promptRect.height > 0 && promptRect.bottom <= viewportH;
     const editorFills = editorRect.height > 200;
@@ -217,6 +214,7 @@
       endColumn: endColumn,
     });
 
+    ed.render(true);
     const bubble = document.querySelector('.selection-copy');
     if (!bubble) {
       ed.setSelection(savedSelection);
@@ -257,8 +255,6 @@
         rect.left < nodeRect.right
     );
 
-    ed.setSelection(savedSelection);
-
     const result = {
       ok: true,
       // 这几项是判断"到底为什么不出现"的关键
@@ -282,6 +278,7 @@
     // 判定：display 不是 none、尺寸 > 0、且落在编辑器视口内，才算"真的出现了"
     result.visible =
       result.display !== 'none' && result.visibility !== 'hidden' && result.width > 0 && result.height > 0 && inView;
+    ed.setSelection(savedSelection);
     return result;
   };
 
@@ -426,7 +423,7 @@
    */
   const EDITOR_OPTIONS = {
     language: 'plaintext',
-    theme: 'vs-dark',
+    theme: 'workspace-dark',
     automaticLayout: true,
     // 字体：优先 Cascadia Code（Win11 自带），依次回退；中文回退到等宽字体
     fontFamily:
@@ -482,6 +479,24 @@
 
     window.require.config({ paths: { vs: './vendor/monaco/vs' } });
     window.require(['vs/editor/editor.main'], function () {
+      const themeTokens = getComputedStyle(document.documentElement);
+      const themeColor = (name) => themeTokens.getPropertyValue(name).trim();
+      window.monaco.editor.defineTheme('workspace-dark', {
+        base: 'vs-dark', inherit: true, rules: [],
+        colors: {
+          'editor.background': themeColor('--ui-bg'),
+          'editor.foreground': themeColor('--ui-text'),
+          'editorGutter.background': themeColor('--ui-bg'),
+          'editor.lineHighlightBackground': themeColor('--ui-surface'),
+          'editorLineNumber.foreground': themeColor('--ui-muted'),
+          'editor.selectionBackground': themeColor('--ui-selected'),
+          'editorWidget.background': themeColor('--ui-surface'),
+          'editorWidget.border': themeColor('--ui-border'),
+          'editorHoverWidget.background': themeColor('--ui-surface'),
+          'editorHoverWidget.border': themeColor('--ui-border'),
+          'minimap.background': themeColor('--ui-bg'),
+        },
+      });
       // 显式持有空白模型；create(value) 的内置模型会在首次 setModel 时被 Monaco 释放。
       emptyModel = window.monaco.editor.createModel('', 'plaintext');
       state.editor = window.monaco.editor.create(el.monacoHost, { model: emptyModel, ...EDITOR_OPTIONS });
@@ -502,65 +517,11 @@
     });
   }
 
-  /* ---------------- 目录树宽度与可见性 ---------------- */
-  function applySidebar(width, visible) {
-    if (typeof width === 'number' && Number.isFinite(width)) {
-      el.sidebar.style.width = Math.round(width) + 'px';
-    }
-    el.sidebar.hidden = !visible;
-    el.sidebarResizer.hidden = !visible;
-    el.btnSidebar.classList.toggle('active', visible);
-  }
-
-  /* ---------------- 目录树与编辑器之间的拖拽 ---------------- */
-  (function setupSidebarResizer() {
-    let dragging = false;
-    let startX = 0;
-    let startWidth = 0;
-
-    el.sidebarResizer.addEventListener('pointerdown', function (e) {
-      dragging = true;
-      startX = e.clientX;
-      startWidth = el.sidebar.getBoundingClientRect().width;
-      el.sidebarResizer.classList.add('dragging');
-      el.sidebarResizer.setPointerCapture(e.pointerId);
-      e.preventDefault();
-    });
-
-    el.sidebarResizer.addEventListener('pointermove', function (e) {
-      if (!dragging) return;
-      const next = Math.round(startWidth + (e.clientX - startX));
-      el.sidebar.style.width = next + 'px';
-      if (state.editor) state.editor.layout();
-    });
-
-    function end(e) {
-      if (!dragging) return;
-      dragging = false;
-      el.sidebarResizer.classList.remove('dragging');
-      try {
-        el.sidebarResizer.releasePointerCapture(e.pointerId);
-      } catch (err) {
-        /* 指针可能已释放 */
-      }
-      void bridge.setSidebarWidth(el.sidebar.getBoundingClientRect().width);
-    }
-    el.sidebarResizer.addEventListener('pointerup', end);
-    el.sidebarResizer.addEventListener('pointercancel', end);
-
-    // 双击复位
-    el.sidebarResizer.addEventListener('dblclick', function () {
-      el.sidebar.style.width = '230px';
-      if (state.editor) state.editor.layout();
-      void bridge.setSidebarWidth(230);
-    });
-  })();
-
-  /* ---------------- 面板开关 ---------------- */
-  el.btnSidebar.addEventListener('click', function () {
-    const next = el.sidebar.hidden;
-    applySidebar(undefined, next);
-    void bridge.setSidebarVisible(next);
+  const workspaceNavigation = window.setupWorkspaceNavigation(bridge);
+  const workspaceLayout = window.setupWorkspaceLayout(bridge);
+  const fileWorkspace = window.setupFileWorkspace(bridge);
+  document.addEventListener('workspace-layout-changed', function () {
+    if (state.editor) state.editor.layout();
   });
 
   /*
@@ -591,36 +552,12 @@
     }, 1200);
   });
 
-  /*
-   * 「AI 网页」的显隐按钮已移到**网页区自己的顶部工具条**（webbar.html）——
-   * 折叠/展开应在被折叠的那块板上操作，而不是挤在左侧编辑器工具栏里。
-   * 因此这里没有按钮，只有快捷键与主进程状态同步。
-   */
-  async function toggleWeb() {
-    const result = await bridge.setWebVisible(!state.webVisible);
-    state.webVisible = Boolean(result && result.visible);
-    setInfo(state.webVisible ? '已显示右侧 AI 网页' : '已隐藏 AI 网页 —— 编辑器占满全窗口');
-  }
-
-  // 注：这里**不再有**「回程预览」的开关按钮。
-  // 它原先在编辑器工具栏里，与网页区右上角那个图标按钮**功能完全重复**
-  // （两处逐行相同的 setPreviewPanel 调用，连面板高度算法都一样）。
-  // 现在只保留网页区右上角那一个：
-  //   - 预览面板属于「右侧那一列」，开关就该跟着那一列走；
-  //   - 编辑器工具栏是编辑器的顶栏，放右侧区域的开关属于越界；
-  //   - 网页隐藏时预览会一并隐藏，此时那一列的控制也跟着消失，语义自洽。
-  // 本进程仍保留 state.previewVisible 作为状态镜像（主进程会广播），
-  // 只是不再由本进程发起切换。
-
-  // 快捷键：Ctrl+B 目录树 / Ctrl+Shift+A AI 网页（编辑器获得焦点时也能用）
+  // Ctrl+B 显示或隐藏本地目录树。
   document.addEventListener('keydown', function (e) {
     if (!e.ctrlKey && !e.metaKey) return;
     if (e.key === 'b' || e.key === 'B') {
       e.preventDefault();
       el.btnSidebar.click();
-    } else if (e.shiftKey && (e.key === 'A' || e.key === 'a')) {
-      e.preventDefault();
-      void toggleWeb();
     }
   });
 
@@ -644,14 +581,8 @@
     } else await editorWorkspace.reload(filePath, false, false, discardDraft);
   });
 
-  bridge.onSidebarChanged(function (s) {
-    applySidebar(s && s.width, !(s && s.visible === false));
-  });
-
-  // 网页可见性也可能被网页区工具条那个按钮改掉，这里只同步状态（无本地按钮要paint）
   bridge.onChromeState(function (s) {
     if (!s) return;
-    state.webVisible = s.webVisible !== false;
     state.previewVisible = Boolean(s.previewVisible);
 
   });
@@ -701,9 +632,11 @@
     highlight: function (path) { explorer.highlight(path); },
   });
   const tabs = window.createEditorTabs(el.editorTabs, {
-    open: function (path) { return editorWorkspace.open(path); },
+    open: function (path) { return openFile(path); },
     close: function (path) { return editorWorkspace.close(path); },
+    openReview: fileWorkspace.openReview, closeReview: fileWorkspace.closeReview,
   });
+  fileWorkspace.attachTabs(tabs);
   const explorer = window.createFileExplorer({
     bridge, tree: el.tree, editor: el.monacoHost,
     getRoot: function () { return state.root; }, currentPath: function () { return state.currentPath; },
@@ -712,7 +645,12 @@
     setInfo, openFile: function (path) { return openFile(path, null); },
   });
   function loadTree() { return explorer.refresh(false); }
-  function openFile(relPath) { return editorWorkspace.open(relPath); }
+  async function openFile(relPath) {
+    const root = state.root; const revision = workspaceRevision;
+    await fileWorkspace.showEditor();
+    if (root !== state.root || revision !== workspaceRevision) return false;
+    return editorWorkspace.open(relPath);
+  }
   function save() { return editorWorkspace.save(); }
   function languageFor(p) {
     const ext = (p.split('.').pop() || '').toLowerCase();
@@ -752,40 +690,8 @@
   }
 
   /* ---------------- 事件绑定 ---------------- */
-  el.btnOpen.addEventListener('click', async function () {
-    const info = await bridge.chooseRoot();
-    if (info.error) setInfo('打开目录失败：' + info.error, true);
-  });
-
-  /** 复制当前 Monaco 全文作为只读上下文，包含未保存草稿，不暗示覆盖操作。 */
-  async function copyWholeFileContext() {
-    if (!state.currentPath) {
-      setInfo('请先打开一个文件，再复制', true);
-      return false;
-    }
-    const model = state.editor && state.editor.getModel();
-    if (!model) { setInfo('编辑器尚未就绪，无法复制全文', true); return false; }
-    const result = await bridge.copyWholeFile({ root: state.root, relPath: state.currentPath, text: model.getValue() });
-    if (!result.ok) {
-      setInfo('复制整个文件失败：' + (result.error ?? '未知错误'), true);
-      return false;
-    }
-    setInfo(
-      '已复制整个文件（' + state.currentPath + ' · ' + (result.lineCount ?? 0) + ' 行 · ' + result.length +
-        ' 字符）—— 粘贴给模型作为完整原文上下文'
-    );
-    el.btnWholeFile.textContent = '已复制 ✓';
-    setTimeout(function () {
-      el.btnWholeFile.textContent = '复制整个文件';
-    }, 1800);
-    return true;
-  }
-  el.btnWholeFile.addEventListener('click', function () { void copyWholeFileContext(); });
-
-  /** 无损复制选区原文上下文；本地行数反馈不作为 AI 定位指令。
-   * 顶部按钮无选区时保留取全文的既有行为；浮动按钮必须有选区。
-   */
-  async function copyNumberedSelection(fallbackToWholeFile) {
+  /** 选区浮动入口仅复制真实选中原文，无全文回退。 */
+  async function copyNumberedSelection() {
     if (!state.currentPath) {
       setInfo('请先打开一个文件，再选中要交给模型修改的代码', true);
       return false;
@@ -799,10 +705,9 @@
     const model = editor.getModel();
     const selection = editor.getSelection();
     const hasSelection = Boolean(selection) && !selection.isEmpty();
-    if (!hasSelection && !fallbackToWholeFile) {
+    if (!hasSelection) {
       return false;
     }
-    if (!hasSelection) return copyWholeFileContext();
 
     const text = model.getValueInRange(selection);
     const startLine = selection.startLineNumber;
@@ -827,15 +732,6 @@
     );
     return true;
   }
-
-  el.btnSnippet.addEventListener('click', async function () {
-    const ok = await copyNumberedSelection(true);
-    if (!ok) return;
-    el.btnSnippet.textContent = '已复制 ✓';
-    setTimeout(function () {
-      el.btnSnippet.textContent = '复制选中片段';
-    }, 1800);
-  });
 
   /* ---------------- 选区右上角的浮动复制按钮 ----------------
    *
@@ -1029,7 +925,7 @@
     bubble.addEventListener('click', async function (e) {
       e.preventDefault();
       e.stopPropagation();
-      const ok = await copyNumberedSelection(false);
+      const ok = await copyNumberedSelection();
       if (!ok) return;
       bubble.textContent = '已复制 ✓';
       bubble.classList.add('done');
@@ -1046,58 +942,13 @@
 
   window.setupPromptComposer(bridge, setInfo);
 
-  /* ---------------- 分隔条拖动 ----------------
-   * 本渲染进程只占左侧面板，因此拖动时用 window.screenX 推算窗口左边界的屏幕坐标，
-   * 再算出"编辑器期望宽度 = 鼠标屏幕坐标 - 窗口左边界"，交给主进程做最小宽度约束后执行。
-   * 主进程回传实际宽度，据此校准偏移，避免累计误差。
-   */
-  let dragging = false;
-  let dragOffset = 0;
-
-  function onDragMove(e) {
-    if (!dragging) return;
-    const windowLeft = window.screenX;
-    const desired = e.screenX - windowLeft + dragOffset;
-    void bridge.setSplit(desired).then(function (result) {
-      dragOffset = result.editorWidth - (e.screenX - windowLeft);
-    });
-  }
-
-  el.resizer.addEventListener('pointerdown', function (e) {
-    dragging = true;
-    dragOffset = 0;
-    el.resizer.classList.add('dragging');
-    el.resizer.setPointerCapture(e.pointerId);
-    // 拖动期间提升指针事件频率
-    e.preventDefault();
-  });
-
-  el.resizer.addEventListener('pointermove', onDragMove);
-
-  function endDrag(e) {
-    if (!dragging) return;
-    dragging = false;
-    el.resizer.classList.remove('dragging');
-    try {
-      el.resizer.releasePointerCapture(e.pointerId);
-    } catch (err) {
-      /* 指针可能已释放 */
-    }
-  }
-  el.resizer.addEventListener('pointerup', endDrag);
-  el.resizer.addEventListener('pointercancel', endDrag);
-
-  // 双击分隔条：回到 45% 默认比例
-  el.resizer.addEventListener('dblclick', function () {
-    void bridge.setSplit(Math.round(window.outerWidth * 0.45));
-  });
-
   function updateRoot(info) {
     const changed = state.root !== info.root || (workspaceRevision !== null && workspaceRevision !== info.revision);
     state.root = info.root;
     workspaceRevision = info.revision;
     recentRoots = info.recentRoots || recentRoots;
-    if (changed) editorWorkspace.clear();
+    if (changed) { fileWorkspace.resetReview(); editorWorkspace.clear(); }
+    workspaceNavigation.update(info);
     renderRoot(); renderDirty(); explorer.welcome(recentRoots);
     if (changed) void explorer.refresh(true);
   }

@@ -3,11 +3,12 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import type { FileService } from './fileService';
-import { normalizeRecentRoots, type SettingsStore } from './settings';
+import { normalizeRecentRoots, normalizeWorkspaceRoots, type SettingsStore } from './settings';
 
 export interface WorkspaceState {
   root: string | null;
   recentRoots: string[];
+  workspaceRoots: string[];
   revision: number;
 }
 
@@ -29,6 +30,7 @@ export class WorkspaceService {
     return {
       root: this.files.getRoot(),
       recentRoots: [...this.settings.get().recentRoots],
+      workspaceRoots: [...this.settings.get().workspaceRoots],
       revision: this.revision,
     };
   }
@@ -37,7 +39,8 @@ export class WorkspaceService {
     try {
       const root = this.validateRoot(absolutePath);
       const recentRoots = normalizeRecentRoots([root, ...this.settings.get().recentRoots]);
-      this.settings.update({ lastRoot: root, recentRoots });
+      const workspaceRoots = normalizeWorkspaceRoots([...this.settings.get().workspaceRoots, root]);
+      this.settings.update({ lastRoot: root, recentRoots, workspaceRoots });
       if (this.files.getRoot() !== root) {
         this.files.setRoot(root);
         this.revision += 1;
@@ -60,6 +63,24 @@ export class WorkspaceService {
     try {
       this.settings.update({ lastRoot: null });
       if (this.files.getRoot() !== null) {
+        this.files.clearRoot();
+        this.revision += 1;
+      }
+      return { ok: true, ...this.getState() };
+    } catch (err) {
+      return this.failure(err);
+    }
+  }
+
+  /** 仅取消注册；活动项目关闭与列表移除在同一次持久化中完成。 */
+  remove(root: string): WorkspaceResult {
+    try {
+      const roots = this.settings.get().workspaceRoots;
+      if (!roots.includes(root)) throw new Error('工作区条目无效，请刷新后重试');
+      const active = this.files.getRoot()?.toLowerCase() === root.toLowerCase();
+      this.settings.update({ workspaceRoots: roots.filter(item => item !== root),
+        ...(active ? { lastRoot: null } : {}) });
+      if (active) {
         this.files.clearRoot();
         this.revision += 1;
       }

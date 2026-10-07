@@ -28,6 +28,7 @@ function element(variant = '') {
 function setup(overrides: Record<string, unknown> = {}) {
   const input = element(); const short = element('short'); const full = element('full');
   const sw = element(); const copy = element(); const custom = element();
+  const requirementPanel = { ...element(), open: true };
   const actions = { offsetHeight: 30 };
   sw.querySelectorAll = () => [short, full];
   let current: Status = { variant: 'full', shortIsCustom: false, fullIsCustom: true };
@@ -38,7 +39,7 @@ function setup(overrides: Record<string, unknown> = {}) {
   const messages: Array<{ text: string; warn: boolean }> = [];
   const writes: string[] = [];
   const nodes: Record<string, unknown> = {
-    requirement: input, 'variant-switch': sw, 'btn-copy-prompt': copy, 'prompt-custom': custom, 'prompt-actions': actions,
+    requirement: input, 'requirement-panel': requirementPanel, 'variant-switch': sw, 'btn-copy-prompt': copy, 'prompt-custom': custom, 'prompt-actions': actions,
   };
   const bridge = {
     async getPromptStatus() { return current; },
@@ -63,12 +64,26 @@ function setup(overrides: Record<string, unknown> = {}) {
   vm.createContext(sandbox);
   vm.runInContext(source, sandbox);
   sandbox.window.setupPromptComposer(bridge, (text: string, warn = false) => messages.push({ text, warn }));
-  return { input, short, full, sw, copy, custom, messages, writes,
+  return { input, short, full, sw, copy, custom, requirementPanel, messages, writes,
     narrow() { sandbox.window.innerHeight = 600; actions.offsetHeight = 80; resized(); },
     publish(next: Status) { current = next; listener(next); },
     resize() { resized(); }, observe() { observer(); }, expire() { timer?.(); },
-  };
+};
 }
+
+it('收起需求保留草稿与高度，重新展开时按当前内容调整', () => {
+  const ui = setup();
+  ui.input.value = '需要保留的需求草稿';
+  const before = ui.input.style.height;
+  ui.requirementPanel.open = false;
+  ui.input.scrollHeight = 170;
+  ui.input.fire('input');
+  assert.equal(ui.input.style.height, before);
+  assert.equal(ui.input.value, '需要保留的需求草稿');
+  ui.requirementPanel.open = true;
+  ui.requirementPanel.fire('toggle');
+  assert.equal(ui.input.style.height, '174px');
+});
 
 it('读取持久化版本，并在切换、保存或恢复默认后显示对应自定义状态', async () => {
   const ui = setup(); await flush();
@@ -197,26 +212,21 @@ it('主进程状态读取失败时两版均使用权威生成默认，不显示�
   assert.equal(f.nodes['pm-reset'].disabled, true); assert.equal(f.saves(), 0);
 });
 
-it('全文复制使用当前 Monaco 草稿与完整上下文；无选区回到全文，纯空白选区仍无损复制', async () => {
+it('选区复制没有全文回退，纯空白选区仍保留原文', async () => {
   const renderer = fs.readFileSync(path.join(__dirname, '../src/renderer/renderer.js'), 'utf8');
-  const handlers = renderer.slice(renderer.indexOf('  async function copyWholeFileContext()'), renderer.indexOf("  el.btnSnippet.addEventListener('click'"));
-  const whole: any[] = []; const snippets: any[] = []; let selected = false;
-  const text = '\n  unsaved draft  \r\n\n';
-  const state: { root: string; currentPath: string | null; editor: any } = { root: 'C:/root', currentPath: 'a.txt', editor: {
-    getModel: () => ({ getValue: () => text, getValueInRange: () => '  \n\t' }),
+  const handlers = renderer.slice(renderer.indexOf('  async function copyNumberedSelection()'), renderer.indexOf('  /* ---------------- 选区'));
+  const snippets: any[] = []; let selected = false;
+  const state: any = { root: 'C:/root', currentPath: 'a.txt', editor: {
+    getModel: () => ({ getValueInRange: () => '  \n\t' }),
     getSelection: () => ({ isEmpty: () => !selected, startLineNumber: 6 }),
   } };
-  const sandbox: any = { state, el: { btnWholeFile: element() }, setInfo() {}, setTimeout() {}, bridge: {
-    async copyWholeFile(input: any) { whole.push(input); const parts = buildWholeFileText(input.relPath, input.text); return { ok: true, ...parts, length: parts.text.length }; },
+  const sandbox: any = { state, setInfo() {}, bridge: {
     async copyNumberedSnippet(input: any) { snippets.push(input); return { ok: true, startLine: 6, endLine: 7, length: 12 }; },
   } };
   vm.createContext(sandbox); vm.runInContext(handlers, sandbox);
-  assert.equal(await sandbox.copyWholeFileContext(), true);
-  assert.deepEqual(JSON.parse(JSON.stringify(whole[0])), { root: 'C:/root', relPath: 'a.txt', text });
-  assert.equal(await sandbox.copyNumberedSelection(false), false);
-  assert.equal(await sandbox.copyNumberedSelection(true), true); assert.equal(whole.length, 2); assert.equal(snippets.length, 0);
-  selected = true; assert.equal(await sandbox.copyNumberedSelection(false), true);
+  assert.equal(await sandbox.copyNumberedSelection(), false); assert.equal(snippets.length, 0);
+  selected = true; assert.equal(await sandbox.copyNumberedSelection(), true);
   assert.equal(snippets[0].text, '  \n\t'); assert.equal(snippets[0].startLine, 6);
-  state.currentPath = null; assert.equal(await sandbox.copyWholeFileContext(), false); assert.equal(await sandbox.copyNumberedSelection(true), false);
-  assert.equal(whole.length, 2); assert.equal(snippets.length, 1);
+  state.currentPath = null; assert.equal(await sandbox.copyNumberedSelection(), false); assert.equal(snippets.length, 1);
+  assert.doesNotMatch(renderer, /copyWholeFileContext|bridge\.copyWholeFile/);
 });

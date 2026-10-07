@@ -18,7 +18,7 @@ window.setupPromptComposer = function (bridge, setInfo) {
 
     function grow() {
       const ta = el.requirement;
-      if (!ta) return;
+      if (!ta || !document.getElementById('requirement-panel').open) return;
       // 归零时连 min/max 一起放开：否则 min-height 会把 scrollHeight 顶到 MIN_H 起，
       // 测出来的永远是钳制后的值而非真实内容高度。
       ta.style.height = 'auto';
@@ -50,6 +50,7 @@ window.setupPromptComposer = function (bridge, setInfo) {
     }
 
     el.requirement.addEventListener('input', grow);
+    document.getElementById('requirement-panel').addEventListener('toggle', grow);
 
     // 粘贴 / 拖拽：input 事件在部分粘贴路径下先于 DOM 更新触发，用 rAF 再量一次
     el.requirement.addEventListener('paste', function () {
@@ -170,7 +171,7 @@ window.setupPromptComposer = function (bridge, setInfo) {
     try {
       const result = await bridge.copyPrompt(requirement, []);
       if (!result.ok) throw new Error(result.error || '未知错误');
-      setInfo('已复制完整提示词（' + result.length + ' 字符）—— 请到右侧输入框 Ctrl+V 粘贴，然后自己按发送');
+      setInfo('已复制完整提示词（' + result.length + ' 字符）—— 请到中间官网输入框 Ctrl+V 粘贴，然后自己按发送');
       el.btnCopyPrompt.textContent = '已复制';
       feedbackTimer = window.setTimeout(function () {
         el.btnCopyPrompt.textContent = '复制提示词';

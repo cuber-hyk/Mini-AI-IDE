@@ -28,7 +28,7 @@ import { buildSnippetText, buildWholeFileText, fenceFor } from '../shared/snippe
 import { createFixtures, type FixturePaths } from './fixtures';
 import type { FileService } from './fileService';
 import { SettingsStore, isUsableRoot, SELF_TEST_SETTINGS_FILE } from './settings';
-import { computeLayout, HANDLE_BAR_WIDTH } from './windowLayout';
+import { computeLayout, type Layout } from './windowLayout';
 import { buildContextSummary } from './contextSummary';
 import { COLLECT_STRATEGIES, collectReply } from './replyCollector';
 import { ConsumptionStore, fingerprintOf, sessionKeyOf } from './consumptionStore';
@@ -39,12 +39,6 @@ interface BootInfo {
   userAgent: { original: string; effective: string; removed: string[] };
   uaConsistency: { ok: boolean; uaMajor: string | null; kernelMajor: string | null };
   versions: { electron: string | undefined; chromium: string | undefined; node: string };
-}
-
-interface Layout {
-  editorBounds: { width: number; height: number };
-  webBounds: { width: number; height: number };
-  dividerX: number;
 }
 
 interface Check {
@@ -261,10 +255,13 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   add('D8', '编辑器渲染进程已开启 sandbox', prefs['sandbox'] === true, prefs['sandbox']);
 
   const layoutOk =
-    input.layout.editorBounds.width >= 360 &&
-    input.layout.webBounds.width >= 420 &&
-    input.layout.dividerX === input.layout.editorBounds.width;
-  add('D9', '左右分栏布局已计算且满足最小宽度', layoutOk, input.layout);
+    input.layout.editorBounds.x === 0 &&
+    input.layout.workspaceBounds.width > 0 && input.layout.webBounds.width >= 420 &&
+    input.layout.workspaceBounds.width === input.layout.webBounds.x &&
+    input.layout.webBounds.x + input.layout.webBounds.width === input.layout.fileBounds.x &&
+    input.layout.contentBounds.x + input.layout.contentBounds.width === input.layout.treeBounds.x &&
+    input.layout.treeBounds.x + input.layout.treeBounds.width === input.layout.editorBounds.width;
+  add('D9', '左工作区、中官网、右编辑且目录最右，原生编辑器覆盖本地底层', layoutOk, input.layout);
 
   /* ---- E) 通道名一致性（preload 在沙箱下无法 require shared，故用源码比对兜底）---- */
   // 主进程 → 渲染进程的单向通道（不需要 ipcMain.handle）
@@ -349,7 +346,10 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     const workspaceJs = fs.readFileSync(path.join(rendererDir, 'editorWorkspace.js'), 'utf8');
     const tabsJs = fs.readFileSync(path.join(rendererDir, 'editorTabs.js'), 'utf8');
     const toolLayoutJs = fs.readFileSync(path.join(rendererDir, 'toolPanelLayout.js'), 'utf8');
-    const js = [editorJs, composerJs, toolbarJs, explorerJs, workspaceJs, tabsJs, updateJs].join('\n');
+    const navigationJs = fs.readFileSync(path.join(rendererDir, 'workspaceNavigation.js'), 'utf8');
+    const layoutJs = fs.readFileSync(path.join(rendererDir, 'workspaceLayout.js'), 'utf8');
+    const fileWorkspaceJs = fs.readFileSync(path.join(rendererDir, 'fileWorkspace.js'), 'utf8');
+    const js = [editorJs, composerJs, toolbarJs, explorerJs, workspaceJs, tabsJs, updateJs, navigationJs, layoutJs, fileWorkspaceJs].join('\n');
     const css = fs.readFileSync(path.join(rendererDir, 'style.css'), 'utf8');
     /*
      * 主进程 / preload / 契约 / 设置 的**源码**（不是 __dirname 下的编译产物：那里只有 .js）。
@@ -359,6 +359,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
      */
     const srcMainDir = path.join(__dirname, '..', '..', 'src', 'main');
     const mainTs = fs.readFileSync(path.join(srcMainDir, 'index.ts'), 'utf8');
+    const layoutControllerTs = fs.readFileSync(path.join(srcMainDir, 'workspaceLayoutController.ts'), 'utf8');
     const preloadTs = fs.readFileSync(path.join(srcMainDir, 'preload.ts'), 'utf8');
     /* 通道名的权威定义在契约层，不在 index.ts */
     const contractTs = fs.readFileSync(path.join(srcMainDir, '..', 'shared', 'contract.ts'), 'utf8');
@@ -417,6 +418,17 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     const htmlButtonIds = [...html.matchAll(/<button\s+id="([^"]+)"/g)].map((m) => m[1] as string);
     const toCamel = (s: string): string => s.replace(/-([a-z])/g, (_m, c: string) => c.toUpperCase());
     const unboundButtons = htmlButtonIds.filter((id) => {
+      const layoutBindings: Record<string, string> = {
+        'workspace-collapse': "getElementById('workspace-collapse').addEventListener('click'",
+        'workspace-restore': "restore.addEventListener('click'",
+        'btn-sidebar': "treeButton.addEventListener('click'",
+        'tree-collapse': "getElementById('tree-collapse').addEventListener('click'",
+        'file-maximize': "getElementById('file-maximize').addEventListener('click'",
+        'file-collapse': "getElementById('file-collapse').addEventListener('click'",
+      };
+      if (layoutBindings[id]) return !layoutJs.includes(layoutBindings[id]!);
+      if (id === 'workspace-add') return !navigationJs.includes("getElementById('workspace-add').addEventListener('click'");
+      if (id === 'tool-view-changes') return !fileWorkspaceJs.includes("getElementById('tool-view-changes').addEventListener('click'");
       if (id === 'btn-copy-context') return !/trigger\.addEventListener\('click'/.test(toolbarJs);
       const updateKeys: Record<string, string> = { 'btn-update': 'trigger', 'update-action': 'action', 'update-notes-toggle': 'notesToggle' };
       if (updateKeys[id]) return !new RegExp(`${updateKeys[id]}\\.addEventListener\\('click'`).test(updateJs);
@@ -432,6 +444,11 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
         }
         if (id === 'tool-settings-close') return !/getElementById\(closeId\)\.addEventListener\('click'/.test(toolLayoutJs) || !/popup\('tool-settings-wrap', 'tool-settings-toggle', 'tool-settings-panel', 'tool-settings-close'\)/.test(toolLayoutJs);
         const toolJs = fs.readFileSync(path.join(rendererDir, 'toolHarness.js'), 'utf8');
+        if (id === 'tool-interval-down' || id === 'tool-interval-up') {
+          return !/const intervalDown = document\.getElementById\('tool-interval-down'\)/.test(toolJs) ||
+            !/const intervalUp = document\.getElementById\('tool-interval-up'\)/.test(toolJs) ||
+            !/\[intervalDown, intervalUp\]\.forEach\(function \(button, index\)\s*\{[\s\S]*?button\.addEventListener\('click'[\s\S]*?configure\(\{ sendIntervalSeconds: Number\(sendInterval\.value\) \}\)/.test(toolJs);
+        }
         const declaration = new RegExp(`const (\\w+) = document\\.getElementById\\('${id}'\\)`).exec(toolJs);
         return !declaration || !new RegExp(`\\b${declaration[1]}\\.addEventListener\\(`).test(toolJs);
       }
@@ -584,41 +601,15 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       }
       add('N2', '网页区工具条：webbar.js 语法可解析', wbParseError === null, wbParseError ?? 'OK');
 
-      // 图标按钮必须真的绑了事件，且样式定义了 .icon-btn 外观
-      const wbBoundWeb = /el\.web\.addEventListener\(/.test(wbJs);
-      const wbBoundPreview = /el\.preview\.addEventListener\(/.test(wbJs);
-      const wbBoundRestore = /el\.restore\.addEventListener\(/.test(wbJs);
-      const wbHasIconCss = /\.ui-icon/.test(wbCss) && /\.ui-icon\.active/.test(wbCss);
-      add('N3', '网页区工具条：显隐按钮绑定了事件且有图标按钮样式', wbBoundWeb && wbBoundPreview && wbBoundRestore && wbHasIconCss, {
-        boundWeb: wbBoundWeb,
-        boundPreview: wbBoundPreview,
-        boundRestore: wbBoundRestore,
-        hasIconCss: wbHasIconCss,
-      });
-
-      // N5：网页隐藏后的**右边缘把手**必须存在（这是"能再展开"的唯一常驻入口）
-      const hasHandleEl = /id="btn-restore"/.test(wbHtml) && /class="handle"/.test(wbHtml);
-      const hasHandleCss =
-        /\.webbar\.handle-mode/.test(wbCss) && /\.handle:hover/.test(wbCss) && /writing-mode:\s*vertical-rl/.test(wbCss);
-      add('N5', '网页区工具条：具备右边缘把手形态（竖排 + hover 展开）', hasHandleEl && hasHandleCss, {
-        hasHandleEl,
-        hasHandleCss,
-      });
-
-      // N6：刚隐藏后要高亮提示 —— 否则 5px 窄条会被当成窗口边框忽略
-      const hasHint = /just-hidden/.test(wbJs) && /just-hidden/.test(wbCss) && /3000/.test(wbJs);
-      add('N6', '网页隐藏后有 3 秒高亮提示（just-hidden）', hasHint, { hasHint });
-
-      // 独立 preload：窄接口 + 通道名与主进程一致
+      const collectBound = /el\.collect\.addEventListener/.test(wbJs) && /bridge\.collectReply/.test(wbJs);
+      add('N3', '官网常驻顶栏的采集入口仍绑定真实只读采集', collectBound, { collectBound });
+      const noToggles = !/id="btn-(web|preview-toggle|restore)"/.test(wbHtml);
+      add('N5', '官网顶栏不再提供网页或 Diff 显隐按钮', noToggles, { noToggles });
+      add('N6', '官网顶栏不再包含隐藏恢复形态', !/handle-mode|just-hidden/.test(wbJs + wbCss), {});
       const wbPreload = fs.readFileSync(path.join(__dirname, 'webbarPreload.js'), 'utf8');
-      const wbBridgeOk =
-        /exposeInMainWorld\('webbarBridge'/.test(wbPreload) &&
-        wbPreload.includes("'ui:set-web-visible'") &&
-        wbPreload.includes("'ui:set-preview-panel'") &&
-        wbPreload.includes("'ui:chrome-state'");
-      add('N4', '网页区工具条：独立 preload 暴露窄 bridge 且通道名正确', wbBridgeOk, {
-        exposeInMainWorld: /exposeInMainWorld\('webbarBridge'/.test(wbPreload),
-      });
+      const wbBridgeOk = /exposeInMainWorld\('webbarBridge'/.test(wbPreload) &&
+        wbPreload.includes("'return:collect'") && !/ui:set-web-visible|ui:set-preview-panel/.test(wbPreload);
+      add('N4', '官网顶栏独立 preload 仅保留只读采集接口', wbBridgeOk, { wbBridgeOk });
     } catch (err) {
       add('N1', '网页区工具条界面契约检查', false, `读取失败：${err instanceof Error ? err.message : String(err)}`);
     }
@@ -884,7 +875,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     });
 
     // O2：目录树开关是编辑器顶部条里的**图标按钮**（有 svg、无文字），且仍受 Ctrl+B 控制
-    const editorHead = /<div class="editor-head">([\s\S]*?)<\/div>/.exec(html)?.[1] ?? '';
+    const editorHead = /<div class="editor-head">([\s\S]*?)<div id="monaco"/.exec(html)?.[1] ?? '';
     const sidebarBtnInHead = /id="btn-sidebar"[^>]*class="icon-btn"/.test(editorHead) && /<svg/.test(editorHead);
     const ctrlBKept = /e\.key === 'b'/.test(js);
     add('O2', '目录树开关为编辑器顶部条内的图标按钮，且 Ctrl+B 快捷键保留', sidebarBtnInHead && ctrlBKept, {
@@ -930,32 +921,12 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
         { config: state.config, resultCount: state.results.length });
     } catch (error) { add('O5', '本地工具 bridge 返回主进程真实权限与结果状态', false, String(error)); }
 
-    /*
-     * O6：网页隐藏后**必须还能回来**（本项目已犯过一次这个错）。
-     *
-     * 早期实现把显隐开关放进网页区顶部工具条，网页隐藏时工具条跟着隐藏 ——
-     * 用户点完就再也回不来。因此断言两条：
-     *  1. 工具条视图在网页隐藏时**仍然 setVisible(true)**（变成右边缘把手）；
-     *  2. 隐藏分支里 webBarBounds 的宽度**不为 0**（否则把手没有落脚处）。
-     */
-    const notAlwaysVisible = /webBarView\.setVisible\(webVisible\)/.test(mainJs);
-    const alwaysVisible = /webBarView\.setVisible\(true\)/.test(mainJs);
-    const hiddenLayout = computeLayout(1600, 900, 800, 300, false);
-    const handleBounds = hiddenLayout.webBarBounds.width === HANDLE_BAR_WIDTH &&
-      hiddenLayout.previewBounds.width === 300 && hiddenLayout.webBounds.width === 0;
-    add('O6', '网页隐藏后工具条仍可见且把手几何有效（能再展开）', alwaysVisible && handleBounds && !notAlwaysVisible, {
-      alwaysVisible,
-      handleBounds,
-      stillConditional: notAlwaysVisible,
-    });
-
-    // O7：View 菜单必须有「AI 网页」勾选项作为**兜底入口**（菜单永远不会被隐藏）
-    const menuHasWebItem = /label:\s*'AI 网页'/.test(mainJs) && /type:\s*'checkbox'/.test(mainJs);
-    const menuHasShortcut = /CmdOrCtrl\+Shift\+A/.test(mainJs);
-    add('O7', 'View 菜单提供「AI 网页」勾选项与快捷键（兜底入口）', menuHasWebItem && menuHasShortcut, {
-      menuHasWebItem,
-      menuHasShortcut,
-    });
+    const permanentLayout = computeLayout(1600, 900, { dockHeight: 10000, previewVisible: true });
+    add('O6', '官网区域常驻，展开工具区仍保留官网高度且 Diff 不盖目录',
+      permanentLayout.webBounds.height >= 120 && permanentLayout.webBounds.width > 0 &&
+      permanentLayout.previewBounds.x + permanentLayout.previewBounds.width === permanentLayout.treeBounds.x, permanentLayout);
+    add('O7', '菜单和快捷键不再提供隐藏官网入口',
+      !/label:\s*'AI 网页'/.test(mainJs) && !/CmdOrCtrl\+Shift\+A/.test(mainJs), {});
 
     /* ---------------- P 组：实际工具变更只读查看 ---------------- */
     const previewJs = fs.readFileSync(path.join(rendererDir, 'preview.js'), 'utf8');
@@ -1079,24 +1050,32 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       { resetsMinH, releasesMaxH },
     );
 
-    // 检查实际级联与几何，避免旧 CSS 中的固定高度掩盖紧凑布局。
+    // 先验证收起时只有官网原生输入，再展开本地需求验证真实 dock 预算。
+    const collapsedRequirement = await input.editorView.webContents.executeJavaScript(`(() => {
+      const panel = document.getElementById('requirement-panel');
+      return !panel.open && !document.getElementById('requirement').checkVisibility();
+    })()`);
+    await input.editorView.webContents.executeJavaScript("document.querySelector('#requirement-panel summary').click()");
+    await new Promise(resolve => setTimeout(resolve, 200));
     const promptGeometry = await input.editorView.webContents.executeJavaScript(`(() => {
       const bar = document.querySelector('.prompt-bar'), rect = bar.getBoundingClientRect();
+      const dock = document.getElementById('collaboration-dock').getBoundingClientRect();
       const ids = ['requirement', 'variant-switch', 'tool-permission', 'tool-automatic', 'tool-settings-toggle', 'btn-copy-prompt'];
       return {
         editorShrinkable: getComputedStyle(document.querySelector('.editor-wrap')).minHeight === '0px',
-        withinBudget: rect.height <= innerHeight * .48 + 1 && rect.bottom <= innerHeight + 1,
+        withinBudget: rect.top >= dock.top - 1 && rect.bottom <= dock.bottom + 1 && dock.bottom <= innerHeight + 1 && dock.left >= 0 && dock.right <= innerWidth + 1,
+        rect: rect.toJSON(), dock: dock.toJSON(), viewport: { width: innerWidth, height: innerHeight },
         controlsVisible: ids.every(id => {
           const r = document.getElementById(id).getBoundingClientRect();
-          return r.width > 0 && r.height > 0 && r.left >= 0 && r.right <= innerWidth + 1 && r.top >= rect.top && r.bottom <= rect.bottom + 1;
+          return r.width > 0 && r.height > 0 && r.left >= 0 && r.right <= innerWidth + 1 && r.top >= rect.top && r.bottom <= rect.bottom + 1 && r.bottom <= innerHeight + 1 && r.bottom <= dock.bottom + 1;
         })
       };
     })()`) as { editorShrinkable: boolean; withinBudget: boolean; controlsVisible: boolean };
     add(
       'R5',
-      '输入区处于实际视口预算内，编辑器允许收缩',
-      promptGeometry.editorShrinkable && promptGeometry.withinBudget,
-      promptGeometry,
+      '本地需求默认收起，展开后处于中间工具区实际视口预算内',
+      collapsedRequirement && promptGeometry.editorShrinkable && promptGeometry.withinBudget,
+      { ...promptGeometry, collapsedRequirement },
     );
 
     add(
@@ -1105,6 +1084,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       promptGeometry.controlsVisible,
       promptGeometry,
     );
+    await input.editorView.webContents.executeJavaScript("document.querySelector('#requirement-panel summary').click()");
 
     // R6b：外壳不得用 overflow: hidden 静默裁掉输入框。
     // 它曾把"差几像素"变成"看得出来的一条切边"（用户截图里的底部溢出）。
@@ -1188,24 +1168,10 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     const infoNotShrunk = /flex:\s*0\s+0\s+auto/.test(infoBlock);
     add('S2', '状态行不参与纵向压缩（纵向只压编辑器本体）', infoNotShrunk, { infoNotShrunk });
 
-    // T 组：显隐开关**只能有一套**，不允许出现功能重复的第二份入口。
-    //
-    // 背景（用户指出）：编辑器工具栏里有个「回程预览」文字按钮，网页区右上角
-    // 又有一个分栏图标按钮，两者调的是**同一个** setPreviewPanel，
-    // 连面板高度算法都逐行相同 —— 纯重复，且误导用户以为它们管的是两件事。
-    // 已删掉工具栏那个，只保留网页区右上角的图标。
-    //
-    // 断言要点：预览开关在**编辑器页面里不应再出现**（连 DOM 都不能有）。
-    const previewToggleInEditor = /btn-preview-toggle/.test(html) || /btnPreviewToggle/.test(js);
-    // 网页区那个必须还在，且仍挂在 setPreviewPanel 上
-    const previewToggleInWebbar = /btn-preview-toggle/.test(webbarHtml);
-    const webbarWired = /setPreviewPanel/.test(webbarJs);
-    add(
-      'T1',
-      '回程预览开关只有网页区右上角一处（编辑器里不再有重复按钮）',
-      !previewToggleInEditor && previewToggleInWebbar && webbarWired,
-      { previewToggleInEditor, previewToggleInWebbar, webbarWired },
-    );
+    const localReviewEntry = /id="tool-view-changes"/.test(html);
+    add('T1', '本地工具区打开右侧改动标签，官网顶栏不控制 Diff',
+      localReviewEntry && !/btn-preview-toggle|setPreviewPanel/.test(webbarHtml + webbarJs) &&
+      /ipcMain\.handle\(CHANNELS\.setWorkspaceLayout/.test(layoutControllerTs), { localReviewEntry });
 
     // ---- U 组：浮层复制按钮的定位与提示；保存按钮移除后快捷键仍在 ----
 
@@ -1655,7 +1621,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   const whole = buildWholeFileText('src/a.ts', 'export const a = 1;');
   add(
     'M3',
-    '全文复制明确为完整原文上下文，不暗示覆盖全文',
+    '提示词完整原文样例明确为只读上下文，不暗示覆盖全文',
     whole.text === ['### 上下文文件：src/a.ts', '### 上下文：完整原文', '````typescript', 'export const a = 1;', '````'].join('\n') &&
       !whole.text.includes('这个文件是'),
     whole.text
@@ -1812,15 +1778,17 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   /* ---- G) 设置持久化（上次打开的目录）---- */
   if (input.settings) {
     const before = input.settings.get();
-    const written = input.settings.update({ lastRoot: fixtures.root, previewWidth: 340 });
+    const workspaceLayout = { workspaceWidth: 220, workspaceVisible: true, fileWidth: 640,
+      fileVisible: true, treeWidth: 180, treeVisible: true };
+    const written = input.settings.update({ lastRoot: fixtures.root, workspaceLayout });
     add('G1', '设置可写入并读回（上次打开的目录）', written.lastRoot === fixtures.root, written);
     const reread = new SettingsStore(SELF_TEST_SETTINGS_FILE);
     add('G2', '设置可从磁盘重新加载（等价于重启后恢复）', reread.get().lastRoot === fixtures.root, reread.get());
-    add('G5', '变更列宽度从磁盘恢复，重启后不丢用户调整', reread.get().previewWidth === 340, reread.get().previewWidth);
+    add('G5', '项目、文件、目录的宽度与显隐从磁盘完整恢复', JSON.stringify(reread.get().workspaceLayout) === JSON.stringify(workspaceLayout), reread.get().workspaceLayout);
     // 复原，避免自检污染设置
-    input.settings.update({ lastRoot: before.lastRoot, editorWidth: before.editorWidth, previewWidth: before.previewWidth });
+    input.settings.update({ lastRoot: before.lastRoot, workspaceLayout: before.workspaceLayout });
     const after = input.settings.get();
-    add('G3', '自检结束后已复原原设置', after.lastRoot === before.lastRoot && after.editorWidth === before.editorWidth, after);
+    add('G3', '自检结束后已复原原设置', after.lastRoot === before.lastRoot && JSON.stringify(after.workspaceLayout) === JSON.stringify(before.workspaceLayout), after);
 
     // G4：自检**必须**使用独立的设置文件，否则会覆盖用户真实的"上次打开的目录"
     const settingsBase = path.basename(input.settings.filePath);

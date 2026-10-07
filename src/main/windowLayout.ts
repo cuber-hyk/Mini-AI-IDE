@@ -4,44 +4,108 @@ export const WEB_MIN_WIDTH = 420;
 export const PREVIEW_MIN_WIDTH = 260;
 export const PREVIEW_DEFAULT_WIDTH = 300;
 export const WEB_BAR_HEIGHT = 40;
-export const HANDLE_BAR_WIDTH = 28;
+export const HANDLE_BAR_WIDTH = 32;
+export const WORKSPACE_DEFAULT_WIDTH = 240;
+export const FILE_DEFAULT_WIDTH = 700;
+export const TREE_DEFAULT_WIDTH = 190;
+export const FILE_HEADER_HEIGHT = 108;
+export const DOCK_DEFAULT_HEIGHT = 100;
+
+export interface WorkspaceLayoutOptions {
+  workspaceWidth?: number;
+  workspaceVisible?: boolean;
+  fileWidth?: number;
+  fileVisible?: boolean;
+  treeWidth?: number;
+  treeVisible?: boolean;
+  dockHeight?: number;
+  previewVisible?: boolean;
+  fileMaximized?: boolean;
+}
 
 interface Bounds { x: number; y: number; width: number; height: number }
 export interface Layout {
   editorBounds: Bounds;
+  workspaceBounds: Bounds;
+  fileBounds: Bounds;
+  contentBounds: Bounds;
+  treeBounds: Bounds;
+  treePaneBounds: Bounds;
+  dockBounds: Bounds;
   webBounds: Bounds;
   webBarBounds: Bounds;
   previewBounds: Bounds;
   dividerX: number;
-  webVisible: boolean;
+  workspaceVisible: boolean;
+  fileVisible: boolean;
+  treeVisible: boolean;
+  previewVisible: boolean;
+  workspaceWidth: number;
+  fileWidth: number;
+  treeWidth: number;
+  dockHeight: number;
 }
 
 const clamp = (value: number, min: number, max: number): number => Math.min(Math.max(value, min), max);
+const rounded = (value: number | undefined, fallback: number): number =>
+  value !== undefined && Number.isFinite(value) ? Math.round(value) : fallback;
 
 export function computeLayout(
-  width: number, height: number, editorWidth: number,
-  previewWidth = PREVIEW_DEFAULT_WIDTH, webVisible = true,
+  width: number, height: number, options: WorkspaceLayoutOptions = {},
 ): Layout {
-  const w = Math.max(0, Math.round(width));
-  const h = Math.max(0, Math.round(height));
-  const previewVisible = previewWidth > 0;
-  // 系统最小窗宽保障常规尺寸；测试或外部缩到更小时仍保持所有 bounds 在视口内。
-  const minimum = EDITOR_MIN_WIDTH + (webVisible ? WEB_MIN_WIDTH : HANDLE_BAR_WIDTH) +
-    (previewVisible ? PREVIEW_MIN_WIDTH : 0);
-  const scale = Math.min(1, w / minimum);
-  const minEditor = Math.floor(EDITOR_MIN_WIDTH * scale);
-  const minWeb = webVisible ? Math.floor(WEB_MIN_WIDTH * scale) : Math.min(HANDLE_BAR_WIDTH, w);
-  const minPreview = Math.floor(PREVIEW_MIN_WIDTH * scale);
-  const pw = previewVisible ? clamp(Math.round(previewWidth), minPreview, Math.max(0, w - minEditor - minWeb)) : 0;
-  const ew = webVisible ? clamp(Math.round(editorWidth), minEditor, Math.max(minEditor, w - minWeb - pw)) : Math.max(0, w - pw - minWeb);
-  const ww = Math.max(0, w - ew - pw);
+  const w = Math.max(0, rounded(width, 0));
+  const h = Math.max(0, rounded(height, 0));
+  const workspaceVisible = options.workspaceVisible !== false;
+  const fileVisible = options.fileVisible !== false;
+  const maximized = fileVisible && options.fileMaximized === true;
+  const treeVisible = fileVisible && options.treeVisible !== false;
+  const previewVisible = fileVisible && options.previewVisible === true;
+  // 窄窗口优先保护 AI 与编辑正文；极小窗口同比缩减下限。
+  const workspaceMinimum = workspaceVisible ? 120 : HANDLE_BAR_WIDTH;
+  const fileMinimum = fileVisible ? EDITOR_MIN_WIDTH : 0;
+  const scale = Math.min(1, w / (workspaceMinimum + (maximized ? 0 : WEB_MIN_WIDTH) + fileMinimum));
+  const minWorkspace = Math.floor(workspaceMinimum * scale);
+  const minFile = Math.floor(fileMinimum * scale);
+  const minWeb = maximized ? 0 : Math.floor(WEB_MIN_WIDTH * scale);
+  const workspaceWidth = workspaceVisible
+    ? clamp(rounded(options.workspaceWidth, WORKSPACE_DEFAULT_WIDTH), minWorkspace, w - minFile - minWeb)
+    : minWorkspace;
+  const fileWidth = fileVisible
+    ? clamp((maximized ? w : rounded(options.fileWidth, FILE_DEFAULT_WIDTH)), minFile, w - workspaceWidth - minWeb)
+    : minFile;
+  const centerWidth = w - workspaceWidth - fileWidth;
+  const fileX = workspaceWidth + centerWidth;
   const barH = Math.min(WEB_BAR_HEIGHT, h);
+  const bodyHeight = h - barH;
+  const dockHeight = maximized ? 0 : clamp(rounded(options.dockHeight, DOCK_DEFAULT_HEIGHT), 0, bodyHeight - Math.min(120, Math.floor(bodyHeight / 2)));
+  const webHeight = maximized ? 0 : bodyHeight - dockHeight;
+  const headerHeight = Math.min(FILE_HEADER_HEIGHT, h);
+  const treeWidth = treeVisible
+    ? clamp(rounded(options.treeWidth, TREE_DEFAULT_WIDTH), Math.min(120, Math.max(0, fileWidth - 240)), Math.max(0, fileWidth - 240))
+    : 0;
+  const contentBounds = {
+    x: fileX, y: headerHeight, width: fileVisible ? fileWidth - treeWidth : 0,
+    height: fileVisible ? h - headerHeight : 0,
+  };
   return {
-    editorBounds: { x: 0, y: 0, width: ew, height: h },
-    webBarBounds: { x: ew, y: 0, width: ww, height: webVisible ? barH : h },
-    webBounds: { x: ew, y: barH, width: webVisible ? ww : 0, height: webVisible ? h - barH : 0 },
-    previewBounds: { x: ew + ww, y: 0, width: pw, height: pw > 0 ? h : 0 },
-    dividerX: ew,
-    webVisible,
+    editorBounds: { x: 0, y: 0, width: w, height: h },
+    workspaceBounds: { x: 0, y: 0, width: workspaceWidth, height: h },
+    webBarBounds: { x: workspaceWidth, y: 0, width: centerWidth, height: barH },
+    webBounds: { x: workspaceWidth, y: barH, width: centerWidth, height: webHeight },
+    dockBounds: { x: workspaceWidth, y: barH + webHeight, width: centerWidth, height: dockHeight },
+    fileBounds: { x: fileX, y: 0, width: fileWidth, height: h },
+    contentBounds,
+    treePaneBounds: { x: fileX + fileWidth - treeWidth, y: 0, width: treeWidth, height: treeWidth > 0 ? h : 0 },
+    treeBounds: { x: fileX + fileWidth - treeWidth, y: headerHeight, width: treeWidth, height: treeWidth > 0 ? h - headerHeight : 0 },
+    previewBounds: previewVisible ? { ...contentBounds } : { x: fileX, y: headerHeight, width: 0, height: 0 },
+    dividerX: fileX,
+    workspaceVisible,
+    fileVisible,
+    treeVisible,
+    previewVisible,
+    workspaceWidth,
+    fileWidth,
+    treeWidth,
+    dockHeight,
   };
 }

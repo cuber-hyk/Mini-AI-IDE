@@ -16,11 +16,23 @@ import { randomUUID } from 'node:crypto';
 
 import { MAX_CUSTOM_FORMAT_SPEC_LENGTH, normalizeVariant, type FormatSpecVariant } from '../shared/formatSpec';
 
+export interface WorkspaceLayoutSettings {
+  workspaceWidth: number;
+  workspaceVisible: boolean;
+  fileWidth: number;
+  fileVisible: boolean;
+  treeWidth: number;
+  treeVisible: boolean;
+}
+
 export interface Settings {
   /** 上次打开的根目录（绝对路径）；目录不存在时启动会忽略并清空 */
   lastRoot: string | null;
   /** 最近成功打开的目录，按使用时间倒序，最多 5 项 */
   recentRoots: string[];
+  /** 常驻工作区，按加入顺序保存，不受最近目录数量限制 */
+  workspaceRoots: string[];
+  workspaceLayout: WorkspaceLayoutSettings | null;
   /** 编辑器面板宽度（像素） */
   editorWidth: number | null;
   /** 变更列宽度（像素）；显隐不改变已保存宽度 */
@@ -53,6 +65,8 @@ export interface Settings {
 const DEFAULTS: Settings = {
   lastRoot: null,
   recentRoots: [],
+  workspaceRoots: [],
+  workspaceLayout: null,
   editorWidth: null,
   previewWidth: null,
   sidebarVisible: true,
@@ -76,6 +90,10 @@ export const SELF_TEST_SETTINGS_FILE = 'settings.selftest.json';
 
 /** Windows 路径按大小写不敏感去重；失效目录保留，打开时再报告错误。 */
 export function normalizeRecentRoots(value: unknown): string[] {
+  return normalizeWorkspaceRoots(value).slice(0, 5);
+}
+
+export function normalizeWorkspaceRoots(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   const roots: string[] = [];
   const seen = new Set<string>();
@@ -86,9 +104,24 @@ export function normalizeRecentRoots(value: unknown): string[] {
     if (seen.has(key)) continue;
     seen.add(key);
     roots.push(root);
-    if (roots.length === 5) break;
   }
   return roots;
+}
+
+function normalizeWorkspaceLayout(value: unknown): WorkspaceLayoutSettings | null {
+  if (!value || typeof value !== 'object') return null;
+  const layout = value as Record<string, unknown>;
+  for (const key of ['workspaceWidth', 'fileWidth', 'treeWidth']) {
+    if (typeof layout[key] !== 'number' || !Number.isFinite(layout[key]) || (layout[key] as number) <= 0) return null;
+  }
+  for (const key of ['workspaceVisible', 'fileVisible', 'treeVisible']) {
+    if (typeof layout[key] !== 'boolean') return null;
+  }
+  return {
+    workspaceWidth: Math.round(layout.workspaceWidth as number), workspaceVisible: layout.workspaceVisible as boolean,
+    fileWidth: Math.round(layout.fileWidth as number), fileVisible: layout.fileVisible as boolean,
+    treeWidth: Math.round(layout.treeWidth as number), treeVisible: layout.treeVisible as boolean,
+  };
 }
 
 export class SettingsStore {
@@ -105,7 +138,8 @@ export class SettingsStore {
   }
 
   get(): Settings {
-    return { ...this.cache, recentRoots: [...this.cache.recentRoots] };
+    return { ...this.cache, recentRoots: [...this.cache.recentRoots], workspaceRoots: [...this.cache.workspaceRoots],
+      workspaceLayout: this.cache.workspaceLayout ? { ...this.cache.workspaceLayout } : null };
   }
 
   /** 合并写入并落盘；返回写入后的完整设置 */
@@ -114,6 +148,8 @@ export class SettingsStore {
       ...this.cache,
       ...patch,
       recentRoots: normalizeRecentRoots(patch.recentRoots ?? this.cache.recentRoots),
+      workspaceRoots: normalizeWorkspaceRoots(patch.workspaceRoots ?? this.cache.workspaceRoots),
+      workspaceLayout: normalizeWorkspaceLayout(patch.workspaceLayout === undefined ? this.cache.workspaceLayout : patch.workspaceLayout),
     };
     this.save(next);
     this.cache = next;
@@ -122,12 +158,16 @@ export class SettingsStore {
 
   private load(): Settings {
     try {
-      if (!fs.existsSync(this.file)) return { ...DEFAULTS, recentRoots: [] };
+      if (!fs.existsSync(this.file)) return { ...DEFAULTS, recentRoots: [], workspaceRoots: [] };
       const raw = fs.readFileSync(this.file, 'utf8');
       const parsed = JSON.parse(raw) as Partial<Settings>;
-      const out: Settings = { ...DEFAULTS, recentRoots: [] };
+      const out: Settings = { ...DEFAULTS, recentRoots: [], workspaceRoots: [] };
       if (typeof parsed.lastRoot === 'string' && parsed.lastRoot.length > 0) out.lastRoot = parsed.lastRoot;
       out.recentRoots = normalizeRecentRoots(parsed.recentRoots);
+      // 仅首次升级初始化；已明确保存的空列表不能从最近历史重新填回。
+      out.workspaceRoots = normalizeWorkspaceRoots('workspaceRoots' in parsed
+        ? parsed.workspaceRoots : [out.lastRoot, ...out.recentRoots]);
+      out.workspaceLayout = normalizeWorkspaceLayout(parsed.workspaceLayout);
       if (typeof parsed.editorWidth === 'number' && Number.isFinite(parsed.editorWidth) && parsed.editorWidth > 0) {
         out.editorWidth = Math.round(parsed.editorWidth);
       }
@@ -175,7 +215,7 @@ export class SettingsStore {
       process.stderr.write(
         `[settings] 读取失败，使用默认值：${err instanceof Error ? err.message : String(err)}\n`
       );
-      return { ...DEFAULTS, recentRoots: [] };
+      return { ...DEFAULTS, recentRoots: [], workspaceRoots: [] };
     }
   }
 

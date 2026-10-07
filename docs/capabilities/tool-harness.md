@@ -3,7 +3,7 @@ artifact_type: capability
 status: current
 updated: 2026-10-07
 owner: 胡运宽
-source_of_truth: [src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, tools/verify-web-result-sender.cjs, src/shared/toolJsonDiagnostic.ts, src/main/tools/resultClipboard.ts, src/renderer/toolExecutionClock.js, test/toolJsonDiagnostic.test.ts, test/toolResultClipboard.test.ts, test/toolExecutionClock.test.ts, test/toolExecutionIntegration.test.ts, src/shared/toolProtocol.ts, src/main/tools/harness.ts, src/main/tools/store.ts, src/main/tools/files.ts, src/main/tools/processes.ts, src/main/tools/changes.ts, src/main/tools/autoCollector.ts, src/main/tools/replyObservation.ts, src/main/tools/replyContinuation.ts, src/main/tools/replyChangeWatcher.ts, src/main/tools/integration.ts, src/renderer/toolHarness.js, src/renderer/toolHarness.css, src/renderer/toolPanelLayout.js, src/renderer/toolResultPresentation.js, test/toolProtocol.test.ts, test/toolHarness.test.ts, test/toolIntegration.test.ts, test/toolAutoCollector.test.ts, test/replyObservation.test.ts, test/replyChangeWatcher.test.ts, test/toolHarnessUi.test.ts, test/toolPanelLayout.test.ts, test/toolResultPresentation.test.ts, test/deepseekReplyState.test.ts, test/toolChanges.test.ts, test/toolProcesses.test.ts]
+source_of_truth: [src/renderer/workspaceLayout.js, src/main/workspaceLayoutController.ts, src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, tools/verify-web-result-sender.cjs, src/shared/toolJsonDiagnostic.ts, src/main/tools/resultClipboard.ts, src/renderer/toolExecutionClock.js, test/toolJsonDiagnostic.test.ts, test/toolResultClipboard.test.ts, test/toolExecutionClock.test.ts, test/toolExecutionIntegration.test.ts, src/shared/toolProtocol.ts, src/main/tools/harness.ts, src/main/tools/store.ts, src/main/tools/files.ts, src/main/tools/processes.ts, src/main/tools/changes.ts, src/main/tools/autoCollector.ts, src/main/tools/replyObservation.ts, src/main/tools/replyContinuation.ts, src/main/tools/replyChangeWatcher.ts, src/main/tools/integration.ts, src/renderer/toolHarness.js, src/renderer/toolHarness.css, src/renderer/toolPanelLayout.js, src/renderer/toolResultPresentation.js, test/toolProtocol.test.ts, test/toolHarness.test.ts, test/toolIntegration.test.ts, test/toolAutoCollector.test.ts, test/replyObservation.test.ts, test/replyChangeWatcher.test.ts, test/toolHarnessUi.test.ts, test/toolPanelLayout.test.ts, test/toolResultPresentation.test.ts, test/deepseekReplyState.test.ts, test/toolChanges.test.ts, test/toolProcesses.test.ts]
 ---
 
 # 能力：通用本地工具
@@ -50,9 +50,9 @@ AI 输出规范请求，IDE 只读采集、校验、按权限执行并显示真�
 
 展开面板可拖动顶部横向分隔条，方向键每次调整 24px，Home／End 调至当前最小／最大高度，双击恢复 160px 请求高度。实际高度随窗口、输入区与摘要高度钳制，保留至少 120px 编辑空间；拖动在取消、失去捕获、失焦或收起时结束，不跨次保留活动指针。
 
-权限与自动继续常驻输入框操作栏，同一个 automatic 开关包含采集、权限执行与结果回传，无轮数参数。详细设置在本地浮层，包含发送间隔（0–300 整数秒，默认 3）、未保存策略、完成音效、规则清理与原提示词设置入口；浮层不参与三列宽度计算。Escape 关闭并恢复按钮焦点，外点、焦点离开或失焦关闭；窄列和长输入仍保留常用操作。摘要显示倒计时、发送、等待回复/用户及暂停原因。
+工具摘要与结果详情位于中间官网下方的本地协作 dock；“查看改动”按需打开右侧可关闭的本批改动标签，执行工具不自动切离当前文件；权限与自动继续常驻本地操作栏，同一个 automatic 开关包含采集、权限执行与结果回传，无轮数参数。详细设置在本地浮层，包含发送间隔（0–300 整数秒，默认 3）、未保存策略、完成音效、规则清理与原提示词设置入口；浮层不参与工作区宽度计算。Escape 关闭并恢复按钮焦点，外点、焦点离开或失焦关闭；窄列和长输入仍保留常用操作。摘要显示倒计时、发送、等待回复/用户及暂停原因。
 
-修改先准备本请求全部变更，检查所有真实目标别名的未保存内容，再逐项直接写入。继续替换 B 为 C，停止保留 A/B；成功落盘后更新编辑器。右侧仅查看本批实际 before/after、差异与逐项执行状态，不提供再次应用或左侧内联预览；后续人工编辑不污染执行快照，失败与部分成功如实显示。快照仅存当前轮内存，不进入复制结果或执行账本。撤销使用唯一源身份，复用原工具入口并同步变更状态，不能误撤销其后的人工修改。保留同项目／会话内最近 20 项工具撤销，项目或会话切换清空；迟到完成的旧会话修改不能进入新撤销栈。改名／删除仅移除相关路径撤销记录。
+修改先准备本请求全部变更，检查所有真实目标别名的未保存内容，再逐项直接写入。继续替换 B 为 C，停止保留 A/B；成功落盘后更新编辑器。右文件区的 Diff 模式仅查看本批实际 before/after、差异与逐项执行状态，与编辑模式共用正文且不覆盖最右目录树，不提供再次应用或编辑器内联预览；后续人工编辑不污染执行快照，失败与部分成功如实显示。快照仅存当前轮内存，不进入复制结果或执行账本。撤销使用唯一源身份，复用原工具入口并同步变更状态，不能误撤销其后的人工修改。保留同项目／会话内最近 20 项工具撤销，项目或会话切换清空；迟到完成的旧会话修改不能进入新撤销栈。改名／删除仅移除相关路径撤销记录。
 
 自动采集同步观察生成/完成控件和正文，不以文字静止判结束；启用或导航建立历史基线。结构未知时提示手动采集；手动未知状态需用户确认并再次核对正文，生成中不执行。采集不点击、输入或修改网页。
 

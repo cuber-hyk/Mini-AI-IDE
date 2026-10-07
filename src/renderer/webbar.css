@@ -1,11 +1,9 @@
-/* 网页区顶部工具条；网页隐藏时保留恢复把手。 */
+/* 官网区域常驻顶栏，仅提供只读采集。 */
 :root {
   --bg-soft: var(--ui-surface);
   --border: var(--ui-border);
   --text-dim: var(--ui-muted);
   --accent: var(--ui-accent);
-  --handle-w: 28px;
-  --handle-peek: 5px;
 }
 * { box-sizing: border-box; }
 html, body {
@@ -48,43 +46,9 @@ html, body {
 }
 .ui-icon.active { background: #5b8def29; border-color: #5b8def6b; color: var(--accent); }
 @media (max-width: 440px) { .collect-status { display: none; } }
-.webbar:not(.handle-mode) .handle { display: none; }
-.webbar.handle-mode .bar-wide { display: none; }
-.webbar.handle-mode { position: relative; background: transparent; border-left: 1px solid var(--border); }
-.handle {
-  position: absolute;
-  top: 50%;
-  right: 0;
-  transform: translate(calc(100% - var(--handle-peek)), -50%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 8px;
-  width: var(--handle-w);
-  padding: 12px 0;
-  border: 1px solid var(--border);
-  border-right: none;
-  border-radius: 8px 0 0 8px;
-  background: #222834;
-  color: var(--text-dim);
-  cursor: pointer;
-  opacity: .55;
-  transition: transform .16s ease, opacity .16s ease;
-}
-.webbar.handle-mode:hover .handle,
-.webbar.handle-mode:focus-within .handle,
-.webbar.handle-mode.just-hidden .handle { transform: translate(0, -50%); opacity: 1; }
-.handle:hover { color: var(--accent); background: #2a3140; }
-.handle:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.handle svg {
-  width: 15px;
-  height: 15px;
-  flex: 0 0 auto;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.2;
-  stroke-linecap: round;
-}
-.handle-label { writing-mode: vertical-rl; font-size: 11px; letter-spacing: .06em; white-space: nowrap; }
-.webbar.handle-mode.just-hidden { background: #5b8def1a; border-left-color: var(--accent); }
-.webbar.handle-mode.just-hidden .handle { border-color: var(--accent); color: var(--accent); }
+.bar-wide .ui-button { background: transparent; border-color: transparent; }
+
+#btn-file-restore { background: transparent; border-color: transparent; }
+#btn-file-restore:hover { background: var(--ui-hover); }
+
+[hidden] { display: none !important; }

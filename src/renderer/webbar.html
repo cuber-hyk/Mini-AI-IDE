@@ -12,46 +12,14 @@
     <link rel="stylesheet" href="./webbar.css" />
   </head>
   <body>
-    <!--
-      网页区工具条：同一个视图的**两种形态**，由主进程的几何决定：
-
-      1. 横条（网页可见）：贴在网页区顶部，两个显隐开关并排。
-      2. 竖把手（网页隐藏）：位于编辑器与变更列之间，静置是一条 5px 窄条，hover 展开成 28px，
-         上面只有「展开 AI 网页」一个按钮。
-
-      为什么不能把工具条一起隐藏：它上面的按钮是"把网页叫回来"的唯一常驻入口。
-      早期实现跟着网页一起隐藏，用户点完隐藏就再也回不来（本项目已犯过一次）。
-    -->
     <div id="bar" class="webbar">
-      <!-- 网页顶部只负责采集与板块显隐，变更操作在右侧列表。 -->
       <div class="bar-wide">
-        <span class="webbar-title">AI 网页</span>
+        <span class="webbar-title">DeepSeek</span>
         <span class="spacer"></span>
         <span id="collect-status" class="collect-status" role="status" aria-live="polite"></span>
-        <button id="btn-collect" type="button" class="ui-button primary" title="只读采集最新回复，结果显示在变更列表">采集回复</button>
-        <!-- 隐藏网页后本视图变为恢复把手，变更列表仍可见。 -->
-        <button id="btn-web" type="button" class="ui-icon active" aria-label="隐藏 AI 网页" title="隐藏 AI 网页 · Ctrl+Shift+A">
-          <svg viewBox="0 0 16 16" aria-hidden="true">
-            <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
-            <path d="M9.5 2.5v11" />
-          </svg>
-        </button>
-        <button id="btn-preview-toggle" type="button" class="ui-icon" aria-label="显示变更列表" title="显示变更列表">
-          <svg viewBox="0 0 16 16" aria-hidden="true">
-            <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
-            <path d="M10.5 2.5v11" />
-          </svg>
-        </button>
+        <button id="btn-collect" type="button" class="ui-button" title="只读采集最新回复，结果显示在工具区">采集回复</button>
+        <button id="btn-file-restore" type="button" class="ui-icon" aria-label="展开文件工作区" title="展开文件工作区" hidden><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1"/><path d="M11 2.5v11"/></svg></button>
       </div>
-
-      <!-- 竖把手形态：网页隐藏时唯一可见的东西（"把网页叫回来"的入口） -->
-      <button id="btn-restore" type="button" class="handle" aria-label="显示 AI 网页" title="显示 AI 网页 · Ctrl+Shift+A">
-        <svg viewBox="0 0 16 16" aria-hidden="true">
-          <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
-          <path d="M9.5 2.5v11" />
-        </svg>
-        <span class="handle-label">AI 网页</span>
-      </button>
     </div>
     <script src="./webbar.js"></script>
   </body>

@@ -9,6 +9,8 @@ import { FileService } from '../src/main/fileService';
 import { FileManagementService } from '../src/main/fileManagement';
 import { EditorSession } from '../src/main/editorSession';
 import { CHANNELS } from '../src/shared/contract';
+import { SettingsStore } from '../src/main/settings';
+import { WorkspaceService } from '../src/main/workspaceService';
 
 async function fixture(t: any) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mini-controller-'));
@@ -27,11 +29,12 @@ async function fixture(t: any) {
   const code = ts.transpileModule(await fs.readFile('src/main/workspaceController.ts', 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
   vm.runInNewContext(code, { exports, require(name: string) { assert.ok(name in dependencies, name); return dependencies[name]; } });
   const view = { id: 1, mainFrame: {}, send() {} };
-  const workspace = { getState: () => ({ root: files.getRoot(), revision: 1, recentRoots: [] }) };
+  const workspace = new WorkspaceService(files, new SettingsStore('test.json', root));
+  workspace.open(root);
   const controller = new exports.WorkspaceController({}, view, files, workspace, () => {}, (event: any) => notifications.push(event), () => false);
   controller.register();
   const event = { sender: view, senderFrame: view.mainFrame };
-  return { root, files, controller, dialogs, answers, clipboard, revealed, trashed, notifications, view,
+  return { root, files, workspace, controller, dialogs, answers, clipboard, revealed, trashed, notifications, view,
     beforeAnswer(fn: () => Promise<void>) { beforeAnswer = fn; },
     invoke(channel: string, ...args: unknown[]) { return handlers.get(channel)!(event, ...args); },
     foreign(channel: string, ...args: unknown[]) { return handlers.get(channel)!({ sender: view, senderFrame: {} }, ...args); } };
@@ -49,6 +52,24 @@ it('复制与定位只允许当前编辑器主 frame 和当前根，路径由主
   assert.equal((await f.invoke(CHANNELS.copyEntryPath, 'sub/a.txt', true, 'old-root')).ok, false);
   assert.equal((await f.invoke(CHANNELS.revealEntry, '..', f.root)).ok, false);
   assert.equal(f.clipboard.length, 3); assert.equal(f.revealed.length, 1);
+});
+
+it('切换和移除工作区沿用未保存确认，取消保持活动项目和注册列表', async t => {
+  const f = await fixture(t); const other = path.join(f.root, 'other'); await fs.mkdir(other);
+  f.workspace.open(other); f.workspace.open(f.root);
+  const before = f.workspace.getState();
+  f.controller.editor.update({ root: f.root, path: 'draft.txt', documents: [{ path: 'draft.txt', dirty: true }] });
+  f.answers.push(2);
+  assert.equal((await f.invoke(CHANNELS.openWorkspace, 1)).canceled, true);
+  f.answers.push(2);
+  assert.equal((await f.invoke(CHANNELS.removeWorkspace, 0)).canceled, true);
+  assert.deepEqual(f.workspace.getState(), before);
+  assert.equal((await f.foreign(CHANNELS.removeWorkspace, 0)).ok, false);
+  assert.equal((await f.invoke(CHANNELS.openWorkspace, -1)).ok, false);
+  f.answers.push(1);
+  assert.equal((await f.invoke(CHANNELS.removeWorkspace, 0)).ok, true);
+  assert.equal(f.files.getRoot(), null); assert.deepEqual(f.workspace.getState().workspaceRoots, [other]);
+  assert.ok((await fs.stat(f.root)).isDirectory());
 });
 
 it('永久删除先处理文件夹内草稿，再确认永久删除；取消不改变文件或通知', async t => {

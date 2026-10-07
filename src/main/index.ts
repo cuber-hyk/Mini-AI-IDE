@@ -16,7 +16,7 @@ import * as path from 'node:path';
 
 import { CHANNELS, type PromptPanelState, type PromptComposerStatus, type PromptVariantState, type SavePromptSpecResult, type ReturnPreview, type RootInfo } from '../shared/contract';
 import { buildPrompt, getFormatSpec, resolveFormatSpec, normalizeVariant, MAX_CUSTOM_FORMAT_SPEC_LENGTH, type CustomFormatSpecs, type FormatSpecVariant } from '../shared/formatSpec';
-import { buildSnippetText, buildWholeFileText } from '../shared/snippet';
+import { buildSnippetText } from '../shared/snippet';
 import { checkUaConsistency, stripSelfDeclarations } from '../shared/userAgent';
 import { FileService } from './fileService';
 import { registerFileIpc } from './ipc';
@@ -26,7 +26,7 @@ import { runDiagnose } from './diagnose';
 import { SettingsStore, PRODUCTION_SETTINGS_FILE, SELF_TEST_SETTINGS_FILE, type Settings } from './settings';
 import { buildContextSummary } from './contextSummary';
 import { ReturnPathService } from './returnPathService';
-import { computeLayout, EDITOR_MIN_WIDTH, WEB_MIN_WIDTH, PREVIEW_MIN_WIDTH, PREVIEW_DEFAULT_WIDTH, HANDLE_BAR_WIDTH } from './windowLayout';
+import { WorkspaceLayoutController } from './workspaceLayoutController';
 import { runLayoutProbe } from './layoutProbe';
 import { WorkspaceService } from './workspaceService';
 import { WorkspaceController } from './workspaceController';
@@ -67,9 +67,6 @@ const UI_PROBE = process.argv.includes('--ui-probe') || WORKSPACE_PROBE;
 const DIAGNOSE = process.argv.includes('--diagnose');
 
 /** 分区宽度（编辑器内部左侧目录树，渲染进程自绘，这里只持久化用户选择） */
-const SIDEBAR_MIN_WIDTH = 140;
-const SIDEBAR_MAX_WIDTH = 520;
-const SIDEBAR_DEFAULT_WIDTH = 230;
 
 /* ------------------------------------------------------------------ *
  * 启动自检数据（供 --self-test 使用）
@@ -85,14 +82,15 @@ interface BootInfo {
  * 应用主流程
  * ------------------------------------------------------------------ */
 /** 预览面板是否可见 + 其宽度（0 表示隐藏） */
-let previewWidth = PREVIEW_DEFAULT_WIDTH;
+
 /** 右侧 AI 网页是否显示（可隐藏，把空间让给预览面板或编辑器） */
-let webVisible = true;
+
 
 async function bootstrap(): Promise<void> {
   // Electron 的应用名会影响 userData 目录；显式设定以保证分区落盘位置可预期。
   app.setName('mini-ai-ide');
-  const workspaceProbeDirectory = WORKSPACE_PROBE ? configureWorkspaceProbe() : null;
+  const probeDirectory = SELF_TEST || UI_PROBE ? configureWorkspaceProbe() : null;
+  const workspaceProbeDirectory = WORKSPACE_PROBE ? probeDirectory : null;
 
   await app.whenReady();
 
@@ -100,8 +98,6 @@ async function bootstrap(): Promise<void> {
   const settings = new SettingsStore(SELF_TEST ? SELF_TEST_SETTINGS_FILE : PRODUCTION_SETTINGS_FILE);
   const saved = settings.get();
   const workspace = new WorkspaceService(fileService, settings);
-  /** 左侧目录树宽度（编辑器内部布局；主进程负责持久化与约束） */
-  let sidebarWidth = saved.sidebarWidth ?? SIDEBAR_DEFAULT_WIDTH;
   const targetSession = session.fromPartition(SESSION_PARTITION);
 
   // UA 处理：移除自我声明标记，保留真实内核版本（ADR-0001）
@@ -134,17 +130,6 @@ async function bootstrap(): Promise<void> {
   let updater: ApplicationUpdater | null = null;
   let closeApproved = false;
   let closePending = false;
-  const size = win.getContentSize();
-  const winW = size[0] ?? 1440;
-  const winH = size[1] ?? 900;
-  previewWidth = saved.previewWidth ?? PREVIEW_DEFAULT_WIDTH;
-  let lastPreviewWidth = previewWidth;
-  let editorWidth = Math.min(
-    Math.max(saved.editorWidth ?? Math.round(winW * 0.50), EDITOR_MIN_WIDTH),
-    Math.max(EDITOR_MIN_WIDTH, winW - WEB_MIN_WIDTH)
-  );
-  let layout = computeLayout(winW, winH, editorWidth, previewWidth);
-
   const editorView = new WebContentsView({
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -228,61 +213,14 @@ async function bootstrap(): Promise<void> {
    * 它是一块覆盖式浮层，必须盖住编辑器与网页，否则打开后会被它们挡住。
    */
   win.contentView.addChildView(promptView);
-  editorView.setBounds(layout.editorBounds);
-  webBarView.setBounds(layout.webBarBounds);
-  webView.setBounds(layout.webBounds);
-  previewView.setBounds(layout.previewBounds);
-  previewView.setVisible(false);
-  // 先移到屏幕外的零尺寸位置并隐藏：加载完成前若它已占据屏幕，会闪一下空白页面
+  const layoutController = new WorkspaceLayoutController(win,
+    { editor: editorView, web: webView, webbar: webBarView, preview: previewView }, settings,
+    () => buildApplicationMenu());
+  let layout = layoutController.layout;
+  function relayout(): void { layoutController.apply(); layout = layoutController.layout; }
+  relayout();
   promptView.setBounds(PROMPT_HIDDEN_BOUNDS);
   promptView.setVisible(false);
-
-  /** 把当前网页/预览的可见状态广播给网页区工具条（它的按钮高亮靠这个） */
-  function broadcastChromeState(): void {
-    const state = {
-      webVisible,
-      previewVisible: previewWidth > 0,
-      previewWidth: previewWidth > 0 ? layout.previewBounds.width : lastPreviewWidth,
-      previewMaxWidth: Math.max(PREVIEW_MIN_WIDTH, (win.getContentSize()[0] ?? 1600) -
-        EDITOR_MIN_WIDTH - (webVisible ? WEB_MIN_WIDTH : HANDLE_BAR_WIDTH)),
-    };
-    for (const view of [webBarView, editorView, previewView]) {
-      if (!view.webContents.isDestroyed()) view.webContents.send(CHANNELS.chromeState, state);
-    }
-  }
-
-  /**
-   * 统一的"显示/隐藏网页"入口。
-   *
-   * 三个调用方都走这里，保证几何、菜单勾选、三个渲染进程的状态**永远一致**：
-   *  1. 网页区顶部工具条的「隐藏」按钮；
-   *  2. 网页隐藏后右边缘把手的「展开」按钮；
-   *  3. View 菜单的「AI 网页」勾选项（兜底，永远可见）。
-   * 另外编辑器的 `Ctrl+Shift+A` 走 IPC，最终也落到 `CHANNELS.setWebVisible`。
-   */
-  function setWebVisible(visible: boolean): void {
-    webVisible = visible;
-    relayout();
-    buildApplicationMenu();
-  }
-
-  /** 按当前 previewWidth / webVisible 重算三区并应用 */
-  function relayout(): void {
-    const s = win.getContentSize();
-    const w = s[0] ?? 1440;
-    const h = s[1] ?? 900;
-    layout = computeLayout(w, h, editorWidth, previewWidth, webVisible);
-    editorView.setBounds(layout.editorBounds);
-    webBarView.setBounds(layout.webBarBounds);
-    //工具条**始终可见**：网页隐藏时它变成右边缘把手，是"把网页叫回来"的唯一常驻入口
-    webBarView.setVisible(true);
-    webView.setBounds(layout.webBounds);
-    webView.setVisible(webVisible && layout.webBounds.height > 0);
-    previewView.setBounds(layout.previewBounds);
-    // 变更列独立于网页显隐；只收起用户明确隐藏的列。
-    previewView.setVisible(previewWidth > 0 && layout.previewBounds.width > 0);
-    broadcastChromeState();
-  }
 
   /**
    * 提示词面板的显示/隐藏（覆盖式浮层）。
@@ -527,61 +465,7 @@ async function loadLocalView(
 
   /* ---------------- IPC ---------------- */
 
-  // 分栏比例（由编辑器渲染进程在拖动分隔条时上报）
-  ipcMain.handle(CHANNELS.setSplit, (_e, desiredWidth: unknown): { editorWidth: number } => {
-    const requested = typeof desiredWidth === 'number' && Number.isFinite(desiredWidth) ? desiredWidth : editorWidth;
-    editorWidth = Math.max(EDITOR_MIN_WIDTH, Math.round(requested));
-    relayout();
-    editorWidth = layout.editorBounds.width;
-    settings.update({ editorWidth: layout.editorBounds.width });
-    return { editorWidth: layout.editorBounds.width };
-  });
-
-  /** 显示/隐藏右侧 AI 网页。
-   *
-   * 三个入口（顶部工具条按钮 / 右边缘把手 / View 菜单）都汇聚到 `setWebVisible`，
-   * 它再调用本IPC handler —— 保证走同一条路径、状态不会分叉。
-   */
-  ipcMain.handle(CHANNELS.setWebVisible, (_e, visible: unknown) => {
-    setWebVisible(visible !== false);
-    return { visible: webVisible };
-  });
-
-  /** 显示/隐藏左侧目录树（编辑器内部面板，主进程只广播 + 持久化） */
-  ipcMain.handle(CHANNELS.setSidebarVisible, (_e, visible: unknown) => {
-    const v = visible !== false;
-    settings.update({ sidebarVisible: v });
-    if (!editorView.webContents.isDestroyed()) {
-      editorView.webContents.send(CHANNELS.sidebarChanged, { visible: v, width: sidebarWidth });
-    }
-    return { visible: v };
-  });
-
-  /** 调整左侧目录树宽度（约束在 [SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH]） */
-  ipcMain.handle(CHANNELS.setSidebarWidth, (_e, width: unknown) => {
-    const raw = typeof width === 'number' && Number.isFinite(width) ? Math.round(width) : sidebarWidth;
-    sidebarWidth = Math.min(Math.max(raw, SIDEBAR_MIN_WIDTH), SIDEBAR_MAX_WIDTH);
-    settings.update({ sidebarWidth });
-    if (!editorView.webContents.isDestroyed()) {
-      editorView.webContents.send(CHANNELS.sidebarChanged, { visible: settings.get().sidebarVisible, width: sidebarWidth });
-    }
-    return { width: sidebarWidth };
-  });
-
-  /** 变更列按宽度展开/调整；0 收起，实际尺寸由三列几何约束。 */
-  ipcMain.handle(CHANNELS.setPreviewPanel, (_e, width: unknown, temporary: unknown = false) => {
-    if (typeof temporary !== 'boolean') throw new Error('变更列宽度参数无效');
-    const requested = typeof width === 'number' && Number.isFinite(width) ? Math.round(width) : lastPreviewWidth;
-    previewWidth = requested > 0 ? Math.max(PREVIEW_MIN_WIDTH, requested) : 0;
-    relayout();
-    if (previewWidth > 0 && !temporary) {
-      lastPreviewWidth = layout.previewBounds.width;
-      previewWidth = lastPreviewWidth;
-      settings.update({ previewWidth: lastPreviewWidth });
-    }
-    buildApplicationMenu();
-    return { width: layout.previewBounds.width, visible: previewWidth > 0 };
-  });
+  const layoutChannels = layoutController.register();
 
   /**
    * 把"输出格式要求"模板写入系统剪贴板。
@@ -630,6 +514,7 @@ async function loadLocalView(
     (info) => {
       if (info.revision !== announcedRevision) {
         announcedRevision = info.revision ?? announcedRevision;
+        layoutController.update({ previewVisible: false }, false);
         returnPath.clear();
         tools.reset();
       }
@@ -640,17 +525,13 @@ async function loadLocalView(
       tools.invalidate(event.oldRelPath, event.isDirectory);
       editorView.webContents.send(CHANNELS.entryChanged, event);
     }, () => tools.getReviewState().records.length > 0 || returnPath.undoCount > 0);
-  let revealedReviewGeneration = -1;
   const tools = await createToolIntegration({
     ipc: ipcMain, editor: editorView.webContents, web: webView.webContents,
     review: previewView.webContents,
     notifyReview: state => {
       if (previewView.webContents.isDestroyed()) return;
       previewView.webContents.send(CHANNELS.reviewState, state);
-      if (state.generation !== revealedReviewGeneration && state.records.some(record => record.status === 'applied')) {
-        revealedReviewGeneration = state.generation;
-        if (previewWidth <= 0) { previewWidth = lastPreviewWidth; relayout(); buildApplicationMenu(); }
-      }
+
     },
     files: fileService, returnPath, workspace: workspaceController,
     storePath: path.join(app.getPath('userData'), SELF_TEST || UI_PROBE || DIAGNOSE ? 'tools-probe.json' : 'tools.json'),
@@ -688,7 +569,7 @@ async function loadLocalView(
     ...registerFileIpc(fileService, {
       chooseRoot: () => workspaceController.chooseRoot(), getState: () => workspace.getState(),
       write: (relative, text) => workspaceController.write(relative, text),
-    }), ...workspaceController.register(),
+    }), ...workspaceController.register(), ...layoutChannels,
   ];
 
   /**
@@ -807,44 +688,6 @@ async function loadLocalView(
     }
   });
 
-  /**
-   * 把当前打开的**整个文件**写入剪贴板，作为**上下文**交给模型。
-   *
-   * 格式：只读上下文文件与完整原文头 + 代码围栏 + Monaco 全文。
-   * 只读上下文标记与修改操作分开，
-   * 回程解析器只读呈现，不作为待写入块。
-   */
-  ipcMain.handle(CHANNELS.copyWholeFile, async (_e, input: unknown) => {
-    const raw = input as { root?: unknown; relPath?: unknown; text?: unknown } | null;
-    const rel = typeof raw?.relPath === 'string' ? raw.relPath.trim() : '';
-    if (rel.length === 0) return { ok: false, snippet: '', length: 0, error: '未指定文件路径（请先打开一个文件）' };
-    if (raw?.root !== fileService.getRoot() || typeof raw?.text !== 'string' ||
-      rel.replace(/\\/g, '/').toLowerCase() !== workspaceController.editor.current.path?.toLowerCase()) {
-      return { ok: false, snippet: '', length: 0, error: '目录或文件已变化，请重新复制全文' };
-    }
-    const parts = buildWholeFileText(rel, raw.text);
-    try {
-      clipboard.writeText(parts.text);
-      return {
-        ok: true,
-        snippet: parts.text,
-        length: parts.text.length,
-        relPath: parts.relPath,
-        lineCount: parts.lineCount,
-        fence: parts.fence,
-      };
-    } catch (err) {
-      return { ok: false, snippet: parts.text, length: parts.text.length, error: err instanceof Error ? err.message : String(err) };
-    }
-  });
-
-  /**
-   * 组装完整 prompt（需求 + 工作环境 + 目录结构 + 格式要求）并写入剪贴板。
-   *
-   * 边界（ADR-0003 零注入）：**只写剪贴板**。用户在应用内输入框写需求 →
-   * 点「复制 prompt」→ 自己 Ctrl+V 到网页 → 自己回车。
-   * 程序不接触网页输入框，因此不产生任何"程序在操作"的特征。
-   */
   ipcMain.handle(CHANNELS.copyPrompt, (_e, requirement: unknown, targetFiles: unknown) => {
     const req = typeof requirement === 'string' ? requirement : '';
     const files = Array.isArray(targetFiles) ? targetFiles.filter((f): f is string => typeof f === 'string') : [];
@@ -878,14 +721,7 @@ async function loadLocalView(
     if (result.error) void dialog.showMessageBox(win, { type: 'error', message: '目录操作失败', detail: result.error });
   }
 
-  /* ---------------- 菜单 ----------------
-   *
-   * View 菜单里的「AI 网页」是**最后一道兜底**：网页显隐的主入口在网页区顶部工具条，
-   * 而网页隐藏时那块工具条变成右边缘把手。菜单是应用级 UI、**永远不会被隐藏**，
-   * 保证"网页永远能被叫回来"（与把手、`Ctrl+Shift+A` 快捷键并存）。
-   *
-   * 因为菜单项带勾选状态，必须跟随实际显隐重建 —— 故抽成函数而不是一次性常量。
-   */
+  /* ---------------- 应用菜单 ---------------- */
   function buildApplicationMenu(): void {
     Menu.setApplicationMenu(
       Menu.buildFromTemplate([
@@ -960,25 +796,11 @@ async function loadLocalView(
             { role: 'toggleDevTools', label: '开发者工具' },
             { type: 'separator' },
             {
-              label: 'AI 网页',
-              type: 'checkbox',
-              checked: webVisible,
-              accelerator: 'CmdOrCtrl+Shift+A',
-              click: () => {
-                setWebVisible(!webVisible);
-              },
-            },
-            {
               label: '变更列表',
               type: 'checkbox',
-              checked: previewWidth > 0,
+              checked: layoutController.state.previewVisible,
               click: () => {
-                previewWidth =
-                  previewWidth > 0
-                    ? 0
-                    : lastPreviewWidth;
-                relayout();
-                buildApplicationMenu();
+                layoutController.update({ previewVisible: !layoutController.state.previewVisible, fileVisible: true }, false);
               },
             },
             { type: 'separator' },
@@ -1042,7 +864,9 @@ async function loadLocalView(
   let restorationError: string | undefined;
 
   if (rootArg) {
-    restoredRoot = fileService.setRoot(rootArg);
+    const opened = workspace.open(rootArg);
+    if (!opened.ok) throw new Error(opened.error);
+    restoredRoot = opened.root;
     process.stdout.write(`[fs] 命令行指定根目录：${restoredRoot}\n`);
   } else {
     const restoration = workspace.restore();
@@ -1091,6 +915,7 @@ async function loadLocalView(
   });
 
   await loadLocalView(editorView, 'index.html');
+  relayout();
 
   // 告知渲染进程：记忆的目录已失效（让界面明确提示，而不是"看似有目录、实际读不了"）
   if ((staleRoot || restorationError) && !editorView.webContents.isDestroyed()) {
@@ -1118,10 +943,11 @@ async function loadLocalView(
   }
 
   if (workspaceProbeDirectory) {
-    const workspaceReport = await runWorkspaceProbe(editorView.webContents, webView.webContents, previewView.webContents, workspaceController, workspaceProbeDirectory);
+    const workspaceReport = await runWorkspaceProbe(editorView.webContents, webView.webContents, previewView.webContents, workspaceController, workspaceProbeDirectory, webBarView.webContents);
     const columns = await runLayoutProbe({
       win, editor: editorView, webbar: webBarView, preview: previewView,
-      configure: (web, preview) => { webVisible = web; previewWidth = preview ? lastPreviewWidth : 0; relayout(); },
+      getLayout: () => layoutController.layout,
+      configure: (preview, maximized = false) => { layoutController.update({ previewVisible: preview, fileMaximized: maximized }, false); relayout(); },
     });
     const report = { ...workspaceReport, columns, pass: workspaceReport.pass && columns.ok };
     process.stdout.write(`\n===== 目录与文件管理探针 =====\n${JSON.stringify(report, null, 2)}\n`);
@@ -1172,10 +998,10 @@ async function loadLocalView(
     const g = geometry as { ok?: boolean; editorFills?: boolean; promptVisible?: boolean } | null;
     const columns = await runLayoutProbe({
       win, editor: editorView, webbar: webBarView, preview: previewView,
+      getLayout: () => layoutController.layout,
       captureDirectory: path.join(app.getPath('temp'), 'Mini-AI-IDE-tool-preview'),
-      configure: (web, preview) => {
-        webVisible = web;
-        previewWidth = preview ? lastPreviewWidth : 0;
+      configure: (preview, maximized = false) => {
+        layoutController.update({ previewVisible: preview, fileMaximized: maximized }, false);
         relayout();
       },
     });
