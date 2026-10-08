@@ -57,7 +57,7 @@ const state = () => window.webContents.executeJavaScript(`({value:document.query
 async function test(name, check) { await check(); passed++; console.log('ok ' + name); }
 async function until(check, message) {
   const started = Date.now();
-  while (!check()) { if (Date.now() - started > 3000) assert.fail(message); await pause(25); }
+  while (!await check()) { if (Date.now() - started > 3000) assert.fail(message); await pause(25); }
 }
 async function autoFixture() {
   await setup(`
@@ -228,24 +228,44 @@ app.whenReady().then(async () => {
     await watcher.settleNavigation(); assert.deepEqual(reset,{preserve:false,awaitHistory:true});
     await watcher.dispose();
   });
-  for (const mode of ['reply-first', 'url-first', 'fast-url-first', 'marked-url-first', 'history-unknown']) await test('真实 watcher/integration：输出生命周期与历史基线 ' + mode, async () => {
+  const controls = JSON.parse(fs.readFileSync(path.join(root, 'test/fixtures/deepseek-reply-controls.json'), 'utf8'));
+  for (const mode of ['reply-first', 'url-first', 'fast-url-first', 'marked-url-first', 'warm-marked-url-first', 'history-unknown']) await test('真实 watcher/integration：输出生命周期与历史基线 ' + mode, async () => {
     const { createToolIntegration } = require('../src/main/tools/integration.ts');
     const { FileService } = require('../src/main/fileService.ts');
     const { ReturnPathService } = require('../src/main/returnPathService.ts');
     const { CHANNELS } = require('../src/shared/contract.ts');
     const project = path.join(temporary,'output-project-'+mode); fs.mkdirSync(project);
-    await firstSetup(`window.mountReply=(id,footer=true)=>{
-        const frame=document.createElement('section');frame.className='ds-assistant-message-main-content';
-        const reply=document.createElement('article');reply.className='ds-markdown';
+    await firstSetup(`
+      const controls=${JSON.stringify(controls)};
+      const sendButton=document.querySelector('[role="button"]');
+      sendButton.className=controls.send.className.replace('ds-button--disabled','');
+      sendButton.querySelector('path').setAttribute('d',controls.send.path);
+      window.allocatedSessions=0;
+      window.mountFooter=frame=>{
+        for(const name of ['copy','regenerate','read']){
+          const control=controls[name],button=document.createElement('div');button.setAttribute('role','button');button.className=control.className;
+          if(control.aria!==null)button.setAttribute('aria-label',control.aria);
+          if(control.ariaDisabled!==null)button.setAttribute('aria-disabled',control.ariaDisabled);
+          const svg=document.createElementNS('http://www.w3.org/2000/svg','svg'),icon=document.createElementNS('http://www.w3.org/2000/svg','path');
+          icon.setAttribute('d',control.path);svg.append(icon);button.append(svg);frame.append(button);
+        }
+      };
+      window.mountReply=(id,footer=true)=>{
+        const frame=document.createElement('section'),message=document.createElement('div');message.className='ds-message';
+        const reply=document.createElement('article');reply.className='ds-assistant-message-main-content ds-markdown';
         const pre=document.createElement('pre'),code=document.createElement('code');code.className='language-mini-ai-tools';
         code.textContent=JSON.stringify({protocol_version:1,batch_id:id,requests:[{id:'project',tool:'get_project_info',args:{}}]});
-        pre.append(code);reply.append(pre);frame.append(reply);
-        if(footer){const copy=document.createElement('button');copy.className='ds-button';copy.textContent='复制';frame.append(copy);}
+        pre.append(code);reply.append(pre);message.append(reply);frame.append(message);
+        if(footer)window.mountFooter(frame);
         document.body.insertBefore(frame,document.querySelector('#composer'));
         return frame;
-      };      document.querySelector('[role="button"]').addEventListener('click',()=>{
-        if(${JSON.stringify(mode)}==='marked-url-first'){
-          history.pushState({},'', '/a/chat/s/allocated');window.mountReply('first-native');
+      };
+      document.querySelector('[role="button"]').addEventListener('click',()=>{
+        if(${JSON.stringify(mode)}.endsWith('marked-url-first')){
+          const round=++window.allocatedSessions;
+          history.pushState({},'', '/a/chat/s/allocated-'+round);
+          // 测试主进程确认导航已处理后才挂载；不让同步正文掩盖提交记录缺陷。
+          window.pendingReply='first-native-'+round;
         }else if(${JSON.stringify(mode)}==='url-first'||${JSON.stringify(mode)}==='fast-url-first'){
           history.pushState({},'', '/a/chat/s/allocated');
           setTimeout(()=>{const stop=document.createElement('button');stop.className='ds-button';stop.id='stop';stop.textContent='停止生成';document.body.append(stop);},${mode==='fast-url-first'?30:200});
@@ -257,40 +277,80 @@ app.whenReady().then(async () => {
           setTimeout(()=>stop.remove(),450);
         }
       });
-      if(${JSON.stringify(mode)}==='history-unknown'){
-        history.pushState({},'', '/a/chat/s/existing');window.mountReply('initial-history',false);
+      if(${JSON.stringify(mode)}==='history-unknown'||${JSON.stringify(mode)}==='warm-marked-url-first'){
+        history.pushState({},'', '/a/chat/s/existing');window.mountReply('initial-history',${mode==='warm-marked-url-first'});
       }`);
     const files=new FileService(); files.setRoot(project);
+    const { ToolFiles } = require('../src/main/tools/files.ts');
+    const executeFile = ToolFiles.prototype.execute;
+    let executions=0;
+    ToolFiles.prototype.execute=async function(...args){ executions++; return executeFile.apply(this,args); };
     const handlers=new Map();const editor={mainFrame:{},send(){},isDestroyed:()=>false};
     const system=await createToolIntegration({ipc:{handle:(c,f)=>handlers.set(c,f)},editor,web:window.webContents,files,
       returnPath:new ReturnPathService(files),workspace:{editor:{isDirty:()=>false},run:f=>f()},sender,
       storePath:path.join(temporary,'tools-'+mode+'.json'),disabled:false,ask:async()=>({response:0,checkboxChecked:false}),notifyFile(){},copy(){}});
+    const waitForScope=scope=>until(async()=>await window.webContents.executeJavaScriptInIsolatedWorld(REPLY_WATCH_WORLD,[{code:'globalThis.__miniAIReplyChanges?.scope'}])===scope,'原生 watcher 未处理导航 '+scope);
+    const newHomepage=async()=>{
+      await window.webContents.executeJavaScript(`document.querySelectorAll('.ds-message').forEach(element=>element.parentElement.remove());history.pushState({},'', '/');`);
+      await waitForScope('https://chat.deepseek.com/');
+      await pause(200);
+    };
+    const sendFirst=async(round)=>{
+      const before=executions;
+      const result=await system.sendLocalPrompt('本地主动需求','https://chat.deepseek.com/',()=>true);
+      assert.equal(result.ok,true,JSON.stringify(result));
+      if(mode.endsWith('marked-url-first')){
+        await waitForScope('https://chat.deepseek.com/a/chat/s/allocated-'+round);
+        await pause(200);
+        assert.equal(await window.webContents.executeJavaScript(`document.querySelectorAll('.ds-message').length`),0,'导航处理前不得偷跑挂载首轮回复');
+        assert.equal(executions,before,'空白首轮未出现完整回复时不得执行');
+        await window.webContents.executeJavaScript(`window.mountReply(window.pendingReply);window.pendingReply=null;`);
+      }
+      const batch=mode.endsWith('marked-url-first')?'first-native-'+round:'first-native';
+      await until(()=>system.getState().results.some(result=>result.batch_id===batch&&result.status==='done'),'真实集成未自动执行首次工具回复 '+mode+' round '+round);
+      assert.equal(executions,before+1,'首次工具回复必须真正执行一次');
+      await window.webContents.executeJavaScript(`document.querySelector('.ds-markdown').append(document.createElement('span'));`);
+      await pause(200);
+      assert.equal(executions,before+1,'重复 DOM 通知不得再次执行首批');
+      assert.equal((await state()).clicks,round);
+    };
     try {
       await handlers.get(CHANNELS.setToolConfig)({sender:editor,senderFrame:editor.mainFrame},{automatic:true,permission:'ask',sendIntervalSeconds:300});
       if(mode==='history-unknown'){
         await pause(700);
-        assert.equal(system.getState().results.length,0);
-        await window.webContents.executeJavaScript(`const copy=document.createElement('button');copy.className='ds-button';copy.textContent='复制';document.querySelector('.ds-assistant-message-main-content').append(copy);`);
+        assert.equal(executions,0);
+        assert.equal((await new ReplyMonitor(window.webContents).read()).completion,'unknown');
+        await window.webContents.executeJavaScript(`window.mountFooter(document.querySelector('.ds-message').parentElement);`);
         await pause(700);
-        assert.equal(system.getState().results.length,0,'启用时已有unknown历史回复后补footer不得执行');
+        assert.equal((await new ReplyMonitor(window.webContents).read()).completion,'complete','真实控件组合必须明确表示完成');
+        assert.equal(executions,0,'启用时已有 unknown 历史回复后补真实 footer 不得执行');
       }else{
-        await pause(100);
-        const result=await system.sendLocalPrompt('本地主动需求','https://chat.deepseek.com/',()=>true);
-        assert.equal(result.ok,true,JSON.stringify(result));
-        await until(()=>system.getState().results[0]?.status==='done','真实集成未自动执行首次工具回复');
-        assert.equal(system.getState().results.length,1);assert.equal((await state()).clicks,1);
+        if(mode==='warm-marked-url-first'){
+          await pause(700);
+          assert.equal(executions,0,'原有完整历史不得执行');
+          await newHomepage();
+        }else await pause(100);
+        await sendFirst(1);
       }
+      const beforeNext=executions;
       await window.webContents.executeJavaScript(`window.mountReply('existing-native')`);
       await until(()=>system.getState().results.some(result=>result.batch_id==='existing-native' && result.status==='done'),'已有会话无需点击的新完整回复未自动采集');
+      assert.equal(executions,beforeNext+1,'后续回复必须执行一次');
       assert.equal((await state()).clicks,mode==='history-unknown'?0:1,'采集不得制造发送动作');
-      await window.webContents.executeJavaScript(`document.querySelectorAll('.ds-assistant-message-main-content').forEach(element=>element.remove());history.pushState({},'', '/a/chat/s/history');`);
+      if(mode==='warm-marked-url-first'){
+        await newHomepage();
+        await sendFirst(2);
+      }
+      const beforeHistory=executions;
+      await window.webContents.executeJavaScript(`document.querySelectorAll('.ds-message').forEach(element=>element.parentElement.remove());history.pushState({},'', '/a/chat/s/history');`);
+      await waitForScope('https://chat.deepseek.com/a/chat/s/history');
       await pause(250);
       await window.webContents.executeJavaScript(`window.mountReply('history-native')`);
       await pause(250);
       await window.webContents.executeJavaScript(`window.mountReply('history-native-second')`);
       await pause(750);
-      assert.equal(system.getState().results.some(result=>result.batch_id.startsWith('history-native')),false,'分段加载历史会话不得执行其已存在的工具回复');
-    } finally { await system.dispose(); }
+      assert.equal(executions,beforeHistory,'分段加载历史会话不得执行其已存在的工具回复');
+    } finally { await system.dispose(); ToolFiles.prototype.execute=executeFile; }
   });
   previousWindow.destroy();
   console.log('原生离线 DOM 夹具：通过 ' + passed + '，未连接官方网页；不证明官方网页接受合成发送。');

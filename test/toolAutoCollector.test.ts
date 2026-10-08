@@ -108,3 +108,18 @@ it('地址分配只延续内容观察，首页新输出无需发送回执', asyn
  auto.setEnabled(true);await auto.tick();reply.completion='generating';await auto.tick();auto.continueAt('allocated');
  reply={url:'allocated',text:'new batch',completion:'complete'};await auto.tick();assert.deepEqual(output,['new batch']);auto.dispose();
 });
+
+it('已确认首页交接结束遗留历史等待，但不伪造生成态或丢失已消费正文', async () => {
+  let reply: AutoReply = { url: 'old', text: 'old history', completion: 'complete' };
+  const output: string[] = [];
+  const auto = new AutoCollector(async () => reply, async text => { output.push(text); }, () => {});
+  auto.setEnabled(true); await auto.tick(); auto.reset(true);
+  reply = { url: 'home', text: '', completion: 'unknown' }; await auto.tick();
+  auto.continueAt('allocated');
+  reply = { url: 'allocated', text: 'first tools', completion: 'idle' }; await auto.tick();
+  assert.deepEqual(output, [], '首页交接不能把未知结束当作已生成完成');
+  reply.completion = 'complete'; await auto.tick(); await auto.tick();
+  assert.deepEqual(output, ['first tools']);
+  auto.continueAt('another-address'); reply.url = 'another-address'; await auto.tick();
+  assert.deepEqual(output, ['first tools'], '交接保留已消费正文，不重复执行'); auto.dispose();
+});

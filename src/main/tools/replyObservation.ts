@@ -4,6 +4,7 @@ import { collectReply, type CollectResult } from '../replyCollector';
 import { sessionKeyOf } from '../consumptionStore';
 import type { AutoReply } from './autoCollector';
 import { CONTINUATION_BUTTON } from './replyContinuation';
+import { traceCollection, traceScope, traceText } from './collectionTrace';
 
 export const DEEPSEEK_SEND_ICON = 'M8.3125 0.980206C8.66767 1.05312 8.97902 1.2042';
 export const DEEPSEEK_REGENERATE_ICON = 'M7.92136 0.349152C10.3744 0.349234 12.5564 1.5052';
@@ -76,6 +77,7 @@ const completionOf = (value: unknown): AutoReply['completion'] => ['generating',
 /** 全文和结束状态在同一同步脚本读取；轻量探测不能替代此次完整快照。 */
 export async function readAutoReply(web: WebReader): Promise<ReplySnapshot> {
   const url = web.getURL(); let completion: AutoReply['completion'] = 'unknown'; let signature: string | undefined;
+  traceCollection('observation.full-start', { scope: traceScope(url) });
   const collected = await collectReply({ currentUrl: () => web.getURL(), evaluate: async script => {
     const snapshot: unknown = await web.executeJavaScript(`(() => { const replies = ${script}; const observation = ${OBSERVATION_SCRIPT}; const completion = observation.completion; return {replies,completion,signature:observation.signature}; })()`);
     if (!snapshot || typeof snapshot !== 'object') return [];
@@ -84,8 +86,14 @@ export async function readAutoReply(web: WebReader): Promise<ReplySnapshot> {
     signature = typeof value.signature === 'string' ? value.signature : undefined;
     return value.replies;
   } });
-  if (web.getURL() !== url) return { url: sessionKeyOf(web.getURL()), text: '', completion: 'unknown', collected: { ...collected, replyText: '' } };
-  return { url: sessionKeyOf(url), text: collected.replyText ?? '', completion, collected, ...(signature !== undefined ? { signature } : {}) };
+  if (web.getURL() !== url) {
+    traceCollection('observation.full-address-changed', { from: traceScope(url), to: traceScope(web.getURL()), completion });
+    return { url: sessionKeyOf(web.getURL()), text: '', completion: 'unknown', collected: { ...collected, replyText: '' } };
+  }
+  const text = collected.replyText ?? '';
+  traceCollection('observation.full-result', { scope: traceScope(url), completion, text: traceText(text), signature: signature ?? null,
+    attempts: collected.attempts?.map(attempt => ({ strategyId: attempt.strategyId, ok: attempt.ok, length: attempt.length, error: attempt.error ?? null })) ?? [] });
+  return { url: sessionKeyOf(url), text, completion, collected, ...(signature !== undefined ? { signature } : {}) };
 }
 
 /** 主进程缓存上一快照；空闲无变化和生成阶段不重复运行完整采集器。 */
@@ -94,15 +102,18 @@ export class ReplyMonitor {
   constructor(private readonly web: WebReader) {}
   async read(): Promise<AutoReply> {
     const url = this.web.getURL(); const scope = sessionKeyOf(url);
+    traceCollection('observation.monitor-start', { scope: traceScope(url), cache: this.cached ? { ...traceScope(this.cached.url), ...traceText(this.cached.text), completion: this.cached.completion, signature: this.cached.signature ?? null } : null });
     if (this.cached?.url !== scope) this.cached = undefined;
     const raw: unknown = await this.web.executeJavaScript(OBSERVATION_SCRIPT);
-    if (this.web.getURL() !== url) { this.cached = undefined; return { url: sessionKeyOf(this.web.getURL()), text: '', completion: 'unknown' }; }
+    if (this.web.getURL() !== url) { this.cached = undefined; traceCollection('observation.monitor-address-changed', { from: traceScope(url), to: traceScope(this.web.getURL()) }); return { url: sessionKeyOf(this.web.getURL()), text: '', completion: 'unknown' }; }
     const observation = raw && typeof raw === 'object' ? raw as { completion?: unknown; signature?: unknown } : {};
     const completion = completionOf(observation.completion);
-    if (completion === 'generating' || completion === 'interrupted' || completion === 'unknown') return { url: scope, text: this.cached?.text ?? '', completion };
-    if (typeof observation.signature === 'string' && this.cached?.signature === observation.signature && this.cached.completion === completion) return this.cached;
+    traceCollection('observation.light-result', { scope: traceScope(scope), completion, signature: typeof observation.signature === 'string' ? observation.signature : null });
+    if (completion === 'generating' || completion === 'interrupted' || completion === 'unknown') { traceCollection('observation.monitor-return', { reason: 'uncertain', completion, text: traceText(this.cached?.text ?? '') }); return { url: scope, text: this.cached?.text ?? '', completion }; }
+    if (typeof observation.signature === 'string' && this.cached?.signature === observation.signature && this.cached.completion === completion) { traceCollection('observation.monitor-return', { reason: 'cache-hit', completion, text: traceText(this.cached.text) }); return this.cached; }
     const latest = await readAutoReply(this.web);
     this.cached = latest.signature ? latest : undefined;
+    traceCollection('observation.monitor-return', { reason: 'full-read', completion: latest.completion, text: traceText(latest.text), signature: latest.signature ?? null });
     return latest;
   }
 }

@@ -23,6 +23,7 @@ import { ReplyChangeWatcher } from './replyChangeWatcher';
 import { ResultClipboard, formatToolResults } from './resultClipboard';
 import { AutoContinuation } from './autoContinuation';
 import { WebResultSender } from './webResultSender';
+import { traceCollection, traceScope, traceText } from './collectionTrace';
 export { readAutoReply } from './replyObservation';
 
 interface Options {
@@ -145,6 +146,9 @@ export async function createToolIntegration(options: Options) {
     if (!disposed && harness) harness.refreshProcesses();
   });
   const publish = (state: ToolState) => {
+    traceCollection('integration.publish', { busy: state.busy, completion: state.completion ? { id: state.completion.id, cancelled: state.completion.cancelled } : null,
+      resultCount: state.results.length, resultStatuses: state.results.map(result => ({ id: result.request_id, status: result.status })), batchError: state.batchError ?? null,
+      automatic: state.config.automatic, suspended: automaticSuspended });
     review.updateResults(state.results);
     auto.setEnabled(!options.disabled && !automaticSuspended && state.config.automatic);
     watcher.setEnabled(!options.disabled && !automaticSuspended && state.config.automatic);
@@ -169,12 +173,19 @@ export async function createToolIntegration(options: Options) {
   const monitor = new ReplyMonitor(options.web);
   const auto = new AutoCollector(() => monitor.read(), async (text, current) => {
     const root = options.files.getRoot(); const session = sessionKeyOf(options.web.getURL());
-    if (current() && root === options.files.getRoot() && session === sessionKeyOf(options.web.getURL())) await harness.collect(text);
+    const allowed = current() && root === options.files.getRoot() && session === sessionKeyOf(options.web.getURL());
+    traceCollection('integration.collect-check', { allowed, root: root ? traceText(root) : null, session: traceScope(session), text: traceText(text) });
+    if (allowed) {
+      await harness.collect(text);
+      traceCollection('integration.collect-returned', { root: root ? traceText(root) : null, session: traceScope(session), text: traceText(text) });
+    }
   }, message => harness.report(message));
   const watcher = new ReplyChangeWatcher(options.web, userTurn => {
+    traceCollection('integration.watcher-change', { userTurn, session: traceScope(options.web.getURL()) });
     if (userTurn) continuation?.userTurn();
     return auto.tick();
   }, (preserve = false, awaitHistory = false, generated = false) => {
+    traceCollection('integration.watcher-baseline', { preserve, awaitHistory, generated, session: traceScope(options.web.getURL()) });
     continuation?.reset();
     if (generated) auto.observeGeneration(sessionKeyOf(options.web.getURL()));
     else if (preserve) auto.continueAt(sessionKeyOf(options.web.getURL())); else auto.reset(awaitHistory);
@@ -284,9 +295,12 @@ export async function createToolIntegration(options: Options) {
     /** 本地发送与输出采集独立；发送器自身核验地址和一次点击。 */
     async sendLocalPrompt(text: string, session: string, submissionCurrent: () => boolean) {
       if (!submissionCurrent() || disposed || session !== sessionKeyOf(options.web.getURL())) return { ok: false, error: '项目、会话或发送选项已变化' };
+      traceCollection('integration.local-prompt-start', { session: traceScope(session), text: traceText(text) });
       // 首页首发的地址分配先于正文挂载且生成控件无可读标签；发送前打短期标记，watcher 交接时据此保留新轮基线，失败退回既有判据。
-      try { await watcher.markLocalSubmit(); } catch { /* 页面忙时由既有回复/生成判据兜底 */ }
-      return sender.send(text, session, 'prompt');
+      try { await watcher.markLocalSubmit(); } catch (error) { traceCollection('integration.local-submit-mark-error', { error: error instanceof Error ? error.message : String(error) }); /* 页面忙时由既有回复/生成判据兜底 */ }
+      const result = await sender.send(text, session, 'prompt');
+      traceCollection('integration.local-prompt-result', { session: traceScope(session), ok: result.ok, error: result.ok ? null : result.error ?? null });
+      return result;
     },
     invalidate: (relative: string, isDirectory: boolean) => { changes.invalidate(relative, isDirectory); publish(harness.getState()); },
     getReviewState: () => { harness.getState(); return review.getState(); },

@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import * as vm from 'node:vm';
 import { it } from 'node:test';
 import { ReplyChangeWatcher, REPLY_WATCH_WORLD } from '../src/main/tools/replyChangeWatcher';
-import { AutoCollector } from '../src/main/tools/autoCollector';
+import { AutoCollector, type AutoReply } from '../src/main/tools/autoCollector';
 import { DEEPSEEK_SEND_ICON } from '../src/main/tools/replyObservation';
 
 function continuationControl() {
@@ -16,6 +16,7 @@ function continuationControl() {
 
 async function flush() { for (let i = 0; i < 20; i++) await Promise.resolve(); }
 function fixture(change?: (userTurn: boolean) => Promise<void>, reset?: (preserve?: boolean, awaitHistory?: boolean, generated?: boolean) => void) {
+  let now = 10000;
   const timers = new Map<number, () => void>(); const delays = new Map<number, number>(); let timerId = 0; let checks = 0; let resets = 0; let executions = 0;
   let observer: any; let url = 'https://chat.deepseek.com/a/chat/s/one';
   class Observer {
@@ -33,7 +34,7 @@ function fixture(change?: (userTurn: boolean) => Promise<void>, reset?: (preserv
   const composer: any = { disabled: false, classList: { contains: () => false }, getAttribute: () => null,
     closest: () => composer, matches: () => true, querySelectorAll: () => [{ getAttribute: () => DEEPSEEK_SEND_ICON }] };
   Object.defineProperty(composer, 'value', { get: () => assert.fail('不得读取输入内容') });
-  const context = vm.createContext({ URL, location: { get href() { return url; } }, MutationObserver: Observer, document: { documentElement: {},
+  const context = vm.createContext({ URL, Date: { now: () => now }, location: { get href() { return url; } }, MutationObserver: Observer, document: { documentElement: {},
     querySelector: (selector: string) => selector.includes('primary') ? composer : root ? currentReply : null,
     querySelectorAll: (selector: string) => selector.includes('assistant') || selector.includes('markdown') ? root ? messagesFrames : [] : selector.includes('aria-busy') ? generating ? [{ getClientRects: () => [{}] }] : [] : selector.startsWith('button') ? tooltipGeneration ? [{ textContent: '', getClientRects: () => [{}], getAttribute: (name: string) => name === 'data-tooltip' ? '停止生成' : null }] : [] : messagesFrames,
     addEventListener: (name: string, fn: any) => listeners.set(name, fn), removeEventListener: (name: string) => listeners.delete(name),
@@ -48,6 +49,7 @@ function fixture(change?: (userTurn: boolean) => Promise<void>, reset?: (preserv
   const watcher = new ReplyChangeWatcher(web, async userTurn => { checks++; await change?.(userTurn); }, (preserve, awaitHistory, generated) => { resets++; reset?.(preserve, awaitHistory, generated); }, text => messages.push(text));
   const node = (relevant: boolean) => ({ nodeType: 1, closest: () => relevant ? {} : null, querySelector: () => null });
   return { watcher, web, messages, timers, context, listeners,
+    advanceTime(milliseconds: number) { now += milliseconds; },
     userAction(extra: Record<string, unknown> = {}) { const type = String(extra.type ?? 'click'); listeners.get(type)?.({ type, isTrusted: true, target: composer, ...extra }); },
     hasRoot(value: boolean) { root = value; },
     generating(value: boolean) { generating = value; },
@@ -226,12 +228,12 @@ it('本地提交标记使首页地址交接在回复与生成态都不可观测�
   assert.deepEqual(resets.at(-1), [false, true]); await f.watcher.dispose();
 });
 
-it('真实用户动作使本地提交标记立即失效，交接重建历史基线', async () => {
+it('非发送的真实用户动作使本地提交标记立即失效，交接重建历史基线', async () => {
   const resets: [boolean | undefined, boolean | undefined][] = [];
   const f = fixture(undefined, (preserve, history) => resets.push([preserve, history]));
   f.hasRoot(false); f.navigate('https://chat.deepseek.com/'); f.watcher.setEnabled(true); await flush();
   await f.watcher.markLocalSubmit(); await flush();
-  f.userAction(); f.navigate('https://chat.deepseek.com/a/chat/s/history'); await f.watcher.settleNavigation();
+  f.userAction({ target: { closest: () => null } }); f.navigate('https://chat.deepseek.com/a/chat/s/history'); await f.watcher.settleNavigation();
   assert.deepEqual(resets.at(-1), [false, true]); await f.watcher.dispose();
 });
 
@@ -316,4 +318,94 @@ it('仅tooltip可见的新生成证据跨合并保留，未知或中断不执行
  reply.completion='complete';f.mutation();f.deliver(150);await flush();assert.deepEqual(output,['new']);
  await f.watcher.dispose();auto.dispose();
  }
+});
+
+for (const source of ['website-click', 'website-enter', 'local'] as const) {
+  for (const warm of [false, true]) it(`首轮交接 ${source} / ${warm ? '已有会话中新建' : '空首页启动'}：地址先到且生成不可识别，完成后实际采集一次`, async () => {
+    let reply: AutoReply = warm
+      ? { url: 'https://chat.deepseek.com/a/chat/s/old', text: 'old history', completion: 'complete' }
+      : { url: 'https://chat.deepseek.com/', text: '', completion: 'unknown' };
+    const output: string[] = [];
+    const auto = new AutoCollector(async () => ({ ...reply }), async text => { output.push(text); }, () => {});
+    const f = fixture(async () => auto.tick(), (preserve, history, generated) => {
+      if (generated) auto.observeGeneration(reply.url);
+      else if (preserve) auto.continueAt(reply.url);
+      else auto.reset(history);
+    });
+    f.hasRoot(warm); f.navigate(reply.url); auto.setEnabled(true); f.watcher.setEnabled(true); await flush();
+    try {
+      if (warm) {
+        reply = { url: 'https://chat.deepseek.com/', text: '', completion: 'unknown' };
+        f.hasRoot(false); f.navigate(reply.url); await f.watcher.settleNavigation();
+        f.mutation(); f.deliver(150); await flush();
+      }
+      f.userAction({ type: 'keydown', key: 'a' });
+      if (source === 'local') await f.watcher.markLocalSubmit();
+      else f.userAction(source === 'website-enter' ? { type: 'keydown', key: 'Enter' } : {});
+      reply.url = 'https://chat.deepseek.com/a/chat/s/new';
+      f.navigate(reply.url); await f.watcher.settleNavigation(); await flush();
+      // 新地址已被处理，随后才挂载回复；没有任何可识别的生成标志。
+      reply.text = 'first tools'; f.replaceReply(reply.text);
+      for (const completion of ['unknown', 'interrupted', 'idle'] as const) {
+        reply.completion = completion; f.mutation(); f.deliver(150); await flush();
+        assert.deepEqual(output, [], '提交记录不是结束证据，不能执行未知或半成品');
+      }
+      reply.completion = 'complete'; f.mutation(); f.deliver(150); await flush();
+      assert.deepEqual(output, ['first tools'], '首轮新工具不能记为历史');
+      f.mutation(); f.deliver(150); await flush(); assert.deepEqual(output, ['first tools']);
+      reply.text = 'second tools'; f.replaceReply(reply.text); f.mutation(); f.deliver(150); await flush();
+      assert.deepEqual(output, ['first tools', 'second tools']);
+      reply.url = 'https://chat.deepseek.com/a/chat/s/history'; f.navigate(reply.url); await f.watcher.settleNavigation();
+      reply.text = 'unexecuted history tools'; f.replaceReply(reply.text); f.mutation(); f.deliver(150); await flush();
+      assert.deepEqual(output, ['first tools', 'second tools'], '真正切到历史会话仍不得执行历史');
+    } finally { await f.watcher.dispose(); auto.dispose(); }
+  });
+}
+
+it('首轮交接记录过期、非发送动作、合成发送与监听重建均不能把历史当新轮', async () => {
+  for (const invalidation of ['expired-local', 'expired-website', 'other-action', 'synthetic', 'restart', 'shift-enter', 'composing'] as const) {
+    const resets: [boolean | undefined, boolean | undefined][] = [];
+    const f = fixture(undefined, (preserve, history) => resets.push([preserve, history]));
+    f.hasRoot(false); f.navigate('https://chat.deepseek.com/'); f.watcher.setEnabled(true); await flush();
+    try {
+      if (invalidation === 'expired-local') await f.watcher.markLocalSubmit();
+      else f.userAction(invalidation === 'synthetic' ? { isTrusted: false }
+        : invalidation === 'shift-enter' ? { type: 'keydown', key: 'Enter', shiftKey: true }
+        : invalidation === 'composing' ? { type: 'keydown', key: 'Enter', isComposing: true } : {});
+      if (invalidation.startsWith('expired-')) f.advanceTime(8000);
+      if (invalidation === 'other-action') f.userAction({ target: { closest: () => null } });
+      if (invalidation === 'restart') { f.watcher.setEnabled(false); f.watcher.setEnabled(true); await flush(); }
+      f.navigate('https://chat.deepseek.com/a/chat/s/history'); await f.watcher.settleNavigation();
+      assert.deepEqual(resets.at(-1), [false, true], invalidation);
+    } finally { await f.watcher.dispose(); }
+  }
+});
+
+it('首页点击历史时，先挂载的历史正文不能靠新节点绕过交接取消', async () => {
+  for (const warm of [false, true]) {
+    let reply: AutoReply = warm
+      ? { url: 'https://chat.deepseek.com/a/chat/s/old', text: 'old history', completion: 'complete' }
+      : { url: 'https://chat.deepseek.com/', text: '', completion: 'unknown' };
+    const output: string[] = [];
+    const auto = new AutoCollector(async () => ({ ...reply }), async text => { output.push(text); }, () => {});
+    const f = fixture(async () => auto.tick(), (preserve, history, generated) => {
+      if (generated) auto.observeGeneration(reply.url);
+      else if (preserve) auto.continueAt(reply.url);
+      else auto.reset(history);
+    });
+    f.hasRoot(warm); f.navigate(reply.url); auto.setEnabled(true); f.watcher.setEnabled(true); await flush();
+    try {
+      if (warm) {
+        reply = { url: 'https://chat.deepseek.com/', text: '', completion: 'unknown' };
+        f.hasRoot(false); f.navigate(reply.url); await f.watcher.settleNavigation(); await flush();
+      }
+      await f.watcher.markLocalSubmit();
+      f.userAction({ target: { closest: () => null } });
+      // 历史已挂载后才执行导航检查；旧提交及“新节点”都不能证明这是新生成。
+      reply = { url: 'https://chat.deepseek.com/a/chat/s/history', text: 'unexecuted history tools', completion: 'complete' };
+      f.replaceReply(reply.text); f.navigate(reply.url); await f.watcher.settleNavigation(); await flush();
+      f.mutation(); f.deliver(150); await flush();
+      assert.deepEqual(output, [], warm ? '已有会话回首页' : '空首页');
+    } finally { await f.watcher.dispose(); auto.dispose(); }
+  }
 });
