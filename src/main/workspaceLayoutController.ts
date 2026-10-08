@@ -106,6 +106,11 @@ export class WorkspaceLayoutController {
         throw new Error('恢复文件区仅供本地官网顶栏主 frame');
       return this.update({ fileVisible: true });
     });
+    ipcMain.handle(CHANNELS.toggleWorkspace, event => {
+      if (event.sender !== this.views.webbar.webContents || event.senderFrame !== this.views.webbar.webContents.mainFrame)
+        throw new Error('切换工作区仅供本地官网顶栏主 frame');
+      return this.update({ workspaceVisible: !this.layout.workspaceVisible });
+    });
     ipcMain.handle(CHANNELS.setWorkspaceLayout, (event, raw: unknown) => {
       trusted(event, true);
       if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('布局参数无效');
@@ -140,6 +145,6 @@ export class WorkspaceLayoutController {
       if (typeof width !== 'number' || !Number.isFinite(width) || typeof temporary !== 'boolean') throw new Error('差异宽度参数无效');
       return this.setPreview(width, temporary);
     });
-    return [CHANNELS.restoreFileWorkspace, CHANNELS.setWorkspaceLayout, CHANNELS.setSplit, CHANNELS.setSidebarVisible, CHANNELS.setSidebarWidth, CHANNELS.setPreviewPanel];
+    return [CHANNELS.restoreFileWorkspace, CHANNELS.toggleWorkspace, CHANNELS.setWorkspaceLayout, CHANNELS.setSplit, CHANNELS.setSidebarVisible, CHANNELS.setSidebarWidth, CHANNELS.setPreviewPanel];
   }
 }

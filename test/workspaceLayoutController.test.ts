@@ -184,7 +184,7 @@ it('文件区全屏隐藏官网但保留原宽度，显隐和重启不保存临�
 });
 
 
-it('官网顶栏恢复入口权限仅允许自己的主 frame，不授予通用布局权限', async () => {
+it('官网顶栏的恢复与工作区切换仅允许自己的主 frame，不授予通用布局权限', async () => {
   const f = await fixture(); f.invoke(CHANNELS.setWorkspaceLayout, { fileVisible: false });
   assert.equal(f.controller.layout.fileBounds.width, 0);
   assert.throws(() => f.invoke(CHANNELS.restoreFileWorkspace), /主 frame/);
@@ -193,6 +193,14 @@ it('官网顶栏恢复入口权限仅允许自己的主 frame，不授予通用�
   f.withEvent({sender,senderFrame:sender.mainFrame}, CHANNELS.restoreFileWorkspace);
   assert.equal(f.controller.layout.fileVisible, true);
   assert.equal(f.controller.state.fileMaximized, false);
+  f.invoke(CHANNELS.setWorkspaceLayout, { workspaceVisible: false });
+  assert.equal(f.controller.layout.workspaceBounds.width, 0);
+  assert.throws(() => f.invoke(CHANNELS.toggleWorkspace), /主 frame/);
+  assert.throws(() => f.withEvent({sender,senderFrame:{}}, CHANNELS.toggleWorkspace), /主 frame/);
+  f.withEvent({sender,senderFrame:sender.mainFrame}, CHANNELS.toggleWorkspace);
+  assert.equal(f.controller.layout.workspaceBounds.width, 220);
+  f.withEvent({sender,senderFrame:sender.mainFrame}, CHANNELS.toggleWorkspace);
+  assert.equal(f.controller.layout.workspaceBounds.width, 0);
 });
 
 

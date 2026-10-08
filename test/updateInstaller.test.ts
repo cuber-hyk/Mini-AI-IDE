@@ -32,8 +32,7 @@ it('直接执行已校验exe，路径与参数独立传递，NSIS安装目录在
   const spawnProcess: InstallerSpawner = (command, args, settings) => {
     called++; assert.equal(command, installerOptions.installerPath);
     assert.deepEqual(args, ['--updated', '--force-run', `/D=${installerOptions.installDirectory}`]);
-    assert.deepEqual(settings, { argv0: `"${installerOptions.installerPath}"`, windowsVerbatimArguments: true,
-      shell: false, detached: true, stdio: 'ignore', windowsHide: true });
+    assert.deepEqual(settings, { shell: false, detached: true, stdio: 'ignore' });
     return child;
   };
   const task = launchUpdateInstaller(installerOptions, spawnProcess); child.emit('spawn'); await task;

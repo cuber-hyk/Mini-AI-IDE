@@ -17,12 +17,12 @@ async function fixture(t: any) {
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const files = new FileService(); files.setRoot(root);
   const handlers = new Map<string, (...args: any[]) => any>(); const notifications: any[] = [];
-  const dialogs: any[] = []; const answers: number[] = []; const clipboard: string[] = []; const revealed: string[] = []; const trashed: string[] = [];
+  const dialogs: any[] = []; const answers: number[] = []; const clipboard: string[] = []; const revealed: string[] = []; const opened: string[] = []; const trashed: string[] = [];
   let beforeAnswer: (() => Promise<void>) | undefined;
   const electron = { ipcMain: { handle(channel: string, fn: any) { handlers.set(channel, fn); }, on() {} },
     dialog: { async showMessageBox(_window: any, options: any) { dialogs.push(options); await beforeAnswer?.(); return { response: answers.shift() ?? 1 }; } },
     clipboard: { writeText(text: string) { clipboard.push(text); } }, shell: {
-      showItemInFolder(absolute: string) { revealed.push(absolute); }, async trashItem(absolute: string) { trashed.push(absolute); },
+      showItemInFolder(absolute: string) { revealed.push(absolute); }, async openPath(absolute: string) { opened.push(absolute); return ''; }, async trashItem(absolute: string) { trashed.push(absolute); },
     } };
   const dependencies: Record<string, unknown> = { electron, '../shared/contract': { CHANNELS }, './editorSession': { EditorSession }, './fileManagement': { FileManagementService } };
   const exports: any = {};
@@ -34,7 +34,7 @@ async function fixture(t: any) {
   const controller = new exports.WorkspaceController({}, view, files, workspace, () => {}, (event: any) => notifications.push(event), () => false);
   controller.register();
   const event = { sender: view, senderFrame: view.mainFrame };
-  return { root, files, workspace, controller, dialogs, answers, clipboard, revealed, trashed, notifications, view,
+  return { root, files, workspace, controller, dialogs, answers, clipboard, revealed, opened, trashed, notifications, view,
     beforeAnswer(fn: () => Promise<void>) { beforeAnswer = fn; },
     invoke(channel: string, ...args: unknown[]) { return handlers.get(channel)!(event, ...args); },
     foreign(channel: string, ...args: unknown[]) { return handlers.get(channel)!({ sender: view, senderFrame: {} }, ...args); } };
@@ -42,15 +42,18 @@ async function fixture(t: any) {
 
 it('复制与定位只允许当前编辑器主 frame 和当前根，路径由主进程解析', async t => {
   const f = await fixture(t); await fs.mkdir(path.join(f.root, 'sub')); await fs.writeFile(path.join(f.root, 'sub/a.txt'), 'keep');
-  for (const channel of [CHANNELS.copyEntryPath, CHANNELS.revealEntry, CHANNELS.deleteEntry]) assert.equal((await f.foreign(channel, 'sub/a.txt', false, f.root)).ok, false);
+  for (const channel of [CHANNELS.copyEntryPath, CHANNELS.revealEntry, CHANNELS.openEntry, CHANNELS.deleteEntry]) assert.equal((await f.foreign(channel, 'sub/a.txt', false, f.root)).ok, false);
   assert.equal((await f.invoke(CHANNELS.copyEntryPath, 'sub/a.txt', false, f.root)).ok, true);
   assert.equal((await f.invoke(CHANNELS.copyEntryPath, 'sub/a.txt', true, f.root)).ok, true);
   assert.equal((await f.invoke(CHANNELS.copyEntryPath, '', true, f.root)).ok, true);
   assert.equal((await f.invoke(CHANNELS.revealEntry, 'sub/a.txt', f.root)).ok, true);
+  assert.equal((await f.invoke(CHANNELS.openEntry, 'sub/a.txt', f.root)).ok, true);
   assert.deepEqual(f.clipboard, [path.join(f.root, 'sub/a.txt'), 'sub/a.txt', '.']);
   assert.deepEqual(f.revealed, [path.join(f.root, 'sub/a.txt')]);
+  assert.deepEqual(f.opened, [path.join(f.root, 'sub/a.txt')]);
   assert.equal((await f.invoke(CHANNELS.copyEntryPath, 'sub/a.txt', true, 'old-root')).ok, false);
   assert.equal((await f.invoke(CHANNELS.revealEntry, '..', f.root)).ok, false);
+  assert.equal((await f.invoke(CHANNELS.openEntry, '..', f.root)).ok, false);
   assert.equal(f.clipboard.length, 3); assert.equal(f.revealed.length, 1);
 });
 

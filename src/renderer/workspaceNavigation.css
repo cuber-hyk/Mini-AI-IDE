@@ -6,7 +6,9 @@ body { display: block; }
 .layout > * { pointer-events: auto; }
 .workspace-navigation { display: flex; flex-direction: column; background: var(--ui-surface); border-right: 1px solid var(--ui-border); overflow: hidden; padding: 20px 12px 12px; }
 .workspace-brand { display: flex; align-items: center; gap: 6px; padding: 0 8px 28px; font-size: 22px; font-weight: 600; white-space: nowrap; }
-.workspace-brand > span { font-size: 11px; border: 1px solid var(--ui-border); border-radius: 4px; padding: 1px 4px; }
+.workspace-brand > .workspace-product { font-size: 11px; border: 1px solid var(--ui-border); border-radius: 4px; padding: 1px 4px; }
+.workspace-brand .update-wrap { display: flex; flex: 0 0 auto; }
+.workspace-brand .update-trigger { width: 26px; height: 26px; }
 .workspace-brand > button { margin-left: auto; font-size: 20px; background: transparent; border-color: transparent; }
 .workspace-heading { display: flex; align-items: center; justify-content: space-between; padding: 4px 8px 10px; color: var(--ui-muted); font-size: 12px; }
 .workspace-heading button { background: transparent; border-color: transparent; font-size: 20px; }
@@ -24,7 +26,8 @@ body { display: block; }
 .workspace-message:empty { display: none; }
 .workspace-footnote { margin-bottom: 0; }
 .workspace-project:focus-visible, .workspace-remove:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: -2px; }
-.workspace-restore { position: fixed; top: 5px; left: 5px; z-index: 5; }
+.workspace-restore { position: fixed; top: 5px; left: 6px; z-index: 5; width: 36px; height: 36px; border: 0; border-radius: 12px; background: transparent; color: var(--ui-text); }
+.workspace-restore.ui-icon:hover:not(:disabled) { border-color: transparent; background: var(--ui-hover); }
 .workspace-divider, .resizer, .sidebar-resizer { position: absolute; width: 6px; min-width: 6px; border: 0; background: transparent; z-index: 8; touch-action: none; cursor: col-resize; }
 .workspace-divider:hover, .workspace-divider.dragging, .resizer:hover, .resizer.dragging, .sidebar-resizer:hover, .sidebar-resizer.dragging { background: var(--ui-accent); }
 .workspace-divider:focus-visible, .resizer:focus-visible, .sidebar-resizer:focus-visible { outline: 1px solid var(--ui-accent); outline-offset: -1px; }
@@ -63,7 +66,10 @@ body { display: block; }
 .toolbar > .spacer { display: none; }
 .toolbar { gap: 4px; padding: 0 6px; }
 .toolbar .ui-icon { flex: 0 0 26px; width: 26px; background: transparent; border-color: transparent; }
+.app-version { flex: 0 0 auto; color: var(--ui-muted); font: 11px/1.4 "Cascadia Code", Consolas, monospace; white-space: nowrap; }
 .workspace-brand .ui-icon svg, .workspace-restore svg, .toolbar svg, .sidebar-title svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.2; stroke-linecap: round; stroke-linejoin: round; }
+.workspace-restore svg { width: 18px; height: 18px; }
+.toolbar > .ui-icon svg, .editor-head #btn-sidebar svg, .sidebar-title .ui-icon svg { width: 18px; height: 18px; }
 #file-maximize .restore-mark, #file-maximize.maximized .maximize-mark { display: none; }
 #file-maximize.maximized .restore-mark { display: inline; }
 .editor-head { height: calc(72px * var(--layout-scale, 1)); min-height: calc(72px * var(--layout-scale, 1)); }

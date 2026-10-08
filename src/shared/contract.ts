@@ -41,6 +41,7 @@ export const CHANNELS = {
   trashEntry: 'fs:trash-entry',
   deleteEntry: 'fs:delete-entry',
   revealEntry: 'fs:reveal-entry',
+  openEntry: 'fs:open-entry',
   copyEntryPath: 'fs:copy-entry-path',
   getReviewState: 'review:get-state',
   reviewState: 'review:state',
@@ -65,6 +66,7 @@ export const CHANNELS = {
   /** 调整左右分栏比例（拖动分隔条时由编辑器渲染进程上报） */
   setSplit: 'ui:set-split',
   restoreFileWorkspace: 'ui:restore-file-workspace',
+  toggleWorkspace: 'ui:toggle-workspace',
   setWorkspaceLayout: 'ui:set-workspace-layout',
   /** 把"输出格式要求"模板写入系统剪贴板（**由用户自己粘贴到提示词**，程序绝不注入） */
   copyFormatSpec: 'ui:copy-format-spec',
@@ -566,6 +568,7 @@ export interface EditorBridge {
   trashEntry(relPath: string, root: string): Promise<FileOperationResult>;
   deleteEntry(relPath: string, root: string): Promise<FileOperationResult>;
   revealEntry(relPath: string, root: string): Promise<FileOperationResult>;
+  openEntry(relPath: string, root: string): Promise<FileOperationResult>;
   copyEntryPath(relPath: string, relative: boolean, root: string): Promise<FileOperationResult>;
   confirmLeave(path?: string, root?: string): Promise<{ ok: boolean }>;
   reportEditorState(state: EditorState): void;

@@ -5,6 +5,7 @@
   window.setupApplicationUpdate = function (bridge) {
     const wrap = document.getElementById('update-wrap');
     const trigger = document.getElementById('btn-update');
+    const version = document.getElementById('app-version');
     const panel = document.getElementById('update-panel');
     const heading = document.getElementById('update-heading');
     const versions = document.getElementById('update-versions');
@@ -49,6 +50,7 @@
 
     function render() {
       if (!state) {
+        version.hidden = true;
         action.disabled = pending || !localError;
         action.textContent = localError ? '重试读取' : '正在读取…';
         message.textContent = localError || '正在读取更新状态…';
@@ -57,6 +59,9 @@
       }
       const status = state.status;
       const release = state.release;
+      version.textContent = state.currentVersion ? 'v' + state.currentVersion : '';
+      version.hidden = !state.currentVersion;
+      version.title = state.currentVersion ? '当前版本 v' + state.currentVersion : '当前版本';
       const ready = status === 'ready' || status === 'confirming' || status === 'installing';
       const hasUpdate = Boolean(release);
       trigger.classList.toggle('has-update', hasUpdate);

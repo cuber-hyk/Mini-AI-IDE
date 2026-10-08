@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { it } from 'node:test';
-import { computeLayout, EDITOR_MIN_WIDTH, WEB_MIN_WIDTH, WEB_BAR_HEIGHT, HANDLE_BAR_WIDTH } from '../src/main/windowLayout';
+import { computeLayout, EDITOR_MIN_WIDTH, WEB_MIN_WIDTH, WEB_BAR_HEIGHT } from '../src/main/windowLayout';
 
 it('工作区在左、AI 在中，编辑正文与 Diff 在目录树左侧', () => {
   const layout = computeLayout(1600, 900, { previewVisible: true });
@@ -43,7 +43,7 @@ it('官网区域始终保留可用高度，工具区展开也不挤走官网', (
 it('隐藏侧栏保留恢复入口，隐藏目录或 Diff 将空间还给文件正文', () => {
   const all = computeLayout(1600, 900);
   const hidden = computeLayout(1600, 900, { workspaceVisible: false, fileVisible: false, previewVisible: true });
-  assert.equal(hidden.workspaceBounds.width, HANDLE_BAR_WIDTH);
+  assert.equal(hidden.workspaceBounds.width, 0);
   assert.equal(hidden.fileBounds.width, 0);
   assert.equal(hidden.treeVisible, false);
   assert.equal(hidden.previewVisible, false);

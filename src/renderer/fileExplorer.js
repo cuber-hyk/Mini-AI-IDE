@@ -158,6 +158,7 @@
       const relative = entry ? entry.relPath : '';
       actions.push(null,
         ['在文件资源管理器中显示', async function () { fail(await bridge.revealEntry(relative, root)); }],
+        ['在默认应用中打开', async function () { fail(await bridge.openEntry(relative, root)); }],
         ['复制绝对路径', async function () { if (!fail(await bridge.copyEntryPath(relative, false, root))) info('已复制绝对路径'); }],
         ['复制相对路径', async function () { if (!fail(await bridge.copyEntryPath(relative, true, root))) info('已复制相对路径'); }]);
       if (entry) actions.push(null, ['重命名', function () { void rename(entry); }],

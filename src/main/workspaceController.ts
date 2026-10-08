@@ -190,6 +190,16 @@ export class WorkspaceController {
         catch (error) { return { ok: false, error: `无法在资源管理器中显示：${String(error)}` }; }
       });
     });
+    handle(CHANNELS.openEntry, (relative, root) => {
+      if (root !== this.files.getRoot()) return { ok: false, error: '目录已切换，请重新操作' };
+      if (typeof relative !== 'string') return { ok: false, error: '参数不合法' };
+      return this.atRevision(async () => {
+        const source = await this.entries.inspect(relative);
+        if (!source.ok) return source;
+        const error = await shell.openPath(source.absolute);
+        return error ? { ok: false, error: `无法在默认应用中打开：${error}` } : { ok: true };
+      });
+    });
     handle(CHANNELS.copyEntryPath, (relative, relativeOnly, root) => {
       if (root !== this.files.getRoot()) return { ok: false, error: '目录已切换，请重新操作' };
       if (typeof relative !== 'string' || typeof relativeOnly !== 'boolean') return { ok: false, error: '参数不合法' };
@@ -202,7 +212,7 @@ export class WorkspaceController {
     });
     return [CHANNELS.getRecentRoots, CHANNELS.openRecentRoot, CHANNELS.openWorkspace, CHANNELS.removeWorkspace, CHANNELS.closeRoot, CHANNELS.confirmLeave,
       CHANNELS.editorReply, CHANNELS.createEntry, CHANNELS.renameEntry, CHANNELS.trashEntry,
-      CHANNELS.deleteEntry, CHANNELS.revealEntry, CHANNELS.copyEntryPath];
+      CHANNELS.deleteEntry, CHANNELS.revealEntry, CHANNELS.openEntry, CHANNELS.copyEntryPath];
   }
 
   private atRevision<T extends { ok: boolean; error?: string }>(operation: () => Promise<T>) {

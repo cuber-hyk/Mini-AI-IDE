@@ -40,6 +40,7 @@ const CH = {
   trashEntry: 'fs:trash-entry',
   deleteEntry: 'fs:delete-entry',
   revealEntry: 'fs:reveal-entry',
+  openEntry: 'fs:open-entry',
   copyEntryPath: 'fs:copy-entry-path',
   entryChanged: 'fs:entry-changed',
   confirmLeave: 'editor:confirm-leave',
@@ -98,6 +99,7 @@ const bridge = {
   trashEntry: (relPath: string, root: string) => ipcRenderer.invoke(CH.trashEntry, relPath, root),
   deleteEntry: (relPath: string, root: string) => ipcRenderer.invoke(CH.deleteEntry, relPath, root),
   revealEntry: (relPath: string, root: string) => ipcRenderer.invoke(CH.revealEntry, relPath, root),
+  openEntry: (relPath: string, root: string) => ipcRenderer.invoke(CH.openEntry, relPath, root),
   copyEntryPath: (relPath: string, relative: boolean, root: string) => ipcRenderer.invoke(CH.copyEntryPath, relPath, relative, root),
   confirmLeave: (path?: string, root?: string) => ipcRenderer.invoke(CH.confirmLeave, path, root),
   reportEditorState: (state: unknown) => ipcRenderer.send(CH.editorState, state),
@@ -145,7 +147,7 @@ const bridge = {
   onOpenPromptPanel: (listener: () => void) => {
     ipcRenderer.on(CH.openPromptPanel, () => listener());
   },
-  /** 网页/预览可见性变化（网页区工具条那边改了，本进程据此同步状态） */
+  /** 外壳布局状态变化（主进程广播，编辑器据此同步各区域状态） */
   onChromeState: (listener: (state: unknown) => void) => {
     ipcRenderer.on(CH.chromeState, (_e, state) => listener(state));
   },

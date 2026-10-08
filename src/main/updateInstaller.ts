@@ -6,11 +6,10 @@ export type InstallerSpawner = (command: string, args: readonly string[], option
 export function launchUpdateInstaller(options: { installerPath: string; installDirectory: string },
   spawnProcess: InstallerSpawner = spawn): Promise<void> {
   return new Promise((resolve, reject) => {
-    // NSIS /D 必须最后且不能带引号，即使目录含空格。仅对 argv0 引用 exe 路径。
-    // windowsVerbatimArguments 禁止 Node 改写 /D；shell:false 不解释任何 shell 字符。
+    // 让 Node 在 Windows 上负责参数转义；手动开启 windowsVerbatimArguments 会让
+    // 含空格的 /D=安装目录 被拆成多个参数，NSIS 随后可能静默退出。
     const child = spawnProcess(options.installerPath, ['--updated', '--force-run', `/D=${options.installDirectory}`], {
-      argv0: `"${options.installerPath}"`, windowsVerbatimArguments: true,
-      shell: false, detached: true, stdio: 'ignore', windowsHide: true,
+      shell: false, detached: true, stdio: 'ignore',
     });
     child.once('error', reject);
     child.once('spawn', () => {

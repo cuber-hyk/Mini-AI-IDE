@@ -1,7 +1,7 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-07
+updated: 2026-10-08
 owner: 胡运宽
 source_of_truth: [src/renderer/workspaceNavigation.js, docs/adr/2026-10-07-workspace-ui-shell-layout.md, docs/adr/2026-10-02-filesystem-permission-model.md, src/main/fileService.ts, src/main/fileManagement.ts, src/main/workspaceService.ts, src/main/workspaceController.ts, src/main/editorSession.ts, src/main/settings.ts, src/shared/contract.ts, src/main/preload.ts, src/renderer/editorWorkspace.js, src/renderer/editorTabs.js, src/renderer/fileExplorer.js, src/renderer/fileIcons.js, src/renderer/fileExplorer.css, test/workspaceService.test.ts, test/fileManagement.test.ts, test/workspaceController.test.ts, test/fileExplorer.test.ts, test/fileIcons.test.ts, test/editorSession.test.ts, test/editorWorkspace.test.ts, test/fileService.test.ts]
 ---
@@ -65,6 +65,7 @@ source_of_truth: [src/renderer/workspaceNavigation.js, docs/adr/2026-10-07-works
 | `fs:trash-entry` | `relPath, root` | 文件操作结果，成功含旧路径 |
 | `fs:delete-entry` | `relPath, root` | 独立永久删除，原生确认后返回文件操作结果 |
 | `fs:reveal-entry` | `relPath, root` | 验证目标后在资源管理器中显示 |
+| `fs:open-entry` | `relPath, root` | 验证目标后用系统默认应用打开文件或目录 |
 | `fs:copy-entry-path` | `relPath, relative: boolean, root` | 验证目标后复制绝对／相对路径 |
 | `fs:root-changed` | （主进程 → 编辑器） | 根目录、最近记录、工作区列表、版本 |
 | `fs:file-changed` | （主进程 → 编辑器）`filePath, updated/created/deleted, revision` | AI 更新重读目标，创建／删除同步标签和文件树，拒绝旧目录事件 |
@@ -98,7 +99,7 @@ source_of_truth: [src/renderer/workspaceNavigation.js, docs/adr/2026-10-07-works
 | 移入回收站 | 保留独立入口，原生确认后调用 `shell.trashItem`，失败可见且不改为永久删除；成功后关闭受影响标签，其他标签保留 |
 | 永久删除 | 独立“永久删除…”入口；先处理目标及文件夹后代草稿，原生确认展示路径、文件夹全部内容范围及不进回收站后果；取消不删，确认后复核目标身份与目录版本，失败可见 |
 | 管理边界 | 不允许改名／删除工作区根目录；永久删除、定位和复制拒绝根目录下链接及链接祖先；用户选择的根目录自身可为合法 junction。删除普通目录内链接仅移除链接，不递归到外部目标 |
-| 图标与菜单 | 本地 SVG 按特殊文件名与扩展名区分常见类型，未知类型通用，文件夹区分开合；菜单按创建、定位／路径复制和改名／两种删除分组，键盘导航跳过分隔线 |
+| 图标与菜单 | 本地 SVG 按特殊文件名与扩展名区分常见类型，未知类型通用，文件夹区分开合；菜单按创建、定位／默认应用打开／路径复制和改名／两种删除分组，键盘导航跳过分隔线 |
 | 刷新 | 手动刷新文件树，保留仍有效的展开、选中及焦点；无自动监听 |
 
 **实现说明**：GBK 解码使用 Node 自带的 `TextDecoder('gbk')`（本机 ICU 为 full），**不引入 iconv-lite** 等第三方依赖。

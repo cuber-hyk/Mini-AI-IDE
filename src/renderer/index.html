@@ -18,7 +18,32 @@
   </head>
   <body>
     <nav id="workspace-navigation" class="workspace-navigation" aria-label="项目工作区">
-      <div class="workspace-brand">Mini AI <span>IDE</span><button id="workspace-collapse" class="ui-icon" type="button" title="收起工作区" aria-label="收起工作区"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1"/><path d="M5 2.5v11"/></svg></button></div>
+      <div class="workspace-brand">
+        Mini AI <span class="workspace-product">IDE</span>
+        <span id="app-version" class="app-version" aria-label="当前版本" hidden></span>
+        <div id="update-wrap" class="update-wrap">
+          <button id="btn-update" type="button" class="ui-icon update-trigger" title="软件更新" aria-label="软件更新" aria-haspopup="dialog" aria-expanded="false" aria-controls="update-panel">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path class="update-download-mark" d="M8 2v8M4.5 6.5 8 10l3.5-3.5M2.5 10.5v3h11v-3"/><path class="update-ready-mark" d="m3.5 8 3 3 6-6"/></svg>
+            <span class="update-dot" aria-hidden="true"></span>
+          </button>
+          <section id="update-panel" class="update-panel" role="dialog" aria-modal="false" aria-labelledby="update-heading" tabindex="-1" hidden>
+            <div class="update-header"><span class="update-eyebrow">软件更新</span><button id="update-close" type="button" class="ui-icon update-close" title="关闭更新面板" aria-label="关闭更新面板"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg></button></div>
+            <h2 id="update-heading">检查新版本</h2>
+            <div id="update-versions" class="update-versions"></div>
+            <p id="update-message" class="update-message" aria-live="polite" aria-atomic="true"></p>
+            <div id="update-notes-section" class="update-notes-section" hidden>
+              <h3>更新内容</h3><p id="update-notes" class="update-notes"></p>
+              <button id="update-notes-toggle" type="button" class="update-text-button" aria-expanded="false" aria-controls="update-notes" hidden>展开完整说明</button>
+            </div>
+            <div id="update-progress-wrap" class="update-progress-wrap" hidden>
+              <div class="update-progress-label"><span>正在下载</span><span id="update-percent"></span></div>
+              <progress id="update-progress" max="100" value="0" aria-label="更新下载进度"></progress>
+            </div>
+            <div class="update-footer"><span id="update-hint" class="update-hint">由你选择何时更新</span><button id="update-action" type="button" class="ui-button primary">检查更新</button></div>
+          </section>
+        </div>
+        <button id="workspace-collapse" class="ui-icon" type="button" title="收起工作区" aria-label="收起工作区" hidden><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1"/><path d="M5 2.5v11"/></svg></button>
+      </div>
       <div class="workspace-heading"><span>工作区</span><button id="workspace-add" class="ui-icon" type="button" title="添加项目" aria-label="添加项目">＋</button></div>
       <input id="workspace-search" class="workspace-search" type="search" placeholder="搜索项目…" aria-label="搜索工作区项目" />
       <ul id="workspace-list" class="workspace-list"></ul>
@@ -41,27 +66,6 @@
       <span id="dirty-flag" class="dirty"></span>
       <button id="file-maximize" class="ui-icon" type="button" title="文件区全屏" aria-label="文件区全屏" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><path class="maximize-mark" d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/><path class="restore-mark" d="M6 2v4H2M14 6h-4V2M10 14v-4h4M2 10h4v4"/></svg></button>
       <button id="file-collapse" class="ui-icon" type="button" aria-label="收起文件工作区" title="收起文件工作区"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1"/><path d="M11 2.5v11"/></svg></button>
-      <div id="update-wrap" class="update-wrap">
-        <button id="btn-update" type="button" class="ui-icon update-trigger" title="软件更新" aria-label="软件更新" aria-haspopup="dialog" aria-expanded="false" aria-controls="update-panel">
-          <svg viewBox="0 0 16 16" aria-hidden="true"><path class="update-download-mark" d="M8 2v8M4.5 6.5 8 10l3.5-3.5M2.5 10.5v3h11v-3"/><path class="update-ready-mark" d="m3.5 8 3 3 6-6"/></svg>
-          <span class="update-dot" aria-hidden="true"></span>
-        </button>
-        <section id="update-panel" class="update-panel" role="dialog" aria-modal="false" aria-labelledby="update-heading" tabindex="-1" hidden>
-          <div class="update-header"><span class="update-eyebrow">软件更新</span><button id="update-close" type="button" class="ui-icon update-close" title="关闭更新面板" aria-label="关闭更新面板"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg></button></div>
-          <h2 id="update-heading">检查新版本</h2>
-          <div id="update-versions" class="update-versions"></div>
-          <p id="update-message" class="update-message" aria-live="polite" aria-atomic="true"></p>
-          <div id="update-notes-section" class="update-notes-section" hidden>
-            <h3>更新内容</h3><p id="update-notes" class="update-notes"></p>
-            <button id="update-notes-toggle" type="button" class="update-text-button" aria-expanded="false" aria-controls="update-notes" hidden>展开完整说明</button>
-          </div>
-          <div id="update-progress-wrap" class="update-progress-wrap" hidden>
-            <div class="update-progress-label"><span>正在下载</span><span id="update-percent"></span></div>
-            <progress id="update-progress" max="100" value="0" aria-label="更新下载进度"></progress>
-          </div>
-          <div class="update-footer"><span id="update-hint" class="update-hint">由你选择何时更新</span><button id="update-action" type="button" class="ui-button primary">检查更新</button></div>
-        </section>
-      </div>
     </header>
 
     <main class="layout">

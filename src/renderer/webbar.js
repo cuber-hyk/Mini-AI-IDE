@@ -4,11 +4,19 @@
   const bridge = window.webbarBridge;
   const el = {
     collect: document.getElementById('btn-collect'), status: document.getElementById('collect-status'),
+    workspaceToggle: document.getElementById('btn-workspace-toggle'),
   };
   if (!bridge || Object.values(el).some(function (node) { return !node; })) return;
   const restore = document.getElementById('btn-file-restore');
+  el.workspaceToggle.addEventListener('click', function () { void bridge.toggleWorkspace(); });
   restore.addEventListener('click', function () { void bridge.restoreFileWorkspace(); });
-  bridge.onChromeState(function (state) { restore.hidden = state.fileVisible !== false; });
+  bridge.onChromeState(function (state) {
+    restore.hidden = state.fileVisible !== false;
+    const workspaceVisible = !state.layout || state.layout.workspaceVisible !== false;
+    el.workspaceToggle.title = workspaceVisible ? '收起工作区' : '展开工作区';
+    el.workspaceToggle.setAttribute('aria-label', el.workspaceToggle.title);
+    el.workspaceToggle.setAttribute('aria-pressed', String(workspaceVisible));
+  });
   let collecting = false;
 
   function feedback(message, warn) {

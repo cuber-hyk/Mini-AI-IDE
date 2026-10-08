@@ -29,7 +29,7 @@ function state(overrides: Record<string, unknown> = {}) {
 }
 
 function updateUi(overrides: Record<string, unknown> = {}) {
-  const ids = ['update-wrap', 'btn-update', 'update-panel', 'update-heading', 'update-versions', 'update-message',
+  const ids = ['app-version', 'update-wrap', 'btn-update', 'update-panel', 'update-heading', 'update-versions', 'update-message',
     'update-notes-section', 'update-notes', 'update-notes-toggle', 'update-progress-wrap', 'update-progress',
     'update-percent', 'update-hint', 'update-action', 'update-close'];
   const nodes = Object.fromEntries(ids.map(id => [id, element()]));
@@ -62,6 +62,8 @@ it('启动只订阅和读取状态，发现新版只点亮图标且不打开面�
   const ui = updateUi(); await flush();
   assert.deepEqual(ui.calls, ['get']);
   ui.publish(state({ status: 'available', release, revision: 1 }));
+  assert.equal(ui.nodes['app-version'].textContent, 'v0.1.0');
+  assert.equal(ui.nodes['app-version'].hidden, false);
   assert.equal(ui.nodes['update-panel'].hidden, true);
   assert.equal(ui.nodes['btn-update'].classList.contains('has-update'), true);
   assert.equal(ui.nodes['update-panel'].focused, false);

@@ -76,6 +76,7 @@ function menuFixture() {
     listDir: async (parent: string) => { reads++; return { ok: true, entries: parent ? [] : [{ name: 'sub', relPath: 'sub', isDirectory: true }] }; },
     createEntry: async (...args: unknown[]) => { created.push(args); return { ok: true }; },
     revealEntry: async (...args: unknown[]) => { operations.push(['reveal', ...args]); return { ok: true }; },
+    openEntry: async (...args: unknown[]) => { operations.push(['open', ...args]); return { ok: true }; },
     copyEntryPath: async (...args: unknown[]) => { operations.push(['copy', ...args]); return { ok: true }; },
     trashEntry: async (...args: unknown[]) => { operations.push(['trash', ...args]); return { ok: true }; },
     deleteEntry: async (...args: unknown[]) => { operations.push(['delete', ...args]); return { ok: true }; },
@@ -95,7 +96,7 @@ it('树和侧栏空白右键在根目录创建，不继承此前选中的子目�
     const row = fixture.tree.querySelectorAll('.tree-row')[0]!; await row.listeners.click!();
     fixture.sidebar.listeners.contextmenu!(fixture.event(isDirectory ? fixture.sidebar : fixture.tree));
     const menu = fixture.menu()!;
-    assert.deepEqual(menuItems(menu).map(item => item.textContent), ['新建文件', '新建文件夹', '在文件资源管理器中显示', '复制绝对路径', '复制相对路径', '刷新目录']);
+    assert.deepEqual(menuItems(menu).map(item => item.textContent), ['新建文件', '新建文件夹', '在文件资源管理器中显示', '在默认应用中打开', '复制绝对路径', '复制相对路径', '刷新目录']);
     menu.children[isDirectory ? 1 : 0]!.listeners.click!(); await flush();
     const draft = fixture.tree.children[0]!; assert.equal(draft.className, 'tree-name-entry');
     const input = draft.children[0]!; input.value = isDirectory ? 'folder' : 'file.txt';
@@ -109,7 +110,7 @@ it('行菜单同时保留回收站和永久删除，冒泡到侧栏不被根目�
   const row = fixture.tree.querySelectorAll('.tree-row')[0]!;
   const event = fixture.event(row.children[1]!);
   row.listeners.contextmenu!(event); fixture.sidebar.listeners.contextmenu!(event);
-  assert.deepEqual(menuItems(fixture.menu()!).map(item => item.textContent), ['新建文件', '新建文件夹', '在文件资源管理器中显示', '复制绝对路径', '复制相对路径', '重命名', '移入回收站', '永久删除…']);
+  assert.deepEqual(menuItems(fixture.menu()!).map(item => item.textContent), ['新建文件', '新建文件夹', '在文件资源管理器中显示', '在默认应用中打开', '复制绝对路径', '复制相对路径', '重命名', '移入回收站', '永久删除…']);
 });
 
 it('树容器支持键盘根目录菜单、关闭后恢复焦点，未打开目录时不展示菜单', async () => {
@@ -117,12 +118,12 @@ it('树容器支持键盘根目录菜单、关闭后恢复焦点，未打开目�
   assert.equal(fixture.tree.tabIndex, 0);
   for (const key of ['ContextMenu', 'F10']) {
     fixture.tree.listeners.keydown!(fixture.event(fixture.tree, { key, shiftKey: key === 'F10' }));
-    assert.equal(menuItems(fixture.menu()!).length, 6);
+    assert.equal(menuItems(fixture.menu()!).length, 7);
     fixture.menu()!.listeners.keydown!(fixture.event(fixture.menu()!, { key: 'Escape' }));
     assert.equal(fixture.menu(), undefined); assert.equal(fixture.document.activeElement, fixture.tree);
   }
   fixture.sidebar.listeners.contextmenu!(fixture.event(fixture.tree)); const before = fixture.reads();
-  menuItems(fixture.menu()!)[5]!.listeners.click!(); await flush(); assert.ok(fixture.reads() > before);
+  menuItems(fixture.menu()!)[6]!.listeners.click!(); await flush(); assert.ok(fixture.reads() > before);
   fixture.setRoot(null); await fixture.explorer.refresh(true);
   fixture.sidebar.listeners.contextmenu!(fixture.event(fixture.tree));
   fixture.tree.listeners.keydown!(fixture.event(fixture.tree, { key: 'ContextMenu' }));
@@ -136,12 +137,12 @@ it('菜单路径操作绑定右击目标，空白指向根；旧菜单不能操�
     const event = f.event(target); if (target === row) row.listeners.contextmenu!(event); else f.sidebar.listeners.contextmenu!(event);
     menuItems(f.menu()!).find(item => item.textContent === label)!.listeners.click!(); await flush();
   };
-  await invoke('复制绝对路径', row); await invoke('复制相对路径', row); await invoke('在文件资源管理器中显示', f.tree);
+  await invoke('复制绝对路径', row); await invoke('复制相对路径', row); await invoke('在文件资源管理器中显示', f.tree); await invoke('在默认应用中打开', row);
   await invoke('移入回收站', row); await invoke('永久删除…', row);
-  assert.deepEqual(f.operations, [['copy', 'sub', false, 'A'], ['copy', 'sub', true, 'A'], ['reveal', '', 'A'], ['trash', 'sub', 'A'], ['delete', 'sub', 'A']]);
+  assert.deepEqual(f.operations, [['copy', 'sub', false, 'A'], ['copy', 'sub', true, 'A'], ['reveal', '', 'A'], ['open', 'sub', 'A'], ['trash', 'sub', 'A'], ['delete', 'sub', 'A']]);
   f.sidebar.listeners.contextmenu!(f.event(f.tree)); const oldButton = menuItems(f.menu()!).find(item => item.textContent === '复制相对路径')!;
   f.setRoot('B'); oldButton.listeners.click!(); await flush();
-  assert.equal(f.operations.length, 5); assert.deepEqual(f.messages.at(-1), ['目录已切换，请重新操作', true]);
+  assert.equal(f.operations.length, 6); assert.deepEqual(f.messages.at(-1), ['目录已切换，请重新操作', true]);
 });
 
 it('菜单键盘导航跳过分隔线；文件夹开合时图标同步', async () => {

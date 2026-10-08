@@ -256,7 +256,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
 
   const layoutOk =
     input.layout.editorBounds.x === 0 &&
-    input.layout.workspaceBounds.width > 0 && input.layout.webBounds.width >= 420 &&
+    (input.layout.workspaceVisible ? input.layout.workspaceBounds.width > 0 : input.layout.workspaceBounds.width === 0) && input.layout.webBounds.width >= 420 &&
     input.layout.workspaceBounds.width === input.layout.webBounds.x &&
     input.layout.webBounds.x + input.layout.webBounds.width === input.layout.fileBounds.x &&
     input.layout.contentBounds.x + input.layout.contentBounds.width === input.layout.treeBounds.x &&
@@ -367,7 +367,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     /* 设置持久化层：自定义格式要求存这里（Y8 要核对字段确实存在） */
     const settingsTs = fs.readFileSync(path.join(srcMainDir, 'settings.ts'), 'utf8');
     const previewHtml = fs.readFileSync(path.join(rendererDir, 'preview.html'), 'utf8');
-    // 网页区顶部工具条（webbar）：显隐开关的唯一常驻入口，单独读出来供 T1 断言
+    // 网页区顶部工具条（webbar）：采集与窄恢复操作入口，单独读取供契约断言
     const webbarHtml = fs.readFileSync(path.join(rendererDir, 'webbar.html'), 'utf8');
     const webbarJs = fs.readFileSync(path.join(rendererDir, 'webbar.js'), 'utf8');
     const htmlIds = new Set([...html.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1] as string));
@@ -578,9 +578,8 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
 
     /* ---- N) 网页区顶部工具条（webbar）契约 ----
      *
-     * 为什么单列一组：网页/预览的显隐开关**只**存在于这个视图里。
-     * 一旦它在 HTML/JS/preload 任一处对不上，用户就没有任何入口控制网页显隐，
-     * 而这类问题在 tsc 与单测里都看不见（三个文件都不参与类型检查的相互引用）。
+     * 这里核对只读采集与两个受限布局操作是否在 HTML/JS/preload 间对应，
+     * 并确保 webbar 不获得通用布局或网页操作能力。
      */
     try {
       const wbHtml = fs.readFileSync(path.join(rendererDir, 'webbar.html'), 'utf8');
@@ -611,8 +610,9 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       add('N6', '官网顶栏不再包含隐藏恢复形态', !/handle-mode|just-hidden/.test(wbJs + wbCss), {});
       const wbPreload = fs.readFileSync(path.join(__dirname, 'webbarPreload.js'), 'utf8');
       const wbBridgeOk = /exposeInMainWorld\('webbarBridge'/.test(wbPreload) &&
-        wbPreload.includes("'return:collect'") && !/ui:set-web-visible|ui:set-preview-panel/.test(wbPreload);
-      add('N4', '官网顶栏独立 preload 仅保留只读采集接口', wbBridgeOk, { wbBridgeOk });
+        wbPreload.includes("'return:collect'") && wbPreload.includes("'ui:toggle-workspace'") &&
+        wbPreload.includes("'ui:restore-file-workspace'") && !/ui:set-web-visible|ui:set-preview-panel/.test(wbPreload);
+      add('N4', '官网顶栏 preload 仅暴露只读采集、单一工作区切换和文件区恢复', wbBridgeOk, { wbBridgeOk });
     } catch (err) {
       add('N1', '网页区工具条界面契约检查', false, `读取失败：${err instanceof Error ? err.message : String(err)}`);
     }

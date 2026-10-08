@@ -172,7 +172,7 @@ async function bootstrap(): Promise<void> {
   });
   // 预览视图与编辑器视图使用同一分区，便于复用同一份 preload 缓存策略
 
-  // 网页区顶部工具条：**独立视图**，只放网页/预览的显隐开关。
+  // 网页区顶部工具条：**独立视图**，承载只读采集和受限的本地布局操作。
   // 为什么不用 <iframe> 也不用盖在网页上：它是本程序自己的界面，
   // 与网页视图同层并排（网页本体从 WEB_BAR_HEIGHT 之下开始），互不遮挡。
   const webBarView = new WebContentsView({
@@ -368,8 +368,8 @@ async function bootstrap(): Promise<void> {
  * 是渲染进程创建时序的问题。因此这里用"重试若干次 + 间隔"把它吸收掉：
  * 失败是偶发的，重试即恢复。
  *
- * 之所以必须成功：这些视图承载着唯一的功能入口（网页区显隐开关在 webbar 里），
- * 加载失败等于整个应用没有网页控制入口，不能静默跳过。
+ * 之所以必须成功：这些视图承载网页只读采集与文件区恢复入口，
+ * 加载失败会让用户失去网页采集操作，不能静默跳过。
  */
 async function loadLocalView(
   view: WebContentsView,

@@ -50,12 +50,14 @@ it('目录路径以末两级显示，完整路径保留在悬停提示', () => {
 });
 
 function webbar(overrides: Record<string, unknown> = {}) {
-  const ids = ['bar', 'btn-collect', 'collect-status', 'btn-file-restore'];
+  const ids = ['bar', 'btn-collect', 'collect-status', 'btn-file-restore', 'btn-workspace-toggle'];
   const nodes = Object.fromEntries(ids.map(id => [id, node()]));
+  nodes['btn-workspace-toggle'].hidden = false;
   let chrome: (value: unknown) => void = () => {};
   const widths: number[] = [];
   const bridge = {
     async restoreFileWorkspace() { return {}; },
+    async toggleWorkspace() { return {}; },
     async setPreviewPanel(width: number) { widths.push(width); return { width, visible: width > 0 }; },
     async collectReply() { return { ok: true, blocks: [1, 2] }; },
     onChromeState(fn: typeof chrome) { chrome = fn; },
@@ -68,12 +70,15 @@ function webbar(overrides: Record<string, unknown> = {}) {
   return { nodes, widths, publish(value: unknown) { chrome(value); } };
 }
 
-it('官网顶栏只保留采集，不提供网页显隐或 Diff 布局接口', () => {
+it('官网顶栏在 DeepSeek 左侧固定提供工作区切换，不提供网页显隐或 Diff 布局接口', () => {
   const html = fs.readFileSync(path.join(__dirname, '../src/renderer/webbar.html'), 'utf8');
   const preload = fs.readFileSync(path.join(__dirname, '../src/main/webbarPreload.ts'), 'utf8');
   assert.doesNotMatch(html, /id="btn-(web|preview-toggle|restore)"/);
   assert.doesNotMatch(preload, /setWebVisible|setPreviewPanel/);
+  assert.match(html, /id="btn-workspace-toggle"[^>]*aria-pressed="true"/);
+  assert.ok(html.indexOf('id="btn-workspace-toggle"') < html.indexOf('class="webbar-title"'));
   assert.match(preload, /collectReply/);
+  assert.match(preload, /toggleWorkspace/);
 });
 
 it('采集过程中拒绝重复请求，失败恢复按钮并提供可重试的诊断', async () => {
@@ -97,10 +102,18 @@ it('成功采集在网页栏显示变更数量，重复回复提供无新内容�
 });
 
 
-it('文件区收起后恢复入口只在官网顶栏出现，点击只恢复文件区', async () => {
-  let restored = 0;
-  const ui = webbar({ restoreFileWorkspace: async () => { restored++; } });
+it('工作区切换按钮固定在 DeepSeek 左侧，文件区收起后提供单独恢复入口', async () => {
+  let restoredFiles = 0; let toggledWorkspace = 0;
+  const ui = webbar({ restoreFileWorkspace: async () => { restoredFiles++; }, toggleWorkspace: async () => { toggledWorkspace++; } });
+  ui.publish({ fileVisible: true, layout: { workspaceVisible: false } });
+  assert.equal(ui.nodes['btn-workspace-toggle'].hidden, false);
+  assert.equal(ui.nodes['btn-workspace-toggle'].title, '展开工作区');
+  await ui.nodes['btn-workspace-toggle'].fire('click'); assert.equal(toggledWorkspace, 1);
+  ui.publish({ fileVisible: true, layout: { workspaceVisible: true } });
+  assert.equal(ui.nodes['btn-workspace-toggle'].hidden, false);
+  assert.equal(ui.nodes['btn-workspace-toggle'].title, '收起工作区');
   ui.publish({ fileVisible: false }); assert.equal(ui.nodes['btn-file-restore'].hidden, false);
-  await ui.nodes['btn-file-restore'].fire('click'); assert.equal(restored, 1);
-  ui.publish({ fileVisible: true }); assert.equal(ui.nodes['btn-file-restore'].hidden, true);
+  await ui.nodes['btn-file-restore'].fire('click'); assert.equal(restoredFiles, 1);
+  ui.publish({ fileVisible: true, layout: { workspaceVisible: true } });
+  assert.equal(ui.nodes['btn-file-restore'].hidden, true);
 });

@@ -25,7 +25,9 @@
       document.documentElement.style.setProperty('--layout-scale', String(scale));
       document.documentElement.style.setProperty('--file-width', file.width * scale + 'px');
       rectangle(navigation, layout.workspaceBounds); navigation.hidden = !layout.workspaceVisible;
-      restore.hidden = !navigation.hidden;
+      const workspaceCollapse = document.getElementById('workspace-collapse');
+      workspaceCollapse.hidden = !state.fileMaximized || !layout.workspaceVisible;
+      restore.hidden = !navigation.hidden || !state.fileMaximized;
       rectangle(tree, layout.treePaneBounds); tree.hidden = !layout.treeBounds.width;
       treeButton.classList.toggle('active', !tree.hidden);
       treeButton.setAttribute('aria-pressed', String(!tree.hidden));

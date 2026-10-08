@@ -92,6 +92,10 @@ export class UpdateService {
       await this.backend.install();
       if (this.disposed) return;
       this.set({ status: 'installing' });
+      // electron-updater 的 quitAndInstall 也会把退出排到下一个事件循环，
+      // 给刚创建的 NSIS 进程一次初始化和接管当前安装目录的机会。
+      await new Promise<void>(resolve => setImmediate(resolve));
+      if (this.disposed) return;
       this.backend.quit();
     } catch (error) {
       if (this.disposed) return;

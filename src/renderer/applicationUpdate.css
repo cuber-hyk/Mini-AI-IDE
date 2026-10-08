@@ -10,7 +10,7 @@
 .update-trigger.is-ready .update-ready-mark { display: block; }
 .update-trigger.is-busy::before { content: ''; position: absolute; inset: 1px; border: 1px solid transparent; border-top-color: var(--ui-accent); border-right-color: var(--ui-accent); border-radius: 50%; animation: update-spin 1s linear infinite; }
 @keyframes update-spin { to { transform: rotate(360deg); } }
-.update-panel { position: fixed; z-index: 100; top: 44px; right: 10px; width: min(360px, calc(100vw - 20px)); max-height: calc(100vh - 54px); overflow: auto; padding: 18px; border: 1px solid var(--ui-border); border-radius: 12px; background: var(--ui-surface); box-shadow: 0 12px 36px #0006; }
+.update-panel { position: fixed; z-index: 100; top: 72px; left: 10px; width: min(360px, calc(100vw - 20px)); max-height: calc(100vh - 82px); overflow: auto; padding: 18px; border: 1px solid var(--ui-border); border-radius: 12px; background: var(--ui-surface); box-shadow: 0 12px 36px #0006; }
 .update-panel[hidden], .update-panel [hidden] { display: none; }
 .update-panel:focus { outline: none; }
 .update-header { display: flex; align-items: center; justify-content: space-between; margin: -4px -4px 12px 0; }

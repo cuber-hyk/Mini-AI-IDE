@@ -4,7 +4,6 @@ export const WEB_MIN_WIDTH = 420;
 export const PREVIEW_MIN_WIDTH = 260;
 export const PREVIEW_DEFAULT_WIDTH = 300;
 export const WEB_BAR_HEIGHT = 40;
-export const HANDLE_BAR_WIDTH = 32;
 export const WORKSPACE_DEFAULT_WIDTH = 240;
 export const FILE_DEFAULT_WIDTH = 700;
 export const TREE_DEFAULT_WIDTH = 190;
@@ -61,7 +60,7 @@ export function computeLayout(
   const treeVisible = fileVisible && options.treeVisible !== false;
   const previewVisible = fileVisible && options.previewVisible === true;
   // 窄窗口优先保护 AI 与编辑正文；极小窗口同比缩减下限。
-  const workspaceMinimum = workspaceVisible ? 120 : HANDLE_BAR_WIDTH;
+  const workspaceMinimum = workspaceVisible ? 120 : 0;
   const fileMinimum = fileVisible ? EDITOR_MIN_WIDTH : 0;
   const scale = Math.min(1, w / (workspaceMinimum + (maximized ? 0 : WEB_MIN_WIDTH) + fileMinimum));
   const minWorkspace = Math.floor(workspaceMinimum * scale);
@@ -69,7 +68,7 @@ export function computeLayout(
   const minWeb = maximized ? 0 : Math.floor(WEB_MIN_WIDTH * scale);
   const workspaceWidth = workspaceVisible
     ? clamp(rounded(options.workspaceWidth, WORKSPACE_DEFAULT_WIDTH), minWorkspace, w - minFile - minWeb)
-    : minWorkspace;
+    : 0;
   const fileWidth = fileVisible
     ? clamp((maximized ? w : rounded(options.fileWidth, FILE_DEFAULT_WIDTH)), minFile, w - workspaceWidth - minWeb)
     : minFile;

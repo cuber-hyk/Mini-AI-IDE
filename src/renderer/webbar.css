@@ -1,4 +1,4 @@
-/* 官网区域常驻顶栏，仅提供只读采集。 */
+/* 官网区域常驻顶栏，提供只读采集和受限工作区操作。 */
 :root {
   --bg-soft: var(--ui-surface);
   --border: var(--ui-border);
@@ -50,5 +50,8 @@ html, body {
 
 #btn-file-restore { background: transparent; border-color: transparent; }
 #btn-file-restore:hover { background: var(--ui-hover); }
+#btn-workspace-toggle { width: 36px; height: 36px; border: 0; border-radius: 12px; background: transparent; color: var(--ui-text); }
+#btn-workspace-toggle:hover:not(:disabled) { border-color: transparent; background: var(--ui-hover); }
+#btn-workspace-toggle svg { width: 18px; height: 18px; }
 
 [hidden] { display: none !important; }
