@@ -1,20 +1,20 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-07
+updated: 2026-10-08
 owner: 胡运宽
-source_of_truth: [docs/adr/2026-10-07-automatic-result-return-boundary.md, src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, src/main/tools/integration.ts, src/main/tools/autoCollector.ts, src/main/tools/replyChangeWatcher.ts, src/main/preload.ts, src/shared/toolProtocol.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, tools/verify-web-result-sender.cjs]
+source_of_truth: [docs/capabilities/skills-and-local-prompt.md, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, docs/adr/2026-10-07-automatic-result-return-boundary.md, src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, src/main/tools/integration.ts, src/main/tools/autoCollector.ts, src/main/tools/replyChangeWatcher.ts, src/main/preload.ts, src/shared/toolProtocol.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, tools/verify-web-result-sender.cjs]
 ---
 
 # 能力：人机边界与限定结果回传
 
-用户发送需求，AI 输出正式工具请求，IDE 只读采集、校验和按权限执行。开启自动继续后，IDE 可向当前官网会话回传本批真实结果一次；纯对话或暂停状态等待用户处理。
+用户发送需求，AI 输出正式工具请求，IDE 只读采集、校验和按权限执行。需求可在官网手动输入，也可开启独立“回车发送”后从本地输入框提交。开启自动继续后，IDE 可向当前官网会话回传本批真实结果一次；纯对话或暂停状态等待用户处理。技能与本地需求边界见 `skills-and-local-prompt.md` 及 `../adr/2026-10-08-skills-and-local-demand-send.md`。
 
 ## 职责
 
 | 环节 | 执行者 | 约束 |
 |---|---|---|
-| 首条需求、自由输入、选择上下文 | 用户 | IDE 组装提示词供用户复制，不代写需求 |
+| 首条需求、自由输入、选择技能 | 用户 | IDE 统一组装供复制；开启回车发送可主动提交本地需求，初始化是否附带由用户决定 |
 | 复制上下文或本批结果 | 用户点击；完成结果可按设置自动复制 | 原统一剪贴板入口，自动回传不读取剪贴板 |
 | 读取回复与生成状态 | IDE | 同步只读快照，未知状态不自动执行 |
 | 校验与执行正式工具 | IDE 按预选权限 | 需要授权时询问，拒绝不执行 |
@@ -34,12 +34,12 @@ source_of_truth: [docs/adr/2026-10-07-automatic-result-return-boundary.md, src/m
 ## 网页接触面
 
 - 回程采集同步只读读取正文与结束标志；只读 MutationObserver 和真实用户动作识别在隔离世界 1004，不读用户输入内容，不向网页主世界提供 IPC 或文件桥。
-- `WebResultSender` 是唯一网页写 owner，使用隔离世界 1005。仅接纳 `https://chat.deepseek.com` 的当前会话、唯一可见 textarea，以及具有已知 SVG 路径的发送按钮；局部共同容器不能包含回复正文。证据缺失、生成中或等待继续生成时暂停。
+- `WebComposerSender` 是唯一网页写运输 owner，`WebResultSender` 是工具结果门面，使用隔离世界 1005。仅接纳 `https://chat.deepseek.com` 的当前会话、唯一可见 textarea，以及具有已知 SVG 路径的发送按钮；局部共同容器不能包含回复正文。证据缺失、生成中或等待继续生成时暂停。
 - 发送直接使用与手动复制同源的纯文本结果；通过 textarea 原生 value setter、input 事件和原生 click 完成。检查输入是否为空或仍等于本程序刚填入的文本，不保存、上传或记录用户草稿，不使用 HTML、不读取剪贴板。
 - 已有草稿、用户改写文本、控件变化或不可编辑时不覆盖。取消和点击前失败仅清理自有且未发送的文本；点击后不能确认、异常或超时均停止且不重试，不清理可能已提交的内容。清理无法确认时阻止后续自动发送。
 - 不使用 `SendInput`、`sendInputEvent`、模拟回车、CDP、浏览器驱动或指纹伪造。大模型业务网络仍由 Chromium 发起，主进程不包装 AI HTTP，不读网页凭据，也不提供任意网页动作接口。
 
-发送前 integration 通过 auto.noteUserTurn 为自动采集标记本轮关联，后续仍由 DOM 变化触发只读检查。合成发送不冒充真实用户动作；真实用户新轮可以取消旧的待发送结果。
+自动采集由历史基线后的新完成工具输出触发，不依赖发送动作或回执。真实用户动作仍可取消旧待发送结果，合成发送不冒充真实用户动作；结果回传保持来源项目/会话/批次校验。见 `../adr/2026-10-08-output-driven-collection.md`。
 
 ## 验证与限制
 

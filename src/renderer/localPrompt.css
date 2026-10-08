@@ -1,0 +1,17 @@
+.local-prompt-options { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; padding: 8px 0; font-size: 12px; }
+.local-prompt-options label { display: flex; align-items: center; gap: 6px; }
+.local-prompt-options span { color: var(--text-dim); }
+.skill-menu { position: relative; box-sizing: border-box; max-height: 224px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; margin: 6px 0; padding: 4px; border: 1px solid var(--ui-border); border-radius: 12px; background: var(--ui-surface); box-shadow: 0 4px 16px #0003; scrollbar-gutter: stable; }
+.skill-option { box-sizing: border-box; display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; height: 34px; padding: 6px 8px; border: 0; border-radius: 8px; background: transparent; color: var(--ui-text); font: inherit; font-size: 13px; line-height: 20px; text-align: left; cursor: pointer; }
+.skill-option[aria-selected="true"] { background: var(--ui-hover); }
+.skill-option:focus-visible { outline: 1px solid var(--ui-accent); outline-offset: -1px; }
+.skill-option-icon { flex: 0 0 14px; color: var(--ui-muted); text-align: center; font-size: 15px; }
+.skill-option-name { flex: 0 1 auto; min-width: 0; max-width: 42%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.skill-option-source { flex: none; padding: 0 5px; border-radius: 4px; background: var(--ui-control); color: var(--ui-muted); font-size: 10px; line-height: 17px; }
+.skill-option-description { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ui-muted); font-size: 12px; line-height: 18px; text-align: right; }
+.skill-chips { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 6px; }
+.skill-chip { border: 1px solid var(--border); border-radius: 5px; background: var(--bg-elevated); color: var(--text); padding: 4px 8px; cursor: pointer; }
+.skill-preview { max-height: 140px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; font-size: 12px; }
+.skill-preview-controls { display: none; }
+.requirement-panel:has(.skill-preview:not([hidden])) .skill-preview-controls { display: block; padding-top: 6px; }
+.skill-menu[hidden], .skill-chips[hidden], .skill-preview[hidden], #btn-send-prompt[hidden] { display: none; }

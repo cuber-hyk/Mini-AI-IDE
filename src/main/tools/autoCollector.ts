@@ -5,7 +5,7 @@ export interface AutoReply { url: string; text: string; completion: 'generating'
 export class AutoCollector {
   private disposed = false; private enabled = false; private polling = false;
   private revision = 0; private pending = false;
-  private userTurn = false;
+  private awaitingHistory = false;
   private waiting: 'unknown' | 'interrupted' | undefined;
   private scope = ''; private last = ''; private baseline = true; private observedGenerating = false;
   constructor(private readonly read: () => Promise<AutoReply>, private readonly collect: (text: string, current: () => boolean) => Promise<void>,
@@ -14,11 +14,12 @@ export class AutoCollector {
     if (this.enabled === value) return;
     this.enabled = value; this.reset();
   }
-  reset(): void { this.revision++; this.pending = false; this.userTurn = false; this.waiting = undefined; this.baseline = true; this.observedGenerating = false; this.scope = ''; this.last = ''; }
-  noteUserTurn(): void { this.userTurn = true; this.waiting = undefined; }
-  /** 未确认的自动发送不能授权下一轮；保留已见正文基线，真人新动作可再关联。 */
-  cancelTurn(): void { this.revision++; this.pending = false; this.userTurn = false; this.waiting = undefined; this.observedGenerating = false; }
-  acknowledge(url: string, text: string): void { this.revision++; this.userTurn = false; this.waiting = undefined; this.scope = url; this.last = text; this.baseline = false; this.observedGenerating = false; }
+  reset(awaitHistory = false): void { this.revision++; this.pending = false; this.awaitingHistory = awaitHistory; this.waiting = undefined; this.baseline = true; this.observedGenerating = false; this.scope = ''; this.last = ''; }
+  /** 同文档首页地址分配只更新观察地址，不重新授权或依赖发送状态。 */
+  continueAt(url: string): void { this.revision++; this.scope = url; }
+  /** 只读监听已见真实生成，完整快照可能晚于生成结束；不能吞掉首轮。 */
+  observeGeneration(url: string): void { this.revision++; this.scope = url; this.baseline = false; this.awaitingHistory = false; this.waiting = undefined; this.observedGenerating = true; }
+  acknowledge(url: string, text: string): void { this.revision++; this.waiting = undefined; this.scope = url; this.last = text; this.baseline = false; this.awaitingHistory = false; this.observedGenerating = false; }
   dispose(): void { this.disposed = true; this.pending = false; this.revision++; }
   async tick(): Promise<void> {
     if (!this.enabled || this.disposed) return;
@@ -28,16 +29,16 @@ export class AutoCollector {
     try {
       const reply = await this.read();
       if (!this.enabled || this.disposed || revision !== this.revision) return;
-      if (this.scope !== reply.url) { if (this.scope) this.userTurn = false; this.scope = reply.url; this.baseline = true; this.observedGenerating = false; }
+      if (this.scope !== reply.url) { this.awaitingHistory ||= !!this.scope; this.scope = reply.url; this.baseline = true; this.observedGenerating = false; }
       if (this.baseline) {
-        this.last = reply.text; this.baseline = false; this.observedGenerating = reply.completion === 'generating';
+        // 切换后的空加载帧不结束历史基线；观察到实际生成则等待本次新回复。
+        this.last = reply.text; this.baseline = this.awaitingHistory && !reply.text && reply.completion !== 'generating'; this.awaitingHistory = this.baseline; this.observedGenerating = reply.completion === 'generating';
         this.report(reply.completion === 'interrupted' ? 'AI 回复已中断，等待继续生成；当前工具批次未执行' : this.observedGenerating ? 'AI 正在生成，自动采集等待回复结束' : '自动采集已就绪，等待新的 mini-ai-tools 工具回复；已有回复不执行');
         return;
       }
-      // 页面导航后的历史内容可能异步挂载；只有用户实际发起的新轮可执行。
-      if (!this.userTurn) { if (reply.completion === 'complete' || reply.completion === 'idle') this.last = reply.text; this.observedGenerating = false; return; }
       if (reply.completion === 'generating') { this.observedGenerating = true; this.waiting = undefined; return; }
       if (reply.completion === 'unknown' || reply.completion === 'interrupted') {
+        if (reply.text === this.last && !this.observedGenerating) return;
         if (this.waiting !== reply.completion) this.report(reply.completion === 'interrupted'
           ? 'AI 回复已中断，等待继续生成；当前工具批次未执行'
           : '自动采集等待确认回复结束；若完成后仍未采集，请使用“采集回复”');
@@ -49,7 +50,6 @@ export class AutoCollector {
         this.report('无法确认网页回复结束，请使用“采集回复”；网页结构可能已变化'); return;
       }
       this.last = reply.text; this.observedGenerating = false;
-      this.userTurn = false;
       await this.collect(reply.text, () => this.enabled && !this.disposed && revision === this.revision);
     } catch (error) { if (this.enabled && !this.disposed && revision === this.revision) this.report('自动采集失败：' + (error instanceof Error ? error.message : String(error))); }
     finally { this.polling = false; if (this.pending) { this.pending = false; await this.tick(); } }

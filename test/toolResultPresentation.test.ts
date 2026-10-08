@@ -9,6 +9,13 @@ const window = {} as { describeToolResult: (result: unknown) => { label: string;
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/renderer/toolResultPresentation.js'), 'utf8'), { window });
 const describe = (tool: ToolName, data?: unknown, extra: Partial<ToolResult> = {}) => window.describeToolResult({ batch_id: 'b', request_id: 'r', tool, status: 'done', data, ...extra });
 
+it('加载技能展示真实技能名而非技能正文或资源目录', () => {
+  const summary = describe('load_skill', { name: 'review', content: '私有说明', resourceRoot: 'C:\\private' });
+  assert.equal(summary.label, '加载技能'); assert.equal(summary.target, 'review'); assert.equal(summary.detail, '');
+  const failed = describe('load_skill', undefined, { status: 'failed', error: '技能未找到' });
+  assert.equal(failed.label, '加载技能'); assert.equal(failed.target, ''); assert.match(failed.detail, /技能未找到/);
+});
+
 it('全部查询工具以真实路径和返回数量展示，不把截断与跳过隐藏成完整结果', () => {
   const cases: Array<[ToolName, unknown, string, string, string]> = [
     ['get_project_info', { root: 'C:\\project', entries: [{ path: 'src' }], truncated: true, skipped: [{ path: '.git' }] }, '项目概况', 'C:\\project', '1 项 · 结果已截断 · 跳过 1 项'],

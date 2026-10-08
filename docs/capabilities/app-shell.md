@@ -1,9 +1,9 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-07
+updated: 2026-10-08
 owner: 胡运宽
-source_of_truth: [src/renderer/fileWorkspace.js, test/fileWorkspace.test.ts, docs/adr/2026-10-07-workspace-ui-shell-layout.md, src/main/workspaceLayoutController.ts, src/main/workspaceService.ts, src/renderer/workspaceLayout.js, src/renderer/workspaceNavigation.js, test/workspaceLayoutController.test.ts, src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, tools/verify-web-result-sender.cjs, src/renderer/preview.css, src/main/previewPreload.ts, test/changeTree.test.ts, docs/adr/2026-10-02-honest-electron-identity.md, docs/adr/2026-10-02-filesystem-permission-model.md, DESIGN.md, design-tokens.json, src/main/windowLayout.ts, src/main/layoutProbe.ts, src/main/tools/changeReview.ts, src/renderer/preview.js, src/renderer/editorToolbar.js, src/renderer/ui.css, test/windowLayout.test.ts, test/toolChanges.test.ts, test/editorToolbar.test.ts, src/main/index.ts, src/renderer/index.html, src/renderer/style.css, src/renderer/promptComposer.js, test/promptComposer.test.ts, src/renderer/toolPanelLayout.js, test/toolPanelLayout.test.ts, src/main/workspaceController.ts, src/main/workspaceProbe.ts, src/renderer/fileExplorer.js, src/renderer/fileIcons.js, src/renderer/fileExplorer.css, src/renderer/editorTabs.js, src/renderer/editorWorkspace.js, test/editorWorkspace.test.ts, test/fileExplorer.test.ts, test/fileIcons.test.ts, test/workspaceController.test.ts]
+source_of_truth: [docs/capabilities/skills-and-local-prompt.md, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, src/renderer/fileWorkspace.js, test/fileWorkspace.test.ts, docs/adr/2026-10-07-workspace-ui-shell-layout.md, src/main/workspaceLayoutController.ts, src/main/workspaceService.ts, src/renderer/workspaceLayout.js, src/renderer/workspaceNavigation.js, test/workspaceLayoutController.test.ts, src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, tools/verify-web-result-sender.cjs, src/renderer/preview.css, src/main/previewPreload.ts, test/changeTree.test.ts, docs/adr/2026-10-02-honest-electron-identity.md, docs/adr/2026-10-02-filesystem-permission-model.md, DESIGN.md, design-tokens.json, src/main/windowLayout.ts, src/main/layoutProbe.ts, src/main/tools/changeReview.ts, src/renderer/preview.js, src/renderer/editorToolbar.js, src/renderer/ui.css, test/windowLayout.test.ts, test/toolChanges.test.ts, test/editorToolbar.test.ts, src/main/index.ts, src/renderer/index.html, src/renderer/style.css, src/renderer/promptComposer.js, test/promptComposer.test.ts, src/renderer/toolPanelLayout.js, test/toolPanelLayout.test.ts, src/main/workspaceController.ts, src/main/workspaceProbe.ts, src/renderer/fileExplorer.js, src/renderer/fileIcons.js, src/renderer/fileExplorer.css, src/renderer/editorTabs.js, src/renderer/editorWorkspace.js, test/editorWorkspace.test.ts, test/fileExplorer.test.ts, test/fileIcons.test.ts, test/workspaceController.test.ts]
 ---
 
 # 能力：应用外壳与进程架构
@@ -40,7 +40,7 @@ source_of_truth: [src/renderer/fileWorkspace.js, test/fileWorkspace.test.ts, doc
 
 | 进程 | 职责 | 硬性约束 |
 |---|---|---|
-| **main** | 窗口与分栏布局、IPC 路由、本地文件读取、会话分区配置、提示词设置的持久化、启动自检、安装版软件更新 | 绝不发起或代理大模型相关网络请求；限定结果写入仅由 webResultSender 调度，见结果回传 ADR；更新模块专用网络例外见 `application-update.md` 与 ADR-0005 |
+| **main** | 窗口与分栏布局、IPC 路由、本地文件读取、会话分区配置、提示词设置的持久化、启动自检、安装版软件更新 | 绝不发起或代理大模型相关网络请求；限定需求/结果写入共用 WebComposerSender，见技能/本地需求及结果回传 ADR；更新模块专用网络例外见 `application-update.md` 与 ADR-0005 |
 | **editor renderer**（`persist:editor-ui`） | 铺满窗口的本地工作区外壳，含项目导航、Monaco、文件树、工具结果与需求编写 | `nodeIntegration:false`、`contextIsolation:true`、`sandbox:true`；无文件系统能力；CSP `connect-src 'none'` |
 | **webview renderer**（`persist:postcheck`） | 加载目标平台网页 | 顶级独立视图；无本地桥。隔离世界 1004 只读采集，1005 仅回传当前真实工具结果，不开放任意网页操作 |
 | **webbar renderer**（`persist:editor-ui`） | 中间网页区顶部工具条：只读采集 | 只能请求只读采集与恢复文件区；不能读写文件或向网页写入内容。不提供网页显隐入口 |
@@ -191,7 +191,7 @@ source_of_truth: [src/renderer/fileWorkspace.js, test/fileWorkspace.test.ts, doc
 | 高度 | 文本框最小 44px、最大 220px；上限随视口与操作栏实际高度收缩。输入、粘贴、拖入、缩放和操作栏换行后重算，超出上限滚动 |
 | 高度预算 | 输入区最多占视口高度 48%，为操作栏及内边距预留空间；工具面板随输入高度收缩并保留官网阅读空间，长输入不裁切底部控件 |
 | 版本切换 | 「简洁 / 完整」分段控件，点击按钮或聚焦容器后按 Space / Enter 切换；主进程持久化 `formatSpecVariant`，重启后恢复 |
-| 开关改什么 | 复制提示词时使用的输出格式要求；简洁为 6 个示例，完整为 13 个示例；两版自定义互不影响 |
+| 开关改什么 | 复制提示词时使用的输出格式要求；简洁为 6 个示例，完整为 14 个示例；两版自定义互不影响 |
 | 自定义标记 | 当前版本有非空自定义提示词时显示小圆点，悬停说明；主进程保存、清空、恢复默认与切换后广播布尔状态 |
 | 提示词设置 | 操作栏齿轮打开工具设置浮层，其中提示词编辑按钮打开原有独立视图；菜单入口与 Ctrl+Shift+P 保留 |
 | 复制反馈 | 固定宽度的紧凑按钮，成功暂显「已复制」；失败提示原因并恢复可操作，需求为空时聚焦输入框 |
@@ -200,7 +200,7 @@ source_of_truth: [src/renderer/fileWorkspace.js, test/fileWorkspace.test.ts, doc
 输入区行为由 `src/renderer/promptComposer.js` 唯一负责，`renderer.js` 初始化并接入信息栏。
 工具面板与浮层内部高度预算由 `src/renderer/toolPanelLayout.js` 管理，中间 dock 实测高度由 `src/renderer/workspaceLayout.js` 上报主进程，纯摘要由 `src/renderer/toolResultPresentation.js` 管理；权限、执行状态与结果复制接线见 `docs/capabilities/tool-harness.md`。目录树宽度在窄列时钳制，为编辑器保留空间。
 `ui:get-prompt-status` 查询版本及两版自定义布尔值，`ui:prompt-status` 推送相同结构；编辑器不读取提示词全文。
-需求提示词仍由主进程组装并复制，由用户粘贴到官网并发送；本批工具结果可按 automatic 设置由限定 sender 回传。
+需求提示词由 `LocalPromptController` 统一组装供复制，开启“回车发送”时可由用户主动提交到官网空输入框；初始化是否附带由用户手动选择并持久保存。本地 `/` 技能选择由 `localPrompt.js` 管理，详见 `skills-and-local-prompt.md`；本批工具结果仍由独立 automatic 设置控制回传。
 
 ## 代码入口
 

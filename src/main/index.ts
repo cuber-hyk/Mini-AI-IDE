@@ -1,3 +1,7 @@
+import { sessionKeyOf } from './consumptionStore';
+import { LocalPromptController } from './localPromptController';
+import { SkillService } from './skills';
+import { WebComposerSender } from './webComposerSender';
 /**
  * Mini-AI-IDE 主进程
  *
@@ -15,7 +19,7 @@ import { app, BaseWindow, clipboard, dialog, ipcMain, Menu, session, WebContents
 import * as path from 'node:path';
 
 import { CHANNELS, type PromptPanelState, type PromptComposerStatus, type PromptVariantState, type SavePromptSpecResult, type ReturnPreview, type RootInfo } from '../shared/contract';
-import { buildPrompt, getFormatSpec, resolveFormatSpec, normalizeVariant, MAX_CUSTOM_FORMAT_SPEC_LENGTH, type CustomFormatSpecs, type FormatSpecVariant } from '../shared/formatSpec';
+import { getFormatSpec, resolveFormatSpec, normalizeVariant, MAX_CUSTOM_FORMAT_SPEC_LENGTH, type CustomFormatSpecs, type FormatSpecVariant } from '../shared/formatSpec';
 import { buildSnippetText } from '../shared/snippet';
 import { checkUaConsistency, stripSelfDeclarations } from '../shared/userAgent';
 import { FileService } from './fileService';
@@ -213,6 +217,9 @@ async function bootstrap(): Promise<void> {
    * 它是一块覆盖式浮层，必须盖住编辑器与网页，否则打开后会被它们挡住。
    */
   win.contentView.addChildView(promptView);
+  const skills = new SkillService(probeDirectory ? path.join(probeDirectory, 'global-skills') : undefined);
+  const composerSender = new WebComposerSender(webView.webContents, { allowLocalFixture: WORKSPACE_PROBE });
+  let localPrompt: LocalPromptController | undefined;
   const layoutController = new WorkspaceLayoutController(win,
     { editor: editorView, web: webView, webbar: webBarView, preview: previewView }, settings,
     () => buildApplicationMenu());
@@ -514,6 +521,7 @@ async function loadLocalView(
     (info) => {
       if (info.revision !== announcedRevision) {
         announcedRevision = info.revision ?? announcedRevision;
+        localPrompt?.cancel();
         layoutController.update({ previewVisible: false }, false);
         returnPath.clear();
         tools.reset();
@@ -527,7 +535,9 @@ async function loadLocalView(
     }, () => tools.getReviewState().records.length > 0 || returnPath.undoCount > 0);
   const tools = await createToolIntegration({
     ipc: ipcMain, editor: editorView.webContents, web: webView.webContents,
-    review: previewView.webContents,
+    review: previewView.webContents, skills,
+    sender: { send: (text, session, kind = 'results') => composerSender.send(text, session, kind),
+      cancel: () => composerSender.cancel('results'), dispose: () => composerSender.dispose() },
     notifyReview: state => {
       if (previewView.webContents.isDestroyed()) return;
       previewView.webContents.send(CHANNELS.reviewState, state);
@@ -543,6 +553,11 @@ async function loadLocalView(
     notifyFile: (relative, change, discard) => notifyFileChanged(relative, change, discard),
     copy: text => clipboard.writeText(text),
   });
+  localPrompt = new LocalPromptController({ ipc: ipcMain, editor: editorView.webContents, settings, skills,
+    sender: { send: (text, session, _kind, current) => tools.sendLocalPrompt(text, session, current), cancel: kind => composerSender.cancel(kind) }, root: () => fileService.getRoot(), session: () => sessionKeyOf(webView.webContents.getURL()),
+    busy: () => { const state = tools.getState(); return state.busy || ['countdown', 'sending', 'waiting_tools'].includes(state.continuation?.phase ?? ''); },
+    copy: text => clipboard.writeText(text), disabled: SELF_TEST || (UI_PROBE && !WORKSPACE_PROBE) || DIAGNOSE });
+  const localPromptChannels = localPrompt.register();
   // 先注册只读变更桥，再加载会立即请求初始状态的面板。
   await loadLocalView(previewView, 'preview.html');
   updater = createApplicationUpdater({
@@ -564,7 +579,7 @@ async function loadLocalView(
     }),
   });
   const registeredChannels = [
-    ...tools.channels,
+    ...tools.channels, ...localPromptChannels,
     ...registerApplicationUpdateIpc(ipcMain, editorView.webContents, updater),
     ...registerFileIpc(fileService, {
       chooseRoot: () => workspaceController.chooseRoot(), getState: () => workspace.getState(),
@@ -685,29 +700,6 @@ async function loadLocalView(
       return { ok: true, snippet: parts.text, length: parts.text.length, startLine: parts.startLine, endLine: parts.endLine };
     } catch (err) {
       return { ok: false, snippet: parts.text, length: parts.text.length, error: err instanceof Error ? err.message : String(err) };
-    }
-  });
-
-  ipcMain.handle(CHANNELS.copyPrompt, (_e, requirement: unknown, targetFiles: unknown) => {
-    const req = typeof requirement === 'string' ? requirement : '';
-    const files = Array.isArray(targetFiles) ? targetFiles.filter((f): f is string => typeof f === 'string') : [];
-    const ctx = buildContextSummary(fileService.getRoot());
-    const prompt = buildPrompt({
-      requirement: req,
-      context: {
-        root: ctx.root,
-        environment: ctx.environment,
-        tree: ctx.tree ? `${ctx.tree}${ctx.treeTruncated ? '\n…（目录较多，已截断）' : ''}` : null,
-      },
-      // 版本取底部开关的当前状态（持久化在设置里）
-      formatSpec: resolveFormatSpec(customSpecsOf(settings.get()), settings.get().formatSpecVariant),
-      targetFiles: files,
-    });
-    try {
-      clipboard.writeText(prompt);
-      return { ok: true, prompt, length: prompt.length };
-    } catch (err) {
-      return { ok: false, prompt, length: prompt.length, error: err instanceof Error ? err.message : String(err) };
     }
   });
 

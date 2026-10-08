@@ -1,5 +1,5 @@
-/* 输入区的唯一初始化入口；网页操作仍由用户手动完成。 */
-window.setupPromptComposer = function (bridge, setInfo) {
+/* 提示词版本与复制入口；需求快照由本地输入 owner 提供。 */
+window.setupPromptComposer = function (bridge, setInfo, localPrompt) {
   const el = {
     requirement: document.getElementById('requirement'),
     variantSwitch: document.getElementById('variant-switch'),
@@ -93,11 +93,13 @@ window.setupPromptComposer = function (bridge, setInfo) {
   let copying = false;
   let feedbackTimer;
   let revision = 0;
+  let localBusy = false;
 
   function updateBusy() {
-    opts.forEach(function (b) { b.disabled = switching || copying; });
+    opts.forEach(function (b) { b.disabled = switching || copying || localBusy; });
     sw.setAttribute('aria-busy', String(switching));
-    el.btnCopyPrompt.disabled = switching || copying || !status;
+    el.btnCopyPrompt.disabled = switching || copying || !status || localBusy;
+    localPrompt.setComposerBusy(switching || copying || !status);
   }
 
   function paint(next) {
@@ -114,7 +116,7 @@ window.setupPromptComposer = function (bridge, setInfo) {
   }
 
   async function applyVariant(variant) {
-    if (switching || copying) return;
+    if (switching || copying || localBusy) return;
     switching = true;
     updateBusy();
     try {
@@ -149,6 +151,7 @@ window.setupPromptComposer = function (bridge, setInfo) {
     revision += 1; // 广播比尚未返回的初始查询更新。
     paint(next);
   });
+  localPrompt.onBusy(function (value) { localBusy = value; updateBusy(); });
   updateBusy();
   void refresh().catch(function (err) {
     setInfo('读取提示词设置失败：' + (err && err.message ? err.message : String(err)), true);
@@ -157,7 +160,7 @@ window.setupPromptComposer = function (bridge, setInfo) {
   });
 
   el.btnCopyPrompt.addEventListener('click', async function () {
-    if (copying || switching || !status) return;
+    if (copying || switching || !status || localBusy) return;
     const requirement = el.requirement.value.trim();
     if (!requirement) {
       setInfo('请先写下你的需求，再点「复制提示词」', true);
@@ -169,9 +172,10 @@ window.setupPromptComposer = function (bridge, setInfo) {
     copying = true;
     updateBusy();
     try {
-      const result = await bridge.copyPrompt(requirement, []);
+      const submission = localPrompt.getSubmission();
+      const result = await bridge.copyPrompt(submission);
       if (!result.ok) throw new Error(result.error || '未知错误');
-      setInfo('已复制完整提示词（' + result.length + ' 字符）—— 请到中间官网输入框 Ctrl+V 粘贴，然后自己按发送');
+      setInfo('已复制提示词（' + result.length + ' 字符）—— 请到中间官网输入框 Ctrl+V 粘贴，然后自己按发送');
       el.btnCopyPrompt.textContent = '已复制';
       feedbackTimer = window.setTimeout(function () {
         el.btnCopyPrompt.textContent = '复制提示词';

@@ -16,6 +16,9 @@ function context(path: string, body: string, whole = false): string {
   return whole ? buildWholeFileText(path, body).text : buildSnippetText({ relPath: path, text: body, startLine: 1 }).text;
 }
 const examples: SpecExample[] = [
+  { title: '按名称加载技能', note: '只读取目录中真实可用技能的完整说明，不自动执行技能脚本。', inShort: false,
+    input: '技能目录有 review，用它审阅当前项目。',
+    output: batch('example-skill', [request('skill', 'load_skill', { name: 'review' })]) },
   { title: '局部替换', note: '原文逐字匹配；输出实际修改请求。', inShort: true,
     input: context('src/counter.ts', 'let n = 0;'),
     output: batch('example-replace', [replace('src/counter.ts', 'let n = 0;', 'let n = 1;')]) },

@@ -19,6 +19,8 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 /** 与 src/shared/contract.ts 的 CHANNELS 必须逐字一致（自检会校验） */
 const CH = {
+  getLocalPromptOptions: 'ui:get-local-prompt-options', setLocalPromptOptions: 'ui:set-local-prompt-options',
+  getSkillCatalog: 'skills:list', loadSkill: 'skills:load', sendPrompt: 'ui:send-prompt',
   getToolState: 'tools:get-state', setToolConfig: 'tools:set-config', toolState: 'tools:state',
   copyToolResults: 'tools:copy-results', cancelTools: 'tools:cancel', stopToolCommand: 'tools:stop-command', clearToolRules: 'tools:clear-rules', undoToolChange: 'tools:undo',
   getUpdateState: 'ui:get-update-state',
@@ -120,7 +122,12 @@ const bridge = {
   getFormatSpecVariant: () => ipcRenderer.invoke(CH.getFormatSpecVariant),
   setFormatSpecVariant: (variant: string) => ipcRenderer.invoke(CH.setFormatSpecVariant, variant),
   getContext: () => ipcRenderer.invoke(CH.getContext),
-  copyPrompt: (requirement: string, targetFiles: string[]) => ipcRenderer.invoke(CH.copyPrompt, requirement, targetFiles),
+  getLocalPromptOptions: () => ipcRenderer.invoke(CH.getLocalPromptOptions),
+  setLocalPromptOptions: (patch: unknown) => ipcRenderer.invoke(CH.setLocalPromptOptions, patch),
+  getSkillCatalog: () => ipcRenderer.invoke(CH.getSkillCatalog),
+  loadSkill: (name: string) => ipcRenderer.invoke(CH.loadSkill, name),
+  sendPrompt: (input: unknown) => ipcRenderer.invoke(CH.sendPrompt, input),
+  copyPrompt: (input: unknown) => ipcRenderer.invoke(CH.copyPrompt, input),
   copyNumberedSnippet: (input: unknown) => ipcRenderer.invoke(CH.copyNumberedSnippet, input),
   setPreviewPanel: (width: number) => ipcRenderer.invoke(CH.setPreviewPanel, width),
   setSidebarVisible: (visible: boolean) => ipcRenderer.invoke(CH.setSidebarVisible, visible),

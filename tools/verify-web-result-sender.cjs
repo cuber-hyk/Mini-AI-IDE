@@ -64,6 +64,7 @@ async function autoFixture() {
     window.replyRound = 0; window.lastClickTrusted = null;
     window.addToolReply = id => {
       const frame = document.createElement('section'), reply = document.createElement('article');
+      frame.className = 'ds-assistant-message-main-content';
       reply.className = 'ds-markdown';
       const pre = document.createElement('pre'), code = document.createElement('code');
       code.className = 'language-mini-ai-tools';
@@ -91,11 +92,11 @@ async function autoFixture() {
   auto.setEnabled(true);
   const watcher = new ReplyChangeWatcher(window.webContents, async userTurn => {
     trustedTurns.push(userTurn);
-    if (userTurn) auto.noteUserTurn();
     await auto.tick(); changes++;
-  }, () => auto.reset(), message => reports.push(message));
+  }, (preserve, awaitHistory) => preserve ? auto.continueAt(sessionKeyOf(window.webContents.getURL())) : auto.reset(awaitHistory), message => reports.push(message));
   watcher.setEnabled(true);
   await until(() => changes > 0, '生产 watcher 未建立历史基线');
+  await pause(700);
   assert.deepEqual(collected, []);
   return { auto, watcher, collected, reports, trustedTurns, changes: () => changes,
     async dispose() { await watcher.dispose(); auto.dispose(); } };
@@ -138,27 +139,29 @@ app.whenReady().then(async () => {
   await test('点击后无确认报 unknown，保持内容且不重试', async () => { await setup(`window.mode='unknown'`); const r = await send('result'); assert.equal(r.ok, false); assert.equal(r.uncertain, true); assert.equal((await state()).clicks, 1); assert.equal((await state()).value, 'result'); });
   await test('点击后取消不能清理可能已提交文本', async () => { await setup(`window.mode='unknown'`); const sending = send('result'); await pause(120); await sender.cancel(); const r = await sending; assert.equal(r.uncertain, true); assert.equal((await state()).clicks, 1); assert.equal((await state()).value, 'result'); });
   await test('渲染进程原生导航在按钮等待期间阻止点击', async () => { await setup('window.delay=500'); const sending = send('result'); await pause(70); await window.loadFile(fixturePath); const r = await sending; assert.equal(r.ok, false); assert.equal((await state()).clicks, 0); });
-  await test('合成发送不会伪装真实用户新轮：未显式标记时生产 watcher 不采集', async () => {
+  await test('合成发送无需新轮授权：新回复完成即采集，历史回复不执行', async () => {
     const f = await autoFixture();
     try {
       assert.equal((await send('本批真实结果')).ok, true);
-      await until(() => f.changes() >= 3, '生成和结束变化未送达生产 watcher');
-      assert.deepEqual(f.collected, []);
+      try { await until(() => f.collected.length === 1, '完成的新回复未送达生产 watcher'); }
+      catch (error) {
+        const watch = await window.webContents.executeJavaScriptInIsolatedWorld(REPLY_WATCH_WORLD, [{ code: '({scope:globalThis.__miniAIReplyChanges?.scope,dirty:globalThis.__miniAIReplyChanges?.dirty})' }]);
+        throw new Error(error.message + ' ' + JSON.stringify({ reports: f.reports, changes: f.changes(), collected: f.collected, scope: sessionKeyOf(window.webContents.getURL()), watch }));
+      }
+      assert.deepEqual(f.collected, ['next-batch-1']);
       assert.equal(await window.webContents.executeJavaScript('window.lastClickTrusted'), false);
       assert.equal(f.trustedTurns.some(Boolean), false);
     } finally { await f.dispose(); }
   });
-  await test('sender → 原生 MutationObserver → AutoCollector：显式新轮连续两批只采集各一次', async () => {
+  await test('sender → 原生 MutationObserver → AutoCollector：连续两批无需动作授权且各采集一次', async () => {
     const f = await autoFixture();
     try {
       for (let round = 1; round <= 2; round++) {
-        // 与生产集成相同：本地已确认本批结束后、发送结果前显式标记新轮。
-        f.auto.noteUserTurn();
         assert.equal((await send('第 ' + round + ' 批真实工具结果')).ok, true);
         await until(() => f.collected.length === round, '自动结果回传的新回复未采集');
         assert.deepEqual(f.collected, Array.from({ length: round }, (_, index) => 'next-batch-' + (index + 1)));
         const previousChanges = f.changes();
-        await window.webContents.executeJavaScript(`document.querySelectorAll('.ds-markdown').item(${round}).textContent += ' ';`);
+        await window.webContents.executeJavaScript(`document.querySelectorAll('.ds-markdown').item(${round}).append(document.createElement('span'));`);
         await until(() => f.changes() > previousChanges, '重复 DOM 通知未送达');
         assert.equal(f.collected.length, round, '重复变化不能执行已采集批次');
       }
@@ -171,6 +174,117 @@ app.whenReady().then(async () => {
       assert.equal(f.reports.some(message => /失败/.test(message)), false, JSON.stringify(f.reports));
     } finally { await f.dispose(); }
   });
+  // 独立内存 session 用本地 HTML 响应官方 origin；所有请求都在本机终止。
+  const officialFixture = session.fromPartition('first-prompt-offline');
+  await officialFixture.protocol.handle('https', request => request.url.startsWith('https://chat.deepseek.com/')
+    ? new Response(fs.readFileSync(fixturePath), { headers: { 'content-type': 'text/html; charset=utf-8' } })
+    : new Response('', { status: 403 }));
+  const previousWindow = window;
+  window = new BrowserWindow({ show: false, webPreferences: { session: officialFixture, sandbox: true, contextIsolation: true, nodeIntegration: false } });
+  async function firstSetup(script) {
+    await sender.dispose();
+    await window.loadURL('https://chat.deepseek.com/');
+    await window.webContents.executeJavaScript(script);
+    sender = new WebResultSender(window.webContents);
+  }
+  await test('官方 origin 离线首页：点击后首次分配会话地址仍确认发送', async () => {
+    await firstSetup(`document.querySelector('[role="button"]').addEventListener('click',()=>history.pushState({},'', '/a/chat/s/allocated'));`);
+    const result = await sender.send('本地主动需求', 'https://chat.deepseek.com/', 'prompt');
+    assert.equal(result.ok, true, JSON.stringify(result)); assert.equal(result.session, 'https://chat.deepseek.com/a/chat/s/allocated');
+    assert.equal((await state()).clicks, 1);
+  });
+  await test('官方 origin 离线首页：点击前分配地址拒绝，不能借首发放宽作用域', async () => {
+    await firstSetup('window.delay=500');
+    const sending = sender.send('本地主动需求', 'https://chat.deepseek.com/', 'prompt');
+    await pause(70); await window.webContents.executeJavaScript(`history.pushState({},'', '/a/chat/s/before-click')`);
+    assert.equal((await sending).ok, false); assert.equal((await state()).clicks, 0);
+  });
+  await test('工具结果不能继承首页首发的会话交接例外', async () => {
+    await firstSetup(`document.querySelector('[role="button"]').addEventListener('click',()=>history.pushState({},'', '/a/chat/s/allocated'));`);
+    assert.equal((await send('本批工具结果')).ok, false); assert.equal((await state()).clicks, 1);
+  });
+  await test('首发点击后第二次会话迁移拒绝且不重试', async () => {
+    await firstSetup(`window.mode='unknown';document.querySelector('[role="button"]').addEventListener('click',()=>{history.pushState({},'', '/a/chat/s/allocated');setTimeout(()=>history.pushState({},'', '/a/chat/s/other'),75);});`);
+    const result = await sender.send('本地主动需求', 'https://chat.deepseek.com/', 'prompt');
+    assert.equal(result.ok, false); assert.equal(result.uncertain, true); assert.equal((await state()).clicks, 1);
+  });
+  await test('原生 watcher：同一首页回复节点分配地址保留基线，打开其他会话重建历史基线', async () => {
+    await firstSetup('');
+    let reset; let calls = 0;
+    const watcher = new ReplyChangeWatcher(window.webContents, async () => { calls++; }, (preserve, awaitHistory) => {reset={preserve,awaitHistory};}, message => assert.fail(message));
+    watcher.setEnabled(true); await until(()=>calls===1,'未建立初始基线');
+    await window.webContents.executeJavaScript(`const reply=document.createElement('article');reply.className='ds-assistant-message-main-content ds-markdown';reply.textContent='正在生成';document.body.append(reply);`);
+    await until(()=>calls>1,'未观察到首页新回复');
+    await window.webContents.executeJavaScript(`history.pushState({},'', '/a/chat/s/allocated')`);
+    await watcher.settleNavigation();
+    assert.deepEqual(reset,{preserve:true,awaitHistory:false});
+    await window.webContents.executeJavaScript(`history.pushState({},'', '/a/chat/s/other')`);
+    await watcher.settleNavigation(); assert.deepEqual(reset,{preserve:false,awaitHistory:true});
+    await watcher.dispose();
+  });
+  for (const mode of ['reply-first', 'url-first', 'fast-url-first', 'history-unknown']) await test('真实 watcher/integration：输出生命周期与历史基线 ' + mode, async () => {
+    const { createToolIntegration } = require('../src/main/tools/integration.ts');
+    const { FileService } = require('../src/main/fileService.ts');
+    const { ReturnPathService } = require('../src/main/returnPathService.ts');
+    const { CHANNELS } = require('../src/shared/contract.ts');
+    const project = path.join(temporary,'output-project-'+mode); fs.mkdirSync(project);
+    await firstSetup(`window.mountReply=(id,footer=true)=>{
+        const frame=document.createElement('section');frame.className='ds-assistant-message-main-content';
+        const reply=document.createElement('article');reply.className='ds-markdown';
+        const pre=document.createElement('pre'),code=document.createElement('code');code.className='language-mini-ai-tools';
+        code.textContent=JSON.stringify({protocol_version:1,batch_id:id,requests:[{id:'project',tool:'get_project_info',args:{}}]});
+        pre.append(code);reply.append(pre);frame.append(reply);
+        if(footer){const copy=document.createElement('button');copy.className='ds-button';copy.textContent='复制';frame.append(copy);}
+        document.body.insertBefore(frame,document.querySelector('#composer'));
+        return frame;
+      };document.querySelector('[role="button"]').addEventListener('click',()=>{
+        if(${JSON.stringify(mode)}==='url-first'||${JSON.stringify(mode)}==='fast-url-first'){
+          history.pushState({},'', '/a/chat/s/allocated');
+          setTimeout(()=>{const stop=document.createElement('button');stop.className='ds-button';stop.id='stop';stop.textContent='停止生成';document.body.append(stop);},${mode==='fast-url-first'?30:200});
+          setTimeout(()=>{window.mountReply('first-native');document.querySelector('#stop').remove();},${mode==='fast-url-first'?60:450});
+        }else{
+          const stop=document.createElement('button');stop.className='ds-button';stop.textContent='停止生成';document.body.append(stop);
+          window.mountReply('first-native');
+          setTimeout(()=>history.pushState({},'', '/a/chat/s/allocated'),200);
+          setTimeout(()=>stop.remove(),450);
+        }
+      });
+      if(${JSON.stringify(mode)}==='history-unknown'){
+        history.pushState({},'', '/a/chat/s/existing');window.mountReply('initial-history',false);
+      }`);
+    const files=new FileService(); files.setRoot(project);
+    const handlers=new Map();const editor={mainFrame:{},send(){},isDestroyed:()=>false};
+    const system=await createToolIntegration({ipc:{handle:(c,f)=>handlers.set(c,f)},editor,web:window.webContents,files,
+      returnPath:new ReturnPathService(files),workspace:{editor:{isDirty:()=>false},run:f=>f()},sender,
+      storePath:path.join(temporary,'tools-'+mode+'.json'),disabled:false,ask:async()=>({response:0,checkboxChecked:false}),notifyFile(){},copy(){}});
+    try {
+      await handlers.get(CHANNELS.setToolConfig)({sender:editor,senderFrame:editor.mainFrame},{automatic:true,permission:'ask',sendIntervalSeconds:300});
+      if(mode==='history-unknown'){
+        await pause(700);
+        assert.equal(system.getState().results.length,0);
+        await window.webContents.executeJavaScript(`const copy=document.createElement('button');copy.className='ds-button';copy.textContent='复制';document.querySelector('.ds-assistant-message-main-content').append(copy);`);
+        await pause(700);
+        assert.equal(system.getState().results.length,0,'启用时已有unknown历史回复后补footer不得执行');
+      }else{
+        await pause(100);
+        const result=await system.sendLocalPrompt('本地主动需求','https://chat.deepseek.com/',()=>true);
+        assert.equal(result.ok,true,JSON.stringify(result));
+        await until(()=>system.getState().results[0]?.status==='done','真实集成未自动执行首次工具回复');
+        assert.equal(system.getState().results.length,1);assert.equal((await state()).clicks,1);
+      }
+      await window.webContents.executeJavaScript(`window.mountReply('existing-native')`);
+      await until(()=>system.getState().results.some(result=>result.batch_id==='existing-native' && result.status==='done'),'已有会话无需点击的新完整回复未自动采集');
+      assert.equal((await state()).clicks,mode==='history-unknown'?0:1,'采集不得制造发送动作');
+      await window.webContents.executeJavaScript(`document.querySelectorAll('.ds-assistant-message-main-content').forEach(element=>element.remove());history.pushState({},'', '/a/chat/s/history');`);
+      await pause(250);
+      await window.webContents.executeJavaScript(`window.mountReply('history-native')`);
+      await pause(250);
+      await window.webContents.executeJavaScript(`window.mountReply('history-native-second')`);
+      await pause(750);
+      assert.equal(system.getState().results.some(result=>result.batch_id.startsWith('history-native')),false,'分段加载历史会话不得执行其已存在的工具回复');
+    } finally { await system.dispose(); }
+  });
+  previousWindow.destroy();
   console.log('原生离线 DOM 夹具：通过 ' + passed + '，未连接官方网页；不证明官方网页接受合成发送。');
 }).catch(error => { console.error(error.stack || error); process.exitCode = 1; }).finally(async () => {
   if (sender) await sender.dispose();

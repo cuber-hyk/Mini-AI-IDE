@@ -1,9 +1,9 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-07
+updated: 2026-10-08
 owner: 胡运宽
-source_of_truth: [docs/adr/2026-10-06-native-tool-harness-boundary.md, src/shared/toolProtocol.ts, src/shared/formatSpec.ts, src/shared/returnPath.ts, src/main/replyCollector.ts, src/main/tools/changes.ts, src/main/tools/changeReview.ts, src/main/tools/integration.ts, src/main/returnPathService.ts, src/main/previewPreload.ts, src/main/fileService.ts, src/renderer/preview.js, src/renderer/editorWorkspace.js, test/replyCollector.test.ts, test/toolProtocol.test.ts, test/toolChanges.test.ts, test/formatSpec.test.ts, test/toolSamples.test.ts]
+source_of_truth: [docs/capabilities/skills-and-local-prompt.md, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, docs/adr/2026-10-06-native-tool-harness-boundary.md, src/shared/toolProtocol.ts, src/shared/formatSpec.ts, src/shared/returnPath.ts, src/main/replyCollector.ts, src/main/tools/changes.ts, src/main/tools/changeReview.ts, src/main/tools/integration.ts, src/main/returnPathService.ts, src/main/previewPreload.ts, src/main/fileService.ts, src/renderer/preview.js, src/renderer/editorWorkspace.js, test/replyCollector.test.ts, test/toolProtocol.test.ts, test/toolChanges.test.ts, test/formatSpec.test.ts, test/toolSamples.test.ts]
 ---
 
 # 能力：工具修改与变更查看
@@ -22,7 +22,7 @@ replyCollector 只读还原代码正文及语言：读取 code/pre 的 language-
 
 选区和全文输出只读上下文头，保留当前 Monaco 草稿、空白、空文件及末尾换行，不含执行操作或定位行号。复制全文不暗示覆盖。实际读取工具使用磁盘内容，AI 必须区别草稿与执行时原文。
 
-shared/formatSpec.ts 是唯一默认来源：简洁版 6 个示例、完整版 13 个示例均使用工具协议，普通讨论示例只含解释。构建生成 formatSpecDefaults.js。菜单、复制格式要求、复制提示词经过同一个有效格式入口，始终保留强制执行协议。
+shared/formatSpec.ts 是唯一默认来源：简洁版 6 个示例、完整版 14 个示例均使用工具协议，普通讨论示例只含解释。构建生成 formatSpecDefaults.js。菜单、复制格式要求、复制提示词经过同一个有效格式入口，始终保留强制执行协议。
 
 自定义设置与两版草稿原文独立保存；有效提示词将其逐字附为补充，不能取消执行协议或权限管理。恢复默认由用户保存；新版要求由用户手动粘贴到已有网页对话，IDE 不改写或重发历史回复。
 

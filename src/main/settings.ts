@@ -9,6 +9,7 @@
  * 存储位置：`app.getPath('userData')/settings.json`
  * 边界：只存应用自身配置，**不写入会话分区**（见 session-persistence 能力文档第 6 条）。
  */
+import type { LocalPromptOptions } from '../shared/localPrompt';
 import { app } from 'electron';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -26,6 +27,7 @@ export interface WorkspaceLayoutSettings {
 }
 
 export interface Settings {
+  localPrompt: LocalPromptOptions;
   /** 上次打开的根目录（绝对路径）；目录不存在时启动会忽略并清空 */
   lastRoot: string | null;
   /** 最近成功打开的目录，按使用时间倒序，最多 5 项 */
@@ -63,6 +65,7 @@ export interface Settings {
 }
 
 const DEFAULTS: Settings = {
+  localPrompt: { includeInitialization: true, sendOnEnter: false },
   lastRoot: null,
   recentRoots: [],
   workspaceRoots: [],
@@ -124,6 +127,12 @@ function normalizeWorkspaceLayout(value: unknown): WorkspaceLayoutSettings | nul
   };
 }
 
+export function normalizeLocalPrompt(value: unknown): LocalPromptOptions {
+  const v = value && typeof value === 'object' ? value as Partial<LocalPromptOptions> : {};
+  return { includeInitialization: typeof v.includeInitialization === 'boolean' ? v.includeInitialization : true,
+    sendOnEnter: typeof v.sendOnEnter === 'boolean' ? v.sendOnEnter : false };
+}
+
 export class SettingsStore {
   private readonly file: string;
   private cache: Settings;
@@ -138,7 +147,7 @@ export class SettingsStore {
   }
 
   get(): Settings {
-    return { ...this.cache, recentRoots: [...this.cache.recentRoots], workspaceRoots: [...this.cache.workspaceRoots],
+    return { ...this.cache, localPrompt: { ...this.cache.localPrompt }, recentRoots: [...this.cache.recentRoots], workspaceRoots: [...this.cache.workspaceRoots],
       workspaceLayout: this.cache.workspaceLayout ? { ...this.cache.workspaceLayout } : null };
   }
 
@@ -149,6 +158,7 @@ export class SettingsStore {
       ...patch,
       recentRoots: normalizeRecentRoots(patch.recentRoots ?? this.cache.recentRoots),
       workspaceRoots: normalizeWorkspaceRoots(patch.workspaceRoots ?? this.cache.workspaceRoots),
+      localPrompt: normalizeLocalPrompt(patch.localPrompt === undefined ? this.cache.localPrompt : patch.localPrompt),
       workspaceLayout: normalizeWorkspaceLayout(patch.workspaceLayout === undefined ? this.cache.workspaceLayout : patch.workspaceLayout),
     };
     this.save(next);
@@ -167,6 +177,7 @@ export class SettingsStore {
       // 仅首次升级初始化；已明确保存的空列表不能从最近历史重新填回。
       out.workspaceRoots = normalizeWorkspaceRoots('workspaceRoots' in parsed
         ? parsed.workspaceRoots : [out.lastRoot, ...out.recentRoots]);
+      out.localPrompt = normalizeLocalPrompt(parsed.localPrompt);
       out.workspaceLayout = normalizeWorkspaceLayout(parsed.workspaceLayout);
       if (typeof parsed.editorWidth === 'number' && Number.isFinite(parsed.editorWidth) && parsed.editorWidth > 0) {
         out.editorWidth = Math.round(parsed.editorWidth);

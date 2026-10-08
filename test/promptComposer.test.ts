@@ -55,7 +55,7 @@ function setup(overrides: Record<string, unknown> = {}) {
       addEventListener(_name: string, fn: () => void) { resized = fn; },
       setTimeout(fn: () => void) { timer = fn; return 1; },
       clearTimeout() { timer = undefined; },
-      setupPromptComposer: undefined as unknown as (bridge: unknown, info: unknown) => void,
+      setupPromptComposer: undefined as unknown as (bridge: unknown, info: unknown, local: unknown) => void,
     },
     ResizeObserver: class { constructor(fn: () => void) { observer = fn; } observe() {} },
     Event: class { constructor(readonly type: string) {} },
@@ -63,7 +63,10 @@ function setup(overrides: Record<string, unknown> = {}) {
   };
   vm.createContext(sandbox);
   vm.runInContext(source, sandbox);
-  sandbox.window.setupPromptComposer(bridge, (text: string, warn = false) => messages.push({ text, warn }));
+  sandbox.window.setupPromptComposer(bridge, (text: string, warn = false) => messages.push({ text, warn }), {
+    getSubmission: () => ({ requirement: input.value.trim(), root: 'C:\\project', skills: [] }),
+    setComposerBusy() {}, onBusy() {},
+  });
   return { input, short, full, sw, copy, custom, requirementPanel, messages, writes,
     narrow() { sandbox.window.innerHeight = 600; actions.offsetHeight = 80; resized(); },
     publish(next: Status) { current = next; listener(next); },
@@ -158,6 +161,13 @@ it('空需求聚焦输入；复制成功反馈复位；异常与结构化失败�
     assert.equal(ui.copy.textContent, '复制提示词'); assert.equal(ui.copy.disabled, false);
     assert.match(ui.messages.at(-1)!.text, /复制提示词失败/);
   }
+});
+
+it('复制通过统一需求快照携带项目根目录，不使用旧字符串调用', async () => {
+  let copied: unknown;
+  const ui = setup({ async copyPrompt(input: unknown) { copied = input; return { ok: true, length: 20 }; } });
+  await flush(); ui.input.value = '  修改标题  '; await ui.copy.fire('click');
+  assert.deepEqual(JSON.parse(JSON.stringify(copied)), { requirement: '修改标题', root: 'C:\\project', skills: [] });
 });
 
 it('长输入到上限后滚动；删除与宽度变化后收缩，观察高度变化不会循环增长', async () => {

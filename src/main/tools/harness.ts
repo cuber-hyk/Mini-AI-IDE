@@ -27,7 +27,7 @@ interface BatchSelection extends ToolSelection {
 }
 // 结果归属本次采集对象，避免较早排队批次的迟到输出进入最近一轮。
 interface SelectedEntry extends LedgerEntry { selection: BatchSelection }
-const PROJECT_READ = new Set(['get_project_info', 'list_directory', 'search_files', 'read_file', 'search_text']);
+const PROJECT_READ = new Set(['get_project_info', 'list_directory', 'search_files', 'read_file', 'search_text', 'load_skill']);
 const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
 const failedData = (request: ToolRequest, data: unknown) => {
   // 查询和停止工具返回的是被管理进程的状态；非零退出属于资料，不代表工具调用失败。

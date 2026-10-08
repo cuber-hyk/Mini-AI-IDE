@@ -42,7 +42,7 @@ it('轻量探测与全文之间再次开始生成时，以全文的真实状态�
   auto.setEnabled(true);
   try {
     await auto.tick();
-    auto.noteUserTurn();
+
     f.update('new', 'complete', 'looks complete');
     f.snapshotOnly('generating', 'actually-streaming', 'incomplete');
     await auto.tick();
@@ -62,7 +62,7 @@ it('会话变化重新读取全文和建基线；追踪参数变化不重复采�
     assert.equal(f.counts().captures, 1);
     f.navigate('https://chat.deepseek.com/a/chat/two'); await auto.tick();
     assert.equal(f.counts().captures, 2); assert.deepEqual(executed, []);
-    auto.noteUserTurn(); f.update('new', 'complete', 'new conversation reply'); await auto.tick();
+     f.update('new', 'complete', 'new conversation reply'); await auto.tick();
     assert.deepEqual(executed, ['new conversation reply']);
   } finally { auto.dispose(); }
 });

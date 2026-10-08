@@ -302,7 +302,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     const perFile: Record<string, string[]> = {};
     for (const f of preloadFiles) {
       const src = fs.readFileSync(path.join(__dirname, f), 'utf8');
-      const found = [...src.matchAll(/'((?:fs|ui|return|preview|review|editor|tools):[a-z-]+)'/g)].map((m) => m[1] as string);
+      const found = [...src.matchAll(/'((?:fs|ui|return|preview|review|editor|tools|skills):[a-z-]+)'/g)].map((m) => m[1] as string);
       perFile[f] = found;
       literals.push(...found);
     }
@@ -339,6 +339,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   try {
     const html = fs.readFileSync(htmlPath, 'utf8');
     const editorJs = fs.readFileSync(jsPath, 'utf8');
+    const localPromptJs = fs.readFileSync(path.join(rendererDir, 'localPrompt.js'), 'utf8');
     const composerJs = fs.readFileSync(path.join(rendererDir, 'promptComposer.js'), 'utf8');
     const toolbarJs = fs.readFileSync(path.join(rendererDir, 'editorToolbar.js'), 'utf8');
     const updateJs = fs.readFileSync(path.join(rendererDir, 'applicationUpdate.js'), 'utf8');
@@ -349,7 +350,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     const navigationJs = fs.readFileSync(path.join(rendererDir, 'workspaceNavigation.js'), 'utf8');
     const layoutJs = fs.readFileSync(path.join(rendererDir, 'workspaceLayout.js'), 'utf8');
     const fileWorkspaceJs = fs.readFileSync(path.join(rendererDir, 'fileWorkspace.js'), 'utf8');
-    const js = [editorJs, composerJs, toolbarJs, explorerJs, workspaceJs, tabsJs, updateJs, navigationJs, layoutJs, fileWorkspaceJs].join('\n');
+    const js = [editorJs, composerJs, localPromptJs, toolbarJs, explorerJs, workspaceJs, tabsJs, updateJs, navigationJs, layoutJs, fileWorkspaceJs].join('\n');
     const css = fs.readFileSync(path.join(rendererDir, 'style.css'), 'utf8');
     /*
      * 主进程 / preload / 契约 / 设置 的**源码**（不是 __dirname 下的编译产物：那里只有 .js）。
@@ -427,6 +428,8 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
         'file-collapse': "getElementById('file-collapse').addEventListener('click'",
       };
       if (layoutBindings[id]) return !layoutJs.includes(layoutBindings[id]!);
+      if (id === 'btn-send-prompt') return !/send\.addEventListener\('click'/.test(localPromptJs);
+      if (id === 'skill-preview-close') return !/getElementById\('skill-preview-close'\)\.addEventListener\('click'/.test(localPromptJs);
       if (id === 'workspace-add') return !navigationJs.includes("getElementById('workspace-add').addEventListener('click'");
       if (id === 'tool-view-changes') return !fileWorkspaceJs.includes("getElementById('tool-view-changes').addEventListener('click'");
       if (id === 'btn-copy-context') return !/trigger\.addEventListener\('click'/.test(toolbarJs);
@@ -740,7 +743,8 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
        * 任一条漏了就回到"改了没用"（最坏的失败形态：用户以为生效了）。
        * 另外还要求开关状态（formatSpecVariant）在两个方向上都有 handler。
        */
-      const usesInCopyPrompt = /formatSpec:\s*resolveFormatSpec\(customSpecsOf\(settings\.get\(\)\)/.test(mainTs);
+      const promptControllerTs = fs.readFileSync(path.join(srcMainDir, 'localPromptController.ts'), 'utf8');
+      const usesInCopyPrompt = /formatSpec:\s*resolveFormatSpec/.test(promptControllerTs) && /customFormatSpecShort/.test(promptControllerTs) && /customFormatSpecFull/.test(promptControllerTs);
       const usesInCopyFormat = /resolveFormatSpec\(customSpecsOf\(/.test(mainTs) &&
         /formatSpecVariant/.test(mainTs);
       const panelReadsSetting =
@@ -840,8 +844,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
        * 最坏的失败形态：界面显示"完整版"，但 copyPrompt 仍按短版拼 —— 用户无从察觉。
        * 断言 copyPrompt 链路确实读了 settings.formatSpecVariant。
        */
-      const variantUsedInCopyPrompt =
-        /resolveFormatSpec\(customSpecsOf\(settings\.get\(\)\),\s*settings\.get\(\)\.formatSpecVariant\)/.test(mainTs);
+      const variantUsedInCopyPrompt = /resolveFormatSpec[\s\S]{0,250}settings\.formatSpecVariant/.test(promptControllerTs);
       add('Y15', '开关状态贯通：复制提示词链路确实读取 formatSpecVariant', variantUsedInCopyPrompt, {
         variantUsedInCopyPrompt,
       });
@@ -1539,7 +1542,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
 
   const specAll = getFormatSpec('short') + getFormatSpec('full');
   add('F3c', '格式模板实际覆盖替换、新建、覆盖全文且不输出定位范围', shortExamples.valid && JSON.stringify(shortExamples.operations) === '["create","overwrite","replace"]' && !/### 范围：/.test(specAll), shortExamples);
-  add('F3d', '完整版十三组示例统一通过正式工具解析', fullExamples.valid && fullExamples.examples === 13, fullExamples);
+  add('F3d', '完整版十四组示例统一通过正式工具解析', fullExamples.valid && fullExamples.examples === 14, fullExamples);
   add('F3g', '简洁版六组高频示例逐一通过正式工具解析', shortExamples.valid && shortExamples.examples === 6, shortExamples);
   add(
     'F3e',

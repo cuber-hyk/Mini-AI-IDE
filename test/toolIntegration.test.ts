@@ -9,7 +9,78 @@ import { FileService } from '../src/main/fileService';
 import { ReturnPathService } from '../src/main/returnPathService';
 import { CHANNELS } from '../src/shared/contract';
 import { parseToolBatch } from '../src/shared/toolProtocol';
+import { SkillService } from '../src/main/skills';
 const batch = (id = 'a') => '````mini-ai-tools\n' + JSON.stringify({ protocol_version: 1, batch_id: id, requests: [{ id: 'read', tool: 'get_project_info', args: {} }] }) + '\n````';
+it('新完成输出独立于发送动作和回执，已有会话与首发生成均自动采集', async () => {
+  for (const scenario of ['direct','failed-send','pending-send','generating','disabled'] as const) {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tool-output-'));
+    let system: Awaited<ReturnType<typeof createToolIntegration>> | undefined;
+    let waiter: ((value: unknown) => void) | undefined;
+    let finish: ((value: {ok:boolean}) => void) | undefined;
+    try {
+      const handlers=new Map<string,Function>(); const editor:any={mainFrame:{},send(){},isDestroyed:()=>false};
+      const files=new FileService();files.setRoot(root);
+      const url='https://chat.deepseek.com/a/chat/current';let reply='history';let completion='complete';
+      const web:any=Object.assign(new EventEmitter(),{getURL:()=>url,isDestroyed:()=>false,
+        executeJavaScript:async()=>({replies:[reply],completion}),
+        executeJavaScriptInIsolatedWorld:async(_world:number,entries:{code:string}[])=>{
+          const code=entries[0]!.code;
+          if(code.includes('previous.waiter = resolve'))return new Promise(resolve=>{waiter=resolve;});
+          if(code.includes('previous.dispose();')){waiter?.(false);waiter=undefined;return true;}
+          return true;
+        }});
+      system=await createToolIntegration({ipc:{handle:(c:string,f:any)=>handlers.set(c,f)} as any,editor,web,files,
+        returnPath:new ReturnPathService(files),workspace:{editor:{isDirty:()=>false},run:(f:any)=>f()} as any,
+        sender:{send:async()=>scenario==='failed-send'?{ok:false}:new Promise(resolve=>{finish=resolve;}),cancel:async()=>{},dispose:async()=>{finish?.({ok:false});}},
+        storePath:path.join(root,'state.json'),disabled:false,ask:async()=>({response:0,checkboxChecked:false}),notifyFile(){},copy(){}});
+      await handlers.get(CHANNELS.setToolConfig)!({sender:editor,senderFrame:editor.mainFrame},{automatic:true,permission:'ask',sendIntervalSeconds:300});
+      for(let n=0;!waiter&&n<100;n++)await new Promise(resolve=>setTimeout(resolve,2));
+      let sending:Promise<unknown>|undefined;
+      if(scenario==='failed-send'||scenario==='pending-send')sending=system.sendLocalPrompt('demand',url,()=>true);
+      if(scenario==='failed-send')await sending;
+      const notify=async()=>{const fn=waiter;waiter=undefined;fn?.({turn:0});await new Promise(resolve=>setTimeout(resolve,20));};
+      if(scenario==='generating'){completion='generating';await notify();assert.equal(system.getState().results.length,0);}
+      if(scenario==='disabled')await handlers.get(CHANNELS.setToolConfig)!({sender:editor,senderFrame:editor.mainFrame},{automatic:false});
+      reply=batch('output-'+scenario);completion='complete';await notify();
+      for(let n=0;scenario!=='disabled'&&system.getState().results[0]?.status!=='done'&&n<100;n++)await new Promise(resolve=>setTimeout(resolve,2));
+      assert.equal(system.getState().results[0]?.status,scenario==='disabled'?undefined:'done',scenario);
+      finish?.({ok:false});await sending;
+    }finally{await system?.dispose();await fs.rm(root,{recursive:true,force:true,maxRetries:5,retryDelay:20});}
+  }
+});
+it('load_skill 通过正式批次返回当前真实说明，不执行技能内脚本，加载失败不伪造结果', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tool-skill-'));
+  let system: Awaited<ReturnType<typeof createToolIntegration>> | undefined;
+  try {
+    const global = path.join(root, 'global-skills'); const bundle = path.join(global, 'review');
+    await fs.mkdir(bundle, { recursive: true });
+    const content = '---\nname: review\ndescription: Review files\n---\nRun dangerous.ps1 only when explicitly authorized.';
+    await fs.writeFile(path.join(bundle, 'SKILL.md'), content);
+    const handlers = new Map<string, (...args: any[]) => any>();
+    const editor: any = { mainFrame: {}, send() {}, isDestroyed: () => false };
+    const files = new FileService(); files.setRoot(root);
+    const web: any = Object.assign(new EventEmitter(), { getURL: () => 'https://chat.deepseek.com/a/chat/skills', isDestroyed: () => false });
+    let asked = 0; const copies: string[] = [];
+    system = await createToolIntegration({ ipc: { handle: (c: string, f: any) => handlers.set(c, f) } as any, editor, web, files,
+      skills: new SkillService(global), returnPath: new ReturnPathService(files), workspace: { editor: { isDirty: () => false }, run: (f: any) => f() } as any,
+      storePath: path.join(root, 'state.json'), disabled: true, ask: async () => { asked++; return { response: 1, checkboxChecked: false }; }, notifyFile() {}, copy(value) { copies.push(value); } });
+    const good = { sender: editor, senderFrame: editor.mainFrame };
+    await handlers.get(CHANNELS.setToolConfig)!(good, { permission: 'ask' });
+    const request = (name: string, id: string) => '```mini-ai-tools\n' + JSON.stringify({ protocol_version: 1, batch_id: id, requests: [{ id: 'skill', tool: 'load_skill', args: { name } }] }) + '\n```';
+    await system.accept(request('review', 'first'), 'complete');
+    for (let n = 0; system.getState().busy && n < 100; n++) await new Promise(resolve => setTimeout(resolve, 5));
+    const result = system.getState().results[0]!; assert.equal(result.status, 'done');
+    assert.equal((result.data as any).content, content); assert.equal((result.data as any).source, 'global');
+    assert.equal(asked, 0, '显式授权技能目录只读加载不需要脚本执行权限');
+    assert.equal(JSON.parse(copies.at(-1)!).tool_results[0].data.content, content);
+    await fs.writeFile(path.join(bundle, 'SKILL.md'), 'invalid skill');
+    await system.accept(request('review', 'second'), 'complete');
+    for (let n = 0; system.getState().busy && n < 100; n++) await new Promise(resolve => setTimeout(resolve, 5));
+    assert.equal(system.getState().results[0]?.status, 'failed'); assert.match(system.getState().results[0]?.error ?? '', /不可用/);
+    assert.equal(system.getState().results[0]?.data, undefined);
+    assert.throws(() => handlers.get(CHANNELS.copyToolResults)!({ sender: web, senderFrame: editor.mainFrame }), /仅供本地编辑器主 frame/, '官网不获得工具 IPC');
+  } finally { await system?.dispose(); await fs.rm(root, { recursive: true, force: true }); }
+});
 it('应用退出等待所属进程停止，重复退出不重复清理，完成后才真正 quit', async () => {
   let listener: any; let finish: (() => void) | undefined; let cleanup = 0; let quits = 0; let prevented = 0;
   const application: any = { on(_event: string, handler: any) { listener = handler; }, quit() { quits++; listener({ preventDefault() { prevented++; } }); } };

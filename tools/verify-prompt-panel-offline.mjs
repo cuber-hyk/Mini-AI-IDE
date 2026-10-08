@@ -23,6 +23,7 @@ const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
 const rendererDir = 'src/renderer';
 
 const mainTs = read('src/main/index.ts');
+const localPromptTs = read('src/main/localPromptController.ts');
 const preloadTs = read('src/main/preload.ts');
 const settingsTs = read('src/main/settings.ts');
 const html = read('src/renderer/index.html');
@@ -109,7 +110,7 @@ check('Y7', '入口齐备：Settings 菜单行 + 编辑器齿轮（同一面板�
 
 // Y8：三条消费链路都必须走 customSpecsOf()（分版本取自定义），
 // 否则会出现"改了 B 版、发出去的还是 A 版"这类静默错误。
-const usesInCopyPrompt = /formatSpec:\s*resolveFormatSpec\(customSpecsOf\(settings\.get\(\)\)/.test(mainTs);
+const usesInCopyPrompt = /formatSpec:\s*resolveFormatSpec\([\s\S]*settings\.customFormatSpecShort[\s\S]*settings\.customFormatSpecFull/.test(localPromptTs);
 const usesInCopyFormat = /const text = resolveFormatSpec\(customSpecsOf\(s\),\s*s\.formatSpecVariant\)/.test(mainTs) ||
   /resolveFormatSpec\(customSpecsOf\(settings\.get\(\)\)/.test(mainTs);
 const panelReadsSetting = /customFormatSpecShort/.test(mainTs) && /customFormatSpecFull/.test(mainTs) &&
@@ -169,7 +170,7 @@ check('Y14', '底部双段开关：结构 + 持久化读写 + 键盘可达 + 样
 });
 
 // Y15：开关状态必须真的被"复制提示词"链路读到（否则界面与行为会不一致）
-const variantUsedInCopyPrompt = /resolveFormatSpec\(customSpecsOf\(settings\.get\(\)\),\s*settings\.get\(\)\.formatSpecVariant\)/.test(mainTs);
+const variantUsedInCopyPrompt = /resolveFormatSpec\([\s\S]*settings\.formatSpecVariant/.test(localPromptTs);
 const variantHandlerRegistered = /ipcMain\.handle\(CHANNELS\.getFormatSpecVariant/.test(mainTs) &&
   /ipcMain\.handle\(CHANNELS\.setFormatSpecVariant/.test(mainTs);
 check('Y15', '开关状态贯通：复制提示词读 variant + 主进程有读写 handler', variantUsedInCopyPrompt && variantHandlerRegistered, {
@@ -266,15 +267,15 @@ check(
   }
 );
 
-// Z3b：切到完整版后，组装出的 prompt 用的是 FULL（13 示例），而不是 SHORT
+// Z3b：切到完整版后，组装出的 prompt 用的是 FULL（14 示例），而不是 SHORT
 const fullExampleCount = (getFormatSpec('full').match(/示例 \d+｜/g) ?? []).length;
 const shortExampleCount = (getFormatSpec('short').match(/示例 \d+｜/g) ?? []).length;
 check(
   'Z3b',
-  '切换版本后组装结果确实换了一版（FULL 13 示例 / SHORT 6 示例）',
+  '切换版本后组装结果确实换了一版（FULL 14 示例 / SHORT 6 示例）',
   assembledFull.includes(getFormatSpec('full')) &&
     assembledDefault.includes(getFormatSpec('short')) &&
-    fullExampleCount === 13 &&
+    fullExampleCount === 14 &&
     shortExampleCount === 6,
   { fullExampleCount, shortExampleCount }
 );
@@ -464,6 +465,7 @@ await (async () => {
     'btn-copy-prompt': makeEl('btn-copy-prompt'),
     'prompt-custom': makeEl('prompt-custom'),
     'prompt-actions': { offsetHeight: 30 },
+    'requirement-panel': makeEl('requirement-panel', { open: true }),
   };
   const ctx = {
     window: { innerHeight: 960, requestAnimationFrame: (fn) => fn(), addEventListener() {} },
@@ -475,7 +477,10 @@ await (async () => {
   let ok = false;
   try {
     new vm.Script(composerJs, { filename: 'promptComposer.js' }).runInContext(ctx);
-    ctx.window.setupPromptComposer(bridge, () => {});
+    ctx.window.setupPromptComposer(bridge, () => {}, {
+      getSubmission: () => ({ requirement: '', root: null, skills: [] }),
+      setComposerBusy() {}, onBusy() {},
+    });
     ok = true;
   } catch (err) {
     console.log('        ' + String(err && err.message));

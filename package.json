@@ -1,6 +1,6 @@
 {
   "name": "mini-ai-ide",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Windows 桌面工具：Monaco 本地编辑、DeepSeek 网页接入、规范工具执行与可控结果回传",
   "author": "Mini-AI-IDE contributors",
@@ -26,16 +26,17 @@
     "postinstall": "patch-package"
   },
   "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "22.10.2",
     "electron": "44.5.1",
     "electron-builder": "^26.15.3",
-    "js-yaml": "4.3.2",
     "monaco-editor": "0.57.0",
     "patch-package": "8.0.0",
     "tsx": "4.23.15",
     "typescript": "5.9.3"
   },
   "dependencies": {
-    "electron-updater": "6.8.9"
+    "electron-updater": "6.8.9",
+    "js-yaml": "4.3.2"
   }
 }

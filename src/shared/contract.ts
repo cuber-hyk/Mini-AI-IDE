@@ -4,12 +4,17 @@
  * 设计约束（ADR-0002）：IPC 只暴露**窄接口** —— 声明式参数，不接受任意表达式，
  * 也不接受任意路径。渲染进程没有任何直接的文件系统能力。
  */
+import type { LocalPromptInput, LocalPromptOptions, LocalPromptResult } from './localPrompt';
+import type { SkillCatalog, LoadedSkill } from './skills';
 import type { TextMeta } from './limits';
 import type { FormatSpecVariant } from './formatSpec';
 import type { ApplicationUpdateState } from './applicationUpdate';
 import type { ToolConfig, ToolState } from './toolProtocol';
 
 export const CHANNELS = {
+  getLocalPromptOptions: 'ui:get-local-prompt-options',
+  setLocalPromptOptions: 'ui:set-local-prompt-options',
+  getSkillCatalog: 'skills:list', loadSkill: 'skills:load', sendPrompt: 'ui:send-prompt',
   getToolState: 'tools:get-state',
   setToolConfig: 'tools:set-config',
   toolState: 'tools:state',
@@ -596,7 +601,12 @@ export interface EditorBridge {
    * 组装完整 prompt 并写入剪贴板。
    * 仍**只写剪贴板**：由用户自己 Ctrl+V 到网页输入框（零注入边界）。
    */
-  copyPrompt(requirement: string, targetFiles: string[]): Promise<CopyPromptResult>;
+  copyPrompt(input: LocalPromptInput): Promise<LocalPromptResult>;
+  sendPrompt(input: LocalPromptInput): Promise<LocalPromptResult>;
+  getLocalPromptOptions(): Promise<LocalPromptOptions>;
+  setLocalPromptOptions(patch: Partial<LocalPromptOptions>): Promise<LocalPromptOptions>;
+  getSkillCatalog(): Promise<SkillCatalog>;
+  loadSkill(name: string): Promise<{ok: boolean; skill?: LoadedSkill; error?: string}>;
   /**
    * 把选中原文与只读上下文头写入剪贴板，行号仅供本地反馈。
    * 用于提供原文上下文：模型以 SEARCH/REPLACE 表达修改，应用前复核完整预览原文。

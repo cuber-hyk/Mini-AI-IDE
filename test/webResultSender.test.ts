@@ -90,3 +90,23 @@ it('网页取消检查悬挂时有界结束并阻止后续结果，不能在未�
   assert.equal(count, 2);
   await f.sender.dispose();
 });
+
+
+it('用户需求与工具结果交错调用不改写取消归属，pending阶段已互斥', async () => {
+  const f = fixture();
+  const prompt = f.sender.send('用户需求', 'https://chat.deepseek.com/a/chat/one', 'prompt');
+  const result = f.sender.send('工具结果', 'https://chat.deepseek.com/a/chat/one', 'results');
+  await f.sender.cancel('prompt');
+  assert.equal((await prompt).ok, false); assert.equal((await result).ok, false);
+  assert.equal(f.scripts.length, 0);
+  await f.sender.dispose();
+});
+it('关闭工具自动继续不能取消正在准备的用户需求，反向也独立', async () => {
+  for (const [kind, other] of [['prompt','results'],['results','prompt']] as const) {
+    const f = fixture();
+    const send = f.sender.send('文本','https://chat.deepseek.com/a/chat/one',kind);
+    await f.sender.cancel(other);
+    assert.equal((await send).ok,true); assert.equal(f.scripts.length,1);
+    await f.sender.dispose();
+  }
+});

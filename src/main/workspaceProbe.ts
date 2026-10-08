@@ -4,6 +4,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { DEEPSEEK_SEND_ICON } from './tools/replyObservation';
 import { parseModelReply } from '../shared/returnPath';
 import type { ReturnPreview } from '../shared/contract';
 import type { ToolRequest, ToolState } from '../shared/toolProtocol';
@@ -18,6 +19,11 @@ export function configureWorkspaceProbe(): string {
 
 export async function runWorkspaceProbe(view: WebContents, web: WebContents, preview: WebContents, controller: WorkspaceController, directory: string, webbar: WebContents) {
   const checks: Array<{ name: string; pass: boolean; observed?: unknown }> = [];
+  const screenshotErrors: Array<{ file: string; error: string }> = [];
+  async function capture(contents: WebContents, file: string) {
+    try { fs.writeFileSync(path.join(directory, file), (await contents.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG()); }
+    catch (error) { screenshotErrors.push({ file, error: String(error) }); }
+  }
   const check = (name: string, pass: boolean, observed?: unknown) => checks.push({ name, pass, observed });
   const evaluate = <T = unknown>(script: string): Promise<T> => view.executeJavaScript(script.startsWith('const ') ? `(() => { ${script} })()` : script, true);
   const previewEvaluate = <T = unknown>(script: string): Promise<T> => preview.executeJavaScript(script, true);
@@ -30,6 +36,16 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
   fs.mkdirSync(a); fs.mkdirSync(b); fs.mkdirSync(path.join(a, 'sub'));
   fs.writeFileSync(path.join(a, 'a.txt'), 'A original'); fs.writeFileSync(path.join(b, 'a.txt'), 'B original');
   fs.writeFileSync(path.join(a, 'tabs.txt'), 'tab original');
+  const globalSkillRoot = path.join(directory, 'global-skills', 'audit');
+  const projectSkillRoot = path.join(a, '.mini-ide', 'skills', 'audit');
+  fs.mkdirSync(globalSkillRoot, { recursive: true }); fs.mkdirSync(projectSkillRoot, { recursive: true });
+  fs.writeFileSync(path.join(globalSkillRoot, 'SKILL.md'), '---\nname: audit\ndescription: 全局审阅\n---\nGLOBAL-SKILL');
+  fs.writeFileSync(path.join(projectSkillRoot, 'SKILL.md'), '---\nname: audit\ndescription: 项目审阅\n---\nPROJECT-SKILL');
+  for (let i = 0; i < 9; i++) {
+    const bundle = path.join(directory, 'global-skills', 'sample-' + i); fs.mkdirSync(bundle);
+    fs.writeFileSync(path.join(bundle, 'SKILL.md'), '---\nname: sample-' + i + '\ndescription: Create a structured, evidence-based review for a bounded scope. Inspect correctness and explain findings with concrete source evidence.\n---\nSample instruction');
+  }
+
   let choice = 2;
   const originalBox = dialog.showMessageBox;
   const originalOpen = dialog.showOpenDialog;
@@ -38,7 +54,7 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
   dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [picked] })) as typeof dialog.showOpenDialog;
   try {
     check('Monaco 初始化', await waitFor('Boolean(window.__uiProbe && window.__uiProbe().ready)'));
-    const initialWebUrl = web.getURL();
+    let initialWebUrl = web.getURL();
     const originalFileWidth = await evaluate<number>("document.querySelector('.toolbar').getBoundingClientRect().width");
     await evaluate("document.getElementById('file-maximize').click()");
     check('文件区全屏按钮扩展空间并隐藏中间协作区', await waitFor("document.getElementById('file-maximize').getAttribute('aria-pressed') === 'true'") && await evaluate<number>("document.querySelector('.toolbar').getBoundingClientRect().width") > originalFileWidth && await evaluate("document.getElementById('collaboration-dock').hidden"));
@@ -54,12 +70,63 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     await evaluate("document.getElementById('workspace-add').click()");
     check('左侧加入项目并显示文件树', await waitFor("Boolean(document.querySelector('#tree .tree-row[data-rel-path=\"a.txt\"]'))"));
     check('左侧加入项目持久化', controller.workspace.getState().root === a && fs.readFileSync(path.join(directory, 'settings.json'), 'utf8').includes(a.replace(/\\/g, '\\\\')));
+    check('本地初始化默认勾选且回车发送默认关闭', await waitFor("document.getElementById('prompt-initialization').checked && !document.getElementById('prompt-send-on-enter').checked"));
+    await evaluate("document.getElementById('requirement-panel').open = true; document.getElementById('requirement').value='/'; document.getElementById('requirement').setSelectionRange(1,1); document.getElementById('requirement').dispatchEvent(new Event('input',{bubbles:true}))");
+    await waitFor("document.querySelectorAll('#skill-menu .skill-option').length === 10");
+    await pause(); await pause();
+    check('技能菜单紧凑单行，长描述省略且有完整悬停说明', await evaluate(`(() => {
+      const menu=document.getElementById('skill-menu'), row=menu.querySelector('.skill-option:nth-child(2)'), desc=row.querySelector('.skill-option-description');
+      return row.getBoundingClientRect().height===34 && menu.getBoundingClientRect().height<=225 && getComputedStyle(desc).textOverflow==='ellipsis' && desc.scrollWidth>desc.clientWidth && row.title.includes('concrete source evidence') && row.querySelector('.skill-option-source').textContent==='全局';
+    })()`));
+    await capture(view, 'skills-menu.png');
+    check('正斜杠菜单读取项目覆盖后的真实技能目录', await waitFor("!document.getElementById('skill-menu').hidden && document.querySelector('.skill-option').textContent.includes('项目审阅')"));
+    await evaluate("document.getElementById('requirement').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true})); document.querySelector('.skill-chip').click()");
+    check('选择技能只读展示项目说明', await waitFor("document.getElementById('skill-preview').textContent.includes('PROJECT-SKILL') && document.querySelector('.skill-chip').textContent.includes('项目')"));
+    await evaluate("document.getElementById('btn-copy-prompt').click()");
+    for(let i=0;i<100 && !(await clipboard.readText()).includes('PROJECT-SKILL');i++) await pause();
+    check('勾选初始化复制协议与项目技能完整说明', (await clipboard.readText()).includes('唯一执行协议') && (await clipboard.readText()).includes('PROJECT-SKILL') && !(await clipboard.readText()).includes('GLOBAL-SKILL'));
+    check('技能说明在本地dock内受限滚动且输入选项可到达', await evaluate(`(() => {
+      const dock=document.getElementById('collaboration-dock'), preview=document.getElementById('skill-preview'), option=document.getElementById('prompt-initialization');
+      option.scrollIntoView({block:'nearest'}); const d=dock.getBoundingClientRect(), p=preview.getBoundingClientRect(), o=option.getBoundingClientRect();
+      return p.height<=141 && dock.scrollWidth<=dock.clientWidth+1 && o.top>=d.top && o.bottom<=Math.min(d.bottom,innerHeight)+1;
+    })()`));
+    await capture(view, 'skills-local-prompt.png');
+    await evaluate("document.getElementById('prompt-initialization').click()");
+    await waitFor("window.editorBridge.getLocalPromptOptions().then(value=>!value.includeInitialization)");
+    await evaluate("document.getElementById('btn-copy-prompt').click()");
+    for(let i=0;i<100 && (await clipboard.readText()).includes('唯一执行协议');i++) await pause();
+    check('取消初始化只复制需求与显式技能且选择保持', !(await clipboard.readText()).includes('唯一执行协议') && (await clipboard.readText()).includes('PROJECT-SKILL') && await evaluate<boolean>("!document.getElementById('prompt-initialization').checked"));
+
     check('左侧常驻工作区列表显示当前项目，文件树位于编辑正文右侧', await waitFor("document.querySelectorAll('#workspace-list .workspace-project').length === 1 && Boolean(document.querySelector('#workspace-list .workspace-project[aria-current=true]'))") && await evaluate(`(() => {
       const nav = document.getElementById('workspace-navigation').getBoundingClientRect();
       const content = document.querySelector('.editor-wrap').getBoundingClientRect();
       const tree = document.getElementById('sidebar').getBoundingClientRect();
       return nav.left === 0 && nav.right < content.left && Math.abs(content.right - tree.left) <= 1 && tree.right <= innerWidth;
     })()`));
+
+    const composerFixture = path.join(directory, 'local-prompt-composer.html');
+    fs.writeFileSync(composerFixture, `<!doctype html><style>textarea{width:400px;height:100px}.ds-button{width:40px;height:40px}</style><section><textarea></textarea><div class="ds-button ds-button--primary ds-button--filled ds-button--circle"><svg><path d="${DEEPSEEK_SEND_ICON}"/></svg></div></section><script>window.sent=[];document.querySelector('.ds-button').addEventListener('click',()=>{const input=document.querySelector('textarea');window.sent.push(input.value);input.value='';});</script>`);
+    await web.loadURL(pathToFileURL(composerFixture).href);
+    await evaluate("document.getElementById('prompt-send-on-enter').click()");
+    await waitFor("window.editorBridge.getLocalPromptOptions().then(value=>value.sendOnEnter)");
+    await evaluate("document.getElementById('requirement').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',shiftKey:true,bubbles:true}))"); await pause();
+    check('Shift Enter不发送官网内容', await web.executeJavaScript('window.sent.length===0'));
+    await evaluate("document.getElementById('requirement').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}))");
+    for(let i=0;i<100 && !await web.executeJavaScript('window.sent.length===1');i++) await pause();
+    const delivered = await web.executeJavaScript('window.sent[0]') as string;
+    check('本地Enter通过受控发送提交与复制同源内容', delivered === await clipboard.readText() && delivered.includes('PROJECT-SKILL'));
+    await web.executeJavaScript("document.querySelector('textarea').value='官网用户草稿'");
+    await evaluate("document.getElementById('btn-send-prompt').click()"); await pause(); await pause();
+    check('本地需求发送不覆盖官网草稿也不重复点击', await web.executeJavaScript("window.sent.length===1 && document.querySelector('textarea').value==='官网用户草稿'"));
+    await evaluate("document.getElementById('prompt-send-on-enter').click(); document.getElementById('skill-preview-close').click(); document.getElementById('requirement').value=''; document.getElementById('requirement').dispatchEvent(new Event('input')); document.getElementById('requirement-panel').open=false");
+    await waitFor("window.editorBridge.getLocalPromptOptions().then(value=>!value.sendOnEnter)");
+    if (!initialWebUrl) {
+      const emptyFixture = path.join(directory, 'idle-web.html');
+      fs.writeFileSync(emptyFixture, '<!doctype html><body style="background:#141414"></body>');
+      initialWebUrl = pathToFileURL(emptyFixture).href;
+    }
+    await web.loadURL(initialWebUrl);
+    initialWebUrl = web.getURL();
     await evaluate("document.querySelector('#tree .tree-row[data-rel-path=\"a.txt\"]').click()");
     check('点击文件真实打开', await waitFor("document.getElementById('file-name').textContent === 'a.txt'"));
     const selectionProbe = await evaluate<{ok: boolean; visible: boolean}>("window.__uiSelectionProbe()");
@@ -170,7 +237,7 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     await evaluate("window.editorBridge.setToolConfig({sendIntervalSeconds:3})");
     await waitFor("document.getElementById('tool-send-interval').value === '3'");
     await evaluate("document.getElementById('tool-send-interval').focus()");
-    fs.writeFileSync(path.join(directory, 'interval-control.png'), (await view.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG());
+    await capture(view, 'interval-control.png');
     await evaluate("document.getElementById('tool-settings-close').click()");
     let batchSeq = 0;
     const fixture = path.join(directory, 'tool-reply.html');
@@ -213,19 +280,19 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     await previewEvaluate("document.getElementById('pv-navigate').click(); document.querySelector('.pv-select').click()");
     check('查看差异不抢走编辑焦点文件，无重复应用按钮', await evaluate('document.getElementById("file-name").textContent') === beforeView && await previewEvaluate("Boolean(document.querySelector('.pv-diff')) && !Array.from(document.querySelectorAll('button')).some(button => /应用|创建文件/.test(button.textContent))"));
     check('文件树类型图标实际可见，文件夹开合图标独立于展开箭头', await evaluate("Boolean(document.querySelector('.tree-icon svg')) && Boolean(document.querySelector('.tree-icon-folder, .tree-icon-folder-open'))"));
-    fs.writeFileSync(path.join(directory, 'review.png'), (await preview.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG());
+    await capture(preview, 'review.png');
     const ordinaryWidth = await previewEvaluate<number>('innerWidth');
     const persistedLayout = JSON.stringify(JSON.parse(fs.readFileSync(path.join(directory, 'settings.json'), 'utf8')).workspaceLayout);
     await previewEvaluate("document.getElementById('pv-expand').click()");
     for (let i = 0; i < 100 && await previewEvaluate<number>('innerWidth') <= ordinaryWidth; i++) await pause();
     check('主动展开变更阅读扩大空间，完整布局偏好不被临时宽度覆盖', await previewEvaluate<number>('innerWidth') > ordinaryWidth && JSON.stringify(JSON.parse(fs.readFileSync(path.join(directory, 'settings.json'), 'utf8')).workspaceLayout) === persistedLayout);
-    fs.writeFileSync(path.join(directory, 'review-expanded.png'), (await preview.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG());
+    await capture(preview, 'review-expanded.png');
     await previewEvaluate("document.getElementById('pv-expand').click()");
     for (let i = 0; i < 100 && await previewEvaluate<number>('innerWidth') !== ordinaryWidth; i++) await pause();
     check('恢复阅读后回到原内容宽度且目录保持最右', await previewEvaluate<number>('innerWidth') === ordinaryWidth && await evaluate("Math.abs(document.querySelector('.editor-wrap').getBoundingClientRect().right - document.getElementById('sidebar').getBoundingClientRect().left) <= 1"));
     await evaluate("document.querySelector('#tree .tree-row[data-rel-path=\"root-file.txt\"]').dispatchEvent(new KeyboardEvent('keydown',{key:'F10',shiftKey:true,bubbles:true}))");
     await waitFor("Boolean(document.querySelector('.file-menu'))");
-    fs.writeFileSync(path.join(directory, 'file-menu.png'), (await view.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG());
+    await capture(view, 'file-menu.png');
     await evaluate("document.querySelector('.file-menu').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))");
     const copiedPath = await evaluate<{ ok: boolean }>(`window.editorBridge.copyEntryPath('root-file.txt',true,${JSON.stringify(a)})`);
     check('路径复制来自真实受限桥', copiedPath.ok && await clipboard.readText() === 'root-file.txt');
@@ -309,7 +376,7 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     await previewEvaluate("document.getElementById('pv-wrap').click()");
     check('关闭自动换行后长代码可横向查看', await previewEvaluate("!document.getElementById('pv-detail').classList.contains('wrap') && Array.from(document.querySelectorAll('.pv-diff')).some(box => box.scrollWidth > box.clientWidth)"));
     await previewEvaluate("document.getElementById('pv-wrap').click(); document.getElementById('pv-expand').click()"); await pause();
-    fs.writeFileSync(path.join(directory, 'report-expanded.png'), (await preview.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG());
+    await capture(preview, 'report-expanded.png');
     await previewEvaluate("document.getElementById('pv-expand').click()"); await pause();
     // 多标签仅来自隔离目录，以真实 Chromium 滚动与 CSS 伪元素验证标签条。
     const tabPaths = Array.from({ length: 10 }, (_, i) => 'scroll-tab-' + i + '.txt');
@@ -349,5 +416,5 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     check('目录选择仅在左侧工作区，右侧空白不再显示最近目录', await waitFor("document.querySelectorAll('.recent-folders button').length===0 && document.getElementById('workspace-welcome').hidden && document.getElementById('workspace-add')!==null"));
   } catch (error) { check('探针执行无异常', false, error instanceof Error ? error.stack : String(error)); }
   finally { dialog.showMessageBox = originalBox; dialog.showOpenDialog = originalOpen; }
-  return { checks, pass: checks.every((item) => item.pass), temporaryDirectory: directory };
+  return { checks, pass: checks.every((item) => item.pass), temporaryDirectory: directory, screenshotErrors };
 }

@@ -62,27 +62,26 @@ it('自动发回读取和修改工具结果，下一轮由变化监听采集，�
   assert.equal(f.system.getState().continuation!.phase, 'waiting_user');
   await delay(30); assert.equal(f.sent.length, 2);
 });
-it('发送 unknown 后迟到回复不能自动执行，真人发起新轮可以恢复', async t => {
-  const f = await fixture(t); await f.call(CHANNELS.setToolConfig, { permission: 'full', automatic: true, sendIntervalSeconds: 0 });
-  const first = batch('first', 'get_project_info', {}); f.setReply(first);
-  f.setAction(async () => ({ ok: false, uncertain: true, error: '发送无法确认' }));
-  await f.system.accept(first, 'complete'); await until(() => f.system.getState().continuation?.phase === 'paused');
-  const late = batch('late', 'apply_changes', { changes: [{ path: 'late.txt', operation: 'create', content: 'must not execute' }] });
-  await f.notify(late); await delay(30); assert.equal(f.sent.length, 1); await assert.rejects(fs.stat(path.join(f.root, 'late.txt')));
-  assert.equal(f.system.getState().results[0]!.batch_id, 'first');
-  f.setAction(async () => ({ ok: true })); await f.notify(batch('real-user', 'get_project_info', {}), 1);
-  await until(() => f.sent.length === 2); assert.equal(JSON.parse(f.sent[1]!).tool_results[0].batch_id, 'real-user');
+it('发送 unknown 不重试旧结果，后续真实新输出仍独立采集执行', async t => {
+  const f=await fixture(t);await f.call(CHANNELS.setToolConfig,{permission:'full',automatic:true,sendIntervalSeconds:0});
+  const first=batch('first','get_project_info',{});f.setReply(first);
+  f.setAction(async()=>({ok:false,uncertain:true,error:'发送无法确认'}));
+  await f.system.accept(first,'complete');await until(()=>f.system.getState().continuation?.phase==='paused');
+  await f.call(CHANNELS.setToolConfig,{sendIntervalSeconds:300});
+  const late=batch('late','apply_changes',{changes:[{path:'late.txt',operation:'create',content:'real new output'}]});
+  await f.notify(late);await until(()=>f.system.getState().results[0]?.batch_id==='late'&&!f.system.getState().busy);
+  assert.equal(await fs.readFile(path.join(f.root,'late.txt'),'utf8'),'real new output');assert.equal(f.sent.length,1,'旧未知发送不得重试');
 });
-it('下一回复先到达但发送确认尚未结束，必须确认成功才执行，unknown 时丢弃资格', async t => {
-  const f = await fixture(t); await f.call(CHANNELS.setToolConfig, { permission: 'full', automatic: true, sendIntervalSeconds: 0 });
-  let finish!: (value: any) => void;
-  f.setAction(() => new Promise(resolve => { finish = resolve; }));
-  const first = batch('waiting', 'get_project_info', {}); f.setReply(first); await f.system.accept(first, 'complete');
-  await until(() => f.system.getState().continuation?.phase === 'sending');
-  await f.notify(batch('fast-unconfirmed', 'apply_changes', { changes: [{ path: 'unconfirmed.txt', operation: 'create', content: 'no write' }] }));
-  await delay(30); await assert.rejects(fs.stat(path.join(f.root, 'unconfirmed.txt')));
-  finish({ ok: false, uncertain: true, error: 'unknown' }); await until(() => f.system.getState().continuation?.phase === 'paused');
-  await delay(30); assert.equal(f.sent.length, 1); await assert.rejects(fs.stat(path.join(f.root, 'unconfirmed.txt')));
+it('新回复先到达而发送回执未结束时，采集不等待回执且旧回执不覆盖新批次', async t => {
+ const f=await fixture(t);await f.call(CHANNELS.setToolConfig,{permission:'full',automatic:true,sendIntervalSeconds:0});
+ let finish!:(value:any)=>void;f.setAction(()=>new Promise(resolve=>{finish=resolve;}));
+ const first=batch('waiting','get_project_info',{});f.setReply(first);await f.system.accept(first,'complete');
+ await until(()=>f.system.getState().continuation?.phase==='sending');await f.call(CHANNELS.setToolConfig,{sendIntervalSeconds:300});
+ await f.notify(batch('fast-unconfirmed','apply_changes',{changes:[{path:'unconfirmed.txt',operation:'create',content:'real output'}]}));
+ await until(()=>f.system.getState().results[0]?.batch_id==='fast-unconfirmed'&&!f.system.getState().busy);
+ assert.equal(await fs.readFile(path.join(f.root,'unconfirmed.txt'),'utf8'),'real output');
+ finish({ok:false,uncertain:true,error:'unknown'});await delay(30);
+ assert.equal(f.system.getState().results[0]?.batch_id,'fast-unconfirmed');assert.equal(f.sent.length,1);
 });
 it('关闭立即取消发送倒计时，工具实际结果与磁盘修改保留，重新开启不发送旧批', async t => {
   const f = await fixture(t);

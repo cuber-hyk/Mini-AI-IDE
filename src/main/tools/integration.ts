@@ -9,6 +9,7 @@ import { sessionKeyOf } from '../consumptionStore';
 import type { FileService } from '../fileService';
 import type { ReturnPathService } from '../returnPathService';
 import type { WorkspaceController } from '../workspaceController';
+import { SkillService } from '../skills';
 import { ToolFiles, resolveToolPath } from './files';
 import { ToolProcesses } from './processes';
 import { ToolStore } from './store';
@@ -33,6 +34,7 @@ interface Options {
   review?: WebContents;
   notifyReview?: (state: ChangeReviewState) => void;
   sender?: Pick<WebResultSender, 'send' | 'cancel' | 'dispose'>;
+  skills?: SkillService;
 }
 const READ_TOOLS = new Set(['get_project_info', 'list_directory', 'search_files', 'read_file', 'search_text']);
 const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
@@ -78,6 +80,7 @@ export function registerToolShutdown(application: Pick<App, 'on' | 'quit'>, appr
 
 /** 授权绑定实际目标与命令/项目脚本，而不是可变的友好名字。 */
 export async function describeTool(root: string, request: ToolRequest): Promise<{ external: boolean; fingerprint: string; canRemember: boolean }> {
+  if (request.tool === 'load_skill') return { external: false, fingerprint: hash(JSON.stringify(request)), canRemember: false };
   const actualRoot = await resolveToolPath(root, '.');
   const targets: string[] = [];
   if (READ_TOOLS.has(request.tool) && request.tool !== 'get_project_info') targets.push(await resolveToolPath(root, request.args.path as string | undefined));
@@ -129,11 +132,11 @@ export async function describeTool(root: string, request: ToolRequest): Promise<
 export async function createToolIntegration(options: Options) {
   const store = new ToolStore(options.storePath); await store.ready();
   const fileTools = new ToolFiles();
+  const skills = options.skills ?? new SkillService();
   let disposed = false; let revision = 0;
   let automaticSuspended = false;
   let harness: ToolHarness;
   let continuation: AutoContinuation | undefined;
-  let automaticSend: { promise: Promise<boolean>; finish: (confirmed: boolean) => void } | undefined;
   const sender = options.sender ?? new WebResultSender(options.web);
   const review = new ChangeReviewOwner(options.notifyReview);
   const reviewTokens = new WeakMap<ToolSelection, number>();
@@ -164,20 +167,19 @@ export async function createToolIntegration(options: Options) {
     if (current !== changeSession) { changes.reset(); changeSession = current; }
   };
   const monitor = new ReplyMonitor(options.web);
-  const finishAutomaticSend = (confirmed: boolean, attempt = automaticSend) => {
-    if (!attempt || automaticSend !== attempt) return;
-    automaticSend = undefined;
-    if (!confirmed) auto.cancelTurn();
-    attempt.finish(confirmed);
-  };
   const auto = new AutoCollector(() => monitor.read(), async (text, current) => {
     const root = options.files.getRoot(); const session = sessionKeyOf(options.web.getURL());
-    const attempt = automaticSend;
-    if (attempt && !await attempt.promise) return;
-    await watcher.acknowledge();
     if (current() && root === options.files.getRoot() && session === sessionKeyOf(options.web.getURL())) await harness.collect(text);
   }, message => harness.report(message));
-  const watcher = new ReplyChangeWatcher(options.web, userTurn => { if (userTurn) { finishAutomaticSend(false); continuation?.userTurn(); auto.noteUserTurn(); } return auto.tick(); }, () => { finishAutomaticSend(false); continuation?.reset(); auto.reset(); synchronizeChangeSession(); harness.getState(); }, message => harness.report(message));
+  const watcher = new ReplyChangeWatcher(options.web, userTurn => {
+    if (userTurn) continuation?.userTurn();
+    return auto.tick();
+  }, (preserve = false, awaitHistory = false, generated = false) => {
+    continuation?.reset();
+    if (generated) auto.observeGeneration(sessionKeyOf(options.web.getURL()));
+    else if (preserve) auto.continueAt(sessionKeyOf(options.web.getURL())); else auto.reset(awaitHistory);
+    synchronizeChangeSession(); harness.getState();
+  }, message => harness.report(message));
   harness = new ToolHarness({ store, root: () => options.files.getRoot(), session: () => sessionKeyOf(options.web.getURL()),
     selected: selection => {
       continuation?.reset();
@@ -194,6 +196,7 @@ export async function createToolIntegration(options: Options) {
       return choice.response === 0 ? 'once' : targets.canRemember && choice.response === 1 ? 'remember' : 'deny';
     },
     execute: async (root, request, started, selection) => {
+      if (request.tool === 'load_skill') return skills.load(root, request.args.name as string);
       if (request.tool === 'apply_changes') return options.workspace.run(() => {
         if (selection.session !== sessionKeyOf(options.web.getURL())) throw new Error('会话已切换，未启动文件修改');
         return changes.execute(root, request, reviewTokens.get(selection));
@@ -210,7 +213,7 @@ export async function createToolIntegration(options: Options) {
   };
   continuation = new AutoContinuation({
     current: () => ({ root: options.files.getRoot(), session: sessionKeyOf(options.web.getURL()), state: getState() }),
-    cancelSend: () => { finishAutomaticSend(false); return sender.cancel(); },
+    cancelSend: () => sender.cancel('results'),
     changed: () => { if (!disposed && !options.editor.isDestroyed()) options.editor.send(CHANNELS.toolState, getState()); },
     send: async (text, session, current) => {
       const state = harness.getState();
@@ -222,14 +225,7 @@ export async function createToolIntegration(options: Options) {
       if (parsed.kind !== 'batch' || !harness.matchesBatch(parsed.batch)) return { ok: false, error: '网页最新回复已变化，未发送旧工具结果' };
       const latest = harness.getState();
       if (!current() || automaticSuspended || !latest.config.automatic || latest.busy || latest.completion?.cancelled || latest.completion?.id !== state.completion?.id || formatToolResults(latest.results) !== text || root !== options.files.getRoot() || sessionKeyOf(options.web.getURL()) !== session) return { ok: false, error: '自动继续已关闭或项目、会话、批次已切换' };
-      let finish!: (confirmed: boolean) => void;
-      const attempt = { promise: new Promise<boolean>(resolve => { finish = resolve; }), finish: (confirmed: boolean) => finish(confirmed) };
-      automaticSend = attempt; auto.noteUserTurn();
-      try {
-        const result = await sender.send(text, session);
-        finishAutomaticSend(result.ok && current(), attempt);
-        return result;
-      } catch (error) { finishAutomaticSend(false, attempt); throw error; }
+      return sender.send(text, session);
     },
   });
   const channels: string[] = [];
@@ -285,6 +281,11 @@ export async function createToolIntegration(options: Options) {
   publish(getState());
   return {
     channels, getState, approveDirty,
+    /** 本地发送与输出采集独立；发送器自身核验地址和一次点击。 */
+    async sendLocalPrompt(text: string, session: string, submissionCurrent: () => boolean) {
+      if (!submissionCurrent() || disposed || session !== sessionKeyOf(options.web.getURL())) return { ok: false, error: '项目、会话或发送选项已变化' };
+      return sender.send(text, session, 'prompt');
+    },
     invalidate: (relative: string, isDirectory: boolean) => { changes.invalidate(relative, isDirectory); publish(harness.getState()); },
     getReviewState: () => { harness.getState(); return review.getState(); },
     async prepareDirty(relative: string): Promise<{ allowed: boolean; discard: boolean; aliases: string[] }> {

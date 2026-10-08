@@ -8,7 +8,7 @@ import { CONTINUATION_BUTTON } from './replyContinuation';
 export const DEEPSEEK_SEND_ICON = 'M8.3125 0.980206C8.66767 1.05312 8.97902 1.2042';
 export const DEEPSEEK_REGENERATE_ICON = 'M7.92136 0.349152C10.3744 0.349234 12.5564 1.5052';
 
-const REPLY_NODES = `
+export const REPLY_NODES = `
   const nodes = Array.from(document.querySelectorAll('[class*="markdown"]')).filter(e => {
     if (e.closest('pre,code')) return false;
     for (let parent = e.parentElement; parent; parent = parent.parentElement) {

@@ -12,13 +12,15 @@
 
 ## 按任务类型路由
 
-通用工具协作先读 `docs/capabilities/tool-harness.md`、`docs/adr/2026-10-06-native-tool-harness-boundary.md`；入口为 `src/shared/toolProtocol.ts`、`src/main/tools/integration.ts`，执行及状态 owner 为同目录 files/processes/changes/harness/store/autoCollector，只读回复状态/快照为 replyObservation，隔离世界变化通知与真实发送动作标记由 replyChangeWatcher 管理，UI 为 `src/renderer/toolHarness.js`。结束控件现场诊断可由用户在 IDE 内嵌 AI 网页 Console 手动执行 `tools/inspect-reply-state.js` 并返回结构文本。
+技能与本地需求先读 `docs/capabilities/skills-and-local-prompt.md`、`docs/adr/2026-10-08-skills-and-local-demand-send.md`。固定目录 owner 为 `src/main/skills.ts`，组装与窄 IPC 为 `localPromptController.ts`，本地 UI 为 `src/renderer/localPrompt.js/css`；唯一官网写入运输为 `src/main/webComposerSender.ts`，`tools/webResultSender.ts` 保留工具门面。技能工具与独立采集/发送入口由 `tools/integration.ts` 接线。
+
+通用工具协作先读 `docs/capabilities/tool-harness.md`、`docs/adr/2026-10-06-native-tool-harness-boundary.md`；入口为 `src/shared/toolProtocol.ts`、`src/main/tools/integration.ts`，执行及状态 owner 为同目录 files/processes/changes/harness/store/autoCollector，只读回复状态/快照为 replyObservation，隔离世界变化通知、历史DOM基线与用于取消旧回传的真实动作通知由 replyChangeWatcher 管理，UI 为 `src/renderer/toolHarness.js`。结束控件现场诊断可由用户在 IDE 内嵌 AI 网页 Console 手动执行 `tools/inspect-reply-state.js` 并返回结构文本。
 
 工具本地 UI 的尺寸、浮层、焦点和拖动由 `src/renderer/toolPanelLayout.js` 管理，纯结果摘要由 `src/renderer/toolResultPresentation.js` 管理；样式为 `src/renderer/toolHarness.css`，状态接线仍为 `toolHarness.js`。对应验收为 `test/toolPanelLayout.test.ts`、`test/toolResultPresentation.test.ts`、`test/toolHarnessUi.test.ts`。
 
 工具实际文件变更由 `src/main/tools/changeReview.ts` 留存本批执行快照，`changes.ts` 提供实际修改与撤销事件，`integration.ts` 绑定项目／会话／批次；右侧文件正文的只读 Diff 界面为 `src/renderer/preview.*` 和 `src/main/previewPreload.ts`。回归入口为 `test/toolChangeReview.test.ts`、`test/toolReviewIntegration.test.ts`、`test/changeTree.test.ts`。文件树类型图标由 `src/renderer/fileIcons.js` 和 `fileExplorer.css` 管理。
 
-自动继续先读 `docs/capabilities/human-machine-boundary.md`、`docs/adr/2026-10-07-automatic-result-return-boundary.md`：`src/main/tools/autoContinuation.ts` 拥有完成事件、作用域与计时，`webResultSender.ts` 拥有唯一官网写入，`integration.ts` 接线和发送前复核。UI 单开关和间隔仍由 `src/renderer/toolHarness.js` 管理；测试为 `test/autoContinuation.test.ts`、`test/webResultSender.test.ts`，原生本地夹具为 `tools/verify-web-result-sender.cjs`，不替代真实官网验收。差异连续阅读、可收起导航、上下文展开、换行及主动临时拓宽由 `preview.js/css` 管理，读 `test/changeTree.test.ts` 和 `src/main/layoutProbe.ts`。
+自动继续先读 `docs/adr/2026-10-08-output-driven-collection.md`、`docs/capabilities/human-machine-boundary.md`、`docs/adr/2026-10-07-automatic-result-return-boundary.md`：`src/main/tools/autoContinuation.ts` 拥有完成事件、作用域与计时，`webResultSender.ts` 调用唯一运输 `src/main/webComposerSender.ts`，`integration.ts` 接线和发送前复核。UI 单开关和间隔仍由 `src/renderer/toolHarness.js` 管理；测试为 `test/autoContinuation.test.ts`、`test/webResultSender.test.ts`，原生本地夹具为 `tools/verify-web-result-sender.cjs`，不替代真实官网验收。差异连续阅读、可收起导航、上下文展开、换行及主动临时拓宽由 `preview.js/css` 管理，读 `test/changeTree.test.ts` 和 `src/main/layoutProbe.ts`。
 
 继续生成的共用只读控件谓词由 `src/main/tools/replyContinuation.ts` 管理，供 replyObservation 的中断状态与 replyChangeWatcher 的真实续写动作使用；等待及补全调度由 autoCollector 管理。回归入口为 `test/deepseekReplyState.test.ts`、`test/replyChangeWatcher.test.ts`、`test/toolAutoCollector.test.ts`、`test/replyObservation.test.ts`、`test/toolIntegration.test.ts`。
 
@@ -55,7 +57,7 @@
 | 明确编辑协议与复制上下文 | `src/shared/returnPath.ts`、`snippet.ts`、`formatSpec.ts`；应用与基线 owner `src/main/returnPathService.ts`；默认面板资源由 `scripts/copy-static.mjs` 生成 |
 | 应用实现（P2 已落地） | `src/main/`、`src/renderer/`、`src/shared/`；脚本 `scripts/`；测试 `test/` |
 | 视图与入口对照（5 个 WebContentsView） | 官方网页、`src/renderer/index.html`（编辑器）、`preview.*`（变更查看）、`webbar.*`（中间官网常驻顶栏 / 只读采集）、独立提示词设置视图；preload 各自独立 |
-| 需求输入与版本切换 | `src/renderer/promptComposer.js`；结构/样式 `index.html`、`style.css`，状态 IPC `src/main/index.ts`、`preload.ts` |
+| 需求输入与版本切换 | `src/renderer/promptComposer.js`；结构/样式 `index.html`、`style.css`，状态与组装 owner `src/main/localPromptController.ts`、`preload.ts` |
 | 自动继续与限定结果回传 | `src/main/tools/autoContinuation.ts`、`webResultSender.ts`、`integration.ts`；本地验收 `tools/verify-web-result-sender.cjs` |
 | 目录和文件管理 | `src/main/workspaceService.ts`（当前根与工作区列表）、`src/renderer/workspaceNavigation.js`（左项目导航）、`workspaceController.ts`（统一入口）、`fileManagement.ts`（条目操作）、`editorSession.ts`（离开保护）；渲染 owner `src/renderer/fileExplorer.js`、`editorWorkspace.js`、`editorTabs.js` |
 | 自动化特征核验工具 | `tools/trace-verifier/` |

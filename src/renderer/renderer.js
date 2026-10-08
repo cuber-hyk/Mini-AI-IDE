@@ -940,7 +940,8 @@
   // 保存现在只有一个入口 —— **Ctrl+S**（注册在 Monaco 上，见 initMonaco）；
   // 未保存状态由工具栏「● 未保存」与文件名旁的白点提示。
 
-  window.setupPromptComposer(bridge, setInfo);
+  const localPrompt = window.setupLocalPrompt(bridge, setInfo);
+  window.setupPromptComposer(bridge, setInfo, localPrompt);
 
   function updateRoot(info) {
     const changed = state.root !== info.root || (workspaceRevision !== null && workspaceRevision !== info.revision);

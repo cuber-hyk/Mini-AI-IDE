@@ -87,7 +87,7 @@
     dock.addEventListener('toggle', measureDock, true);
     dock.addEventListener('click', function () { queueMicrotask(measureDock); });
     observer.observe(dock);
-    ['tool-panel', 'prompt-actions', 'requirement-panel', 'tool-settings-panel', 'tool-more'].forEach(function (id) { observer.observe(document.getElementById(id)); });
+    ['tool-panel', 'prompt-actions', 'requirement-panel', 'local-prompt-options', 'skill-menu', 'skill-chips', 'skill-preview', 'tool-settings-panel', 'tool-more'].forEach(function (id) { observer.observe(document.getElementById(id)); });
     return { apply: apply };
   };
 })();

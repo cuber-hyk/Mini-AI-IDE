@@ -17,7 +17,7 @@ it('启用及导航只建立历史基线；生成中不执行，实际结束后�
   let reply: AutoReply = { url: 'one', text: 'history', completion: 'complete' }; const collected: string[] = [];
   const auto = new AutoCollector(async () => reply, async text => { collected.push(text); }, () => {});
   auto.setEnabled(true); await auto.tick();
-  auto.noteUserTurn();
+
   reply = { ...reply, text: 'partial', completion: 'generating' }; await auto.tick(); await auto.tick();
   assert.deepEqual(collected, []);
   reply = { ...reply, text: 'new batch', completion: 'idle' }; await auto.tick(); await auto.tick();
@@ -29,7 +29,7 @@ it('启用及导航只建立历史基线；生成中不执行，实际结束后�
 it('未知 DOM 与仅文字稳定不能判结束；完成控件可确认错过生成阶段的回复', async () => {
   let reply: AutoReply = { url: 'one', text: 'history', completion: 'complete' }; const output: string[] = []; const messages: string[] = [];
   const auto = new AutoCollector(async () => reply, async text => { output.push(text); }, text => { messages.push(text); });
-  auto.setEnabled(true); await auto.tick(); auto.noteUserTurn(); reply = { ...reply, text: 'new', completion: 'idle' };
+  auto.setEnabled(true); await auto.tick(); reply = { ...reply, text: 'new', completion: 'idle' };
   await auto.tick(); await auto.tick(); assert.equal(output.length, 0); assert.match(messages.at(-1)!, /手动|采集回复/);
   reply.completion = 'complete'; await auto.tick(); assert.deepEqual(output, ['new']); auto.dispose();
 });
@@ -46,7 +46,7 @@ it('手动已采集的回复被调度确认，不重复执行或用未知结束�
     messages.length = 0;
     await auto.tick(); await auto.tick();
     assert.deepEqual(output, []); assert.deepEqual(messages, []);
-    auto.noteUserTurn(); reply = { ...reply, text: 'next', completion: 'complete' }; await auto.tick();
+     reply = { ...reply, text: 'next', completion: 'complete' }; await auto.tick();
     assert.deepEqual(output, ['next']);
   } finally { auto.dispose(); }
 });
@@ -61,7 +61,7 @@ it('异步旧快照不能跨重置执行，新会话通知在旧读取结束后�
   auto.reset(); delayed = false; reply = { url: 'two', text: 'other history', completion: 'complete' };
   await auto.tick(); resolve!({ url: 'one', text: 'stale dangerous request', completion: 'complete' }); await old;
   assert.deepEqual(collected, []);
-  auto.noteUserTurn(); reply.text = 'new request'; await auto.tick(); assert.deepEqual(collected, ['new request']); auto.dispose();
+  reply.text = 'new request'; await auto.tick(); assert.deepEqual(collected, ['new request']); auto.dispose();
 });
 
 it('完成标记的异步清理期间切换上下文、关闭或销毁，旧正文失去执行资格', async () => {
@@ -72,7 +72,7 @@ it('完成标记的异步清理期间切换上下文、关闭或销毁，旧正�
       await new Promise<void>(resolve => { release = resolve; });
       if (current()) output.push(text);
     }, () => {});
-    auto.setEnabled(true); await auto.tick(); auto.noteUserTurn(); reply = { ...reply, text: 'OLD_SESSION_TOOLS' };
+    auto.setEnabled(true); await auto.tick(); reply = { ...reply, text: 'OLD_SESSION_TOOLS' };
     const collecting = auto.tick(); await Promise.resolve();
     if (invalidate === 'reset') auto.reset(); else if (invalidate === 'disable') auto.setEnabled(false); else auto.dispose();
     release!(); await collecting; assert.deepEqual(output, [], invalidate); auto.dispose();
@@ -83,13 +83,28 @@ it('同条回复多次中断只提示等待，续写完全结束后一次采集�
   let reply: AutoReply = { url: 'one', text: 'history', completion: 'complete' };
   const output: string[] = []; const messages: string[] = [];
   const auto = new AutoCollector(async () => reply, async text => { output.push(text); }, text => { messages.push(text); });
-  auto.setEnabled(true); await auto.tick(); auto.noteUserTurn(); messages.length = 0;
+  auto.setEnabled(true); await auto.tick(); messages.length = 0;
   reply = { ...reply, text: 'partial', completion: 'interrupted' }; await auto.tick(); await auto.tick();
   assert.deepEqual(output, []); assert.equal(messages.length, 1); assert.match(messages[0]!, /等待继续生成/);
-  auto.noteUserTurn(); reply.completion = 'generating'; await auto.tick();
+  reply.completion = 'generating'; await auto.tick();
   reply = { ...reply, text: 'still partial', completion: 'interrupted' }; await auto.tick(); assert.deepEqual(output, []);
-  auto.noteUserTurn(); reply = { ...reply, text: 'complete', completion: 'complete' }; await auto.tick(); await auto.tick();
+  reply = { ...reply, text: 'complete', completion: 'complete' }; await auto.tick(); await auto.tick();
   assert.deepEqual(output, ['complete']);
-  auto.noteUserTurn(); reply.completion = 'interrupted'; await auto.tick(); auto.setEnabled(false);
+  reply.completion = 'interrupted'; await auto.tick(); auto.setEnabled(false);
   reply = { ...reply, text: 'finished after disable', completion: 'complete' }; await auto.tick(); assert.deepEqual(output, ['complete']); auto.dispose();
+});
+
+it('切会话空帧与迟到历史只建立基线，之后完整新输出无需发送动作', async () => {
+ let reply:AutoReply={url:'one',text:'old',completion:'complete'};const output:string[]=[];
+ const auto=new AutoCollector(async()=>reply,async text=>{output.push(text);},()=>{});
+ auto.setEnabled(true);await auto.tick();auto.reset(true);
+ reply={url:'two',text:'',completion:'unknown'};await auto.tick();
+ reply={url:'two',text:'history loaded late',completion:'complete'};await auto.tick();assert.deepEqual(output,[]);
+ reply.text='new tool output';await auto.tick();await auto.tick();assert.deepEqual(output,['new tool output']);auto.dispose();
+});
+it('地址分配只延续内容观察，首页新输出无需发送回执', async () => {
+ let reply:AutoReply={url:'home',text:'',completion:'unknown'};const output:string[]=[];
+ const auto=new AutoCollector(async()=>reply,async text=>{output.push(text);},()=>{});
+ auto.setEnabled(true);await auto.tick();reply.completion='generating';await auto.tick();auto.continueAt('allocated');
+ reply={url:'allocated',text:'new batch',completion:'complete'};await auto.tick();assert.deepEqual(output,['new batch']);auto.dispose();
 });

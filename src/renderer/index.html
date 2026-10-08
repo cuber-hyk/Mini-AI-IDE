@@ -14,6 +14,7 @@
     <link rel="stylesheet" href="./applicationUpdate.css" />
     <link rel="stylesheet" href="./toolHarness.css" />
     <link rel="stylesheet" href="./workspaceNavigation.css" />
+    <link rel="stylesheet" href="./localPrompt.css" />
   </head>
   <body>
     <nav id="workspace-navigation" class="workspace-navigation" aria-label="项目工作区">
@@ -126,20 +127,32 @@
     <!-- 变更列表在右侧独立视图（见 preview.html），输入区仍属于编辑器。 -->
     <footer class="prompt-bar">
       <div class="prompt-shell">
-        <details id="requirement-panel" class="requirement-panel"><summary>编写需求 <span>复制提示词后粘贴到官网</span></summary>
+        <details id="requirement-panel" class="requirement-panel"><summary>编写需求 <span>/ 选择技能 · 复制或开启回车发送</span></summary>
         <textarea
           id="requirement"
           class="requirement"
           rows="2"
           aria-label="需求"
-          placeholder="描述你想修改的内容…"
+          placeholder="描述你想修改的内容… 输入 / 选择技能"
+          aria-controls="skill-menu"
+          aria-expanded="false"
           spellcheck="false"
         ></textarea>
+        <div id="skill-menu" class="skill-menu" role="listbox" aria-label="选择技能" hidden></div>
+        <div id="skill-chips" class="skill-chips" aria-label="已选技能" hidden></div>
+        <div class="skill-preview-controls"><button id="skill-preview-close" type="button" class="ui-button">收起技能说明</button></div>
+        <pre id="skill-preview" class="skill-preview" aria-label="技能说明" hidden></pre>
+        <div id="local-prompt-options" class="local-prompt-options">
+          <label title="新对话或需要重新说明规则时勾选"><input id="prompt-initialization" type="checkbox" checked disabled />附带初始化提示词</label>
+          <label title="开启后 Enter 发送，Shift+Enter 换行；关闭后 Enter 换行"><input id="prompt-send-on-enter" type="checkbox" disabled />回车发送到官网</label>
+          <span>新对话或需要重新说明规则时勾选初始化。</span>
+          <button id="btn-send-prompt" type="button" class="ui-button" disabled hidden>发送需求</button>
+        </div>
         </details>
         <div id="prompt-actions" class="prompt-actions">
           <div class="prompt-options">
             <div class="variant-switch" id="variant-switch" role="switch" aria-checked="false"
-                 tabindex="0" title="切换提示词的详细程度：简洁版（6 个示例）/ 完整版（13 个示例）。点击或按空格切换">
+                 tabindex="0" title="切换提示词的详细程度：简洁版（6 个示例）/ 完整版（14 个示例）。点击或按空格切换">
               <span class="variant-thumb" aria-hidden="true"></span>
               <button type="button" class="variant-opt" data-variant="short" aria-pressed="true">简洁</button>
               <button type="button" class="variant-opt" data-variant="full" aria-pressed="false">完整</button>
@@ -185,7 +198,7 @@
             </div>
           </section>
         </div>
-          <button id="btn-copy-prompt" type="button" class="primary" aria-live="polite" title="复制完整提示词，由你粘贴并发送到 AI 网页">复制提示词</button>
+        <button id="btn-copy-prompt" type="button" class="primary" aria-live="polite" title="按当前初始化与技能选择复制提示词，由你粘贴并发送到官网">复制提示词</button>
         </div>
       </div>
     </footer>
@@ -193,6 +206,7 @@
 
     <script src="./vendor/monaco/vs/loader.js"></script>
     <script src="./promptComposer.js"></script>
+    <script src="./localPrompt.js"></script>
     <script src="./editorToolbar.js"></script>
     <script src="./applicationUpdate.js"></script>
     <script src="./editorWorkspace.js"></script>

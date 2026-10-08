@@ -43,6 +43,10 @@ export async function runLayoutProbe(input: {
         const body = document.querySelector('.editor-wrap').getBoundingClientRect();
         return ids.every(inView) && body.left < tree.left && tree.right <= innerWidth + 1 && Math.abs(tree.top) <= 1 && Math.abs(document.getElementById('tree').getBoundingClientRect().top - document.getElementById('monaco').getBoundingClientRect().top) <= 2;
       })()`);
+      const controlDiagnostics = controls ? undefined : await input.editor.webContents.executeJavaScript(`(() => {
+        const ids=['workspace-add','file-new','folder-new','file-refresh','file-maximize','tree-collapse','tool-permission','tool-automatic'];
+        return {width:innerWidth,height:innerHeight, controls:ids.map(id=>({id,rect:document.getElementById(id).getBoundingClientRect().toJSON()})), tree:document.getElementById('tree').getBoundingClientRect().toJSON(), monaco:document.getElementById('monaco').getBoundingClientRect().toJSON()};
+      })()`);
       const previewControls = !previewVisible || await input.preview.webContents.executeJavaScript(`(() => {
         return ['pv-undo','pv-collapse'].every(id => {
           const r = document.getElementById(id).getBoundingClientRect();
@@ -65,7 +69,7 @@ export async function runLayoutProbe(input: {
         try { await fs.writeFile(screenshot, (await input.editor.webContents.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG()); }
         catch (error) { screenshot = undefined; screenshotError = String(error); }
       }
-      cases.push({ width, height, zoom, maximized, previewVisible, editor, bar, preview, geometry, controls, previewControls, webbarControls, pass, ...(screenshot ? { screenshot } : {}), ...(screenshotError ? { screenshotError } : {}) });
+      cases.push({ width, height, zoom, maximized, previewVisible, editor, bar, preview, geometry, controls, previewControls, webbarControls, pass, ...(controlDiagnostics ? { controlDiagnostics } : {}), ...(screenshot ? { screenshot } : {}), ...(screenshotError ? { screenshotError } : {}) });
     }
   } finally {
     input.editor.webContents.setZoomFactor(originalZoom);
