@@ -193,6 +193,12 @@ app.whenReady().then(async () => {
     assert.equal(result.ok, true, JSON.stringify(result)); assert.equal(result.session, 'https://chat.deepseek.com/a/chat/s/allocated');
     assert.equal((await state()).clicks, 1);
   });
+  await test('官方 origin 离线首页：点击后重挂载 composer 断开旧输入框仍确认发送', async () => {
+    await firstSetup(`window.mode='unknown';document.querySelector('[role="button"]').addEventListener('click',()=>{history.pushState({},'', '/a/chat/s/allocated');const composer=document.querySelector('#composer');composer.remove();const next=document.createElement('section');next.id='composer';next.innerHTML='<textarea id="input2"></textarea><div role="button" aria-disabled="true" class="ds-button ds-button--primary ds-button--filled ds-button--circle"><svg><path d="${DEEPSEEK_SEND_ICON}"/></svg></div>';document.body.append(next);});`);
+    const result = await sender.send('本地主动需求', 'https://chat.deepseek.com/', 'prompt');
+    assert.equal(result.ok, true, JSON.stringify(result)); assert.equal(result.session, 'https://chat.deepseek.com/a/chat/s/allocated');
+    assert.equal((await state()).clicks, 1);
+  });
   await test('官方 origin 离线首页：点击前分配地址拒绝，不能借首发放宽作用域', async () => {
     await firstSetup('window.delay=500');
     const sending = sender.send('本地主动需求', 'https://chat.deepseek.com/', 'prompt');
@@ -222,7 +228,7 @@ app.whenReady().then(async () => {
     await watcher.settleNavigation(); assert.deepEqual(reset,{preserve:false,awaitHistory:true});
     await watcher.dispose();
   });
-  for (const mode of ['reply-first', 'url-first', 'fast-url-first', 'history-unknown']) await test('真实 watcher/integration：输出生命周期与历史基线 ' + mode, async () => {
+  for (const mode of ['reply-first', 'url-first', 'fast-url-first', 'marked-url-first', 'history-unknown']) await test('真实 watcher/integration：输出生命周期与历史基线 ' + mode, async () => {
     const { createToolIntegration } = require('../src/main/tools/integration.ts');
     const { FileService } = require('../src/main/fileService.ts');
     const { ReturnPathService } = require('../src/main/returnPathService.ts');
@@ -237,8 +243,10 @@ app.whenReady().then(async () => {
         if(footer){const copy=document.createElement('button');copy.className='ds-button';copy.textContent='复制';frame.append(copy);}
         document.body.insertBefore(frame,document.querySelector('#composer'));
         return frame;
-      };document.querySelector('[role="button"]').addEventListener('click',()=>{
-        if(${JSON.stringify(mode)}==='url-first'||${JSON.stringify(mode)}==='fast-url-first'){
+      };      document.querySelector('[role="button"]').addEventListener('click',()=>{
+        if(${JSON.stringify(mode)}==='marked-url-first'){
+          history.pushState({},'', '/a/chat/s/allocated');window.mountReply('first-native');
+        }else if(${JSON.stringify(mode)}==='url-first'||${JSON.stringify(mode)}==='fast-url-first'){
           history.pushState({},'', '/a/chat/s/allocated');
           setTimeout(()=>{const stop=document.createElement('button');stop.className='ds-button';stop.id='stop';stop.textContent='停止生成';document.body.append(stop);},${mode==='fast-url-first'?30:200});
           setTimeout(()=>{window.mountReply('first-native');document.querySelector('#stop').remove();},${mode==='fast-url-first'?60:450});

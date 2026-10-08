@@ -284,6 +284,8 @@ export async function createToolIntegration(options: Options) {
     /** 本地发送与输出采集独立；发送器自身核验地址和一次点击。 */
     async sendLocalPrompt(text: string, session: string, submissionCurrent: () => boolean) {
       if (!submissionCurrent() || disposed || session !== sessionKeyOf(options.web.getURL())) return { ok: false, error: '项目、会话或发送选项已变化' };
+      // 首页首发的地址分配先于正文挂载且生成控件无可读标签；发送前打短期标记，watcher 交接时据此保留新轮基线，失败退回既有判据。
+      try { await watcher.markLocalSubmit(); } catch { /* 页面忙时由既有回复/生成判据兜底 */ }
       return sender.send(text, session, 'prompt');
     },
     invalidate: (relative: string, isDirectory: boolean) => { changes.invalidate(relative, isDirectory); publish(harness.getState()); },

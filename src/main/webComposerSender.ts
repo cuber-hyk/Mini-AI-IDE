@@ -80,7 +80,8 @@ function sendScript(token: string, text: string, scope: string, fixture: boolean
           else return finish({ ok: false, error: '网页会话已变化', ...(state.clicked ? { uncertain: true } : {}) });
         }
         if (state.clicked) {
-          if ((input.isConnected && input.value === '') || stateOfPage() === 'generating') return finish({ ok: true, session: boundScope });
+          // 首轮点击后官网会同文档切到新会话并重挂载 composer，旧输入框断开本身即证明消息已被受理；生成态标签在真实站不可读，不能作为唯一判据。
+          if ((input.isConnected && input.value === '') || !input.isConnected || stateOfPage() === 'generating') return finish({ ok: true, session: boundScope });
           if (Date.now() - clickedAt >= 3000) return finish({ ok: false, error: '发送后未确认网页接收，已停止且不会重试', uncertain: true });
         } else {
           const current = controls();

@@ -215,6 +215,26 @@ it('空首页打开历史及首页既有回复根都不能保留采集资格', a
   }
 });
 
+it('本地提交标记使首页地址交接在回复与生成态都不可观测时仍保留新轮', async () => {
+  const resets: [boolean | undefined, boolean | undefined][] = [];
+  const f = fixture(undefined, (preserve, history) => resets.push([preserve, history]));
+  f.hasRoot(false); f.navigate('https://chat.deepseek.com/'); f.watcher.setEnabled(true); await flush();
+  await f.watcher.markLocalSubmit(); await flush();
+  f.navigate('https://chat.deepseek.com/a/chat/s/allocated'); await f.watcher.settleNavigation(); await flush();
+  assert.deepEqual(resets.at(-1), [true, false]);
+  f.navigate('https://chat.deepseek.com/a/chat/s/another'); await f.watcher.settleNavigation();
+  assert.deepEqual(resets.at(-1), [false, true]); await f.watcher.dispose();
+});
+
+it('真实用户动作使本地提交标记立即失效，交接重建历史基线', async () => {
+  const resets: [boolean | undefined, boolean | undefined][] = [];
+  const f = fixture(undefined, (preserve, history) => resets.push([preserve, history]));
+  f.hasRoot(false); f.navigate('https://chat.deepseek.com/'); f.watcher.setEnabled(true); await flush();
+  await f.watcher.markLocalSubmit(); await flush();
+  f.userAction(); f.navigate('https://chat.deepseek.com/a/chat/s/history'); await f.watcher.settleNavigation();
+  assert.deepEqual(resets.at(-1), [false, true]); await f.watcher.dispose();
+});
+
 it('导航处理不等待尚在处理的回复，目标生成期间无需发送识别也通知采集', async () => {
   let release: (() => void) | undefined; let calls = 0;
   const f = fixture(async () => { if (++calls === 2) await new Promise<void>(resolve => { release = resolve; }); });

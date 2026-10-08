@@ -8,16 +8,20 @@ import { CONTINUATION_BUTTON } from './replyContinuation';
 
 export const REPLY_WATCH_WORLD = 1004;
 const KEY = '__miniAIReplyChanges';
-export function replyWatchScript(action: 'install' | 'wait' | 'stop' | 'navigation' | 'acknowledge', token: string): string {
+export function replyWatchScript(action: 'install' | 'wait' | 'stop' | 'navigation' | 'acknowledge' | 'local-submit', token: string): string {
   const header = `const key = ${JSON.stringify(KEY)}, token = ${JSON.stringify(token)}; const previous = globalThis[key];`;
   if (action === 'stop') return `(() => { ${header} if (previous?.token !== token) return false; previous.dispose(); delete globalThis[key]; return true; })()`;
+  if (action === 'local-submit') return `(() => { ${header} if (previous?.token !== token) return false; previous.localSubmitAt = Date.now(); return true; })()`;
   if (action === 'navigation') return `(() => { ${header}
     if (previous?.token !== token) return false;
     const url = new URL(location.href), next = (url.protocol === 'file:' ? 'null' : url.origin) + url.pathname;
     const reply = previous.replyNodes().at(-1);
     const firstSession = ${isFirstPromptSession.toString()};
+    // 真实站首轮地址分配先于正文挂载，且生成控件无可读标签；本地提交标记窗口内直接保留新轮，不依赖回复或生成态判据。
+    const marked = previous.localSubmitAt > 0 && Date.now() - previous.localSubmitAt < 8000;
+    previous.localSubmitAt = 0;
     const preserve = firstSession(previous.scope, next)
-      && ((!!reply && !previous.initialReplies.includes(reply)) || previous.generating());
+      && (marked || (!!reply && !previous.initialReplies.includes(reply)) || previous.generating());
     previous.scope = next;
     clearTimeout(previous.history?.timer);
     previous.history = preserve ? null : { reply, generating: previous.generating(), ready: false, timer: null };
@@ -37,7 +41,7 @@ export function replyWatchScript(action: 'install' | 'wait' | 'stop' | 'navigati
     const includes = node => inside(node) || (node.nodeType === 1 && !!node.querySelector(relevant));
     const replyNodes = () => { ${REPLY_NODES} return nodes; };
     const page = new URL(location.href);
-    const state = { token, scope: (page.protocol === 'file:' ? 'null' : page.origin) + page.pathname, replyNodes, initialReplies: replyNodes(), generating: null, history: null, historyReady: false, generated: false, turn: 0, dirty: false, waiter: null, timer: null, observer: null, dispose: null };
+    const state = { token, scope: (page.protocol === 'file:' ? 'null' : page.origin) + page.pathname, replyNodes, initialReplies: replyNodes(), generating: null, history: null, historyReady: false, generated: false, turn: 0, dirty: false, waiter: null, timer: null, observer: null, dispose: null, localSubmitAt: 0 };
     state.generating = () => {
       const visible = element => !!element && element.getClientRects().length > 0;
       if (Array.from(document.querySelectorAll('[aria-busy="true"],[data-is-streaming="true"]')).some(visible)) return true;
@@ -50,6 +54,8 @@ export function replyWatchScript(action: 'install' | 'wait' | 'stop' | 'navigati
     const continuationButton = ${CONTINUATION_BUTTON};
     const userAction = event => {
       if (!event.isTrusted) return;
+      // 真实用户动作使本地提交标记立即失效：标记只覆盖无用户干预的一次首页交接。
+      state.localSubmitAt = 0;
       const button = event.target?.closest?.('[role="button"],button,.ds-button');
       const send = event.type === 'click' && button?.matches(composerSelector) && enabled(button) && icon(button, ${JSON.stringify(DEEPSEEK_SEND_ICON)});
       const regenerate = event.type === 'click' && button?.classList.contains('ds-button--iconLabelTertiary') && enabled(button) && button.getAttribute('aria-disabled') === 'false' && icon(button, ${JSON.stringify(DEEPSEEK_REGENERATE_ICON)});
@@ -145,6 +151,12 @@ export class ReplyChangeWatcher {
     if (manual && this.version === version && metadata && typeof metadata === 'object' && 'turn' in metadata)
       this.consumedTurn = Math.max(this.consumedTurn, Number(metadata.turn));
   }
+  /** 本地主动提交即将发送：保存短期标记，首页交接在回复与生成态都不可观测时仍保留新轮基线。 */
+  async markLocalSubmit(): Promise<void> {
+    const token = this.token;
+    if (!token || this.disposed || this.web.isDestroyed()) return;
+    await this.execute('local-submit', token);
+  }
   private restart(awaitHistory = false): void {
     this.stop(); this.resetBaseline(false, awaitHistory);
     if (!this.enabled || this.disposed || this.web.isDestroyed()) return;
@@ -153,7 +165,7 @@ export class ReplyChangeWatcher {
     const cancelled = new Promise<boolean>(resolve => { this.abort = () => resolve(false); });
     void this.run(version, token, cancelled);
   }
-  private execute(action: 'install' | 'wait' | 'stop' | 'navigation' | 'acknowledge', token: string): Promise<unknown> {
+  private execute(action: 'install' | 'wait' | 'stop' | 'navigation' | 'acknowledge' | 'local-submit', token: string): Promise<unknown> {
     return this.web.executeJavaScriptInIsolatedWorld(REPLY_WATCH_WORLD, [{ code: replyWatchScript(action, token) }]);
   }
   private async run(version: number, token: string, cancelled: Promise<boolean>): Promise<void> {
