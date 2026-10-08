@@ -1,6 +1,6 @@
 ---
 artifact_type: plan
-status: active
+status: archived
 created: 2026-10-08
 updated: 2026-10-08
 owner: 胡运宽
@@ -27,3 +27,10 @@ design_system_impact: none
 ADR gate：实际路径纠正属于现有首发发送/内容观察规则实现，沿用docs/adr/2026-10-08-output-driven-collection.md、docs/adr/2026-10-08-skills-and-local-demand-send.md；公开更新源/四附件与对应tag源码规则沿用docs/adr/2026-10-05-application-update-source-and-boundary.md，不新增架构决策。v0.2.1发布方案经用户明确确认，保留旧v0.2.0附件。
 
 提交范围为当前skills/本地需求、输入UI、自动采集和路径修复及相关测试/文档/版本；用户IDE接入网页版AI.md排版改动不纳入。用户已明确批准Git提交、合并、推送对应源码/tag以及发布记录操作，不能以新包对应旧源码标签。
+
+
+发布结案：用户明确批准已展示的提交、合并、推送及发布记录操作。源码提交221478a1709d8e908ef310153be4280bf86c5952，快进合并master；v0.2.1注解tag指向该提交，93个包内src文件与提交源码（统一CRLF/LF）一致。master与新tag原子推送成功，用户IDE接入网页版AI.md排版改动保留且未提交。
+
+先创建草稿并上传四附件，核对安装包116941362 bytes、Portable116571606 bytes、blockmap121753 bytes、latest.yml359 bytes，Github SHA256均与本地一致；target_commitish准确，随后公开、非prerelease并设latest。发布URL：https://github.com/cuber-hyk/Mini-AI-IDE/releases/tag/v0.2.1，旧v0.2.0附件未替换。无认证公开下载latest.yml与本地逐字节一致，SHA256=010240bb87e2deb2aab7b579830e1d279fea858a08145f2d0baaa5da6e4eab38。
+
+源码构建与666测试、25原生离线夹具、隔离正常启动/自检已经通过；实际覆盖安装和真实官网首轮仍需现场验证，不能将离线测试当真人验收。安装包仍NotSigned。发布记录归档仅改变文档，不改变源码tag或已上传包。
