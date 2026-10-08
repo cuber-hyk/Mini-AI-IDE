@@ -5,28 +5,36 @@ import { sessionKeyOf } from '../consumptionStore';
 import { isFirstPromptSession } from '../firstPromptSession';
 import { DEEPSEEK_SEND_ICON, DEEPSEEK_REGENERATE_ICON, REPLY_NODES } from './replyObservation';
 import { CONTINUATION_BUTTON } from './replyContinuation';
+import { traceCollection, traceScope } from './collectionTrace';
 
 export const REPLY_WATCH_WORLD = 1004;
 const KEY = '__miniAIReplyChanges';
 export function replyWatchScript(action: 'install' | 'wait' | 'stop' | 'navigation' | 'acknowledge' | 'local-submit', token: string): string {
   const header = `const key = ${JSON.stringify(KEY)}, token = ${JSON.stringify(token)}; const previous = globalThis[key];`;
   if (action === 'stop') return `(() => { ${header} if (previous?.token !== token) return false; previous.dispose(); delete globalThis[key]; return true; })()`;
-  if (action === 'local-submit') return `(() => { ${header} if (previous?.token !== token) return false; previous.localSubmitAt = Date.now(); return true; })()`;
+  if (action === 'local-submit') return `(() => { ${header} if (previous?.token !== token) return false; previous.submitAt = Date.now(); previous.handoffCancelled = false; return true; })()`;
   if (action === 'navigation') return `(() => { ${header}
     if (previous?.token !== token) return false;
     const url = new URL(location.href), next = (url.protocol === 'file:' ? 'null' : url.origin) + url.pathname;
+    const from = previous.scope;
     const reply = previous.replyNodes().at(-1);
     const firstSession = ${isFirstPromptSession.toString()};
-    // 真实站首轮地址分配先于正文挂载，且生成控件无可读标签；本地提交标记窗口内直接保留新轮，不依赖回复或生成态判据。
-    const marked = previous.localSubmitAt > 0 && Date.now() - previous.localSubmitAt < 8000;
-    previous.localSubmitAt = 0;
-    const preserve = firstSession(previous.scope, next)
-      && (marked || (!!reply && !previous.initialReplies.includes(reply)) || previous.generating());
+    // 官网真实发送与本地主动发送共用一次首页交接记录；它只证明地址连续性，回复仍须独立核验结束。
+    const marked = previous.submitAt > 0 && Date.now() - previous.submitAt < 8000;
+    const generating = previous.generating();
+    const action = previous.lastAction;
+    const handoffCancelled = previous.handoffCancelled;
+    previous.submitAt = 0;
+    const preserve = firstSession(from, next)
+      && !handoffCancelled
+      && (marked || (!!reply && !previous.initialReplies.includes(reply)) || generating);
     previous.scope = next;
+    previous.handoffCancelled = false;
     clearTimeout(previous.history?.timer);
     previous.history = preserve ? null : { reply, generating: previous.generating(), ready: false, timer: null };
     previous.dirty = false; previous.historyReady = false; previous.generated = false; clearTimeout(previous.timer); previous.timer = null;
-    return { preserve, turn: previous.turn };
+    previous.lastAction = 'none';
+    return { preserve, turn: previous.turn, marked, generating, handoffCancelled, action, replyCount: previous.replyNodes().length, from, to: next };
   })()`;
   if (action === 'acknowledge') return `(() => { ${header} if (previous?.token !== token) return false; return { turn: previous.turn }; })()`;
   if (action === 'wait') return `(() => { ${header} if (previous?.token !== token) return false; if (previous.dirty) { previous.dirty = false; const historyReady = previous.historyReady, generated = previous.generated; previous.historyReady = false; previous.generated = false; return { turn: previous.turn, historyReady, generated, scope: previous.scope }; } return new Promise(resolve => { previous.waiter = resolve; }); })()`;
@@ -41,7 +49,7 @@ export function replyWatchScript(action: 'install' | 'wait' | 'stop' | 'navigati
     const includes = node => inside(node) || (node.nodeType === 1 && !!node.querySelector(relevant));
     const replyNodes = () => { ${REPLY_NODES} return nodes; };
     const page = new URL(location.href);
-    const state = { token, scope: (page.protocol === 'file:' ? 'null' : page.origin) + page.pathname, replyNodes, initialReplies: replyNodes(), generating: null, history: null, historyReady: false, generated: false, turn: 0, dirty: false, waiter: null, timer: null, observer: null, dispose: null, localSubmitAt: 0 };
+    const state = { token, scope: (page.protocol === 'file:' ? 'null' : page.origin) + page.pathname, replyNodes, initialReplies: replyNodes(), generating: null, history: null, historyReady: false, generated: false, turn: 0, dirty: false, waiter: null, timer: null, observer: null, dispose: null, submitAt: 0, handoffCancelled: false, lastAction: 'none' };
     state.generating = () => {
       const visible = element => !!element && element.getClientRects().length > 0;
       if (Array.from(document.querySelectorAll('[aria-busy="true"],[data-is-streaming="true"]')).some(visible)) return true;
@@ -54,8 +62,8 @@ export function replyWatchScript(action: 'install' | 'wait' | 'stop' | 'navigati
     const continuationButton = ${CONTINUATION_BUTTON};
     const userAction = event => {
       if (!event.isTrusted) return;
-      // 真实用户动作使本地提交标记立即失效：标记只覆盖无用户干预的一次首页交接。
-      state.localSubmitAt = 0;
+      // 每次真实动作先作废旧记录；只有当前已识别的发送/回车才建立一次新交接记录。
+      state.submitAt = 0;
       const button = event.target?.closest?.('[role="button"],button,.ds-button');
       const send = event.type === 'click' && button?.matches(composerSelector) && enabled(button) && icon(button, ${JSON.stringify(DEEPSEEK_SEND_ICON)});
       const regenerate = event.type === 'click' && button?.classList.contains('ds-button--iconLabelTertiary') && enabled(button) && button.getAttribute('aria-disabled') === 'false' && icon(button, ${JSON.stringify(DEEPSEEK_REGENERATE_ICON)});
@@ -63,6 +71,10 @@ export function replyWatchScript(action: 'install' | 'wait' | 'stop' | 'navigati
       const composer = document.querySelector(composerSelector);
       const enter = event.type === 'keydown' && event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey && !event.isComposing && !event.defaultPrevented && event.target?.matches?.('textarea,[contenteditable="true"]') && enabled(composer) && icon(composer, ${JSON.stringify(DEEPSEEK_SEND_ICON)});
       if (send || regenerate || resume || enter) state.turn++;
+      // 用户可能打开历史，且历史节点先于导航检查挂载；不得用该新节点复活已取消的交接。
+      state.handoffCancelled = !(send || enter);
+      state.lastAction = send ? 'send' : enter ? 'enter' : regenerate ? 'regenerate' : resume ? 'resume' : 'other';
+      if (send || enter) state.submitAt = Date.now();
       // 只记动作，不读输入内容、不触发采集；后续 DOM 变化才通知主进程。
     };
     document.addEventListener('click', userAction, true);
@@ -118,15 +130,18 @@ export class ReplyChangeWatcher {
   }
   private readonly ready = () => { if (this.enabled) { this.restart(this.navigationHistory); this.navigationHistory = false; } };
   private readonly navigating = (event: { isMainFrame: boolean; isSameDocument: boolean }) => {
-    if (event.isMainFrame && !event.isSameDocument) { this.navigationHistory = true; this.stop(); this.resetBaseline(false, true); }
+    if (event.isMainFrame && !event.isSameDocument) { traceCollection('watcher.full-navigation', { history: true }); this.navigationHistory = true; this.stop(); this.resetBaseline(false, true); }
   };
   private readonly inPage = (_event: unknown, url: string, main: boolean) => {
     if (!main || !this.enabled || sessionKeyOf(url) === this.scope) return;
+    const previousScope = this.scope;
     this.scope = sessionKeyOf(url);
     const token = this.token; const version = this.version;
+    traceCollection('watcher.navigation-start', { from: traceScope(previousScope), to: traceScope(this.scope), version, hasToken: !!token });
     if (token) this.navigation = this.execute('navigation', token).then(metadata => {
       if (!this.enabled || this.disposed || this.version !== version || this.scope !== sessionKeyOf(url)) return;
-      const value = metadata && typeof metadata === 'object' ? metadata as { turn?: number; preserve?: boolean } : {};
+      const value = metadata && typeof metadata === 'object' ? metadata as { turn?: number; preserve?: boolean; marked?: boolean; generating?: boolean; handoffCancelled?: boolean; action?: string; replyCount?: number; from?: string; to?: string } : {};
+      traceCollection('watcher.navigation-result', { from: value.from ? traceScope(value.from) : traceScope(previousScope), to: value.to ? traceScope(value.to) : traceScope(this.scope), preserve: value.preserve === true, turn: value.turn ?? null, marked: value.marked ?? null, generating: value.generating ?? null, handoffCancelled: value.handoffCancelled ?? null, action: value.action ?? null, replyCount: value.replyCount ?? null });
       this.resetBaseline(value.preserve === true, value.preserve !== true);
       this.consumedTurn = value.turn ?? this.consumedTurn;
       // 导航只建立内容基线，不等待工具执行，避免与页面变化处理互相阻塞。
@@ -138,6 +153,7 @@ export class ReplyChangeWatcher {
   setEnabled(value: boolean): void {
     if (this.enabled === value || this.disposed) return;
     this.enabled = value;
+    traceCollection('watcher.enabled', { value });
     this.navigationHistory = false;
     if (value) this.restart(); else this.stop();
   }
@@ -155,12 +171,14 @@ export class ReplyChangeWatcher {
   async markLocalSubmit(): Promise<void> {
     const token = this.token;
     if (!token || this.disposed || this.web.isDestroyed()) return;
+    traceCollection('watcher.local-submit', { scope: traceScope(this.scope), version: this.version });
     await this.execute('local-submit', token);
   }
   private restart(awaitHistory = false): void {
     this.stop(); this.resetBaseline(false, awaitHistory);
     if (!this.enabled || this.disposed || this.web.isDestroyed()) return;
     this.scope = sessionKeyOf(this.web.getURL()); this.consumedTurn = 0; this.navigation = Promise.resolve();
+    traceCollection('watcher.restart', { awaitHistory, scope: traceScope(this.scope), version: this.version });
     const version = this.version; const token = `${this.instance}:${version}`; this.token = token;
     const cancelled = new Promise<boolean>(resolve => { this.abort = () => resolve(false); });
     void this.run(version, token, cancelled);
@@ -173,6 +191,7 @@ export class ReplyChangeWatcher {
     try {
       const installed = await this.execute('install', token);
       if (!installed || !current()) return;
+      traceCollection('watcher.installed', { scope: traceScope(this.scope), hasReplies: !!(installed && typeof installed === 'object' && 'hasReplies' in installed && installed.hasReplies === true) });
       if (typeof installed === 'object' && 'hasReplies' in installed && installed.hasReplies === true) this.resetBaseline(false, true);
       // 监听先安装，再建立历史基线；期间的变化保留为一次待通知。
       await this.change(false);
@@ -183,11 +202,13 @@ export class ReplyChangeWatcher {
         do { navigation = this.navigation; await navigation; } while (navigation !== this.navigation);
         if (!current()) return;
         if (typeof changed === 'object' && changed !== null && 'scope' in changed && changed.scope !== this.scope) continue;
+        traceCollection('watcher.change', { scope: traceScope(this.scope), changed: typeof changed === 'object' && changed !== null ? changed : null, consumedTurn: this.consumedTurn });
         // 实际生成可能在150ms通知合并期间结束；已见证据不能把完整首回复重置为历史。
         if (typeof changed === 'object' && changed !== null && 'generated' in changed && changed.generated === true) this.resetBaseline(false, false, true);
         else if (typeof changed === 'object' && changed !== null && 'historyReady' in changed && changed.historyReady === true) this.resetBaseline(false, true);
         const next = typeof changed === 'object' && changed !== null && 'turn' in changed ? Number(changed.turn) : this.consumedTurn;
         const userTurn = next > this.consumedTurn; this.consumedTurn = Math.max(next, this.consumedTurn);
+        traceCollection('watcher.dispatch', { userTurn, turn: next, historyReady: typeof changed === 'object' && changed !== null && 'historyReady' in changed ? changed.historyReady : null, generated: typeof changed === 'object' && changed !== null && 'generated' in changed ? changed.generated : null });
         await this.change(userTurn);
       }
     } catch (error) {
