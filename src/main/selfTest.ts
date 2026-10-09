@@ -414,7 +414,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
      *
      * 为什么需要：按钮存在于 HTML、也进了 el 结构体，但如果漏了 `addEventListener`，
      * 它就是"看着有、点了没反应"，而 tsc 与其它检查都看不到（P2-15 同类）。
-     * 本项目的按钮 id 与 el 键名有稳定对应（btn-copy-prompt → btnCopyPrompt），据此逐一对齐。
+     * 本项目的按钮 id 与 el 键名有稳定对应（btn-send-prompt → btnSendPrompt），据此逐一对齐。
      */
     const htmlButtonIds = [...html.matchAll(/<button\s+id="([^"]+)"/g)].map((m) => m[1] as string);
     const toCamel = (s: string): string => s.replace(/-([a-z])/g, (_m, c: string) => c.toUpperCase());
@@ -737,14 +737,14 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
        * Y8：**用户内容必须真的被用上**。
        *
        * 分版本后链路变成：
-       *   ① 编辑器「复制提示词」→ copyPrompt → resolveFormatSpec(customSpecsOf(...), variant)
+       *   ① 编辑器需求提交 → LocalPromptController → resolveFormatSpec(customSpecsOf(...), variant)
        *   ② File 菜单「只复制输出格式要求」→ 同一条 customSpecsOf 取值
        *   ③ 面板读写的是 settings.customFormatSpecShort / customFormatSpecFull
        * 任一条漏了就回到"改了没用"（最坏的失败形态：用户以为生效了）。
        * 另外还要求开关状态（formatSpecVariant）在两个方向上都有 handler。
        */
       const promptControllerTs = fs.readFileSync(path.join(srcMainDir, 'localPromptController.ts'), 'utf8');
-      const usesInCopyPrompt = /formatSpec:\s*resolveFormatSpec/.test(promptControllerTs) && /customFormatSpecShort/.test(promptControllerTs) && /customFormatSpecFull/.test(promptControllerTs);
+      const usesInLocalPrompt = /formatSpec:\s*resolveFormatSpec/.test(promptControllerTs) && /customFormatSpecShort/.test(promptControllerTs) && /customFormatSpecFull/.test(promptControllerTs);
       const usesInCopyFormat = /resolveFormatSpec\(customSpecsOf\(/.test(mainTs) &&
         /formatSpecVariant/.test(mainTs);
       const panelReadsSetting =
@@ -754,8 +754,8 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
         /customFormatSpecFull:\s*string \| null/.test(settingsTs);
       const hasToggleLink = /ipcMain\.handle\(CHANNELS\.getFormatSpecVariant/.test(mainTs) &&
         /ipcMain\.handle\(CHANNELS\.setFormatSpecVariant/.test(mainTs);
-      add('Y8', '自定义内容真的被用上（分版本三条链路 + 开关状态可读写）', usesInCopyPrompt && usesInCopyFormat && panelReadsSetting && hasToggleLink, {
-        usesInCopyPrompt,
+      add('Y8', '自定义内容真的被用上（分版本三条链路 + 开关状态可读写）', usesInLocalPrompt && usesInCopyFormat && panelReadsSetting && hasToggleLink, {
+        usesInLocalPrompt,
         usesInCopyFormat,
         panelReadsSetting,
         hasToggleLink,
@@ -841,12 +841,12 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       /*
        * Y15：**开关状态必须贯通到实际发出去的内容**。
        *
-       * 最坏的失败形态：界面显示"完整版"，但 copyPrompt 仍按短版拼 —— 用户无从察觉。
-       * 断言 copyPrompt 链路确实读了 settings.formatSpecVariant。
+       * 最坏的失败形态：界面显示"完整版"，但本地需求仍按短版拼 —— 用户无从察觉。
+       * 断言本地需求链路确实读了 settings.formatSpecVariant。
        */
-      const variantUsedInCopyPrompt = /resolveFormatSpec[\s\S]{0,250}settings\.formatSpecVariant/.test(promptControllerTs);
-      add('Y15', '开关状态贯通：复制提示词链路确实读取 formatSpecVariant', variantUsedInCopyPrompt, {
-        variantUsedInCopyPrompt,
+      const variantUsedInLocalPrompt = /resolveFormatSpec[\s\S]{0,250}settings\.formatSpecVariant/.test(promptControllerTs);
+      add('Y15', '开关状态贯通：需求提交链路确实读取 formatSpecVariant', variantUsedInLocalPrompt, {
+        variantUsedInLocalPrompt,
       });
 
       /*
@@ -903,18 +903,12 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       rows: rowsAttr ?? null,
     });
 
-    // 复制按钮保持单行，反馈切换不改变宽度。
-    const primaryRule = /\.prompt-bar button\.primary\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
-    const btnH = Number(/height:\s*(\d+)px/.exec(primaryRule)?.[1] ?? 0);
-    const radius = Number(/border-radius:\s*(\d+)px/.exec(primaryRule)?.[1] ?? 0);
-    const compactStyle = btnH >= 28 && radius > 0 && /white-space:\s*nowrap/.test(primaryRule) && /width:\s*\d+px/.test(primaryRule);
-    const copyBtnText = /id="btn-copy-prompt"[\s\S]{0,400}?>\s*([^<]+?)\s*</.exec(html)?.[1] ?? '';
-    add('O4', '「复制提示词」按钮保持紧凑且文案正确', compactStyle && copyBtnText === '复制提示词', {
-      compactStyle,
-      height: btnH || null,
-      borderRadius: radius || null,
-      buttonText: copyBtnText,
-    });
+    // 主提交按钮保持圆形图标，并具有可访问名称。
+    const harnessCss = fs.readFileSync(path.join(rendererDir, 'toolHarness.css'), 'utf8');
+    const sendRule = /\.prompt-actions \.prompt-send\s*\{([^}]*)\}/.exec(harnessCss)?.[1] ?? '';
+    const circleStyle = /border-radius:\s*50%/.test(sendRule) && /width:\s*36px/.test(sendRule) && /height:\s*36px/.test(sendRule);
+    const namedSend = /id="btn-send-prompt"[^>]*aria-label="发送需求"/.test(html);
+    add('O4', '需求提交按钮保持圆形且具有可访问名称', circleStyle && namedSend, { circleStyle, namedSend });
 
     // 唯一工具入口采用权限与结果状态；实际调用本地 bridge 验证已连接到主进程。
     const mainJs = fs.readFileSync(path.join(__dirname, 'index.js'), 'utf8');
@@ -1063,7 +1057,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     const promptGeometry = await input.editorView.webContents.executeJavaScript(`(() => {
       const bar = document.querySelector('.prompt-bar'), rect = bar.getBoundingClientRect();
       const dock = document.getElementById('collaboration-dock').getBoundingClientRect();
-      const ids = ['requirement', 'variant-switch', 'tool-permission', 'tool-automatic', 'tool-settings-toggle', 'btn-copy-prompt'];
+      const ids = ['requirement', 'variant-switch', 'tool-permission', 'tool-automatic', 'tool-settings-toggle', 'btn-send-prompt'];
       return {
         editorShrinkable: getComputedStyle(document.querySelector('.editor-wrap')).minHeight === '0px',
         withinBudget: rect.top >= dock.top - 1 && rect.bottom <= dock.bottom + 1 && dock.bottom <= innerHeight + 1 && dock.left >= 0 && dock.right <= innerWidth + 1,

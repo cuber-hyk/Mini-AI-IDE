@@ -2,7 +2,6 @@
 window.setupLocalPrompt = function (bridge, setInfo) {
   const input = document.getElementById('requirement');
   const include = document.getElementById('prompt-initialization');
-  const enter = document.getElementById('prompt-send-on-enter');
   const send = document.getElementById('btn-send-prompt');
   const menu = document.getElementById('skill-menu');
   const chips = document.getElementById('skill-chips');
@@ -34,12 +33,13 @@ window.setupLocalPrompt = function (bridge, setInfo) {
   function resized() { document.dispatchEvent(new Event('prompt-size-changed')); }
   function busy() { return !optionsReady || !catalogReady || changing || sending || stagingAttachments > 0 || composerBusy; }
   function paint() {
-    send.hidden = !enter.checked;
-    send.disabled = busy();
+    send.disabled = busy() || !input.value.trim();
+    send.classList.toggle('is-sending', sending);
+    send.setAttribute('aria-label', sending ? '正在发送需求' : '发送需求');
+    send.setAttribute('aria-busy', String(sending));
+    send.title = sending ? '正在发送需求' : '发送需求';
     addAttachment.disabled = !optionsReady || changing || sending || stagingAttachments > 0 || composerBusy;
     include.disabled = !optionsReady || changing || sending || composerBusy;
-    // 关闭发送仍允许主进程取消等待中的动作。
-    enter.disabled = !optionsReady || changing;
     const externalBusy = !optionsReady || !catalogReady || changing || sending;
     if (publishedBusy !== externalBusy) { publishedBusy = externalBusy; busyListener(externalBusy); }
     resized();
@@ -163,13 +163,12 @@ window.setupLocalPrompt = function (bridge, setInfo) {
   }
   function getSubmission() { syncSelection(); return { requirement: input.value.trim(), root: root, skills: selected.slice(), attachments: attachments.map(function (file) { return file.id; }) }; }
   async function submit() {
-    if (!enter.checked || !optionsReady || !catalogReady || changing || sending || composerBusy) return;
+    if (!optionsReady || !catalogReady || changing || sending || composerBusy) return;
     sending = true; paint();
     if (stagingAttachments > 0) {
       setInfo('正在添加附件，完成后将继续发送…');
       await lastAttachmentStage;
     }
-    if (!enter.checked) { setInfo('回车发送已关闭，本次需求未发送'); sending = false; paint(); return; }
     if (attachmentStageFailed) { setInfo('附件添加失败，本次需求未发送；请重新添加图片后再试。', true); sending = false; paint(); return; }
     const draft = input.value;
     const submission = getSubmission();
@@ -190,16 +189,15 @@ window.setupLocalPrompt = function (bridge, setInfo) {
     if (changing || !optionsReady) return;
     changing = true; paint();
     try {
-      const next = await bridge.setLocalPromptOptions({ includeInitialization: include.checked, sendOnEnter: enter.checked });
-      include.checked = next.includeInitialization; enter.checked = next.sendOnEnter;
+      const next = await bridge.setLocalPromptOptions({ includeInitialization: include.checked });
+      include.checked = next.includeInitialization;
     } catch (err) {
       setInfo('保存输入设置失败：' + errorText(err), true);
-      try { const next = await bridge.getLocalPromptOptions(); include.checked = next.includeInitialization; enter.checked = next.sendOnEnter; }
+      try { const next = await bridge.getLocalPromptOptions(); include.checked = next.includeInitialization; }
       catch (_) { optionsReady = false; }
     } finally { changing = false; paint(); }
   }
   include.addEventListener('change', function () { void changeOptions(); });
-  enter.addEventListener('change', function () { void changeOptions(); });
   send.addEventListener('click', function () { void submit(); });
   addAttachment.addEventListener('click', function () { void addFiles(function () { return bridge.choosePromptAttachments(); }); });
   async function readClipboardImage(file, sourceType) {
@@ -263,24 +261,24 @@ window.setupLocalPrompt = function (bridge, setInfo) {
     } catch (_) { setInfo('无法读取工作区拖入的文件', true); }
   });
   document.getElementById('skill-preview-close').addEventListener('click', function () { previewRevision += 1; preview.hidden = true; resized(); });
-  input.addEventListener('input', updateMenu);
+  input.addEventListener('input', function () { updateMenu(); paint(); });
   input.addEventListener('click', updateMenu);
   input.addEventListener('compositionstart', function () { composing = true; closeMenu(); });
   input.addEventListener('compositionend', function () { composing = false; updateMenu(); });
   input.addEventListener('keydown', function (event) {
     if (composing || event.isComposing || event.keyCode === 229) return;
     if (event.key === 'Enter' && event.shiftKey) { closeMenu(); return; }
-    if (event.key === 'Enter' && event.repeat && !event.shiftKey && (enter.checked || !menu.hidden)) { event.preventDefault(); return; }
+    if (event.key === 'Enter' && event.repeat && !event.shiftKey) { event.preventDefault(); return; }
     if (!menu.hidden) {
       if (event.key === 'Escape') { event.preventDefault(); closeMenu(); return; }
       if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); active = (active + (event.key === 'ArrowDown' ? 1 : -1) + matches.length) % matches.length; paintMenu(); return; }
       if (event.key === 'Enter') { event.preventDefault(); choose(active); return; }
     }
-    if (event.key === 'Enter' && !event.shiftKey && enter.checked) { event.preventDefault(); void submit(); }
+    if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); void submit(); }
   });
   bridge.onRootChanged(function (next) { root = next.root; attachments = []; renderAttachments(); void refreshCatalog(); });
   paint();
-  void bridge.getLocalPromptOptions().then(function (next) { include.checked = next.includeInitialization; enter.checked = next.sendOnEnter; optionsReady = true; paint(); }).catch(function (err) { setInfo('读取输入设置失败：' + errorText(err), true); });
+  void bridge.getLocalPromptOptions().then(function (next) { include.checked = next.includeInitialization; optionsReady = true; paint(); }).catch(function (err) { setInfo('读取输入设置失败：' + errorText(err), true); });
   void refreshCatalog();
   return {
     getSubmission: getSubmission,

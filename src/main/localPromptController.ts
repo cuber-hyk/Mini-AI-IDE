@@ -17,7 +17,7 @@ interface Options {
   sender: { send: (text: string, session: string, kind: 'prompt', current: () => boolean, attachments?: readonly PromptAttachmentData[]) => ReturnType<WebComposerSender['send']>; cancel: WebComposerSender['cancel'] };
   attachments: LocalPromptAttachments; chooseFiles: () => Promise<string[]>; resolveWorkspacePath: (path: string) => Promise<{ ok: boolean; absolute?: string; error?: string }>;
   root: () => string | null; session: () => string; busy: () => boolean;
-  copy: (text: string) => void; disabled?: boolean;
+  disabled?: boolean;
 }
 export class LocalPromptController {
   private generation = 0;
@@ -29,7 +29,7 @@ export class LocalPromptController {
   setOptions(raw: unknown): LocalPromptOptions {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('本地提示词选项无效');
     const patch = raw as Record<string, unknown>;
-    if (Object.entries(patch).some(([key, value]) => !['includeInitialization', 'sendOnEnter'].includes(key) || typeof value !== 'boolean')) throw new Error('本地提示词选项无效');
+    if (Object.entries(patch).some(([key, value]) => key !== 'includeInitialization' || typeof value !== 'boolean')) throw new Error('本地提示词选项无效');
     const next = { ...this.getOptions(), ...patch } as LocalPromptOptions;
     this.cancel(false); this.options.settings.update({ localPrompt: next }); return next;
   }
@@ -69,19 +69,15 @@ export class LocalPromptController {
     if (prompt.length > 1000000) throw new Error('提示词与技能内容过长，请减少所选技能');
     return prompt;
   }
-  async copy(raw: unknown): Promise<LocalPromptResult> {
-    try { const prompt = await this.compose(raw); this.options.copy(prompt); return { ok: true, prompt, length: prompt.length }; }
-    catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
-  }
   async send(raw: unknown): Promise<LocalPromptResult> {
-    if (this.options.disabled || !this.getOptions().sendOnEnter) return { ok: false, error: '回车发送未开启，请复制后手动发送' };
+    if (this.options.disabled) return { ok: false, error: '当前运行模式不支持发送需求' };
     if (this.sending || this.options.busy()) return { ok: false, error: '需求或工具结果正在处理，请等待当前操作结束' };
     const session = this.options.session(); const generation = this.generation; this.sending = true;
     try {
       const prompt = await this.compose(raw);
-      if (generation !== this.generation || !this.getOptions().sendOnEnter || session !== this.options.session() || this.options.busy()) return { ok: false, error: '开关、会话或工具状态已变化，需求未发送' };
+      if (generation !== this.generation || session !== this.options.session() || this.options.busy()) return { ok: false, error: '选项、会话或工具状态已变化，需求未发送' };
       // 会话作用域由 integration/sender 核验，允许它们证明首页首发的地址分配。
-      const current = () => generation === this.generation && this.getOptions().sendOnEnter && !this.options.busy();
+      const current = () => generation === this.generation && !this.options.busy();
       const attachments = await this.options.attachments.resolve((raw as LocalPromptInput).attachments ?? []);
       if (generation !== this.generation || session !== this.options.session()) return { ok: false, error: '项目或会话已变化，需求未发送' };
       traceCollection('local-prompt.attachments-resolved', { count: attachments.length, totalBytes: attachments.reduce((sum, item) => sum + item.size, 0) });
@@ -145,8 +141,8 @@ export class LocalPromptController {
         return { ok: true, skill };
       } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
     });
-    handle(CHANNELS.copyPrompt, raw => this.copy(raw)); handle(CHANNELS.sendPrompt, raw => this.send(raw));
+    handle(CHANNELS.sendPrompt, raw => this.send(raw));
     return [CHANNELS.getLocalPromptOptions, CHANNELS.setLocalPromptOptions, CHANNELS.choosePromptAttachments, CHANNELS.stagePromptAttachments, CHANNELS.stageWorkspacePromptAttachments, CHANNELS.stageClipboardPromptImage,
-      CHANNELS.removePromptAttachment, CHANNELS.getSkillCatalog, CHANNELS.loadSkill, CHANNELS.copyPrompt, CHANNELS.sendPrompt];
+      CHANNELS.removePromptAttachment, CHANNELS.getSkillCatalog, CHANNELS.loadSkill, CHANNELS.sendPrompt];
   }
 }

@@ -11,20 +11,21 @@ function fixture() {
       height: 30, width: 200, children: [] as any[],
       getBoundingClientRect() { return { height: parseFloat(this.style.height) || this.height, width: this.width, left: 0, right: this.width, top: 400, bottom: 430 }; },
       addEventListener(type: string, fn: (event: any) => void) { listeners.set(type, fn); },
+      dispatchEvent(event: {type: string}) { this.fire(event.type); },
       fire(type: string, extra = {}) { const event = { preventDefault() {}, ...extra }; listeners.get(type)?.(event); },
       setAttribute(key: string, value: string) { this.attrs[key] = value; },
-      classList: { add(key: string) { classes.add(key); }, remove(key: string) { classes.delete(key); } },
+      classList: { contains(key: string) { return classes.has(key); }, add(key: string) { classes.add(key); }, remove(key: string) { classes.delete(key); } },
       setPointerCapture(id: number) { captures.add(id); }, hasPointerCapture(id: number) { return captures.has(id); }, releasePointerCapture(id: number) { captures.delete(id); },
       contains(other: any) { return this === other || this.children.includes(other); },
       querySelector() { return this.children[0]; }, focus() { this.focused = true; },
     };
   }
-  const ids = ['tool-panel','tool-panel-body','tool-resizer','tool-settings-wrap','tool-settings-toggle','tool-settings-panel','tool-settings-close','tool-more-wrap','tool-more-toggle','tool-more','btn-settings'];
+  const ids = ['collaboration-dock','tool-panel','tool-panel-body','tool-resizer','tool-settings-wrap','tool-settings-toggle','tool-settings-panel','tool-settings-close','tool-more-wrap','tool-more-toggle','tool-more','btn-settings'];
   const nodes = Object.fromEntries(ids.map(id => [id, node()]));
   const prompt = node(); prompt.height = 130;
   const toolbar = node(); toolbar.height = 36;
   const heading = node(); heading.height = 38;
-  nodes['tool-panel'].children = [heading];
+  nodes['tool-panel'].children = [heading]; nodes['tool-panel'].classList.add('has-results');
   nodes['tool-settings-wrap'].children = [nodes['tool-settings-toggle'], nodes['tool-settings-panel']];
   nodes['tool-more-wrap'].children = [nodes['tool-more-toggle'], nodes['tool-more']];
   nodes['tool-settings-panel'].hidden = true; nodes['tool-more'].hidden = true;
@@ -32,7 +33,7 @@ function fixture() {
   const document = { ...node(), getElementById: (id: string) => nodes[id], querySelector: (selector: string) => selector === '.prompt-bar' ? prompt : toolbar };
   const window = { ...node(), innerHeight: 600, innerWidth: 420, setupToolPanelLayout: null as any };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/renderer/toolPanelLayout.js'), 'utf8'), {
-    window, document, ResizeObserver: class { observe() {} },
+    window, document, Event: class { constructor(readonly type: string) {} }, ResizeObserver: class { observe() {} },
   });
   const layout = window.setupToolPanelLayout();
   return { nodes, document, window, prompt, layout };

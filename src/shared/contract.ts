@@ -75,8 +75,6 @@ export const CHANNELS = {
   setWorkspaceLayout: 'ui:set-workspace-layout',
   /** 把"输出格式要求"模板写入系统剪贴板（**由用户自己粘贴到提示词**，程序绝不注入） */
   copyFormatSpec: 'ui:copy-format-spec',
-  /** 组装完整 prompt（需求 + 环境上下文 + 格式要求）并写入剪贴板；仍由用户自己粘贴 */
-  copyPrompt: 'ui:copy-prompt',
   /** 取"工作环境摘要"（绝对路径 + 目录树 + 运行环境），供界面预览 */
   getContext: 'ui:get-context',
   /** 把选中原文组装为只读上下文并写入剪贴板 */
@@ -606,11 +604,7 @@ export interface EditorBridge {
   setFormatSpecVariant(variant: FormatSpecVariant): Promise<FormatSpecVariant>;
   /** 取工作环境摘要（当前目录 + 目录树 + 运行环境），用于界面预览 */
   getContext(): Promise<ContextSummary>;
-  /**
-   * 组装完整 prompt 并写入剪贴板。
-   * 仍**只写剪贴板**：由用户自己 Ctrl+V 到网页输入框（零注入边界）。
-   */
-  copyPrompt(input: LocalPromptInput): Promise<LocalPromptResult>;
+  /** 按初始化和技能选择组装用户需求，经唯一受控运输提交到官网。 */
   sendPrompt(input: LocalPromptInput): Promise<LocalPromptResult>;
   choosePromptAttachments(): Promise<PromptAttachment[]>;
   stagePromptAttachments(files: File[]): Promise<PromptAttachment[]>;

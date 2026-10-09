@@ -65,7 +65,7 @@ export interface Settings {
 }
 
 const DEFAULTS: Settings = {
-  localPrompt: { includeInitialization: true, sendOnEnter: false },
+  localPrompt: { includeInitialization: true },
   lastRoot: null,
   recentRoots: [],
   workspaceRoots: [],
@@ -129,8 +129,7 @@ function normalizeWorkspaceLayout(value: unknown): WorkspaceLayoutSettings | nul
 
 export function normalizeLocalPrompt(value: unknown): LocalPromptOptions {
   const v = value && typeof value === 'object' ? value as Partial<LocalPromptOptions> : {};
-  return { includeInitialization: typeof v.includeInitialization === 'boolean' ? v.includeInitialization : true,
-    sendOnEnter: typeof v.sendOnEnter === 'boolean' ? v.sendOnEnter : false };
+  return { includeInitialization: typeof v.includeInitialization === 'boolean' ? v.includeInitialization : true };
 }
 
 export class SettingsStore {
@@ -195,7 +194,7 @@ export class SettingsStore {
        * 自定义格式要求：**空字符串视同未设置**。
        * 若允许空串，用户误清空内容就会得到"格式要求为空"的 prompt ——
        * 提示词里缺了唯一让"一键同步"成立的那段约定，模型输出将无法被解析，
-       * 而这不会有任何报错（表现为"复制提示词后 AI 的输出识别不出来"）。
+       * 而这不会有任何报错（表现为"附带初始化的需求提交后 AI 的输出识别不出来"）。
        * 因此空串一律回落默认值，与面板上的「恢复默认」语义保持一致。
        */
       const clampSpec = (v: unknown): string | null =>

@@ -99,12 +99,12 @@ it('真实设置写入失败抛错且缓存不先行更新；自检存储不污�
 });
 
 
-it('本地发送默认关闭、初始化默认附带；用户选择落盘重载且不与其他设置串改', (t) => {
-  const f=fixture(t); assert.deepEqual(f.settings.get().localPrompt,{includeInitialization:true,sendOnEnter:false});
-  f.settings.update({localPrompt:{includeInitialization:false,sendOnEnter:true}});
+it('初始化默认附带；用户选择落盘重载且不与其他设置串改', (t) => {
+  const f=fixture(t); assert.deepEqual(f.settings.get().localPrompt,{includeInitialization:true});
+  f.settings.update({localPrompt:{includeInitialization:false}});
   const reread=new SettingsStore('test.json',f.home);
-  assert.deepEqual(reread.get().localPrompt,{includeInitialization:false,sendOnEnter:true});
+  assert.deepEqual(reread.get().localPrompt,{includeInitialization:false});
   reread.get().localPrompt.includeInitialization=true;
   assert.equal(reread.get().localPrompt.includeInitialization,false);
-  reread.update({sidebarVisible:false}); assert.equal(reread.get().localPrompt.sendOnEnter,true);
+  reread.update({sidebarVisible:false}); assert.equal(reread.get().localPrompt.includeInitialization,false);
 });

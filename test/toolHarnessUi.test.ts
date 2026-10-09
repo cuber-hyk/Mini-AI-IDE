@@ -24,7 +24,7 @@ function state(overrides: Record<string, unknown> = {}) {
 }
 
 function setup(overrides: Record<string, unknown> = {}, audioConstructor?: unknown) {
-  const ids = ['tool-permission', 'tool-automatic', 'tool-dirty-policy', 'tool-permission-hint', 'tool-count',
+  const ids = ['tool-permission-control', 'tool-permission', 'tool-automatic', 'tool-dirty-policy', 'tool-permission-hint', 'tool-count',
     'tool-activity', 'tool-message', 'tool-results', 'tool-copy', 'tool-cancel', 'tool-clear-rules', 'tool-undo',
     'tool-panel', 'tool-completion-notice', 'tool-sound-notice', 'tool-completion-sound', 'tool-more-toggle', 'tool-copy-notice', 'tool-auto-copy', 'tool-send-interval', 'tool-continue-notice', 'tool-interval-down', 'tool-interval-up', 'tool-send-results', 'tool-return-notice'];
   const nodes = Object.fromEntries(ids.map(id => [id, element()]));
@@ -171,7 +171,7 @@ it('每条前后台命令有独立中断按钮，只发送被点击的批次和�
   ] }));
   const buttons = ui.nodes['tool-results'].children.map((item: any) => item.children[0].children.find((node: any) => node.className === 'ui-button tool-command-stop'));
   assert.equal(buttons[0].textContent, '中断'); assert.equal(buttons[1].disabled, false); assert.equal(buttons[2], undefined);
-  assert.equal(ui.nodes['tool-more-toggle'].hidden, false);
+  assert.equal(ui.nodes['tool-more-toggle'].hidden, true);
   await buttons[1].fire('click'); assert.deepEqual(ui.calls, ['get', { batch_id: 'inspect', request_id: 'background', process_id: 'proc-b' }]);
 });
 

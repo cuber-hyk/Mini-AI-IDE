@@ -481,32 +481,6 @@ body {
   box-shadow: 0 0 0 2px rgba(91, 141, 239, 0.45);
 }
 
-/* 复制按钮保留固定宽度，成功反馈不导致操作栏跳动。 */
-.prompt-bar button.primary {
-  flex: 0 0 auto;
-  width: 108px;
-  height: 32px;
-  padding: 0 12px;
-  border-radius: 8px;
-  border: none;
-  background: #4d6bfe;
-  color: #fff;
-  font-size: 13px;
-  font-weight: 500;
-  line-height: 32px;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background 0.15s ease;
-}
-
-.prompt-bar button.primary:hover:not(:disabled) {
-  background: #6280ff;
-}
-
-.prompt-bar button.primary:active:not(:disabled) {
-  background: #3f5ce8;
-}
-
 /* ---------------- 选区右上角的浮动复制按钮 ----------------
  *
  * 用户建议：选中代码后在选区右上角冒一个小按钮，比顶部常驻按钮更顺手。

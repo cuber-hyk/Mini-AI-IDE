@@ -64,7 +64,12 @@ export class ToolHarness {
 
   getState(): ToolState {
     const results = this.getCopyResults();
-    return { config: this.options.store.getConfig(), results, message: this.message, busy: this.waiting > 0, ...(this.diagnostic ? { batchError: { ...this.diagnostic.error } } : {}), ...(this.completion ? { completion: { ...this.completion } } : {}) };
+    const storageError = this.options.store.getLoadError();
+    const config = this.options.store.getConfig();
+    const message = storageError
+      ? `工具记录加载失败，工具执行和自动继续已停用；原始记录与权限未重置。${storageError}。请使用匹配版本或恢复有效记录后重启。`
+      : this.message;
+    return { config: storageError ? { ...config, automatic: false } : config, results, message, busy: this.waiting > 0, ...(storageError ? { storageError } : {}), ...(this.diagnostic ? { batchError: { ...this.diagnostic.error } } : {}), ...(this.completion ? { completion: { ...this.completion } } : {}) };
   }
   get state(): ToolState { return this.getState(); }
   getDiagnostic(): ToolDiagnostic | null {
@@ -115,6 +120,8 @@ export class ToolHarness {
   }
 
   collect(text: string): Promise<void> {
+    // 在协议解析之前停止，不能把存储故障转成可自动回传的解析错误。
+    if (this.options.store.getLoadError()) { this.publish(); return Promise.resolve(); }
     const parsed = parseToolBatch(text);
     if (parsed.kind !== 'batch') {
       this.getCopyResults();
@@ -128,7 +135,7 @@ export class ToolHarness {
         this.options.diagnosed?.(this.getDiagnostic()!);
         this.report('工具批次校验失败，未执行');
       }
-      else this.report('已采集回复，但没有 mini-ai-tools 工具请求，未执行。普通讨论和代码示例仅作为资料；实际操作必须使用工具请求。');
+      else this.report('本轮为普通回复，暂无工具请求。');
       return Promise.resolve();
     }
     const root = this.options.root();

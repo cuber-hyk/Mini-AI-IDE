@@ -30,15 +30,20 @@ export class ToolStore {
   private readonly loading: Promise<void>;
   private queue: Promise<unknown> = Promise.resolve();
   private loaded = false;
+  private loadError: string | null = null;
 
   constructor(private readonly filePath: string) {
-    this.loading = this.load().then(() => { this.loaded = true; });
+    this.loading = this.load().then(() => { this.loaded = true; }, error => {
+      this.loadError = error instanceof Error ? error.message : String(error);
+      throw error;
+    });
     // 错误仍由 ready/每个写操作抛出；避免异步构造阶段的未处理拒绝。
     void this.loading.catch(() => undefined);
   }
 
   async ready(): Promise<void> { await this.loading; }
   isReady(): boolean { return this.loaded; }
+  getLoadError(): string | null { return this.loadError; }
   getConfig(): ToolConfig { return { ...this.data.config }; }
   getRules(root: string): Array<{ fingerprint: string; action: RuleAction }> {
     return this.data.rules.filter(r => r.root === rootKey(root)).map(r => ({ fingerprint: r.fingerprint, action: r.action }));

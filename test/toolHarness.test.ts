@@ -346,7 +346,7 @@ test('malformed, repeated IDs and alternative batches reject the entire reply be
 test('ordinary replies remain inert and old file operations are rejected without a second execution path', async t => {
   const f = await fixture(t);
   await f.harness.configure({ permission: 'full' });
-  for (const [reply, expected] of [['普通讨论', /已采集回复.*没有 mini-ai-tools/], ['### 文件：example.ts\n### 操作：新建\n```typescript\nconsole.log("example");\n```', /不再支持文件操作块/]] as const) {
+  for (const [reply, expected] of [['普通讨论', /普通回复.*暂无工具请求/], ['### 文件：example.ts\n### 操作：新建\n```typescript\nconsole.log("example");\n```', /不再支持文件操作块/]] as const) {
     await f.harness.collect(reply);
     assert.match(f.harness.state.batchError?.error ?? f.harness.state.message, expected);
     assert.deepEqual(f.executed, []); assert.deepEqual(f.asked, []);

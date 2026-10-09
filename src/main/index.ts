@@ -251,7 +251,7 @@ async function bootstrap(): Promise<void> {
   /**
    * 从设置里取出分版本的自定义内容，喂给 `resolveFormatSpec`。
    *
-   * 单独抽一个函数是因为**三条消费链路**（复制提示词 / 只复制格式要求 / 面板状态）
+   * 单独抽一个函数是因为只复制格式要求与面板状态
    * 必须都从这里拿，才能保证"能改也真的改了"——分散取值最容易漏掉某一条。
    */
   function customSpecsOf(s: Settings): CustomFormatSpecs {
@@ -561,7 +561,7 @@ async function loadLocalView(
     resolveWorkspacePath: relative => fileService.resolveSafePath(relative).then(result => result.ok ? { ok: true, absolute: result.absolute } : { ok: false, error: result.error }),
     root: () => fileService.getRoot(), session: () => sessionKeyOf(webView.webContents.getURL()),
     busy: () => { const state = tools.getState(); return state.busy || state.resultReturn?.phase === 'sending' || ['countdown', 'sending', 'waiting_tools'].includes(state.continuation?.phase ?? ''); },
-    copy: text => clipboard.writeText(text), disabled: SELF_TEST || (UI_PROBE && !WORKSPACE_PROBE) || DIAGNOSE });
+    disabled: SELF_TEST || (UI_PROBE && !WORKSPACE_PROBE) || DIAGNOSE });
   const localPromptChannels = localPrompt.register();
   // 先注册只读变更桥，再加载会立即请求初始状态的面板。
   await loadLocalView(previewView, 'preview.html');

@@ -3,7 +3,7 @@ artifact_type: capability
 status: current
 updated: 2026-10-09
 owner: 胡运宽
-source_of_truth: [docs/adr/2026-10-08-skills-and-local-demand-send.md, docs/adr/2026-10-08-local-prompt-attachments.md, src/main/localPromptAttachments.ts, src/main/skills.ts, src/main/localPromptController.ts, src/main/webComposerSender.ts, src/main/firstPromptSession.ts, src/main/tools/replyChangeWatcher.ts, src/main/settings.ts, src/main/tools/integration.ts, src/shared/skills.ts, src/shared/localPrompt.ts, src/renderer/localPrompt.js, test/skills.test.ts, test/localPromptController.test.ts, test/localPrompt.test.ts, test/localPromptAttachments.test.ts]
+source_of_truth: [docs/adr/2026-10-09-default-local-prompt-send.md, docs/adr/2026-10-08-skills-and-local-demand-send.md, docs/adr/2026-10-08-local-prompt-attachments.md, src/main/localPromptAttachments.ts, src/main/skills.ts, src/main/localPromptController.ts, src/main/webComposerSender.ts, src/main/firstPromptSession.ts, src/main/tools/replyChangeWatcher.ts, src/main/settings.ts, src/main/tools/integration.ts, src/shared/skills.ts, src/shared/localPrompt.ts, src/renderer/localPrompt.js, test/skills.test.ts, test/localPromptController.test.ts, test/localPrompt.test.ts, test/localPromptAttachments.test.ts]
 ---
 
 # 能力：技能与本地需求发送
@@ -16,7 +16,7 @@ source_of_truth: [docs/adr/2026-10-08-skills-and-local-demand-send.md, docs/adr/
 
 “附带初始化提示词”默认勾选，用户选择持久保存；不根据会话猜测，也不在发送后复位。勾选包含统一协议、项目环境/目录、技能摘要与需求；关闭仅包含需求与显式技能正文。复制与发送共用同一组装入口。
 
-“回车发送”默认关闭，与工具 `automatic` 独立。开启后 Enter 提交、Shift+Enter 换行，输入法组合与重复按键不发送；发送按钮同样受开关控制。用户本地正文经可信编辑器主 frame 的窄 IPC 提交；普通文本粘贴仍由输入框处理，粘贴图片则作为附件暂存。图片异步暂存期间按回车会等待完成后再发送；暂存失败则取消整次提交，避免仅发送文本。回车或按钮提交经官网确认发送成功后，清空本次本地需求、技能选择、预览和附件，并通过现有 input 事件恢复输入高度；发送失败或状态未知时保留内容，等待期间新写的下一条需求不被旧成功回执清空。用户初始化及发送选项不复位，复制入口保留。用户可从本地选择文件，或从资源管理器及右侧工作区文件树拖入文件，发送前可移除待发附件；本地需求附件只随本次需求提交，字节不进入组装文本；工具附件由独立 attach_file 请求及工具权限控制，见 tool-harness.md。
+本地需求默认 Enter 提交、Shift+Enter 换行，与工具 `automatic` 独立，无发送开关和常驻键盘说明。输入法组合、重复按键和技能菜单确认不发送；右下角圆形向上箭头按钮与 Enter 共用提交入口，空正文或忙时禁用，发送中显示加载状态。用户本地正文经可信编辑器主 frame 的窄 IPC 提交；普通文本粘贴仍由输入框处理，粘贴图片则作为附件暂存。图片异步暂存期间按回车会等待完成后再发送；暂存失败则取消整次提交，避免仅发送文本。回车或按钮提交经官网确认发送成功后，清空本次本地需求、技能选择、预览和附件，并通过现有 input 事件恢复输入高度；发送失败或状态未知时保留内容，等待期间新写的下一条需求不被旧成功回执清空。用户初始化选择不复位；需求通过输入框直接提交，不提供复制提示词或需求更多菜单。用户可从本地选择文件，或从资源管理器及右侧工作区文件树拖入文件，发送前可移除待发附件；本地需求附件只随本次需求提交，字节不进入组装文本；工具附件由独立 attach_file 请求及工具权限控制，见 tool-harness.md。
 
 `LocalPromptController` 校验当前项目、会话、选项与忙状态；`WebComposerSender` 是唯一 DOM 写入运输 owner，与工具结果互斥。文本只向已识别的官方 DeepSeek 空输入框填入并点击一次。附件仅由主进程对用户选择的路径做类型、数量、大小和真实路径校验，再通过官方文件输入控件提交；网页不获得路径或文件桥。图片粘贴同时检查剪贴板 `items` 与 `files`，并将可解码的其他图片格式转成 PNG。提交前等待官网 composer 显示本次附件并确认上传进度结束；若页面未能确认附件已接收，则不发送正文并保留本地待发项供用户重试。草稿、生成、已有附件、未知/歧义控件或作用域变化拒绝。点击前失败清理本次暂存；点击后无法确认不重试。隔离世界 1005 无网页 IPC/文件桥。
 

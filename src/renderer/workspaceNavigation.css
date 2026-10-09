@@ -42,22 +42,16 @@ body { display: block; }
 .sidebar { min-width: 0; border-left: 1px solid var(--ui-border); border-right: 0; background: var(--ui-surface); }
 .sidebar-head { height: 40px; min-height: 40px; padding: 4px 8px; }
 .workspace-welcome { top: calc(72px * var(--layout-scale, 1)); padding: 20px; }
-.collaboration-dock { height: auto !important; max-height: 70vh; overflow: auto; background: var(--ui-bg); border-top: 1px solid var(--ui-border); }
+.collaboration-dock { display: flex; flex-direction: column; justify-content: safe flex-end; height: auto !important; max-height: 70vh; overflow: auto; background: var(--ui-bg); border-top: 1px solid var(--ui-border); }
 .collaboration-dock .tool-dock { border-top: 0; }
 .collaboration-dock .prompt-bar { border-top: 0; padding: 6px 10px 10px; max-height: none; overflow: visible; }
 .collaboration-dock .prompt-shell { gap: 6px; padding: 8px 10px; }
 .requirement-panel > summary { cursor: pointer; font-size: 12px; color: var(--ui-text); padding: 2px 0 5px; }
 .requirement-panel > summary > span { margin-left: 8px; color: var(--ui-muted); font-size: 11px; }
 .requirement-panel .requirement { display: block; margin-top: 6px; }
-.requirement-panel:not([open]) ~ .prompt-actions .prompt-options, .requirement-panel:not([open]) ~ .prompt-actions #btn-copy-prompt { display: none; }
+.requirement-panel:not([open]) ~ .prompt-actions .prompt-options { display: none; }
 .tool-result-actions { position: static; justify-content: flex-end; padding: 0 10px 6px; }
 .tool-panel-summary { padding-right: 10px; }
-.tool-settings-panel, .tool-more { position: static; max-width: 100%; max-height: none !important; margin-top: 8px; box-shadow: none; }
-.tool-settings-wrap:has(.tool-settings-panel:not([hidden])) { flex: 1 0 100%; }
-.tool-settings-panel { width: 100%; }
-.tool-result-actions:has(.tool-more:not([hidden])) { display: block; }
-.tool-more { width: 100%; }
-.tool-more-wrap:has(.tool-more:not([hidden])) { display: block; width: 100%; }
 .update-panel { width: min(360px, var(--file-width, 360px)); max-width: calc(100vw - 32px); }
 
 /* 文件和目录都有连续顶栏，正文起点统一由主进程预算决定。 */

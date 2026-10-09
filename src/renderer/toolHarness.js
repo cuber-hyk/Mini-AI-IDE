@@ -9,6 +9,7 @@
     const layout = window.setupToolPanelLayout();
     const clock = window.createToolExecutionClock();
     const permission = document.getElementById('tool-permission');
+    const permissionControl = document.getElementById('tool-permission-control');
     const automatic = document.getElementById('tool-automatic');
     const sendInterval = document.getElementById('tool-send-interval');
     const intervalDown = document.getElementById('tool-interval-down');
@@ -179,19 +180,21 @@
     }
 
     function render() {
-      permission.disabled = configuring || !state;
-      automatic.disabled = configuring || !state;
-      sendInterval.disabled = configuring || !state;
-      intervalDown.disabled = configuring || !state || Number(state.config.sendIntervalSeconds) <= 0;
-      intervalUp.disabled = configuring || !state || Number(state.config.sendIntervalSeconds) >= 300;
-      dirtyPolicy.disabled = configuring || !state;
-      sound.disabled = configuring || !state;
-      autoCopy.disabled = configuring || !state;
+      const unavailable = Boolean(state && state.storageError);
+      panel.classList.toggle('has-results', Boolean(state && (state.results.length || state.batchError)));
+      permission.disabled = configuring || !state || unavailable;
+      automatic.disabled = configuring || !state || unavailable;
+      sendInterval.disabled = configuring || !state || unavailable;
+      intervalDown.disabled = configuring || !state || unavailable || Number(state.config.sendIntervalSeconds) <= 0;
+      intervalUp.disabled = configuring || !state || unavailable || Number(state.config.sendIntervalSeconds) >= 300;
+      dirtyPolicy.disabled = configuring || !state || unavailable;
+      sound.disabled = configuring || !state || unavailable;
+      autoCopy.disabled = configuring || !state || unavailable;
       copy.disabled = copying || !state || (!state.results.length && !state.batchError);
       undo.disabled = undoing || !state || state.busy || !state.canUndo;
-      clearRules.disabled = configuring || !state || state.busy;
+      clearRules.disabled = configuring || !state || unavailable || state.busy;
       undo.hidden = !state || (!state.canUndo && !undoing);
-      more.hidden = false;
+      more.hidden = undo.hidden;
       copy.textContent = copying ? '正在复制…' : '复制本批结果';
       const returned = state && state.resultReturn;
       const hasAttachments = Boolean(returned && returned.attachmentCount > 0);
@@ -202,14 +205,14 @@
       send.title = state && state.config.automatic ? '自动继续已开启，由 IDE 自动发送本批结果与附件' : '将当前批工具结果与已授权附件一起发送给 AI';
       returnNotice.textContent = hasAttachments ? returnMessage || returned.message : '';
       returnNotice.classList.toggle('is-error', returnError || Boolean(hasAttachments && returned.phase === 'paused'));
-      const notice = localMessage || (state ? state.message : '正在读取工具状态…');
+      const notice = unavailable ? state.message : localMessage || (state ? state.message : '正在读取工具状态…');
       const awaitingContinuation = /等待继续生成/.test(notice);
       const needsAttention = !awaitingContinuation && /未执行|无法|失败|停止|没有|无效|变化|等待确认|权限拒绝/.test(notice);
       const incomplete = state && state.results.some(function (item) { return !['done', 'running', 'pending_permission'].includes(item.status) || item.tool === 'run_command' && item.data && ['failed', 'stopped'].includes(item.data.status); });
       message.textContent = notice;
-      message.hidden = !localMessage && (Boolean(state && state.batchError) || !needsAttention && !awaitingContinuation);
-      message.classList.toggle('is-error', localError);
-      activity.textContent = localError ? '操作失败' : localMessage ? (localMessage.startsWith('结果已复制') ? '已复制' : '操作完成')
+      message.hidden = !unavailable && !localMessage && (Boolean(state && state.batchError) || !needsAttention && !awaitingContinuation && Boolean(state && state.results.length));
+      message.classList.toggle('is-error', localError || unavailable);
+      activity.textContent = unavailable ? '工具不可用' : localError ? '操作失败' : localMessage ? (localMessage.startsWith('结果已复制') ? '已复制' : '操作完成')
         : !state ? '读取状态…' : state.busy ? (state.results.some(function (item) { return item.status === 'pending_permission'; }) ? '等待授权' : '执行中')
         : state.hasRunningProcesses ? '进程运行中' : state.batchError ? '格式错误' : awaitingContinuation ? '等待续写' : needsAttention ? '需检查' : incomplete ? '有未完成项' : state.results.length ? '已返回' : state.config.automatic ? '等待回复' : '手动采集';
       activity.title = notice;
@@ -218,11 +221,12 @@
       continueNotice.textContent = '';
       if (!state) { layout.refresh(); return; }
       permission.value = state.config.permission;
+      permissionControl.dataset.permission = state.config.permission;
       // 主进程先停止回传再保存配置；显示实际停止状态，避免保存期间开关反跳。
       automatic.checked = state.config.automatic && (!state.continuation || state.continuation.phase !== 'off');
       sendInterval.value = String(state.config.sendIntervalSeconds === undefined ? 3 : state.config.sendIntervalSeconds);
       const continuing = state.continuation;
-      if (continuing && !localMessage) {
+      if (continuing && !localMessage && !unavailable) {
         const labels = { sending: '正在发送结果', waiting_reply: '等待 AI 回复', waiting_user: '等待你回答', paused: '自动已暂停' };
         if (state.config.automatic && labels[continuing.phase]) activity.textContent = labels[continuing.phase];
         if (continuing.phase === 'countdown') {
@@ -239,7 +243,7 @@
       autoCopy.checked = state.config.autoCopyResults === true;
       copyNotice.textContent = !state.clipboard || state.config.automatic && state.clipboard.ok ? '' : state.clipboard.ok ? '已自动复制本批结果，可粘贴给 AI' : '自动复制失败，请手动重试：' + state.clipboard.error;
       copyNotice.classList.toggle('is-error', Boolean(state.clipboard && !state.clipboard.ok));
-      hint.textContent = {
+      hint.textContent = unavailable ? '工具记录未加载，权限设置不可用；编辑文件和访问官网仍可使用。' : {
         ask: '项目内读取与搜索自动执行；修改与命令由 IDE 请求批准。',
         rules: '按本项目已记住的规则执行；未覆盖的调用由 IDE 请求批准。',
         full: '在当前 Windows 账户权限内执行，可访问项目外文件并运行联网命令。',
@@ -257,6 +261,7 @@
       localMessage = ''; localError = false;
       render();
       const batchError = state.batchError ? state.batchError.error : '';
+      if (state.storageError) panel.open = true;
       if (batchError && batchError !== lastBatchError) panel.open = true;
       lastBatchError = batchError;
       receiveCompletion();

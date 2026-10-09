@@ -29,7 +29,7 @@
     monacoHost: document.getElementById('monaco'),
     resizer: document.getElementById('resizer'),
     requirement: document.getElementById('requirement'),
-    btnCopyPrompt: document.getElementById('btn-copy-prompt'),
+    btnSendPrompt: document.getElementById('btn-send-prompt'),
     // 提示词版本双段开关（开=完整版 / 关=简洁版），状态持久化在主进程设置里
     variantSwitch: document.getElementById('variant-switch'),
     // 采集入口在 AI 网页顶部，变更列表在右侧独立视图。
@@ -147,7 +147,7 @@
      */
     const editorRect = rectOf(el.monacoHost);
     const requirementPanel = document.getElementById('requirement-panel');
-    const promptRect = rectOf(requirementPanel.open ? el.btnCopyPrompt : requirementPanel.querySelector('summary'));
+    const promptRect = rectOf(requirementPanel.open ? el.btnSendPrompt : requirementPanel.querySelector('summary'));
     const toolbarRect = rectOf(document.getElementById('workspace-add'));
 
     const promptVisible = promptRect.height > 0 && promptRect.bottom <= viewportH;
@@ -158,7 +158,7 @@
       viewportH,
       editorArea: editorRect,
       toolbar: toolbarRect,
-      copyPromptButton: promptRect,
+      sendPromptButton: promptRect,
       promptVisible,
       editorFills,
       noOverlap,

@@ -139,7 +139,12 @@ export async function describeTool(root: string, request: ToolRequest): Promise<
 }
 
 export async function createToolIntegration(options: Options) {
-  const store = new ToolStore(options.storePath); await store.ready();
+  const store = new ToolStore(options.storePath);
+  try { await store.ready(); }
+  catch (error) {
+    // 工具状态失败只停用工具；ready 仍拒绝，所有写操作继续受原门槛保护。
+    process.stderr.write(`[tools] 工具记录加载失败，工具已停用：${error instanceof Error ? error.message : String(error)}\n`);
+  }
   const fileTools = new ToolFiles();
   const skills = options.skills ?? new SkillService();
   let disposed = false; let revision = 0;
@@ -343,6 +348,7 @@ export async function createToolIntegration(options: Options) {
       return { allowed: true, discard: dirty.length > 0, aliases };
     },
     async accept(text: string, completion: AutoReply['completion']): Promise<boolean> {
+      if (store.getLoadError()) { publish(harness.getState()); return true; }
       const parsed = parseToolBatch(text);
       const root = options.files.getRoot(); const session = sessionKeyOf(options.web.getURL()); const currentRevision = revision;
       if (completion === 'generating') { harness.report('AI 仍在生成回复，工具批次未执行；请等待回复结束'); return true; }

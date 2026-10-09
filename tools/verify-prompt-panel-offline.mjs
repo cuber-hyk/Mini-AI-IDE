@@ -169,12 +169,12 @@ check('Y14', '底部双段开关：结构 + 持久化读写 + 键盘可达 + 样
   swHtml, swJs, swCss,
 });
 
-// Y15：开关状态必须真的被"复制提示词"链路读到（否则界面与行为会不一致）
-const variantUsedInCopyPrompt = /resolveFormatSpec\([\s\S]*settings\.formatSpecVariant/.test(localPromptTs);
+// Y15：开关状态必须真的被"需求提交"链路读到（否则界面与行为会不一致）
+const variantUsedInLocalPrompt = /resolveFormatSpec\([\s\S]*settings\.formatSpecVariant/.test(localPromptTs);
 const variantHandlerRegistered = /ipcMain\.handle\(CHANNELS\.getFormatSpecVariant/.test(mainTs) &&
   /ipcMain\.handle\(CHANNELS\.setFormatSpecVariant/.test(mainTs);
-check('Y15', '开关状态贯通：复制提示词读 variant + 主进程有读写 handler', variantUsedInCopyPrompt && variantHandlerRegistered, {
-  variantUsedInCopyPrompt, variantHandlerRegistered,
+check('Y15', '开关状态贯通：需求提交读 variant + 主进程有读写 handler', variantUsedInLocalPrompt && variantHandlerRegistered, {
+  variantUsedInLocalPrompt, variantHandlerRegistered,
 });
 
 // Y13：保存失败时不清空编辑框
@@ -462,7 +462,6 @@ await (async () => {
   const nodes = {
     'variant-switch': swEl,
     'requirement': makeEl('requirement', { style: {}, clientWidth: 500, scrollHeight: 44 }),
-    'btn-copy-prompt': makeEl('btn-copy-prompt'),
     'prompt-custom': makeEl('prompt-custom'),
     'prompt-actions': { offsetHeight: 30 },
     'requirement-panel': makeEl('requirement-panel', { open: true }),
@@ -478,7 +477,6 @@ await (async () => {
   try {
     new vm.Script(composerJs, { filename: 'promptComposer.js' }).runInContext(ctx);
     ctx.window.setupPromptComposer(bridge, () => {}, {
-      getSubmission: () => ({ requirement: '', root: null, skills: [] }),
       setComposerBusy() {}, onBusy() {},
     });
     ok = true;

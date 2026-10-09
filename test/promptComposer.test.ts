@@ -15,7 +15,7 @@ function element(variant = '') {
   const listeners: Record<string, (event: unknown) => unknown> = {};
   return {
     dataset: { variant }, style: {} as Record<string, string>, attrs: {} as Record<string, string>,
-    disabled: false, hidden: true, textContent: '复制提示词', value: '',
+    disabled: false, hidden: true, textContent: '', value: '',
     clientWidth: 500, scrollHeight: 40, focused: false,
     addEventListener(name: string, fn: (event: unknown) => unknown) { listeners[name] = fn; },
     setAttribute(name: string, value: string) { this.attrs[name] = value; },
@@ -27,7 +27,7 @@ function element(variant = '') {
 
 function setup(overrides: Record<string, unknown> = {}) {
   const input = element(); const short = element('short'); const full = element('full');
-  const sw = element(); const copy = element(); const custom = element();
+  const sw = element(); const custom = element();
   const requirementPanel = { ...element(), open: true };
   const actions = { offsetHeight: 30 };
   sw.querySelectorAll = () => [short, full];
@@ -35,17 +35,16 @@ function setup(overrides: Record<string, unknown> = {}) {
   let listener: (status: Status) => void = () => {};
   let resized = () => {};
   let observer = () => {};
-  let timer: (() => void) | undefined;
+  let composerBusy = false;
   const messages: Array<{ text: string; warn: boolean }> = [];
   const writes: string[] = [];
   const nodes: Record<string, unknown> = {
-    requirement: input, 'requirement-panel': requirementPanel, 'variant-switch': sw, 'btn-copy-prompt': copy, 'prompt-custom': custom, 'prompt-actions': actions,
+    requirement: input, 'requirement-panel': requirementPanel, 'variant-switch': sw, 'prompt-custom': custom, 'prompt-actions': actions,
   };
   const bridge = {
     async getPromptStatus() { return current; },
     onPromptStatus(fn: typeof listener) { listener = fn; },
     async setFormatSpecVariant(v: string) { writes.push(v); current = { ...current, variant: v }; listener(current); return v; },
-    async copyPrompt() { return { ok: true, length: 88 }; },
     ...overrides,
   };
   const sandbox = {
@@ -53,8 +52,6 @@ function setup(overrides: Record<string, unknown> = {}) {
       innerHeight: 960,
       requestAnimationFrame(fn: () => void) { fn(); },
       addEventListener(_name: string, fn: () => void) { resized = fn; },
-      setTimeout(fn: () => void) { timer = fn; return 1; },
-      clearTimeout() { timer = undefined; },
       setupPromptComposer: undefined as unknown as (bridge: unknown, info: unknown, local: unknown) => void,
     },
     ResizeObserver: class { constructor(fn: () => void) { observer = fn; } observe() {} },
@@ -64,13 +61,13 @@ function setup(overrides: Record<string, unknown> = {}) {
   vm.createContext(sandbox);
   vm.runInContext(source, sandbox);
   sandbox.window.setupPromptComposer(bridge, (text: string, warn = false) => messages.push({ text, warn }), {
-    getSubmission: () => ({ requirement: input.value.trim(), root: 'C:\\project', skills: [] }),
-    setComposerBusy() {}, onBusy() {},
+    setComposerBusy(value: boolean) { composerBusy = value; }, onBusy() {},
   });
-  return { input, short, full, sw, copy, custom, requirementPanel, messages, writes,
+  return { input, short, full, sw, custom, requirementPanel, messages, writes,
     narrow() { sandbox.window.innerHeight = 600; actions.offsetHeight = 80; resized(); },
     publish(next: Status) { current = next; listener(next); },
-    resize() { resized(); }, observe() { observer(); }, expire() { timer?.(); },
+    resize() { resized(); }, observe() { observer(); },
+    get composerBusy() { return composerBusy; },
 };
 }
 
@@ -100,13 +97,13 @@ it('读取持久化版本，并在切换、保存或恢复默认后显示对应�
   assert.equal(ui.custom.hidden, true);
 });
 
-it('切换失败保持实际版本；切换期间禁止复制，避免界面与发出的版本不同', async () => {
+it('切换失败保持实际版本；切换期间禁止提交，避免界面与发出的版本不同', async () => {
   let reject: (err: Error) => void = () => {};
   const ui = setup({ setFormatSpecVariant: () => new Promise((_resolve, no) => { reject = no; }) });
   await flush(); ui.short.fire('click');
-  assert.equal(ui.copy.disabled, true);
+  assert.equal(ui.composerBusy, true);
   reject(new Error('落盘失败')); await flush();
-  assert.equal(ui.sw.dataset.variant, 'full'); assert.equal(ui.copy.disabled, false);
+  assert.equal(ui.sw.dataset.variant, 'full'); assert.equal(ui.composerBusy, false);
   assert.match(ui.messages.at(-1)!.text, /切换.*失败/);
 });
 
@@ -127,7 +124,7 @@ it('初始查询晚于设置广播时，旧查询不会覆盖已生效的新设�
   assert.equal(ui.sw.dataset.variant, 'short'); assert.equal(ui.custom.hidden, false);
 });
 
-it('读取和连续重试都失败时保留版本按钮，服务恢复后能继续切换并复制', async () => {
+it('读取和连续重试都失败时保留版本按钮，服务恢复后能继续切换并提交', async () => {
   let available = false;
   const ui = setup({
     getPromptStatus: async () => {
@@ -140,34 +137,13 @@ it('读取和连续重试都失败时保留版本按钮，服务恢复后能继�
     },
   });
   await flush();
-  assert.equal(ui.copy.disabled, true); assert.equal(ui.short.disabled, false);
+  assert.equal(ui.composerBusy, true); assert.equal(ui.short.disabled, false);
   for (let i = 0; i < 2; i++) {
     ui.short.fire('click'); await flush();
-    assert.equal(ui.short.disabled, false); assert.equal(ui.copy.disabled, true);
+    assert.equal(ui.short.disabled, false); assert.equal(ui.composerBusy, true);
   }
   available = true; ui.short.fire('click'); await flush();
-  assert.equal(ui.sw.dataset.variant, 'short'); assert.equal(ui.copy.disabled, false);
-});
-
-it('空需求聚焦输入；复制成功反馈复位；异常与结构化失败均不显示成功', async () => {
-  const ok = setup(); await flush(); await ok.copy.fire('click');
-  assert.equal(ok.input.focused, true);
-  ok.input.value = '修改标题'; await ok.copy.fire('click');
-  assert.equal(ok.copy.textContent, '已复制'); assert.equal(ok.copy.disabled, false);
-  ok.expire(); assert.equal(ok.copy.textContent, '复制提示词');
-  for (const copyPrompt of [async () => { throw new Error('IPC 失败'); }, async () => ({ ok: false, error: '没有目录' })]) {
-    const ui = setup({ copyPrompt }); await flush(); ui.input.value = '修改标题';
-    await ui.copy.fire('click');
-    assert.equal(ui.copy.textContent, '复制提示词'); assert.equal(ui.copy.disabled, false);
-    assert.match(ui.messages.at(-1)!.text, /复制提示词失败/);
-  }
-});
-
-it('复制通过统一需求快照携带项目根目录，不使用旧字符串调用', async () => {
-  let copied: unknown;
-  const ui = setup({ async copyPrompt(input: unknown) { copied = input; return { ok: true, length: 20 }; } });
-  await flush(); ui.input.value = '  修改标题  '; await ui.copy.fire('click');
-  assert.deepEqual(JSON.parse(JSON.stringify(copied)), { requirement: '修改标题', root: 'C:\\project', skills: [] });
+  assert.equal(ui.sw.dataset.variant, 'short'); assert.equal(ui.composerBusy, false);
 });
 
 it('长输入到上限后滚动；删除与宽度变化后收缩，观察高度变化不会循环增长', async () => {

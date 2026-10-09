@@ -70,7 +70,7 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     await evaluate("document.getElementById('workspace-add').click()");
     check('左侧加入项目并显示文件树', await waitFor("Boolean(document.querySelector('#tree .tree-row[data-rel-path=\"a.txt\"]'))"));
     check('左侧加入项目持久化', controller.workspace.getState().root === a && fs.readFileSync(path.join(directory, 'settings.json'), 'utf8').includes(a.replace(/\\/g, '\\\\')));
-    check('本地初始化默认勾选且回车发送默认关闭', await waitFor("document.getElementById('prompt-initialization').checked && !document.getElementById('prompt-send-on-enter').checked"));
+    check('本地初始化默认勾选且发送按钮可见', await waitFor("document.getElementById('prompt-initialization').checked && !document.getElementById('btn-send-prompt').hidden"));
     await evaluate("document.getElementById('requirement-panel').open = true; document.getElementById('requirement').value='/'; document.getElementById('requirement').setSelectionRange(1,1); document.getElementById('requirement').dispatchEvent(new Event('input',{bubbles:true}))");
     await waitFor("document.querySelectorAll('#skill-menu .skill-option').length === 10");
     await pause(); await pause();
@@ -82,9 +82,6 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     check('正斜杠菜单读取项目覆盖后的真实技能目录', await waitFor("!document.getElementById('skill-menu').hidden && document.querySelector('.skill-option').textContent.includes('项目审阅')"));
     await evaluate("document.getElementById('requirement').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true})); document.querySelector('.skill-chip').click()");
     check('选择技能只读展示项目说明', await waitFor("document.getElementById('skill-preview').textContent.includes('PROJECT-SKILL') && document.querySelector('.skill-chip').textContent.includes('项目')"));
-    await evaluate("document.getElementById('btn-copy-prompt').click()");
-    for(let i=0;i<100 && !(await clipboard.readText()).includes('PROJECT-SKILL');i++) await pause();
-    check('勾选初始化复制协议与项目技能完整说明', (await clipboard.readText()).includes('唯一执行协议') && (await clipboard.readText()).includes('PROJECT-SKILL') && !(await clipboard.readText()).includes('GLOBAL-SKILL'));
     check('技能说明在本地dock内受限滚动且输入选项可到达', await evaluate(`(() => {
       const dock=document.getElementById('collaboration-dock'), preview=document.getElementById('skill-preview'), option=document.getElementById('prompt-initialization');
       option.scrollIntoView({block:'nearest'}); const d=dock.getBoundingClientRect(), p=preview.getBoundingClientRect(), o=option.getBoundingClientRect();
@@ -93,9 +90,6 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     await capture(view, 'skills-local-prompt.png');
     await evaluate("document.getElementById('prompt-initialization').click()");
     await waitFor("window.editorBridge.getLocalPromptOptions().then(value=>!value.includeInitialization)");
-    await evaluate("document.getElementById('btn-copy-prompt').click()");
-    for(let i=0;i<100 && (await clipboard.readText()).includes('唯一执行协议');i++) await pause();
-    check('取消初始化只复制需求与显式技能且选择保持', !(await clipboard.readText()).includes('唯一执行协议') && (await clipboard.readText()).includes('PROJECT-SKILL') && await evaluate<boolean>("!document.getElementById('prompt-initialization').checked"));
 
     check('左侧常驻工作区列表显示当前项目，文件树位于编辑正文右侧', await waitFor("document.querySelectorAll('#workspace-list .workspace-project').length === 1 && Boolean(document.querySelector('#workspace-list .workspace-project[aria-current=true]'))") && await evaluate(`(() => {
       const nav = document.getElementById('workspace-navigation').getBoundingClientRect();
@@ -107,19 +101,16 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     const composerFixture = path.join(directory, 'local-prompt-composer.html');
     fs.writeFileSync(composerFixture, `<!doctype html><style>textarea{width:400px;height:100px}.ds-button{width:40px;height:40px}</style><section><textarea></textarea><div class="ds-button ds-button--primary ds-button--filled ds-button--circle"><svg><path d="${DEEPSEEK_SEND_ICON}"/></svg></div></section><script>window.sent=[];document.querySelector('.ds-button').addEventListener('click',()=>{const input=document.querySelector('textarea');window.sent.push(input.value);input.value='';});</script>`);
     await web.loadURL(pathToFileURL(composerFixture).href);
-    await evaluate("document.getElementById('prompt-send-on-enter').click()");
-    await waitFor("window.editorBridge.getLocalPromptOptions().then(value=>value.sendOnEnter)");
     await evaluate("document.getElementById('requirement').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',shiftKey:true,bubbles:true}))"); await pause();
     check('Shift Enter不发送官网内容', await web.executeJavaScript('window.sent.length===0'));
     await evaluate("document.getElementById('requirement').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}))");
     for(let i=0;i<100 && !await web.executeJavaScript('window.sent.length===1');i++) await pause();
     const delivered = await web.executeJavaScript('window.sent[0]') as string;
-    check('本地Enter通过受控发送提交与复制同源内容', delivered === await clipboard.readText() && delivered.includes('PROJECT-SKILL'));
+    check('本地Enter提交用户需求与完整技能，初始化关闭且选择保持', delivered.includes('/review') && delivered.includes('PROJECT-SKILL') && !delivered.includes('唯一执行协议') && !delivered.includes('GLOBAL-SKILL') && await evaluate<boolean>("!document.getElementById('prompt-initialization').checked"));
     await web.executeJavaScript("document.querySelector('textarea').value='官网用户草稿'");
-    await evaluate("document.getElementById('btn-send-prompt').click()"); await pause(); await pause();
+    await evaluate("document.getElementById('requirement').value='新的需求'; document.getElementById('requirement').dispatchEvent(new Event('input')); document.getElementById('btn-send-prompt').click()"); await pause(); await pause();
     check('本地需求发送不覆盖官网草稿也不重复点击', await web.executeJavaScript("window.sent.length===1 && document.querySelector('textarea').value==='官网用户草稿'"));
-    await evaluate("document.getElementById('prompt-send-on-enter').click(); document.getElementById('skill-preview-close').click(); document.getElementById('requirement').value=''; document.getElementById('requirement').dispatchEvent(new Event('input')); document.getElementById('requirement-panel').open=false");
-    await waitFor("window.editorBridge.getLocalPromptOptions().then(value=>!value.sendOnEnter)");
+    await evaluate("document.getElementById('skill-preview-close').click(); document.getElementById('requirement').value=''; document.getElementById('requirement').dispatchEvent(new Event('input')); document.getElementById('requirement-panel').open=false");
     if (!initialWebUrl) {
       const emptyFixture = path.join(directory, 'idle-web.html');
       fs.writeFileSync(emptyFixture, '<!doctype html><body style="background:#141414"></body>');

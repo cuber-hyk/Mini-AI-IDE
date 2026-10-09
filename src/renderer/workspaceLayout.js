@@ -42,6 +42,7 @@
       document.querySelector('.toolbar').hidden = !layout.fileVisible;
       document.querySelector('.editor-wrap').hidden = !layout.fileVisible;
       rectangle(dock, layout.dockBounds);
+      dock.style.minHeight = layout.dockBounds.height * scale + 'px';
       dock.style.maxHeight = layout.dockBounds.height * scale + 'px';
       dock.hidden = !layout.dockBounds.width;
       divider('workspace-resizer', layout.workspaceBounds.width, file.height, !navigation.hidden);
@@ -79,9 +80,16 @@
     let measured = -1;
     function measureDock() {
       if (dock.hidden || !dock.clientWidth) return;
-      const height = Math.ceil(Array.from(dock.children).reduce(function (total, child) {
+      let needed = Array.from(dock.children).reduce(function (total, child) {
         return total + child.getBoundingClientRect().height;
-      }, 1) / scale);
+      }, 1);
+      // 固定浮层不计入子元素高度，另预留原生官网视图不能遮挡的显示预算。
+      const dockBottom = dock.getBoundingClientRect().bottom;
+      for (const [surfaceId, triggerId] of [['tool-settings-panel', 'tool-settings-toggle'], ['tool-more', 'tool-more-toggle']]) {
+        const surface = document.getElementById(surfaceId);
+        if (!surface.hidden) needed = Math.max(needed, surface.getBoundingClientRect().height + dockBottom - document.getElementById(triggerId).getBoundingClientRect().top + 16);
+      }
+      const height = Math.ceil(needed / scale);
       if (height === measured) return; measured = height; void patch({ dockHeight: height });
     }
     const observer = new ResizeObserver(measureDock);
