@@ -49,6 +49,24 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   };
 }
 
+test('诊断来源只在新采集内容时创建，重复采集和取消保留标识，切 scope 清除', async t => {
+  const f = await fixture(t); const bad = '```mini-ai-tools\n{}\n```';
+  await f.harness.collect(bad);
+  const first = f.harness.getDiagnostic()!;
+  assert.ok(first.id > 0); assert.equal(first.root, f.directory); assert.equal(first.session, 'chat'); assert.equal(first.sourceText, bad);
+  assert.deepEqual(first.error, f.harness.state.batchError); assert.equal(f.harness.state.completion, undefined); assert.deepEqual(f.executed, []);
+  first.error.error = 'mutated copy'; assert.notEqual(f.harness.state.batchError!.error, first.error.error);
+  await f.harness.collect(bad); assert.equal(f.harness.getDiagnostic()!.id, first.id);
+  f.harness.cancel(); await f.harness.collect(bad);
+  assert.equal(f.harness.getDiagnostic()!.id, first.id); assert.equal(f.harness.getDiagnostic()!.cancelled, true);
+  await f.harness.collect('new reply\n' + bad);
+  assert.ok(f.harness.getDiagnostic()!.id > first.id); assert.equal(f.harness.getDiagnostic()!.cancelled, undefined);
+  const error = f.harness.state.batchError;
+  f.setSession('other'); assert.equal(f.harness.getDiagnostic(), null); assert.equal(f.harness.state.batchError, undefined);
+  await f.harness.collect(bad); assert.deepEqual(f.harness.state.batchError, error); assert.equal(f.harness.getDiagnostic()!.session, 'other');
+  f.setRoot(null); assert.equal(f.harness.getDiagnostic(), null);
+});
+
 test('ask mode automatically reads only project data; commands and external files require IDE approval', async t => {
   const f = await fixture(t);
   await f.harness.collect(text([read, run]));

@@ -24,6 +24,8 @@
 
 自动继续先读 `docs/adr/2026-10-08-output-driven-collection.md`、`docs/capabilities/human-machine-boundary.md`、`docs/adr/2026-10-07-automatic-result-return-boundary.md`：`src/main/tools/autoContinuation.ts` 拥有完成事件、作用域与计时，`webResultSender.ts` 调用唯一运输 `src/main/webComposerSender.ts`，`integration.ts` 接线和发送前复核。UI 单开关和间隔仍由 `src/renderer/toolHarness.js` 管理；测试为 `test/autoContinuation.test.ts`、`test/webResultSender.test.ts`，原生本地夹具为 `tools/verify-web-result-sender.cjs`，不替代真实官网验收。差异连续阅读、可收起导航、上下文展开、换行及主动临时拓宽由 `preview.js/css` 管理，读 `test/changeTree.test.ts` 和 `src/main/layoutProbe.ts`。
 
+解析层 `batchError` 自动回传另读 `docs/adr/2026-10-09-batch-error-auto-return.md`；诊断来源由 `src/main/tools/harness.ts` 持有，发送资格归 `src/main/tools/resultReturn.ts`，连续上限归 `src/main/tools/autoContinuation.ts`，官网原文复核及接线归 `src/main/tools/integration.ts`。回归入口为上述 owner 测试和 `test/toolAttachmentIntegration.test.ts`。
+
 继续生成的共用只读控件谓词由 `src/main/tools/replyContinuation.ts` 管理，供 replyObservation 的中断状态与 replyChangeWatcher 的真实续写动作使用；等待及补全调度由 autoCollector 管理。回归入口为 `test/deepseekReplyState.test.ts`、`test/replyChangeWatcher.test.ts`、`test/toolAutoCollector.test.ts`、`test/replyObservation.test.ts`、`test/toolIntegration.test.ts`。
 
 需要工具协议测试原文时读 `docs/工具调用测试样例.md`，验证 owner 为 `test/toolSamples.test.ts`；样例不作为当前能力或默认上下文。

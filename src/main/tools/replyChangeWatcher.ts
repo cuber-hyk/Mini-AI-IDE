@@ -122,7 +122,8 @@ export class ReplyChangeWatcher {
   private navigation: Promise<unknown> = Promise.resolve();
   private cleanup: Promise<unknown> = Promise.resolve();
   constructor(private readonly web: ChangeWeb, private readonly change: (userTurn: boolean) => Promise<void>,
-    private readonly resetBaseline: (preserve?: boolean, awaitHistory?: boolean, generated?: boolean) => void, private readonly report: (message: string) => void) {
+    private readonly resetBaseline: (preserve?: boolean, awaitHistory?: boolean, generated?: boolean) => void, private readonly report: (message: string) => void,
+    private readonly scopeChanged: (session: string) => void = () => {}) {
     web.on('dom-ready', this.ready);
     web.on('did-start-navigation', this.navigating);
     web.on('did-navigate-in-page', this.inPage);
@@ -133,9 +134,12 @@ export class ReplyChangeWatcher {
     if (event.isMainFrame && !event.isSameDocument) { traceCollection('watcher.full-navigation', { history: true }); this.navigationHistory = true; this.stop(); this.resetBaseline(false, true); }
   };
   private readonly inPage = (_event: unknown, url: string, main: boolean) => {
-    if (!main || !this.enabled || sessionKeyOf(url) === this.scope) return;
+    if (!main || sessionKeyOf(url) === this.scope) return;
     const previousScope = this.scope;
     this.scope = sessionKeyOf(url);
+    // 计数与待发送必须观察每次真实切换，不能被后面的异步导航元数据合并吞掉。
+    this.scopeChanged(this.scope);
+    if (!this.enabled) return;
     const token = this.token; const version = this.version;
     traceCollection('watcher.navigation-start', { from: traceScope(previousScope), to: traceScope(this.scope), version, hasToken: !!token });
     if (token) this.navigation = this.execute('navigation', token).then(metadata => {

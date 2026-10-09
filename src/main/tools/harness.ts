@@ -1,4 +1,4 @@
-import { parseToolBatch, ToolBatch, ToolRequest, ToolResult, ToolState } from '../../shared/toolProtocol';
+import { parseToolBatch, ToolBatch, ToolBatchError, ToolRequest, ToolResult, ToolState } from '../../shared/toolProtocol';
 import { LedgerEntry, ToolStore } from './store';
 
 interface HarnessOptions {
@@ -7,6 +7,7 @@ interface HarnessOptions {
   session: () => string;
   execute: (root: string, request: ToolRequest, started: (data: unknown) => void, selection: ToolSelection) => Promise<unknown>;
   selected?: (selection: ToolSelection | null) => void;
+  diagnosed?: (diagnostic: ToolDiagnostic) => void;
   stopped?: (selection: ToolSelection, error: string) => void;
   authorize: (root: string, request: ToolRequest) => Promise<'once' | 'remember' | 'deny'>;
   describe: (root: string, request: ToolRequest) => Promise<{ external: boolean; fingerprint: string }>;
@@ -19,6 +20,15 @@ export interface ToolSelection {
   root: string;
   session: string;
   batch: ToolBatch;
+}
+/** 仅主进程持有的本次解析事实；不是工具执行 completion，不进入复制正文。 */
+export interface ToolDiagnostic {
+  id: number;
+  root: string | null;
+  session: string;
+  sourceText: string;
+  error: ToolBatchError;
+  cancelled?: boolean;
 }
 interface BatchSelection extends ToolSelection {
   executed?: boolean;
@@ -47,15 +57,20 @@ export class ToolHarness {
   private selection: BatchSelection | null = null;
   private completion: ToolState['completion'];
   private completionId = 0;
-  private diagnostic: { root: string | null; session: string; text: string } | null = null;
+  private diagnostic: ToolDiagnostic | null = null;
+  private diagnosticId = 0;
 
   constructor(private readonly options: HarnessOptions) {}
 
   getState(): ToolState {
     const results = this.getCopyResults();
-    return { config: this.options.store.getConfig(), results, message: this.message, busy: this.waiting > 0, ...(this.diagnostic ? { batchError: { status: 'failed' as const, error: this.diagnostic.text } } : {}), ...(this.completion ? { completion: { ...this.completion } } : {}) };
+    return { config: this.options.store.getConfig(), results, message: this.message, busy: this.waiting > 0, ...(this.diagnostic ? { batchError: { ...this.diagnostic.error } } : {}), ...(this.completion ? { completion: { ...this.completion } } : {}) };
   }
   get state(): ToolState { return this.getState(); }
+  getDiagnostic(): ToolDiagnostic | null {
+    this.getCopyResults();
+    return this.diagnostic ? { ...this.diagnostic, error: { ...this.diagnostic.error } } : null;
+  }
   matchesBatch(batch: ToolBatch): boolean {
     this.getCopyResults();
     return !!this.selection && JSON.stringify(this.selection.batch) === JSON.stringify(batch);
@@ -95,15 +110,22 @@ export class ToolHarness {
     this.generation++;
     if (this.selection) this.selection.cancelled = true;
     if (this.completion) this.completion.cancelled = true;
+    if (this.diagnostic) this.diagnostic.cancelled = true;
     this.report('已停止尚未执行的请求；已启动工具的实际结果仍会保留');
   }
 
   collect(text: string): Promise<void> {
     const parsed = parseToolBatch(text);
     if (parsed.kind !== 'batch') {
+      this.getCopyResults();
+      if (parsed.kind === 'error' && this.diagnostic?.sourceText === text) {
+        this.report('工具批次校验失败，未执行'); return Promise.resolve();
+      }
       this.clearResults();
       if (parsed.kind === 'error') {
-        this.diagnostic = { root: this.options.root(), session: this.options.session(), text: parsed.error };
+        this.diagnostic = { id: ++this.diagnosticId, root: this.options.root(), session: this.options.session(), sourceText: text,
+          error: { status: 'failed', error: parsed.error } };
+        this.options.diagnosed?.(this.getDiagnostic()!);
         this.report('工具批次校验失败，未执行');
       }
       else this.report('已采集回复，但没有 mini-ai-tools 工具请求，未执行。普通讨论和代码示例仅作为资料；实际操作必须使用工具请求。');
@@ -302,11 +324,11 @@ export class ToolHarness {
   private clearResults(): void {
     // 只释放展示与复制正文，ToolStore 的防重放状态继续保留。
     this.selection = null;
-    this.options.selected?.(null);
     this.results = [];
     this.completion = undefined;
     this.diagnostic = null;
     this.message = '';
+    this.options.selected?.(null);
   }
   /** 更新已启动后台命令的真实回执；不会执行工具或重新生成完成事件。 */
   refreshProcesses(): void {

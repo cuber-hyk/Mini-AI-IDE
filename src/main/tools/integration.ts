@@ -164,7 +164,7 @@ export async function createToolIntegration(options: Options) {
     auto.setEnabled(!options.disabled && !automaticSuspended && state.config.automatic);
     watcher.setEnabled(!options.disabled && !automaticSuspended && state.config.automatic);
     if (!disposed) clipboard.complete(state);
-    continuation?.observe({ root: options.files.getRoot(), session: sessionKeyOf(options.web.getURL()), state: options.disabled || automaticSuspended ? { ...state, config: { ...state.config, automatic: false } } : state });
+    continuation?.observe({ root: options.files.getRoot(), session: sessionKeyOf(options.web.getURL()), diagnostic: harness.getDiagnostic(), state: options.disabled || automaticSuspended ? { ...state, config: { ...state.config, automatic: false } } : state });
     if (!options.editor.isDestroyed()) options.editor.send(CHANNELS.toolState, { ...state, canUndo: changes.canUndo, hasRunningProcesses: processes.hasRunning, clipboard: clipboard.notification(state), continuation: continuation?.getState(), resultReturn: resultReturn?.getState({ root: options.files.getRoot(), session: sessionKeyOf(options.web.getURL()), state }) });
   };
   const approveDirty = async (relative: string): Promise<boolean> => {
@@ -197,20 +197,21 @@ export async function createToolIntegration(options: Options) {
     return auto.tick();
   }, (preserve = false, awaitHistory = false, generated = false) => {
     traceCollection('integration.watcher-baseline', { preserve, awaitHistory, generated, session: traceScope(options.web.getURL()) });
-    continuation?.reset();
+    continuation?.reset({ root: options.files.getRoot(), session: sessionKeyOf(options.web.getURL()) });
     if (generated) auto.observeGeneration(sessionKeyOf(options.web.getURL()));
     else if (preserve) auto.continueAt(sessionKeyOf(options.web.getURL())); else auto.reset(awaitHistory);
     synchronizeChangeSession(); harness.getState();
-  }, message => harness.report(message));
+  }, message => harness.report(message), session => continuation?.reset({ root: options.files.getRoot(), session }));
   harness = new ToolHarness({ store, root: () => options.files.getRoot(), session: () => sessionKeyOf(options.web.getURL()),
     selected: selection => {
-      continuation?.reset();
-      activeSelection = selection; toolAttachments.begin(selection); resultReturn?.begin(selection);
+      continuation?.reset({ root: options.files.getRoot(), session: sessionKeyOf(options.web.getURL()) });
+      activeSelection = selection; toolAttachments.begin(selection); resultReturn?.begin(selection ? { kind: 'batch', selection } : null);
       synchronizeChangeSession();
       if (!selection) { review.clear(); return; }
       reviewTokens.set(selection, review.begin({ root: selection.root, session: selection.session,
         batchId: selection.batch.batch_id, contentKey: hash(JSON.stringify(selection.batch)) }, selection.batch));
     },
+    diagnosed: diagnostic => resultReturn?.begin({ kind: 'diagnostic', diagnostic }),
     stopped: (selection, error) => review.stop(reviewTokens.get(selection), error),
     describe: describeTool, snapshotProcess: id => processes.snapshot(id), prepare: async (root, batch) => { checkBatchChanges(root, batch); await checkResolvedBatchChanges(root, batch); },
     authorize: async (root, request) => {
@@ -239,25 +240,31 @@ export async function createToolIntegration(options: Options) {
     return { ...state, canUndo: changes.canUndo, hasRunningProcesses: processes.hasRunning, ...(notification ? { clipboard: notification } : {}), ...(continuation ? { continuation: continuation.getState() } : {}), ...(resultReturn ? { resultReturn: resultReturn.getState({ root: options.files.getRoot(), session: sessionKeyOf(options.web.getURL()), state }) } : {}) };
   };
   resultReturn = new ToolResultReturn({
-    current: () => ({ root: options.files.getRoot(), session: sessionKeyOf(options.web.getURL()), state: harness.getState() }),
+    current: () => ({ root: options.files.getRoot(), session: sessionKeyOf(options.web.getURL()), state: harness.getState(), diagnostic: harness.getDiagnostic() }),
     changed: () => { if (!disposed && !options.editor.isDestroyed()) options.editor.send(CHANNELS.toolState, getState()); },
     attachments: state => toolAttachments.resolve(state.results),
     send: (text, session, current, files) => sender.send(text, session, 'results', current, files),
-    verify: async (_text, session, current) => {
+    verify: async (_text, session, current, source) => {
       const reply = await readAutoReply(options.web);
       if (!current()) return { ok: false, error: '本批发送已取消' };
       if (reply.url !== session || reply.completion !== 'complete') return { ok: false, error: '网页回复状态或会话已变化，请在官网处理' };
       const parsed = parseToolBatch(reply.text);
-      if (parsed.kind !== 'batch' || !harness.matchesBatch(parsed.batch)) return { ok: false, error: '网页最新回复已变化，未发送旧工具结果' };
+      if (source.kind === 'diagnostic') {
+        if (parsed.kind !== 'error' || reply.text !== source.diagnostic.sourceText || parsed.error !== source.diagnostic.error.error)
+          return { ok: false, error: '网页最新回复已变化，未发送旧解析诊断' };
+      } else if (parsed.kind !== 'batch' || !harness.matchesBatch(parsed.batch)) return { ok: false, error: '网页最新回复已变化，未发送旧工具结果' };
       return { ok: true };
     },
   });
   continuation = new AutoContinuation({
-    current: () => ({ root: options.files.getRoot(), session: sessionKeyOf(options.web.getURL()), state: getState() }),
+    current: () => ({ root: options.files.getRoot(), session: sessionKeyOf(options.web.getURL()), state: getState(), diagnostic: harness.getDiagnostic() }),
     cancelSend: () => sender.cancel('results'),
     changed: () => { if (!disposed && !options.editor.isDestroyed()) options.editor.send(CHANNELS.toolState, getState()); },
     send: async (text, session, current) => {
-      return resultReturn!.send('automatic', () => current() && !disposed && !options.disabled && !automaticSuspended && sessionKeyOf(options.web.getURL()) === session && formatToolResults(harness.getState().results) === text);
+      return resultReturn!.send('automatic', () => {
+        const state = harness.getState();
+        return current() && !disposed && !options.disabled && !automaticSuspended && sessionKeyOf(options.web.getURL()) === session && formatToolResults(state.results, state.batchError) === text;
+      });
     },
   });
   const channels: string[] = [];
@@ -353,7 +360,7 @@ export async function createToolIntegration(options: Options) {
       auto.acknowledge(sessionKeyOf(options.web.getURL()), text);
       void harness.collect(text); return true;
     },
-    reset(): void { revision++; toolAttachments.reset(); resultReturn?.begin(null); continuation?.reset(); harness.cancel(); watcher.reset(); changes.reset(); },
+    reset(): void { revision++; toolAttachments.reset(); resultReturn?.begin(null); continuation?.reset({ root: options.files.getRoot(), session: sessionKeyOf(options.web.getURL()) }); harness.cancel(); watcher.reset(); changes.reset(); },
     async dispose(): Promise<void> { disposed = true; revision++; toolAttachments.reset(); resultReturn?.begin(null); continuation?.dispose(); await sender.dispose(); auto.dispose(); await watcher.dispose(); harness.cancel(); await processes.dispose(); },
   };
 }
