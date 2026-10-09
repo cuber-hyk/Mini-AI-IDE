@@ -19,7 +19,7 @@ deferred_findings: []
 ## Scope
 
 - In scope: 更新窗口 owner、专用 preload、主 frame IPC 权限、图标/窗口渲染与生命周期、既有用例适配和当前行为文档。
-- Out of scope: 更新服务的网络与安装协议、官网、生产用户数据、提交或发布。
+- Out of scope: 更新服务的网络与安装协议、官网、生产用户数据；发布过程见归档的 v0.2.4 重发计划。
 
 ## Plan Readiness
 
@@ -54,7 +54,7 @@ deferred_findings: []
 
 ## Artifact Routing
 
-DESIGN、application-update 能力、AGENTS、accepted ADR、Unreleased；计划归档。
+DESIGN、application-update 能力、AGENTS、accepted ADR、CHANGELOG 0.2.4；计划归档。
 
 ## Git Visibility
 
@@ -62,7 +62,7 @@ codex/fix-update-panel-clipping 分支；用户诊断文件不纳入修改。
 
 ## Closeout
 
-实现与构建完成，计划归档。未新增或运行测试，未在真实 Electron 窗口执行运行验收；未提交、合并或发布。文档校验既有品牌字体/文件树元数据错误保留。
+实现与构建完成，计划归档。用户明确批准后，修复以 aaec41bd1f240dbd858b2f65f442e98355b2131d 提交合并并纳入重新发布的 0.2.4；发布证据见 2026-10-09-v0.2.4-republish.md。未新增或运行测试，未在真实 Electron 窗口执行运行验收；文档校验既有品牌字体/文件树元数据错误保留。
 
 ## 评审记录
 
