@@ -29,7 +29,7 @@ function state(overrides: Record<string, unknown> = {}) {
 }
 
 function updateUi(overrides: Record<string, unknown> = {}) {
-  const ids = ['app-version', 'update-wrap', 'btn-update', 'update-panel', 'update-heading', 'update-versions', 'update-message',
+  const ids = ['app-version', 'update-wrap', 'btn-update', 'update-panel', 'update-heading', 'update-status-icon', 'update-versions', 'update-message',
     'update-notes-section', 'update-notes', 'update-notes-toggle', 'update-progress-wrap', 'update-progress',
     'update-percent', 'update-hint', 'update-action', 'update-close'];
   const nodes = Object.fromEntries(ids.map(id => [id, element()]));
@@ -51,7 +51,7 @@ function updateUi(overrides: Record<string, unknown> = {}) {
   };
   const window = { ...win, setupApplicationUpdate: null as any, setupUpdateDialog: null as any };
   const context = { window, document: { getElementById(id: string) { return nodes[id]; },
-    createElement() { return element(); }, addEventListener: doc.addEventListener } };
+    createElement() { return element(); }, createElementNS() { return element(); }, addEventListener: doc.addEventListener } };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/renderer/applicationUpdate.js'), 'utf8'), context);
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/renderer/updateDialog.js'), 'utf8'), context);
   window.setupApplicationUpdate({
@@ -80,6 +80,7 @@ it('启动只订阅和读取状态，发现新版只点亮图标且不打开面�
   assert.equal(ui.nodes['update-panel'].hidden, false);
   assert.equal(ui.nodes['update-heading'].textContent, '有新版本可用');
   assert.equal(ui.nodes['update-action'].textContent, '下载更新');
+  assert.equal(ui.nodes['update-action'].classList.contains('primary'), true);
 });
 
 it('迟到的初始快照或请求结果不会覆盖更高 revision 的进度', async () => {
