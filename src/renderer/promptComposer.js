@@ -175,7 +175,8 @@ window.setupPromptComposer = function (bridge, setInfo, localPrompt) {
       const submission = localPrompt.getSubmission();
       const result = await bridge.copyPrompt(submission);
       if (!result.ok) throw new Error(result.error || '未知错误');
-      setInfo('已复制提示词（' + result.length + ' 字符）—— 请到中间官网输入框 Ctrl+V 粘贴，然后自己按发送');
+      const attachmentNote = submission.attachments && submission.attachments.length ? '；附件未复制到剪贴板，请开启回车发送由 IDE 上传' : '';
+      setInfo('已复制提示词（' + result.length + ' 字符）—— 请到中间官网输入框 Ctrl+V 粘贴，然后自己按发送' + attachmentNote);
       el.btnCopyPrompt.textContent = '已复制';
       feedbackTimer = window.setTimeout(function () {
         el.btnCopyPrompt.textContent = '复制提示词';

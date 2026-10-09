@@ -1,5 +1,6 @@
 import { sessionKeyOf } from './consumptionStore';
 import { LocalPromptController } from './localPromptController';
+import { LocalPromptAttachments } from './localPromptAttachments';
 import { SkillService } from './skills';
 import { WebComposerSender } from './webComposerSender';
 /**
@@ -536,8 +537,8 @@ async function loadLocalView(
   const tools = await createToolIntegration({
     ipc: ipcMain, editor: editorView.webContents, web: webView.webContents,
     review: previewView.webContents, skills,
-    sender: { send: (text, session, kind = 'results') => composerSender.send(text, session, kind),
-      cancel: () => composerSender.cancel('results'), dispose: () => composerSender.dispose() },
+    // Keep the full sender contract: local prompts pass their current-scope guard and staged attachments.
+    sender: composerSender,
     notifyReview: state => {
       if (previewView.webContents.isDestroyed()) return;
       previewView.webContents.send(CHANNELS.reviewState, state);
@@ -553,8 +554,12 @@ async function loadLocalView(
     notifyFile: (relative, change, discard) => notifyFileChanged(relative, change, discard),
     copy: text => clipboard.writeText(text),
   });
-  localPrompt = new LocalPromptController({ ipc: ipcMain, editor: editorView.webContents, settings, skills,
-    sender: { send: (text, session, _kind, current) => tools.sendLocalPrompt(text, session, current), cancel: kind => composerSender.cancel(kind) }, root: () => fileService.getRoot(), session: () => sessionKeyOf(webView.webContents.getURL()),
+  localPrompt = new LocalPromptController({ ipc: ipcMain, editor: editorView.webContents, settings, skills, attachments: new LocalPromptAttachments(),
+    chooseFiles: async () => { const root = fileService.getRoot(); const result = await dialog.showOpenDialog(win, { title: '选择需求附件', ...(root ? { defaultPath: root } : {}),
+      properties: ['openFile', 'multiSelections'], filters: [{ name: '文档与图片', extensions: ['txt', 'md', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'png', 'jpg', 'jpeg', 'webp', 'gif'] }] }); return result.canceled ? [] : result.filePaths; },
+    sender: { send: (text, session, _kind, current, attachments) => tools.sendLocalPrompt(text, session, current, attachments), cancel: kind => composerSender.cancel(kind) },
+    resolveWorkspacePath: relative => fileService.resolveSafePath(relative).then(result => result.ok ? { ok: true, absolute: result.absolute } : { ok: false, error: result.error }),
+    root: () => fileService.getRoot(), session: () => sessionKeyOf(webView.webContents.getURL()),
     busy: () => { const state = tools.getState(); return state.busy || ['countdown', 'sending', 'waiting_tools'].includes(state.continuation?.phase ?? ''); },
     copy: text => clipboard.writeText(text), disabled: SELF_TEST || (UI_PROBE && !WORKSPACE_PROBE) || DIAGNOSE });
   const localPromptChannels = localPrompt.register();

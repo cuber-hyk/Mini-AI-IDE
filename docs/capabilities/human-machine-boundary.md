@@ -3,7 +3,7 @@ artifact_type: capability
 status: current
 updated: 2026-10-08
 owner: 胡运宽
-source_of_truth: [docs/capabilities/skills-and-local-prompt.md, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, docs/adr/2026-10-07-automatic-result-return-boundary.md, src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, src/main/tools/integration.ts, src/main/tools/autoCollector.ts, src/main/tools/replyChangeWatcher.ts, src/main/preload.ts, src/shared/toolProtocol.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, tools/verify-web-result-sender.cjs]
+source_of_truth: [docs/capabilities/skills-and-local-prompt.md, docs/adr/2026-10-08-local-prompt-attachments.md, src/main/localPromptAttachments.ts, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, docs/adr/2026-10-07-automatic-result-return-boundary.md, src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, src/main/tools/integration.ts, src/main/tools/autoCollector.ts, src/main/tools/replyChangeWatcher.ts, src/main/preload.ts, src/shared/toolProtocol.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, tools/verify-web-result-sender.cjs]
 ---
 
 # 能力：人机边界与限定结果回传
@@ -35,7 +35,9 @@ source_of_truth: [docs/capabilities/skills-and-local-prompt.md, src/main/localPr
 
 - 回程采集同步只读读取正文与结束标志；只读 MutationObserver 和真实用户动作识别在隔离世界 1004，不读用户输入内容，不向网页主世界提供 IPC 或文件桥。
 - `WebComposerSender` 是唯一网页写运输 owner，`WebResultSender` 是工具结果门面，使用隔离世界 1005。仅接纳 `https://chat.deepseek.com` 的当前会话、唯一可见 textarea，以及具有已知 SVG 路径的发送按钮；局部共同容器不能包含回复正文。证据缺失、生成中或等待继续生成时暂停。
-- 发送直接使用与手动复制同源的纯文本结果；通过 textarea 原生 value setter、input 事件和原生 click 完成。检查输入是否为空或仍等于本程序刚填入的文本，不保存、上传或记录用户草稿，不使用 HTML、不读取剪贴板。
+- 工具结果回传只发送与手动复制同源的纯文本，通过 textarea 原生 value setter、input 事件和原生 click 完成，不读取剪贴板。
+- 用户主动本地需求可携带用户明确选择的附件。主进程校验类型、数量、大小及真实路径后读取字节；唯一 sender 只通过官方文件输入控件提交，不向网页提供路径、磁盘读取或通用 IPC。sender 等待官网 composer 显示新附件且上传进度结束后才发送正文；无法确认时停止发送并提示重试。附件不能用于 automatic 或工具结果回传。
+- 两种发送都不保存或读取用户草稿、不使用 HTML；已有草稿或附件、未知控件及会话变化时停止。
 - 已有草稿、用户改写文本、控件变化或不可编辑时不覆盖。取消和点击前失败仅清理自有且未发送的文本；点击后不能确认、异常或超时均停止且不重试，不清理可能已提交的内容。清理无法确认时阻止后续自动发送。
 - 不使用 `SendInput`、`sendInputEvent`、模拟回车、CDP、浏览器驱动或指纹伪造。大模型业务网络仍由 Chromium 发起，主进程不包装 AI HTTP，不读网页凭据，也不提供任意网页动作接口。
 

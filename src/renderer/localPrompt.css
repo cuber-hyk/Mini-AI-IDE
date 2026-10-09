@@ -1,6 +1,14 @@
 .local-prompt-options { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; padding: 8px 0; font-size: 12px; }
 .local-prompt-options label { display: flex; align-items: center; gap: 6px; }
 .local-prompt-options span { color: var(--text-dim); }
+.prompt-attachments { min-width: 0; }
+.prompt-attachment-list { display: flex; flex-wrap: wrap; gap: 6px; }
+.prompt-attachment { display: inline-flex; align-items: center; gap: 5px; max-width: min(320px, 100%); padding: 3px 6px 3px 9px; border: 1px solid var(--ui-border); border-radius: 8px; background: var(--ui-control); color: var(--ui-text); font-size: 12px; }
+.prompt-attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prompt-attachment-remove { width: 22px; height: 22px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--ui-muted); font-size: 17px; cursor: pointer; }
+.prompt-attachment-remove:hover:not(:disabled) { background: var(--ui-hover); color: var(--ui-text); }
+.prompt-attachment-remove:disabled { opacity: .5; cursor: default; }
+.prompt-shell.has-file-drag { border-color: var(--ui-accent); outline: 2px dashed var(--ui-accent); outline-offset: 2px; }
 .skill-menu { position: relative; box-sizing: border-box; max-height: 224px; overflow-x: hidden; overflow-y: auto; overscroll-behavior: contain; margin: 6px 0; padding: 4px; border: 1px solid var(--ui-border); border-radius: 12px; background: var(--ui-surface); box-shadow: 0 4px 16px #0003; scrollbar-gutter: stable; }
 .skill-option { box-sizing: border-box; display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; height: 34px; padding: 6px 8px; border: 0; border-radius: 8px; background: transparent; color: var(--ui-text); font: inherit; font-size: 13px; line-height: 20px; text-align: left; cursor: pointer; }
 .skill-option[aria-selected="true"] { background: var(--ui-hover); }
@@ -14,4 +22,4 @@
 .skill-preview { max-height: 140px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; font-size: 12px; }
 .skill-preview-controls { display: none; }
 .requirement-panel:has(.skill-preview:not([hidden])) .skill-preview-controls { display: block; padding-top: 6px; }
-.skill-menu[hidden], .skill-chips[hidden], .skill-preview[hidden], #btn-send-prompt[hidden] { display: none; }
+.skill-menu[hidden], .skill-chips[hidden], .skill-preview[hidden], .prompt-attachments[hidden], #btn-send-prompt[hidden] { display: none; }

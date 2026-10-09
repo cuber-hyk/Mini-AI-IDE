@@ -12,7 +12,7 @@
 
 ## 按任务类型路由
 
-技能与本地需求先读 `docs/capabilities/skills-and-local-prompt.md`、`docs/adr/2026-10-08-skills-and-local-demand-send.md`。固定目录 owner 为 `src/main/skills.ts`，组装与窄 IPC 为 `localPromptController.ts`，本地 UI 为 `src/renderer/localPrompt.js/css`；唯一官网写入运输为 `src/main/webComposerSender.ts`，`tools/webResultSender.ts` 保留工具门面。技能工具与独立采集/发送入口由 `tools/integration.ts` 接线。
+技能与本地需求先读 `docs/capabilities/skills-and-local-prompt.md`、`docs/adr/2026-10-08-skills-and-local-demand-send.md` 和 `docs/adr/2026-10-08-local-prompt-attachments.md`。固定目录 owner 为 `src/main/skills.ts`，附件暂存 owner 为 `src/main/localPromptAttachments.ts`，组装与窄 IPC 为 `localPromptController.ts`，本地 UI 为 `src/renderer/localPrompt.js/css`；唯一官网写入运输为 `src/main/webComposerSender.ts`，`tools/webResultSender.ts` 保留工具门面。技能工具与独立采集/发送入口由 `tools/integration.ts` 接线。附件已上传而正文未发送时，可由用户在内嵌官网 Console 手动执行只读 `tools/inspect-composer-attachments.js`，返回附件区祖先、预览和上传标记的结构与数量；开启 collection trace 后，`composer.attachment-status` 仅在等待状态变化时记录确认依据，不记录正文或文件内容。
 
 通用工具协作先读 `docs/capabilities/tool-harness.md`、`docs/adr/2026-10-06-native-tool-harness-boundary.md`；入口为 `src/shared/toolProtocol.ts`、`src/main/tools/integration.ts`，执行及状态 owner 为同目录 files/processes/changes/harness/store/autoCollector，只读回复状态/快照为 replyObservation，隔离世界变化通知、历史DOM基线与用于取消旧回传的真实动作通知由 replyChangeWatcher 管理，UI 为 `src/renderer/toolHarness.js`。结束控件现场诊断可由用户在 IDE 内嵌 AI 网页 Console 手动执行 `tools/inspect-reply-state.js` 并返回结构文本。
 

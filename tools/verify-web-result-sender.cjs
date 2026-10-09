@@ -33,13 +33,32 @@ app.setPath('userData', path.join(temporary, 'userData'));
 const fixturePath = path.join(temporary, 'composer.html');
 fs.writeFileSync(fixturePath, `<!doctype html><meta charset="utf-8"><title>离线工具结果发送夹具</title>
 <style>textarea{width:400px;height:100px}.ds-button{width:40px;height:40px}</style>
-<section id="composer"><textarea id="input"></textarea><div role="button" aria-disabled="true" class="ds-button ds-button--primary ds-button--filled ds-button--circle"><svg><path d="${DEEPSEEK_SEND_ICON}"/></svg></div></section>
+<section id="composer"><div id="composer-controls"><div><textarea id="input"></textarea></div><input id="files" type="file" multiple hidden accept=".txt,.md,.pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.png,.jpg,.jpeg,.webp,.gif"><div role="button" aria-disabled="true" class="ds-button ds-button--primary ds-button--filled ds-button--circle"><svg><path d="${DEEPSEEK_SEND_ICON}"/></svg></div></div></section>
 <script>
-window.received = []; window.clicks = 0; window.inputs = 0;
+window.received = []; window.receivedFiles = []; window.clicks = 0; window.inputs = 0; window.fileChanges = 0; window.appFiles = [];
 window.mode = 'normal'; window.delay = 0;
-const input = document.querySelector('textarea'), button = document.querySelector('[role="button"]');
+window.uploadDelay = 0;
+const input = document.querySelector('textarea'), files = document.querySelector('input[type=file]'), button = document.querySelector('[role="button"]');
+files.addEventListener('change', () => {
+  window.fileChanges++;
+  document.querySelector('#attachment-preview')?.remove();
+  if (!files.files.length) return;
+  window.appFiles = Array.from(files.files).map(file => ({name:file.name,size:file.size,type:file.type}));
+  const preview = document.createElement('div'); preview.id = 'attachment-preview';
+  for (const file of Array.from(files.files)) {
+    if (window.hidePreview || (window.hideDocumentPreview && !file.type.startsWith('image/'))) continue;
+    if (!file.type.startsWith('image/') || !window.hideImageNames) { const label = document.createElement('span'); label.textContent = file.name; preview.append(label); }
+    if (file.type.startsWith('image/')) { const image = document.createElement('img'); image.src = URL.createObjectURL(file); preview.append(image); }
+  }
+  if (window.uploadDelay) {
+    const progress = document.createElement('div'); progress.setAttribute('role', 'progressbar'); preview.append(progress);
+    setTimeout(() => progress.remove(), window.uploadDelay);
+  }
+  document.querySelector('#composer').append(preview);
+  if (window.consumeFilesOnChange) files.files = new DataTransfer().files;
+});
 input.addEventListener('input', () => { window.inputs++; if (window.mode === 'disabled') return; setTimeout(() => button.setAttribute('aria-disabled', input.value ? 'false' : 'true'), window.delay); });
-button.addEventListener('click', () => { window.clicks++; window.received.push(input.value); if (window.mode === 'normal') input.value = ''; if (window.mode === 'generating') { const stop = document.createElement('button'); stop.textContent = '停止生成'; document.body.append(stop); } });
+button.addEventListener('click', () => { window.clicks++; window.received.push(input.value); window.receivedFiles.push(window.appFiles.slice()); if (window.mode === 'normal') { input.value = ''; files.files = new DataTransfer().files; document.querySelector('#attachment-preview')?.remove(); } if (window.mode === 'generating') { const stop = document.createElement('button'); stop.textContent = '停止生成'; document.body.append(stop); } });
 </script>`, 'utf8');
 
 let window;
@@ -53,7 +72,8 @@ async function setup(script = '', local = true) {
   sender = new WebResultSender(window.webContents, { allowLocalFixture: local });
 }
 const send = text => sender.send(text, sessionKeyOf(window.webContents.getURL()));
-const state = () => window.webContents.executeJavaScript(`({value:document.querySelector('textarea').value,clicks:window.clicks,received:window.received,inputs:window.inputs,localBridge:typeof window.require,sendState:typeof window.__miniAIResultSend})`);
+const sendAttachment = (text, file) => sender.send(text, sessionKeyOf(window.webContents.getURL()), 'prompt', () => true, [file]);
+const state = () => window.webContents.executeJavaScript(`({value:document.querySelector('textarea')?.value,clicks:window.clicks,received:window.received,receivedFiles:window.receivedFiles,fileChanges:window.fileChanges,files:Array.from(document.querySelector('input[type=file]')?.files||[]).map(file=>({name:file.name,size:file.size,type:file.type})),inputs:window.inputs,localBridge:typeof window.require,sendState:typeof window.__miniAIResultSend})`);
 async function test(name, check) { await check(); passed++; console.log('ok ' + name); }
 async function until(check, message) {
   const started = Date.now();
@@ -115,6 +135,83 @@ app.whenReady().then(async () => {
     assert.equal(await window.webContents.executeJavaScriptInIsolatedWorld(RESULT_SEND_WORLD, [{ code: 'typeof globalThis.__miniAIResultSend' }]), 'undefined');
   });
   await test('空输入填入后等待按钮启用，成功只点击一次', async () => { await setup('window.delay=150'); assert.equal((await send('result')).ok, true); assert.equal((await state()).clicks, 1); assert.equal((await state()).value, ''); });
+  await test('本地需求附件经唯一文件控件逐块上传，文本与文件只发送一次', async () => {
+    await setup('');
+    const file = { id: 'fixture-file', name: 'note.txt', size: 4, mediaType: 'text/plain', async *stream() { yield Buffer.from('note'); } };
+    const result = await sendAttachment('请阅读附件', file); assert.equal(result.ok, true, JSON.stringify(result));
+    const s = await state(); assert.equal(s.clicks, 1); assert.deepEqual(s.receivedFiles, [[{ name: 'note.txt', size: 4, type: 'text/plain' }]]);
+    assert.equal(s.fileChanges, 1); assert.equal(s.files.length, 0);
+  });
+  await test('真实官网层级：文档首轮后，无文件名的外层图片预览仍随第二轮正文发送', async () => {
+    await setup('window.consumeFilesOnChange = true; window.hideImageNames = true');
+    const document = { id: 'document', name: 'note.txt', size: 4, mediaType: 'text/plain', async *stream() { yield Buffer.from('note'); } };
+    assert.equal((await sendAttachment('阅读文档', document)).ok, true);
+    const image = { id: 'image', name: 'clipboard-image.png', size: 3, mediaType: 'image/png', async *stream() { yield new Uint8Array([1, 2, 3]); } };
+    const started = Date.now();
+    const result = await sender.send('解释图片', sessionKeyOf(window.webContents.getURL()), 'prompt', () => Date.now() - started < 1500, [image]);
+    assert.equal(result.ok, true, JSON.stringify(result));
+    const current = await state(); assert.equal(current.clicks, 2); assert.deepEqual(current.received, ['阅读文档', '解释图片']);
+    assert.deepEqual(current.receivedFiles.map(files => files.map(file => file.name)), [['note.txt'], ['clipboard-image.png']]);
+  });
+  await test('图片与文档混合时须确认外层图片预览和文档卡片，再发送同一份正文', async () => {
+    await setup('window.consumeFilesOnChange = true; window.hideImageNames = true; window.uploadDelay = 350');
+    const attachments = [
+      { id: 'image', name: 'clipboard-image.png', size: 3, mediaType: 'image/png', async *stream() { yield new Uint8Array([1, 2, 3]); } },
+      { id: 'document', name: 'note.txt', size: 4, mediaType: 'text/plain', async *stream() { yield Buffer.from('note'); } }
+    ];
+    const started = Date.now();
+    const result = await sender.send('对照图片和文档', sessionKeyOf(window.webContents.getURL()), 'prompt', () => true, attachments);
+    assert.equal(result.ok, true, JSON.stringify(result)); assert.ok(Date.now() - started >= 400);
+    const current = await state(); assert.equal(current.clicks, 1); assert.deepEqual(current.received, ['对照图片和文档']);
+    assert.deepEqual(current.receivedFiles[0].map(file => file.name), ['clipboard-image.png', 'note.txt']);
+  });
+  await test('未出现文档卡片时，零张图片或已有本次图片预览均不能放行正文', async () => {
+    const document = { id: 'document', name: 'note.txt', size: 4, mediaType: 'text/plain', async *stream() { yield Buffer.from('note'); } };
+    const image = { id: 'image', name: 'clipboard-image.png', size: 3, mediaType: 'image/png', async *stream() { yield new Uint8Array([1, 2, 3]); } };
+    for (const attachments of [[document], [image, document]]) {
+      await setup('window.consumeFilesOnChange = true; window.hideImageNames = true; window.hideDocumentPreview = true');
+      const started = Date.now();
+      const result = await sender.send('不能漏掉文档', sessionKeyOf(window.webContents.getURL()), 'prompt', () => Date.now() - started < 700, attachments);
+      assert.equal(result.ok, false); assert.equal((await state()).clicks, 0); assert.equal((await state()).inputs, 0);
+    }
+  });
+  await test('外层已有图片或包含回复正文时拒绝上传，不把既有内容作为本次附件证据', async () => {
+    const file = { id: 'new', name: 'note.txt', size: 4, mediaType: 'text/plain', async *stream() { yield Buffer.from('note'); } };
+    for (const script of [
+      `document.querySelector('#composer').append(Object.assign(document.createElement('img'), { src: 'data:image/png;base64,iVBORw0KGgo=' }))`,
+      `document.querySelector('#composer').insertAdjacentHTML('beforeend', '<article class="ds-message">回复正文</article>')`
+    ]) {
+      await setup(script); const result = await sendAttachment('需求', file);
+      assert.equal(result.ok, false); const current = await state(); assert.equal(current.clicks, 0); assert.equal(current.fileChanges, 0);
+    }
+  });
+  await test('等待官网附件预览出现且上传进度结束后才点击发送', async () => {
+    await setup('window.uploadDelay = 350');
+    const started = Date.now(); const result = await sendAttachment('查看图片', { id: 'image', name: 'clipboard-image.png', size: 3, mediaType: 'image/png', async *stream() { yield new Uint8Array([1, 2, 3]); } });
+    assert.equal(result.ok, true, JSON.stringify(result)); assert.ok(Date.now() - started >= 400);
+    const stateNow = await state(); assert.equal(stateNow.clicks, 1); assert.equal(stateNow.receivedFiles[0][0].name, 'clipboard-image.png');
+  });
+  await test('官网 change 事件消费并清空原 input.files 后仍发送同一条正文', async () => {
+    await setup('window.consumeFilesOnChange = true');
+    const result = await sendAttachment('请识别这张图', { id: 'consumed-image', name: 'clipboard-image.png', size: 3, mediaType: 'image/png', async *stream() { yield new Uint8Array([1, 2, 3]); } });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    const current = await state(); assert.equal(current.clicks, 1); assert.equal(current.received[0], '请识别这张图');
+    assert.deepEqual(current.receivedFiles[0], [{ name: 'clipboard-image.png', size: 3, type: 'image/png' }]);
+    assert.equal(current.files.length, 0, '夹具模拟官网消费 input.files 后清空原控件');
+  });
+  await test('已有官网附件或多个官网文件控件时安全停止，不点击发送', async () => {
+    await setup(`const dt=new DataTransfer();dt.items.add(new File(['old'],'old.txt',{type:'text/plain'}));document.querySelector('input[type=file]').files=dt.files`);
+    const file = { id: 'new', name: 'new.txt', size: 1, mediaType: 'text/plain', async *stream() { yield Buffer.from('n'); } };
+    assert.equal((await sendAttachment('需求', file)).ok, false); assert.equal((await state()).clicks, 0); assert.equal((await state()).files[0].name, 'old.txt');
+    await setup(`document.body.append(Object.assign(document.createElement('input'),{type:'file'}))`);
+    assert.equal((await sendAttachment('需求', file)).ok, false); assert.equal((await state()).clicks, 0);
+  });
+  await test('附件分块期间用户取消会清掉仅由本次需求暂存的文件', async () => {
+    await setup('');
+    const file = { id: 'slow', name: 'slow.txt', size: 4, mediaType: 'text/plain', async *stream() { yield Buffer.from('a'); await pause(1000); yield Buffer.from('bcd'); } };
+    const sending = sendAttachment('需求', file); await pause(100); await sender.cancel('prompt');
+    assert.equal((await sending).ok, false); assert.equal((await state()).clicks, 0); assert.equal((await state()).files.length, 0);
+  });
   await test('已有用户草稿不读取回传或覆盖', async () => { await setup(`document.querySelector('textarea').value='用户草稿'`); assert.equal((await send('result')).ok, false); assert.equal((await state()).value, '用户草稿'); assert.equal((await state()).inputs, 0); });
   await test('唯一可见 textarea，隐藏控件可忽略但第二个可见控件暂停', async () => {
     await setup(`document.body.insertAdjacentHTML('beforeend','<textarea hidden></textarea>')`); assert.equal((await send('result')).ok, true);

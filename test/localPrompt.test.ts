@@ -11,10 +11,11 @@ function node() {
   return {
     value: '', checked: false, disabled: false, hidden: true, textContent: '', id: '', type: '', className: '',
     attrs: {} as Record<string, string>, children: [] as ReturnType<typeof node>[], selectionStart: 0, focused: false,
+    classList: { add() {}, remove() {} },
     addEventListener(name: string, fn: (event: any) => unknown) { (listeners[name] ||= []).push(fn); },
     setAttribute(name: string, value: string) { this.attrs[name] = value; },
     removeAttribute(name: string) { delete this.attrs[name]; },
-    replaceChildren() { this.children = []; }, appendChild(child: ReturnType<typeof node>) { this.children.push(child); },
+    replaceChildren() { this.children = []; }, appendChild(child: ReturnType<typeof node>) { this.children.push(child); }, append(...children: ReturnType<typeof node>[]) { this.children.push(...children); },
     focus() { this.focused = true; }, scrollIntoView() {},
     setRangeText(value: string, start: number, end: number) { this.value = this.value.slice(0, start) + value + this.value.slice(end); this.selectionStart = start + value.length; },
     dispatchEvent(event: { type: string }) { this.fire(event.type); },
@@ -23,7 +24,7 @@ function node() {
 }
 const skills = [{ name: 'build', description: '构建项目', source: 'project' }, { name: 'review', description: '代码审查', source: 'global' }];
 function setup(overrides: Record<string, unknown> = {}) {
-  const ids = ['requirement', 'prompt-initialization', 'prompt-send-on-enter', 'btn-send-prompt', 'skill-menu', 'skill-chips', 'skill-preview', 'skill-preview-close'];
+  const ids = ['requirement', 'prompt-initialization', 'prompt-send-on-enter', 'btn-send-prompt', 'skill-menu', 'skill-chips', 'skill-preview', 'skill-preview-close', 'prompt-attachments', 'prompt-attachment-list', 'btn-add-prompt-attachment', 'prompt-shell'];
   const nodes = Object.fromEntries(ids.map(id => [id, node()]));
   let rootListener: (next: { root: string }) => void = () => {};
   const sends: any[] = [];
@@ -35,12 +36,13 @@ function setup(overrides: Record<string, unknown> = {}) {
     async getSkillCatalog() { return { root: 'C:\\project', skills, errors: [] }; },
     async loadSkill(name: string) { return { ok: true, skill: { content: name + '说明' } }; },
     async sendPrompt(value: unknown) { sends.push(value); return { ok: true }; },
+    async choosePromptAttachments() { return []; }, async stagePromptAttachments() { return []; }, async removePromptAttachment() { return true; },
     onRootChanged(fn: typeof rootListener) { rootListener = fn; },
     ...overrides,
   };
   const sandbox = {
     window: { setupLocalPrompt: undefined as any },
-    document: { getElementById: (id: string) => nodes[id], createElement: node, dispatchEvent() {} },
+    document: { getElementById: (id: string) => nodes[id], querySelector: () => nodes['prompt-shell'], createElement: node, dispatchEvent() {} },
     Event: class { constructor(readonly type: string) {} },
   };
   vm.createContext(sandbox); vm.runInContext(source, sandbox);
@@ -171,12 +173,135 @@ it('无可用技能或目录加载失败仅保留空列表，不显示原因且�
   }
 });
 
-it('成功发送保留用户关闭的初始化选项，关闭发送开关仍调用主进程持久化取消入口', async () => {
+it('成功发送清空已提交需求，保留初始化选项；关闭发送开关仍调用主进程取消入口', async () => {
   const ui = setup(); await flush();
   ui.nodes['prompt-initialization'].checked = false; ui.nodes['prompt-send-on-enter'].checked = true;
   ui.nodes['prompt-initialization'].fire('change'); await flush();
   ui.input('后续需求'); ui.key('Enter'); await flush();
-  assert.equal(ui.nodes['prompt-initialization'].checked, false); assert.equal(ui.nodes.requirement.value, '后续需求');
+  assert.equal(ui.nodes['prompt-initialization'].checked, false); assert.equal(ui.nodes.requirement.value, '');
   ui.nodes['prompt-send-on-enter'].checked = false; ui.nodes['prompt-send-on-enter'].fire('change'); await flush();
   assert.equal(ui.writes.at(-1).sendOnEnter, false); assert.equal(ui.nodes['btn-send-prompt'].hidden, true);
+});
+
+it('回车和按钮发送成功后清空正文、技能和附件，并通知输入布局更新', async () => {
+  for (const action of ['enter', 'button']) {
+    const ui = setup({ async choosePromptAttachments() { return [{ id: 'image', name: 'image.png', size: 3, mediaType: 'image/png' }]; } }); await flush();
+    ui.nodes['prompt-send-on-enter'].checked = true; ui.nodes['prompt-send-on-enter'].fire('change'); await flush();
+    ui.input('请 /build'); ui.key('Enter'); ui.nodes['skill-chips'].children[0].fire('click'); await flush();
+    ui.nodes['btn-add-prompt-attachment'].fire('click'); await flush();
+    let emptyInputEvents = 0;
+    ui.nodes.requirement.addEventListener('input', () => { if (ui.nodes.requirement.value === '') emptyInputEvents++; });
+    if (action === 'enter') ui.key('Enter'); else ui.nodes['btn-send-prompt'].fire('click');
+    await flush();
+    assert.equal(ui.sends.length, 1); assert.equal(ui.nodes.requirement.value, ''); assert.equal(emptyInputEvents, 1);
+    assert.equal(ui.nodes['skill-chips'].hidden, true); assert.equal(ui.nodes['skill-preview'].hidden, true);
+    assert.equal(ui.nodes['skill-menu'].hidden, true); assert.equal(ui.nodes['prompt-attachments'].hidden, true);
+    assert.equal(ui.owner.getSubmission().skills.length, 0); assert.equal(ui.owner.getSubmission().attachments.length, 0);
+    assert.equal(ui.nodes['prompt-initialization'].checked, true); assert.equal(ui.nodes['prompt-send-on-enter'].checked, true);
+  }
+});
+
+it('发送失败、状态未知或接口异常保留原需求与附件以便检查和重试', async () => {
+  for (const sendPrompt of [
+    async () => ({ ok: false, error: '附件未就绪' }),
+    async () => ({ ok: false, uncertain: true, error: '接收未确认' }),
+    async () => { throw new Error('接口失败'); },
+  ]) {
+    const ui = setup({ sendPrompt, async choosePromptAttachments() { return [{ id: 'image', name: 'image.png', size: 3, mediaType: 'image/png' }]; } }); await flush();
+    ui.nodes['prompt-send-on-enter'].checked = true; ui.nodes['prompt-send-on-enter'].fire('change'); await flush();
+    ui.input('  检查附件  '); ui.nodes['btn-add-prompt-attachment'].fire('click'); await flush();
+    ui.key('Enter'); await flush();
+    assert.equal(ui.nodes.requirement.value, '  检查附件  '); assert.equal(ui.nodes['prompt-attachments'].hidden, false);
+    assert.deepEqual(Array.from(ui.owner.getSubmission().attachments), ['image']);
+  }
+});
+
+it('旧需求成功回执不能清空等待期间新写的下一条需求', async () => {
+  let finish: (value: unknown) => void = () => {};
+  const ui = setup({ sendPrompt() { return new Promise(resolve => { finish = resolve; }); } }); await flush();
+  ui.nodes['prompt-send-on-enter'].checked = true; ui.nodes['prompt-send-on-enter'].fire('change'); await flush();
+  ui.input('已提交需求'); ui.key('Enter'); ui.input('下一条需求');
+  finish({ ok: true }); await flush();
+  assert.equal(ui.nodes.requirement.value, '下一条需求');
+});
+
+it('选择的附件显示在需求区、随显式提交发送并可单项移除', async () => {
+  const selected = [{ id: 'attachment-1', name: '说明.pdf', size: 2048, mediaType: 'application/pdf' }];
+  let removed = '';
+  const ui = setup({ async choosePromptAttachments() { return selected; }, async removePromptAttachment(id: string) { removed = id; return true; } }); await flush();
+  ui.input('阅读附件'); ui.nodes['btn-add-prompt-attachment'].fire('click'); await flush();
+  assert.equal(ui.nodes['prompt-attachments'].hidden, false);
+  assert.equal(ui.nodes['prompt-attachment-list'].children[0].children[0].textContent, '说明.pdf');
+  assert.deepEqual(Array.from(ui.owner.getSubmission().attachments), ['attachment-1']);
+  ui.nodes['prompt-attachment-list'].children[0].children[1].fire('click'); await flush();
+  assert.equal(removed, 'attachment-1'); assert.equal(ui.nodes['prompt-attachments'].hidden, true);
+});
+
+it('外部拖放文件交由主进程窄通道校验，不把路径写进需求文本', async () => {
+  let staged: unknown;
+  const ui = setup({ async stagePromptAttachments(files: unknown) { staged = files; return [{ id: 'drop-1', name: 'image.png', size: 10, mediaType: 'image/png' }]; } }); await flush();
+  const file = { name: 'image.png' };
+  let prevented = false;
+  ui.nodes['prompt-shell'].fire('drop', { dataTransfer: { types: ['Files'], files: [file] }, preventDefault() { prevented = true; } }); await flush();
+  assert.equal(prevented, true); assert.equal((staged as any[])[0].name, 'image.png');
+  assert.deepEqual(Array.from(ui.owner.getSubmission().attachments), ['drop-1']);
+  assert.equal(ui.nodes.requirement.value, '');
+});
+
+it('右侧工作区文件以相对路径和来源根目录拖入附件区', async () => {
+  let staged: unknown[] = [];
+  const ui = setup({ async stageWorkspacePromptAttachments(paths: unknown[], root: string) { staged = paths; assert.equal(root, 'C:\\project'); return [{ id: 'workspace-1', name: 'notes.md', size: 20, mediaType: 'text/markdown' }]; } }); await flush();
+  let prevented = false;
+  ui.nodes['prompt-shell'].fire('drop', { dataTransfer: {
+    types: ['application/x-mini-ai-ide-workspace-files'],
+    getData() { return JSON.stringify({ root: 'C:\\project', paths: ['docs/notes.md'] }); },
+  }, preventDefault() { prevented = true; } }); await flush();
+  assert.equal(prevented, true); assert.deepEqual(Array.from(staged), ['docs/notes.md']);
+  assert.deepEqual(Array.from(ui.owner.getSubmission().attachments), ['workspace-1']);
+});
+
+it('粘贴图片时作为附件暂存，普通文本粘贴保持浏览器默认行为', async () => {
+  let args: unknown[] = [];
+  const ui = setup({ async stageClipboardPromptImage(...values: unknown[]) { args = values; return [{ id: 'clipboard-1', name: 'clipboard-image.png', size: 3, mediaType: 'image/png' }]; } }); await flush();
+  let prevented = false;
+  const file = { type: 'image/png', size: 3, async arrayBuffer() { return new Uint8Array([1, 2, 3]).buffer; } };
+  ui.nodes.requirement.fire('paste', { clipboardData: { items: [{ kind: 'file', type: 'image/png', getAsFile: () => file }] }, preventDefault() { prevented = true; } }); await flush();
+  assert.equal(prevented, true); assert.equal(args[0], 'clipboard-image.png'); assert.equal(args[1], 'image/png');
+  assert.equal(ui.nodes['prompt-attachments'].hidden, false);
+  prevented = false;
+  ui.nodes.requirement.fire('paste', { clipboardData: { items: [{ kind: 'string', type: 'text/plain' }] }, preventDefault() { prevented = true; } });
+  assert.equal(prevented, false);
+});
+
+it('图片从剪贴板 FileList 暴露时也能作为附件读取', async () => {
+  let staged = false;
+  const ui = setup({ async stageClipboardPromptImage() { staged = true; return [{ id: 'clipboard-list', name: 'clipboard-image.png', size: 3, mediaType: 'image/png' }]; } }); await flush();
+  const file = { type: 'image/png', size: 3, async arrayBuffer() { return new Uint8Array([1, 2, 3]).buffer; } };
+  let prevented = false;
+  ui.nodes.requirement.fire('paste', { clipboardData: { items: [], files: [file] }, preventDefault() { prevented = true; } }); await flush();
+  assert.equal(prevented, true); assert.equal(staged, true);
+  assert.deepEqual(Array.from(ui.owner.getSubmission().attachments), ['clipboard-list']);
+});
+
+it('粘贴图片尚在异步暂存时按回车，会等待附件进入提交快照后再发送', async () => {
+  let finish!: (value: unknown) => void;
+  const ui = setup({ stageClipboardPromptImage() { return new Promise(resolve => { finish = resolve; }); } }); await flush();
+  ui.nodes['prompt-send-on-enter'].checked = true; ui.input('请阅读这张图片');
+  const file = { type: 'image/png', size: 3, async arrayBuffer() { return new Uint8Array([1, 2, 3]).buffer; } };
+  ui.nodes.requirement.fire('paste', { clipboardData: { items: [{ kind: 'file', type: 'image/png', getAsFile: () => file }] }, preventDefault() {} });
+  ui.key('Enter'); await flush();
+  assert.equal(ui.sends.length, 0, '附件暂存未完成时不能先发送纯文本');
+  finish([{ id: 'clipboard-ready', name: 'clipboard-image.png', size: 3, mediaType: 'image/png' }]); await flush();
+  assert.equal(ui.sends.length, 1);
+  assert.deepEqual(Array.from(ui.sends[0].attachments), ['clipboard-ready']);
+});
+
+it('粘贴图片暂存失败后按回车不会退化为只发送文本', async () => {
+  const ui = setup({ async stageClipboardPromptImage() { throw new Error('IPC failed'); } }); await flush();
+  ui.nodes['prompt-send-on-enter'].checked = true; ui.input('请看图片');
+  const file = { type: 'image/png', async arrayBuffer() { return new Uint8Array([1]).buffer; } };
+  ui.nodes.requirement.fire('paste', { clipboardData: { items: [{ kind: 'file', type: 'image/png', getAsFile: () => file }] }, preventDefault() {} }); await flush();
+  ui.key('Enter'); await flush();
+  assert.equal(ui.sends.length, 0);
+  assert.match(ui.messages.at(-1)!, /附件添加失败/);
 });

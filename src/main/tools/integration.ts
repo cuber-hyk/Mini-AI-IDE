@@ -24,6 +24,7 @@ import { ResultClipboard, formatToolResults } from './resultClipboard';
 import { AutoContinuation } from './autoContinuation';
 import { WebResultSender } from './webResultSender';
 import { traceCollection, traceScope, traceText } from './collectionTrace';
+import type { PromptAttachmentData } from '../../shared/localPrompt';
 export { readAutoReply } from './replyObservation';
 
 interface Options {
@@ -293,12 +294,12 @@ export async function createToolIntegration(options: Options) {
   return {
     channels, getState, approveDirty,
     /** 本地发送与输出采集独立；发送器自身核验地址和一次点击。 */
-    async sendLocalPrompt(text: string, session: string, submissionCurrent: () => boolean) {
+    async sendLocalPrompt(text: string, session: string, submissionCurrent: () => boolean, attachments: readonly PromptAttachmentData[] = []) {
       if (!submissionCurrent() || disposed || session !== sessionKeyOf(options.web.getURL())) return { ok: false, error: '项目、会话或发送选项已变化' };
-      traceCollection('integration.local-prompt-start', { session: traceScope(session), text: traceText(text) });
+      traceCollection('integration.local-prompt-start', { session: traceScope(session), text: traceText(text), attachmentCount: attachments.length, attachmentBytes: attachments.reduce((sum, item) => sum + item.size, 0) });
       // 首页首发的地址分配先于正文挂载且生成控件无可读标签；发送前打短期标记，watcher 交接时据此保留新轮基线，失败退回既有判据。
       try { await watcher.markLocalSubmit(); } catch (error) { traceCollection('integration.local-submit-mark-error', { error: error instanceof Error ? error.message : String(error) }); /* 页面忙时由既有回复/生成判据兜底 */ }
-      const result = await sender.send(text, session, 'prompt');
+      const result = await sender.send(text, session, 'prompt', submissionCurrent, attachments);
       traceCollection('integration.local-prompt-result', { session: traceScope(session), ok: result.ok, error: result.ok ? null : result.error ?? null });
       return result;
     },

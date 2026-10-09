@@ -132,6 +132,9 @@
     <footer class="prompt-bar">
       <div class="prompt-shell">
         <details id="requirement-panel" class="requirement-panel"><summary>编写需求 <span>/ 选择技能 · 复制或开启回车发送</span></summary>
+        <div id="prompt-attachments" class="prompt-attachments" aria-label="待发送附件" hidden>
+          <div id="prompt-attachment-list" class="prompt-attachment-list"></div>
+        </div>
         <textarea
           id="requirement"
           class="requirement"
@@ -147,6 +150,7 @@
         <div class="skill-preview-controls"><button id="skill-preview-close" type="button" class="ui-button">收起技能说明</button></div>
         <pre id="skill-preview" class="skill-preview" aria-label="技能说明" hidden></pre>
         <div id="local-prompt-options" class="local-prompt-options">
+          <button id="btn-add-prompt-attachment" type="button" class="ui-button" title="添加文档或图片，最多 50 个，每个不超过 100 MB">添加附件</button>
           <label title="新对话或需要重新说明规则时勾选"><input id="prompt-initialization" type="checkbox" checked disabled />附带初始化提示词</label>
           <label title="开启后 Enter 发送，Shift+Enter 换行；关闭后 Enter 换行"><input id="prompt-send-on-enter" type="checkbox" disabled />回车发送到官网</label>
           <span>新对话或需要重新说明规则时勾选初始化。</span>

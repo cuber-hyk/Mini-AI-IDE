@@ -41,6 +41,7 @@
         if (epoch !== generation || root !== options.getRoot()) return;
         const li = node('li', entry.isDirectory ? 'tree-dir' : 'tree-file'); li.dataset.relPath = entry.relPath;
         const row = node('div', 'tree-row'); row.dataset.relPath = entry.relPath;
+        row.draggable = !entry.isDirectory;
         row.tabIndex = 0; row.setAttribute('role', 'treeitem'); row.setAttribute('aria-selected', 'false');
         row.title = entry.relPath;
         const twisty = node('span', 'tree-twisty', entry.isDirectory ? '▸' : '');
@@ -195,6 +196,12 @@
       }
     });
     tree.addEventListener('click', function (event) { if (event.target === tree) selected = null; });
+    tree.addEventListener('dragstart', function (event) {
+      const row = event.target.closest('.tree-row');
+      if (!row || !row.draggable || !options.getRoot() || !event.dataTransfer) { event.preventDefault(); return; }
+      event.dataTransfer.effectAllowed = 'copy';
+      event.dataTransfer.setData('application/x-mini-ai-ide-workspace-files', JSON.stringify({ root: options.getRoot(), paths: [row.dataset.relPath] }));
+    });
     options.newFile.addEventListener('click', function () { void create(false); });
     options.newFolder.addEventListener('click', function () { void create(true); });
     options.refresh.addEventListener('click', function () { void refresh(false); });

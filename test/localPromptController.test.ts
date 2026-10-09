@@ -6,13 +6,15 @@ import { CHANNELS } from '../src/shared/contract';
 function fixture() {
   let root: string | null = null; let session = 'https://chat.deepseek.com/a/chat/one'; let busy = false;
   let saved = { localPrompt: { includeInitialization: true, sendOnEnter: false }, formatSpecVariant: 'short', customFormatSpecShort: null, customFormatSpecFull: null };
-  const sent: Array<{text: string; session: string; kind: string}> = []; const copies: string[] = []; const cancellations: unknown[] = [];
+  const sent: Array<{text: string; session: string; kind: string; attachments?: unknown}> = []; const copies: string[] = []; const cancellations: unknown[] = [];
   const handlers = new Map<string, Function>(); const editor = { mainFrame: {} };
   const options: any = { ipc: { handle(name: string, fn: Function) { handlers.set(name, fn); } }, editor,
     settings: { get: () => structuredClone(saved), update(patch: object) { saved = { ...saved, ...patch }; } },
     skills: { async list(value: string | null) { return { root: value, skills: [{ name: 'review', description: '审阅', source: 'global' }], errors: [] }; },
       async load(_root: string | null, name: string) { if (name !== 'review') throw new Error('技能不存在'); return { name, description: '审阅', source: 'global', content: '完整技能：保留真实错误', resourceRoot: 'C:/skills/review', instructionPath: 'C:/skills/review/SKILL.md' }; } },
-    sender: { async send(text: string, target: string, kind: string) { sent.push({ text, session: target, kind }); return { ok: true }; }, async cancel(kind: string) { cancellations.push(kind); } },
+    sender: { async send(text: string, target: string, kind: string, _current: unknown, attachments: unknown) { sent.push({ text, session: target, kind, attachments }); return { ok: true }; }, async cancel(kind: string) { cancellations.push(kind); } },
+    attachments: { async stage() { return []; }, async resolve() { return []; }, remove() { return true; }, clear() {} }, chooseFiles: async () => [],
+    resolveWorkspacePath: async (relative: string) => ({ ok: true, absolute: `C:\\project\\${relative}` }),
     root: () => root, session: () => session, busy: () => busy, copy(text: string) { copies.push(text); },
   };
   const controller = new LocalPromptController(options); controller.register();
@@ -66,4 +68,53 @@ it('需求、设置和技能IPC只允许编辑器主frame；其他视图、子fr
     for(const event of [{sender:{mainFrame:{}},senderFrame:{}},{sender:f.event.sender,senderFrame:{}}]) assert.throws(()=>fn(event),/主 frame/);
   }
   assert.throws(()=>f.handlers.get(CHANNELS.getSkillCatalog)!(f.event,'C:/secret'),/数量/);
+});
+
+it('回车提交从本地待发附件 ID 解析数据，并将文件字节流交给网页 sender', async () => {
+  const f = fixture(); f.controller.setOptions({ sendOnEnter: true, includeInitialization: false });
+  const staged = { id: 'clipboard-id', name: 'clipboard-image.png', size: 3, mediaType: 'image/png', stream: async function* () { yield new Uint8Array([1, 2, 3]); } };
+  f.options.attachments.resolve = async (ids: string[]) => { assert.deepEqual(ids, ['clipboard-id']); return [staged]; };
+  const result = await f.controller.send({ ...f.input, requirement: '识别图中代码', skills: [], attachments: ['clipboard-id'] });
+  assert.equal(result.ok, true);
+  assert.deepEqual(f.sent[0]!.attachments, [staged]);
+  assert.equal(typeof (f.sent[0]!.attachments as any[])[0].stream, 'function');
+});
+
+it('附件 IPC 只允许编辑器主 frame，选择取消不创建附件', async () => {
+  const f = fixture();
+  assert.deepEqual(await f.handlers.get(CHANNELS.choosePromptAttachments)!(f.event), []);
+  assert.throws(() => f.handlers.get(CHANNELS.stagePromptAttachments)!({ sender: {}, senderFrame: {} }, ['C:/secret.txt']), /主 frame/);
+  assert.throws(() => f.handlers.get(CHANNELS.removePromptAttachment)!(f.event, 'id', 'extra'), /数量/);
+});
+
+it('工作区树拖入只接纳当前根下的相对路径并在根切换后失效', async () => {
+  const f = fixture(); f.setRoot('C:\\project');
+  let staged: string[] = [];
+  f.options.attachments.stage = async (paths: string[]) => { staged = paths; return []; };
+  const stage = f.handlers.get(CHANNELS.stageWorkspacePromptAttachments)!;
+  assert.deepEqual(await stage(f.event, ['docs/readme.md'], 'C:\\project'), []);
+  assert.deepEqual(staged, ['C:\\project\\docs/readme.md']);
+  await assert.rejects(() => stage(f.event, ['docs/readme.md'], 'C:\\other'), /工作区已变化/);
+  f.setRoot('C:\\new-project'); f.controller.cancel();
+  await assert.rejects(() => stage(f.event, ['docs/readme.md'], 'C:\\project'), /工作区已变化/);
+});
+
+it('三个附件入口在暂存等待期间切项目均拒绝迟到结果，仅删除旧批 ID', async () => {
+  for (const channel of [CHANNELS.choosePromptAttachments, CHANNELS.stagePromptAttachments, CHANNELS.stageWorkspacePromptAttachments]) {
+    const f = fixture(); f.setRoot('C:/project');
+    f.options.chooseFiles = async () => ['C:/project/file.md'];
+    let finish!: (value: unknown) => void; let started!: () => void;
+    const staging = new Promise<void>(resolve => { started = resolve; });
+    const removed: string[] = []; let clears = 0;
+    f.options.attachments.stage = () => { started(); return new Promise(resolve => { finish = resolve; }); };
+    f.options.attachments.remove = (id: string) => { removed.push(id); };
+    f.options.attachments.clear = () => { clears++; };
+    const args = channel === CHANNELS.choosePromptAttachments ? [] : channel === CHANNELS.stagePromptAttachments ? [['C:/project/file.md']] : [['file.md'], 'C:/project'];
+    const pending = f.handlers.get(channel)!(f.event, ...args);
+    const rejected = assert.rejects(pending, /项目已切换/);
+    await staging;
+    f.setRoot('C:/new-project'); f.controller.cancel();
+    finish([{ id: 'old-file' }]); await rejected;
+    assert.deepEqual(removed, ['old-file']); assert.equal(clears, 1);
+  }
 });

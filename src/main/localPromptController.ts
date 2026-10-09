@@ -3,16 +3,19 @@ import type { IpcMain, IpcMainInvokeEvent, WebContents } from 'electron';
 import type { SettingsStore } from './settings';
 import type { SkillService } from './skills';
 import type { WebComposerSender } from './webComposerSender';
-import type { LocalPromptInput, LocalPromptOptions, LocalPromptResult } from '../shared/localPrompt';
+import type { LocalPromptInput, LocalPromptOptions, LocalPromptResult, PromptAttachment, PromptAttachmentData } from '../shared/localPrompt';
+import { LocalPromptAttachments, MAX_PROMPT_ATTACHMENTS } from './localPromptAttachments';
 import { validSkillName } from '../shared/skills';
 import { CHANNELS } from '../shared/contract';
 import { buildPrompt, resolveFormatSpec } from '../shared/formatSpec';
 import { buildContextSummary } from './contextSummary';
+import { traceCollection } from './tools/collectionTrace';
 
 interface Options {
   ipc: Pick<IpcMain, 'handle'>; editor: Pick<WebContents, 'mainFrame'>; settings: SettingsStore;
   skills: Pick<SkillService, 'list' | 'load'>;
-  sender: { send: (text: string, session: string, kind: 'prompt', current: () => boolean) => ReturnType<WebComposerSender['send']>; cancel: WebComposerSender['cancel'] };
+  sender: { send: (text: string, session: string, kind: 'prompt', current: () => boolean, attachments?: readonly PromptAttachmentData[]) => ReturnType<WebComposerSender['send']>; cancel: WebComposerSender['cancel'] };
+  attachments: LocalPromptAttachments; chooseFiles: () => Promise<string[]>; resolveWorkspacePath: (path: string) => Promise<{ ok: boolean; absolute?: string; error?: string }>;
   root: () => string | null; session: () => string; busy: () => boolean;
   copy: (text: string) => void; disabled?: boolean;
 }
@@ -22,7 +25,7 @@ export class LocalPromptController {
   private sending = false;
   constructor(private readonly options: Options) {}
   getOptions(): LocalPromptOptions { return { ...this.options.settings.get().localPrompt }; }
-  cancel(rootChanged = true): void { this.generation++; if (rootChanged) this.rootGeneration++; void this.options.sender.cancel('prompt'); }
+  cancel(rootChanged = true): void { this.generation++; if (rootChanged) { this.rootGeneration++; this.options.attachments.clear(); } void this.options.sender.cancel('prompt'); }
   setOptions(raw: unknown): LocalPromptOptions {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('本地提示词选项无效');
     const patch = raw as Record<string, unknown>;
@@ -33,10 +36,11 @@ export class LocalPromptController {
   private input(raw: unknown): LocalPromptInput {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('需求参数无效');
     const value = raw as Record<string, unknown>;
-    if (Object.keys(value).some(key => !['requirement', 'root', 'skills'].includes(key)) ||
+    if (Object.keys(value).some(key => !['requirement', 'root', 'skills', 'attachments'].includes(key)) ||
       typeof value.requirement !== 'string' || !value.requirement.trim() || value.requirement.length > 100000 || value.requirement.includes('\0') ||
       (value.root !== null && typeof value.root !== 'string') || !Array.isArray(value.skills) || value.skills.length > 8 ||
-      value.skills.some(name => !validSkillName(name)) || new Set(value.skills).size !== value.skills.length) throw new Error('需求、项目或技能参数无效');
+      value.skills.some(name => !validSkillName(name)) || new Set(value.skills).size !== value.skills.length ||
+      (value.attachments !== undefined && (!Array.isArray(value.attachments) || value.attachments.length > MAX_PROMPT_ATTACHMENTS || value.attachments.some(id => typeof id !== 'string')))) throw new Error('需求、项目或技能参数无效');
     if (value.root !== this.options.root()) throw new Error('项目已切换，请重新选择技能后发送');
     return value as unknown as LocalPromptInput;
   }
@@ -78,7 +82,12 @@ export class LocalPromptController {
       if (generation !== this.generation || !this.getOptions().sendOnEnter || session !== this.options.session() || this.options.busy()) return { ok: false, error: '开关、会话或工具状态已变化，需求未发送' };
       // 会话作用域由 integration/sender 核验，允许它们证明首页首发的地址分配。
       const current = () => generation === this.generation && this.getOptions().sendOnEnter && !this.options.busy();
-      return { ...await this.options.sender.send(prompt, session, 'prompt', current), length: prompt.length };
+      const attachments = await this.options.attachments.resolve((raw as LocalPromptInput).attachments ?? []);
+      if (generation !== this.generation || session !== this.options.session()) return { ok: false, error: '项目或会话已变化，需求未发送' };
+      traceCollection('local-prompt.attachments-resolved', { count: attachments.length, totalBytes: attachments.reduce((sum, item) => sum + item.size, 0) });
+      const result = await this.options.sender.send(prompt, session, 'prompt', current, attachments);
+      if (result.ok) for (const attachment of attachments) this.options.attachments.remove(attachment.id);
+      return { ...result, length: prompt.length };
     } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
     finally { this.sending = false; }
   }
@@ -89,6 +98,38 @@ export class LocalPromptController {
     const handle = (channel: string, action: (...args: unknown[]) => unknown) => this.options.ipc.handle(channel, (event, ...args: unknown[]) => { trusted(event); if (args.length !== action.length) throw new Error('本地需求参数数量无效'); return action(...args); });
     handle(CHANNELS.getLocalPromptOptions, () => this.getOptions());
     handle(CHANNELS.setLocalPromptOptions, patch => this.setOptions(patch));
+    handle(CHANNELS.choosePromptAttachments, async () => {
+      const root = this.options.root(); const generation = this.rootGeneration;
+      const paths = await this.options.chooseFiles();
+      if (generation !== this.rootGeneration || root !== this.options.root()) throw new Error('项目已切换，未添加附件');
+      const staged = paths.length ? await this.options.attachments.stage(paths) : [];
+      if (generation !== this.rootGeneration || root !== this.options.root()) { for (const item of staged) this.options.attachments.remove(item.id); throw new Error('项目已切换，未添加附件'); }
+      return staged;
+    });
+    handle(CHANNELS.stagePromptAttachments, async paths => {
+      const root = this.options.root(); const generation = this.rootGeneration;
+      if (!Array.isArray(paths) || paths.some(item => typeof item !== 'string')) throw new Error('拖入附件无效');
+      const staged = await this.options.attachments.stage(paths as string[]);
+      if (generation !== this.rootGeneration || root !== this.options.root()) { for (const item of staged) this.options.attachments.remove(item.id); throw new Error('项目已切换，未添加附件'); }
+      return staged;
+    });
+    handle(CHANNELS.stageWorkspacePromptAttachments, async (paths, requestedRoot) => {
+      const root = this.options.root(); const generation = this.rootGeneration;
+      if (typeof requestedRoot !== 'string' || requestedRoot !== root || !Array.isArray(paths) || paths.length === 0 || paths.some(item => typeof item !== 'string'))
+        throw new Error('工作区已变化或拖入路径无效');
+      const resolved: string[] = [];
+      for (const relative of paths as string[]) {
+        const target = await this.options.resolveWorkspacePath(relative);
+        if (!target.ok || !target.absolute) throw new Error(target.error || '无法读取工作区文件');
+        resolved.push(target.absolute);
+      }
+      if (generation !== this.rootGeneration || root !== this.options.root()) throw new Error('项目已切换，未添加附件');
+      const staged = await this.options.attachments.stage(resolved);
+      if (generation !== this.rootGeneration || root !== this.options.root()) { for (const item of staged) this.options.attachments.remove(item.id); throw new Error('项目已切换，未添加附件'); }
+      return staged;
+    });
+    handle(CHANNELS.stageClipboardPromptImage, (name, mediaType, bytes) => this.options.attachments.stageClipboardImage(name, mediaType, bytes));
+    handle(CHANNELS.removePromptAttachment, id => this.options.attachments.remove(id));
     handle(CHANNELS.getSkillCatalog, async () => {
       const root = this.options.root(); const generation = this.rootGeneration;
       const catalog = await this.options.skills.list(root);
@@ -105,6 +146,7 @@ export class LocalPromptController {
       } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
     });
     handle(CHANNELS.copyPrompt, raw => this.copy(raw)); handle(CHANNELS.sendPrompt, raw => this.send(raw));
-    return [CHANNELS.getLocalPromptOptions, CHANNELS.setLocalPromptOptions, CHANNELS.getSkillCatalog, CHANNELS.loadSkill, CHANNELS.copyPrompt, CHANNELS.sendPrompt];
+    return [CHANNELS.getLocalPromptOptions, CHANNELS.setLocalPromptOptions, CHANNELS.choosePromptAttachments, CHANNELS.stagePromptAttachments, CHANNELS.stageWorkspacePromptAttachments, CHANNELS.stageClipboardPromptImage,
+      CHANNELS.removePromptAttachment, CHANNELS.getSkillCatalog, CHANNELS.loadSkill, CHANNELS.copyPrompt, CHANNELS.sendPrompt];
   }
 }

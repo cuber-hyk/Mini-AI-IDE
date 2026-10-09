@@ -4,7 +4,7 @@
  * 设计约束（ADR-0002）：IPC 只暴露**窄接口** —— 声明式参数，不接受任意表达式，
  * 也不接受任意路径。渲染进程没有任何直接的文件系统能力。
  */
-import type { LocalPromptInput, LocalPromptOptions, LocalPromptResult } from './localPrompt';
+import type { LocalPromptInput, LocalPromptOptions, LocalPromptResult, PromptAttachment } from './localPrompt';
 import type { SkillCatalog, LoadedSkill } from './skills';
 import type { TextMeta } from './limits';
 import type { FormatSpecVariant } from './formatSpec';
@@ -14,6 +14,10 @@ import type { ToolConfig, ToolState } from './toolProtocol';
 export const CHANNELS = {
   getLocalPromptOptions: 'ui:get-local-prompt-options',
   setLocalPromptOptions: 'ui:set-local-prompt-options',
+  choosePromptAttachments: 'ui:choose-prompt-attachments', stagePromptAttachments: 'ui:stage-prompt-attachments',
+  stageWorkspacePromptAttachments: 'ui:stage-workspace-prompt-attachments',
+  stageClipboardPromptImage: 'ui:stage-clipboard-prompt-image',
+  removePromptAttachment: 'ui:remove-prompt-attachment',
   getSkillCatalog: 'skills:list', loadSkill: 'skills:load', sendPrompt: 'ui:send-prompt',
   getToolState: 'tools:get-state',
   setToolConfig: 'tools:set-config',
@@ -606,6 +610,11 @@ export interface EditorBridge {
    */
   copyPrompt(input: LocalPromptInput): Promise<LocalPromptResult>;
   sendPrompt(input: LocalPromptInput): Promise<LocalPromptResult>;
+  choosePromptAttachments(): Promise<PromptAttachment[]>;
+  stagePromptAttachments(files: File[]): Promise<PromptAttachment[]>;
+  stageWorkspacePromptAttachments(paths: string[], root: string | null): Promise<PromptAttachment[]>;
+  stageClipboardPromptImage(name: string, mediaType: string, bytes: Uint8Array): Promise<PromptAttachment[]>;
+  removePromptAttachment(id: string): Promise<boolean>;
   getLocalPromptOptions(): Promise<LocalPromptOptions>;
   setLocalPromptOptions(patch: Partial<LocalPromptOptions>): Promise<LocalPromptOptions>;
   getSkillCatalog(): Promise<SkillCatalog>;

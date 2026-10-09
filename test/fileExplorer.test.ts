@@ -73,7 +73,7 @@ function menuFixture() {
   const sidebar = body.appendChild(document.createElement('aside')); const tree = sidebar.appendChild(document.createElement('ul'));
   let root: string | null = 'A'; const created: unknown[][] = []; const operations: unknown[][] = []; const messages: unknown[][] = []; let reads = 0;
   const bridge = {
-    listDir: async (parent: string) => { reads++; return { ok: true, entries: parent ? [] : [{ name: 'sub', relPath: 'sub', isDirectory: true }] }; },
+    listDir: async (parent: string) => { reads++; return { ok: true, entries: parent === 'sub' ? [{ name: 'file.txt', relPath: 'sub/file.txt', isDirectory: false }] : parent ? [] : [{ name: 'sub', relPath: 'sub', isDirectory: true }] }; },
     createEntry: async (...args: unknown[]) => { created.push(args); return { ok: true }; },
     revealEntry: async (...args: unknown[]) => { operations.push(['reveal', ...args]); return { ok: true }; },
     openEntry: async (...args: unknown[]) => { operations.push(['open', ...args]); return { ok: true }; },
@@ -89,6 +89,19 @@ function menuFixture() {
 }
 const menuItems = (menu: Element) => menu.children.filter(item => item.tagName === 'BUTTON');
 const flush = () => new Promise(done => setImmediate(done));
+
+it('只有文件行可拖动到需求区，载荷包含相对路径和原工作区', async () => {
+  const f = menuFixture(); await f.explorer.refresh(true);
+  const folder = f.tree.querySelectorAll('.tree-row')[0]!;
+  assert.equal(folder.draggable, false);
+  await folder.listeners.click!();
+  const file = f.tree.querySelectorAll('.tree-row').find(row => row.dataset.relPath === 'sub/file.txt')!;
+  assert.equal(file.draggable, true);
+  let payload = ''; let prevented = false;
+  f.tree.listeners.dragstart!(f.event(file, { dataTransfer: { effectAllowed: '', setData(type: string, value: string) { assert.equal(type, 'application/x-mini-ai-ide-workspace-files'); payload = value; } }, preventDefault() { prevented = true; } }));
+  assert.equal(prevented, false);
+  assert.deepEqual(JSON.parse(payload), { root: 'A', paths: ['sub/file.txt'] });
+});
 
 it('树和侧栏空白右键在根目录创建，不继承此前选中的子目录', async () => {
   for (const isDirectory of [false, true]) {

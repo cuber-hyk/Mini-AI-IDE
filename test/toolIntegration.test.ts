@@ -48,6 +48,29 @@ it('新完成输出独立于发送动作和回执，已有会话与首发生成�
     }finally{await system?.dispose();await fs.rm(root,{recursive:true,force:true,maxRetries:5,retryDelay:20});}
   }
 });
+it('本地需求发送将会话守卫和已解析附件完整转发给 composer sender', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tool-local-prompt-'));
+  let system: Awaited<ReturnType<typeof createToolIntegration>> | undefined;
+  try {
+    const editor: any = { mainFrame: {}, send() {}, isDestroyed: () => false };
+    const files = new FileService(); files.setRoot(root);
+    const url = 'https://chat.deepseek.com/a/chat/attachment-forward';
+    const web: any = Object.assign(new EventEmitter(), { getURL: () => url, isDestroyed: () => false,
+      executeJavaScriptInIsolatedWorld: async () => true, executeJavaScript: async () => ({ replies: [], completion: 'unknown' }) });
+    const attachment = { id: 'image-id', name: 'clipboard-image.png', size: 3, mediaType: 'image/png', async *stream() { yield new Uint8Array([1, 2, 3]); } };
+    let received: unknown[] = [];
+    const guard = () => true;
+    system = await createToolIntegration({ ipc: { handle() {} } as any, editor, web, files,
+      returnPath: new ReturnPathService(files), workspace: { editor: { isDirty: () => false }, run: (fn: any) => fn() } as any,
+      sender: { async send(...args: unknown[]) { received = args; return { ok: true }; }, async cancel() {}, async dispose() {} } as any,
+      storePath: path.join(root, 'state.json'), disabled: false, ask: async () => ({ response: 0, checkboxChecked: false }), notifyFile() {}, copy() {} });
+    const result = await system.sendLocalPrompt('识别图片', url, guard, [attachment]);
+    assert.equal(result.ok, true);
+    assert.equal(received[0], '识别图片'); assert.equal(received[1], url); assert.equal(received[2], 'prompt');
+    assert.equal(received[3], guard);
+    assert.deepEqual(received[4], [attachment]);
+  } finally { await system?.dispose(); await fs.rm(root, { recursive: true, force: true }); }
+});
 it('load_skill 通过正式批次返回当前真实说明，不执行技能内脚本，加载失败不伪造结果', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tool-skill-'));
   let system: Awaited<ReturnType<typeof createToolIntegration>> | undefined;

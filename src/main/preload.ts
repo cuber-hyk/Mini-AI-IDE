@@ -15,11 +15,15 @@
  *   1. 下面的 CHANNEL_NAMES 列表参与 `preloadChannels` 比对；
  *   2. 主进程自检会逐个 `ipcMain` 注册表比对，缺一即 FAIL。
  */
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 /** 与 src/shared/contract.ts 的 CHANNELS 必须逐字一致（自检会校验） */
 const CH = {
   getLocalPromptOptions: 'ui:get-local-prompt-options', setLocalPromptOptions: 'ui:set-local-prompt-options',
+  choosePromptAttachments: 'ui:choose-prompt-attachments', stagePromptAttachments: 'ui:stage-prompt-attachments',
+  stageWorkspacePromptAttachments: 'ui:stage-workspace-prompt-attachments',
+  stageClipboardPromptImage: 'ui:stage-clipboard-prompt-image',
+  removePromptAttachment: 'ui:remove-prompt-attachment',
   getSkillCatalog: 'skills:list', loadSkill: 'skills:load', sendPrompt: 'ui:send-prompt',
   getToolState: 'tools:get-state', setToolConfig: 'tools:set-config', toolState: 'tools:state',
   copyToolResults: 'tools:copy-results', cancelTools: 'tools:cancel', stopToolCommand: 'tools:stop-command', clearToolRules: 'tools:clear-rules', undoToolChange: 'tools:undo',
@@ -129,6 +133,11 @@ const bridge = {
   getSkillCatalog: () => ipcRenderer.invoke(CH.getSkillCatalog),
   loadSkill: (name: string) => ipcRenderer.invoke(CH.loadSkill, name),
   sendPrompt: (input: unknown) => ipcRenderer.invoke(CH.sendPrompt, input),
+  choosePromptAttachments: () => ipcRenderer.invoke(CH.choosePromptAttachments),
+  stagePromptAttachments: (files: File[]) => ipcRenderer.invoke(CH.stagePromptAttachments, files.map(file => webUtils.getPathForFile(file))),
+  stageWorkspacePromptAttachments: (paths: string[], root: string | null) => ipcRenderer.invoke(CH.stageWorkspacePromptAttachments, paths, root),
+  stageClipboardPromptImage: (name: string, mediaType: string, bytes: Uint8Array) => ipcRenderer.invoke(CH.stageClipboardPromptImage, name, mediaType, bytes),
+  removePromptAttachment: (id: string) => ipcRenderer.invoke(CH.removePromptAttachment, id),
   copyPrompt: (input: unknown) => ipcRenderer.invoke(CH.copyPrompt, input),
   copyNumberedSnippet: (input: unknown) => ipcRenderer.invoke(CH.copyNumberedSnippet, input),
   setPreviewPanel: (width: number) => ipcRenderer.invoke(CH.setPreviewPanel, width),
