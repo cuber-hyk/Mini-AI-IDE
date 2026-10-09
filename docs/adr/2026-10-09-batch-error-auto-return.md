@@ -4,39 +4,37 @@ status: accepted
 created: 2026-10-09
 updated: 2026-10-09
 owner: 胡运宽
-source_of_truth: [src/main/tools/harness.ts, src/main/tools/autoContinuation.ts, src/main/tools/resultReturn.ts, src/main/tools/integration.ts, src/main/tools/replyChangeWatcher.ts, src/main/tools/resultClipboard.ts, test/toolHarness.test.ts, test/autoContinuation.test.ts, test/toolResultReturn.test.ts, test/toolAttachmentIntegration.test.ts, test/replyChangeWatcher.test.ts, docs/adr/2026-10-07-automatic-result-return-boundary.md]
+source_of_truth: [src/shared/toolProtocol.ts, src/main/tools/harness.ts, src/main/tools/autoContinuation.ts, src/main/tools/resultReturn.ts, src/main/tools/integration.ts, src/main/tools/replyChangeWatcher.ts, src/main/tools/resultClipboard.ts, test/toolHarness.test.ts, test/autoContinuation.test.ts, test/toolResultReturn.test.ts, test/toolAttachmentIntegration.test.ts, test/replyChangeWatcher.test.ts, docs/adr/2026-10-07-automatic-result-return-boundary.md]
 ---
 
-# ADR：解析层格式错误自动回传
+# ADR：批次校验错误自动回传
 
 ## Context
 
-自动继续原先把 `state.batchError`（工具 JSON 解析失败、整批未执行）与执行层的 `permission_denied`、`cancelled`、`unknown`、`stopped` 一起放入 `blocked()`，一律暂停等人工。
-
-但两者性质不同：`batchError` 是解析层事实——模型输出的 JSON 无法解析，IDE 根本没有可信请求、也没有执行任何工具，不涉及权限或安全边界。把它也暂停，用户需手动复制回执再发送，增加往返成本。用户明确要求：格式错误应自动回传，让 AI 自我修正；权限只应限制命令执行，不应限制格式错误。
+工具 JSON 解析失败和执行前整批校验失败都需要 AI 修正。用户明确要求开启自动继续时发送真实错误回执，避免每次手动复制。截图中同文件重复 apply_changes 被 prepare 拒绝，整批均未执行；失败回执没有 started_at，因此原资格检查不发送。
 
 ## Decision
 
-1. `AutoContinuation.blocked()` 只拦执行层结果（`permission_denied` / `cancelled` / `unknown` / `run_command` 的 `stopped`），不再包含 `batchError`。
-2. Harness 为本次解析失败保存独立诊断来源：递增 ID、项目、会话、采集原文和真实解析错误；重复采集同一当前原文保持 ID，取消保持失效状态。诊断元数据仅在主进程流转，不生成工具执行 completion，不预约执行账本，不进入共享状态或复制正文。
-3. `ToolResultReturn` 统一管理真实批次与解析诊断的一次发送资格。诊断只走自动入口，必须属于当前项目/会话、未取消、没有 completion 和工具结果；不读取或上传附件。正文使用 `formatToolResults(state.results, state.batchError)`，与「复制本批结果」按钮字节一致，保留真实诊断的行列、片段及修复说明。
-4. `AutoContinuation` 按真实诊断 ID 去重；每次诊断通过计时结束复核、进入发送时连续计数加一。前 5 次可发送，第 6 次改为 `paused`，文案「连续 5 次格式错误，已停止自动发送，等待你处理」。重复广播不增加计数或解除暂停，取消倒计时不占额度，发送失败或未知暂停且不重试。
-5. 计数仅在成功发送一次非 batchError 的正常工具结果或实际 scope（项目/会话）变化时归零。批次变化、用户新轮、关闭再开启、正常结果倒计时及发送失败均不清零。只读 watcher 在主 frame 的会话导航事件同步通知 scope，关闭 automatic 期间也观察切换，保持关闭状态；快速往返无中间结果广播也归零，同会话 query/hash 变化不归零。
-6. integration 发送前复核最新官网回复已完成且会话相符；解析诊断还须与保存的采集原文及真实解析错误匹配。真实批次仍核验批次匹配与完整执行事实。唯一网页写运输仍为 `WebComposerSender`，执行层暂停规则不变。
+1. 解析错误由 Harness 保存独立诊断 ID、项目、会话、采集原文与真实错误；重复原文不生成新 ID，取消后失效。不预约执行账本，不生成工具完成事件。ToolResultReturn 要求当前来源匹配、无 completion 和工具结果、官网原文及解析错误一致。
+2. 执行前 prepare 全批校验失败仍逐项保存真实 failed 回执。全部保存成功后由 Harness 标记当前 selection.validationFailed，再将 validation_failed:true 放入唯一内存 completion；不持久化该标记，不允许历史恢复获得自动发送资格。
+3. isBatchValidationFailure 要求当前 completion 为明确标记的 error、未取消、非 busy、无 batchError，且非空整批结果均属于该批、failed、包含真实错误、没有 started_at/finished_at/data。ToolResultReturn 同时核对当前项目/会话/selection、完整请求数量与官网最新正式批次。不能从错误文案或普通 failed 状态推断资格。
+4. 两类校验错误的自动回传都不读取或上传附件，正文使用 formatToolResults，与手动复制字节一致。解析错误保留 batch_error；prepare 错误保留完整 tool_results。执行权限、整批拒绝与去重规则不变，不自动复制全部未执行的回执。
+5. AutoContinuation 按诊断 ID 或当前 completion ID 去重，两类错误共享连续 5 次额度，进入发送时计数加一。第 6 次暂停，提示“连续 5 次批次校验失败，已停止自动发送，等待你处理”。取消倒计时不占额度；发送失败或未知暂停且不重试。
+6. 计数仅在正常实际执行结果成功发送或实际项目/会话 scope 变化时归零。校验回传成功、新批次、用户新轮、关闭再开启、正常结果倒计时及发送失败均不清零。导航通知沿用只读 watcher；同会话 query/hash 变化不清零。
+7. permission_denied、cancelled、unknown、停止进程、存储故障、无实际执行的普通请求失败仍不能自动发送。唯一网页写运输仍为 WebComposerSender，空输入框、生成结束、当前会话及一次发送边界不变。
 
 ## Alternatives Considered
 
-- 保持 batchError 一律暂停：安全但增加往返；用户明确要求改为自动发送。
-- 发送精简诊断（仅摘要 + SyntaxError 行）：正文更短，但与「复制本批结果」不一致，且丢失出错片段，AI 定位更难；采用与按钮同源的完整回执。
-- 无连续上限，永远自动发送：可能形成坏 JSON 死循环、刷满对话；采用连续 5 次上限打断。
-- 连 unknown / permission_denied 也自动发送：运输不确定可能重复提交、权限拒绝涉及安全边界；仍保持暂停。
+- 所有 failed 均发送：无法区分权限、未知及普通未启动失败，采用 Harness 明确事实标记。
+- 将整批校验错误压成一个解析诊断：丢失已知请求 ID 与现有完整复制回执，保留逐请求真实错误。
+- 无连续上限：可能反复产生相同错误；解析与 prepare 错误共用既有额度。
 
 ## Consequences
 
-- 模型偶发 JSON 语法错误时无需人工介入，AI 可在下一轮自我修正。
-- 最多连续自动回传 5 次坏 JSON 的诊断，第 6 次暂停；切换项目/会话或正常结果成功发送后计数清零。
-- `batchError` 回传沿用唯一网页写运输 owner 与来源复核，不新增网络、工具权限或网页动作边界。
+- AI 可以收到执行前整批校验错误并生成修正后的新批次，用户无需每次复制发送。
+- 同文件修改必须合并等校验仍严格整批不执行；历史和同 ID 已处理批次不会自动重放。
+- 内存完成元数据扩大了当前错误回传资格，没有扩大工具权限或附件/网页写入能力。
 
 ## Verification Boundary
 
-`test/toolHarness.test.ts` 验证诊断来源、去重和取消；`test/autoContinuation.test.ts` 验证计数、真实 scope、历史与失败不重试；`test/toolResultReturn.test.ts` 验证诊断资格、空附件及执行层隔离；`test/toolAttachmentIntegration.test.ts` 经真实接线验证无 selection/completion 的诊断自动发送、复制字节一致、连续上限、额度恢复与发送期间取消。真实官网尚未验收，本地测试不能等同官网可用。执行层暂停与网页边界见 `2026-10-07-automatic-result-return-boundary.md` 与 `docs/capabilities/human-machine-boundary.md`。
+现有验证入口为 test/toolHarness.test.ts、test/autoContinuation.test.ts、test/toolResultReturn.test.ts 和 test/toolAttachmentIntegration.test.ts。本次执行前整批校验扩展仅进行构建、类型和调用路径审查，未新增或运行测试，未进行真实官网发送验收；独立评审证据记录在任务计划。不得将既有测试覆盖声明等同本次新规则已运行验证。

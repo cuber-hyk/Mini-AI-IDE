@@ -1,10 +1,11 @@
-/** 自动继续消费当前完成批次或解析诊断；不执行工具、不读网页输入、不重试发送。 */
+/** 自动继续消费当前完成批次或校验诊断；不执行工具、不读网页输入、不重试发送。 */
 import type { ToolContinuationState, ToolState } from '../../shared/toolProtocol';
+import { isBatchValidationFailure } from '../../shared/toolProtocol';
 import type { ToolDiagnostic } from './harness';
 import { formatToolResults } from './resultClipboard';
 
 interface Context { root: string | null; session: string; state: ToolState; diagnostic?: ToolDiagnostic | null }
-interface Pending { scope: string; event: { kind: 'completion' | 'diagnostic'; id: number }; body: string; interval: number }
+interface Pending { scope: string; event: { kind: 'completion' | 'diagnostic'; id: number }; corrective: boolean; body: string; interval: number }
 interface Options {
   current: () => Context;
   send: (text: string, session: string, current: () => boolean) => Promise<{ ok: boolean; error?: string; uncertain?: boolean }>;
@@ -21,7 +22,7 @@ export class AutoContinuation {
   private generation = 0;
   private disposed = false;
   private initialized = false;
-  // 连续解析层错误计数；发送成功一次正常结果或切换 scope 时归零，达到上限后停止自动发送。
+  // 解析与执行前整批校验错误共用额度；正常执行结果发送成功或切换 scope 时归零。
   private consecutiveBatchErrors = 0;
   private static readonly MAX_CONSECUTIVE_BATCH_ERRORS = 5;
   constructor(private readonly options: Options) {}
@@ -92,16 +93,17 @@ export class AutoContinuation {
       return;
     }
     if (event.kind === 'diagnostic') this.observedDiagnostic = event.id; else this.observedCompletion = event.id;
+    const corrective = event.kind === 'diagnostic' || isBatchValidationFailure(state);
     const hasExecuted = state.results.some(result => result.started_at !== undefined && ['done', 'failed'].includes(result.status));
-    if (!hasExecuted && event.kind !== 'diagnostic') {
+    if (!hasExecuted && !corrective) {
       this.change({ phase: 'waiting_user', message: '本批没有实际执行的工具，等待你处理' }); return;
     }
-    if (event.kind === 'diagnostic') {
+    if (corrective) {
       if (this.consecutiveBatchErrors >= AutoContinuation.MAX_CONSECUTIVE_BATCH_ERRORS) {
-        this.change({ phase: 'paused', message: '连续 5 次格式错误，已停止自动发送，等待你处理' }); return;
+        this.change({ phase: 'paused', message: '连续 5 次批次校验失败，已停止自动发送，等待你处理' }); return;
       }
     }
-    const pending = { scope, event, body: this.bodyOf(state), interval: state.config.sendIntervalSeconds };
+    const pending = { scope, event, corrective, body: this.bodyOf(state), interval: state.config.sendIntervalSeconds };
     this.pending = pending; this.schedule(pending);
   }
   private schedule(pending: Pending): void {
@@ -114,16 +116,16 @@ export class AutoContinuation {
     if (this.disposed || generation !== this.generation || this.pending !== pending) return;
     const context = this.options.current();
     const event = this.eventOf(context);
-    if (!context.state.config.automatic || context.state.busy || this.blocked(context.state) || pending.scope !== JSON.stringify([context.root, context.session]) || event?.kind !== pending.event.kind || event.id !== pending.event.id || this.bodyOf(context.state) !== pending.body) {
+    if (!context.state.config.automatic || context.state.busy || this.blocked(context.state) || pending.scope !== JSON.stringify([context.root, context.session]) || event?.kind !== pending.event.kind || event.id !== pending.event.id || pending.corrective !== (event.kind === 'diagnostic' || isBatchValidationFailure(context.state)) || this.bodyOf(context.state) !== pending.body) {
       this.cancel(); this.change({ phase: 'paused', message: '当前项目、会话或结果已变化，自动发送取消' }); return;
     }
     this.change({ phase: 'sending', message: '正在发送工具结果…' });
-    if (pending.event.kind === 'diagnostic') this.consecutiveBatchErrors++;
+    if (pending.corrective) this.consecutiveBatchErrors++;
     try {
       const result = await this.options.send(pending.body, context.session, () => !this.disposed && generation === this.generation && this.pending === pending);
       if (this.disposed || generation !== this.generation || this.pending !== pending) return;
       this.pending = undefined;
-      if (result.ok && pending.event.kind === 'completion') this.consecutiveBatchErrors = 0;
+      if (result.ok && !pending.corrective) this.consecutiveBatchErrors = 0;
       this.change(result.ok ? { phase: 'waiting_reply', message: '结果已发送，等待 AI 回复' } : { phase: 'paused', message: (result.uncertain ? '发送结果无法确认，不会重复发送：' : '自动发送暂停：') + (result.error || '请检查网页') });
     } catch (error) {
       if (this.disposed || generation !== this.generation || this.pending !== pending) return;

@@ -1,5 +1,6 @@
 /** 当前工具批次或解析诊断的一次发送资格；历史与未知运输不重试。 */
 import type { ToolResultReturnState, ToolState } from '../../shared/toolProtocol';
+import { isBatchValidationFailure } from '../../shared/toolProtocol';
 import type { PromptAttachmentData } from '../../shared/localPrompt';
 import type { ToolDiagnostic, ToolSelection } from './harness';
 import type { WebSendResult } from '../webComposerSender';
@@ -50,7 +51,7 @@ export class ToolResultReturn {
       state.results.every(result => result.batch_id === state.completion!.batch_id && ['done', 'failed', 'skipped_dependency'].includes(result.status) &&
         !(result.tool === 'run_command' && ((result.data as { status?: string; cleanup_pending?: boolean } | undefined)?.cleanup_pending ||
           ['running', 'stopped'].includes((result.data as { status?: string } | undefined)?.status ?? '')))) &&
-      state.results.some(result => ['done', 'failed'].includes(result.status) && result.started_at !== undefined);
+      (isBatchValidationFailure(state) || state.results.some(result => ['done', 'failed'].includes(result.status) && result.started_at !== undefined));
   }
 
   getState(context: Context): ToolResultReturnState {
@@ -76,7 +77,7 @@ export class ToolResultReturn {
       result = await this.options.verify(text, context.session, current, source);
       if (result.ok && !current()) result = { ok: false, error: '项目、会话、批次或发送选项已变化，未发送' };
       if (result.ok) {
-        const attachments = source.kind === 'diagnostic' ? [] : await this.options.attachments(context.state);
+        const attachments = source.kind === 'diagnostic' || isBatchValidationFailure(context.state) ? [] : await this.options.attachments(context.state);
         result = current() ? await this.options.send(text, context.session, current, attachments) : { ok: false, error: '项目、会话、批次或发送选项已变化，未发送' };
       }
     } catch (error) { result = { ok: false, error: error instanceof Error ? error.message : String(error) }; }

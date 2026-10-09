@@ -34,6 +34,7 @@ interface BatchSelection extends ToolSelection {
   executed?: boolean;
   notified?: boolean;
   cancelled?: boolean;
+  validationFailed?: true;
 }
 // 结果归属本次采集对象，避免较早排队批次的迟到输出进入最近一轮。
 interface SelectedEntry extends LedgerEntry { selection: BatchSelection }
@@ -182,6 +183,7 @@ export class ToolHarness {
       try { await this.options.prepare(root, batch); }
       catch (error) {
         for (const request of batch.requests) await this.record(entry, request, { status: 'failed', error: `全批次校验失败：${errorText(error)}` });
+        selection.validationFailed = true;
         this.report('工具批次校验失败，所有请求均未执行');
         return;
       }
@@ -357,7 +359,7 @@ export class ToolHarness {
     selection.notified = true;
     const success = !selection.cancelled && this.results.length === selection.batch.requests.length && this.results.every(item => item.result.status === 'done' &&
       !(item.result.tool === 'run_command' && failedData(selection.batch.requests.find(r => r.id === item.result.request_id)!, item.result.data)));
-    this.completion = { id: ++this.completionId, batch_id: selection.batch.batch_id, outcome: success ? 'success' : 'error', ...(selection.cancelled ? { cancelled: true } : {}) };
+    this.completion = { id: ++this.completionId, batch_id: selection.batch.batch_id, outcome: success ? 'success' : 'error', ...(selection.cancelled ? { cancelled: true } : {}), ...(selection.validationFailed ? { validation_failed: true } : {}) };
   }
   private publish(): void { this.options.changed(this.getState()); }
 }

@@ -14,7 +14,14 @@ export interface ToolResult { batch_id: string; request_id: string; tool: ToolNa
 export interface ToolBatchError { status: 'failed'; error: string }
 export interface ToolContinuationState { phase: 'off' | 'waiting_tools' | 'countdown' | 'sending' | 'waiting_reply' | 'waiting_user' | 'paused'; message: string; dueAt?: number }
 export interface ToolResultReturnState { canSend: boolean; attachmentCount: number; phase: 'ready' | 'sending' | 'sent' | 'paused'; message: string }
-export interface ToolState { config: ToolConfig; results: ToolResult[]; message: string; busy: boolean; storageError?: string; canUndo?: boolean; hasRunningProcesses?: boolean; batchError?: ToolBatchError; clipboard?: { id: number; ok: boolean; error?: string }; completion?: { id: number; batch_id: string; outcome: 'success' | 'error'; cancelled?: boolean }; continuation?: ToolContinuationState; resultReturn?: ToolResultReturnState }
+export interface ToolState { config: ToolConfig; results: ToolResult[]; message: string; busy: boolean; storageError?: string; canUndo?: boolean; hasRunningProcesses?: boolean; batchError?: ToolBatchError; clipboard?: { id: number; ok: boolean; error?: string }; completion?: { id: number; batch_id: string; outcome: 'success' | 'error'; cancelled?: boolean; validation_failed?: true }; continuation?: ToolContinuationState; resultReturn?: ToolResultReturnState }
+/** 只有 harness 确认的执行前整批校验错误可作为未执行回执自动发送。 */
+export function isBatchValidationFailure(state: ToolState): boolean {
+  return !state.busy && !state.batchError && state.completion?.validation_failed === true &&
+    state.completion.outcome === 'error' && !state.completion.cancelled && state.results.length > 0 &&
+    state.results.every(result => result.batch_id === state.completion!.batch_id && result.status === 'failed' &&
+      result.started_at === undefined && result.finished_at === undefined && result.data === undefined && !!result.error);
+}
 export type ProtocolParse = { kind: 'none' } | { kind: 'error'; error: string } | { kind: 'batch'; batch: ToolBatch };
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const id = (v: unknown): v is string => typeof v === 'string' && /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}$/.test(v);
