@@ -57,7 +57,7 @@ token_source: design-tokens.json
 
 ## Sources
 
-精确基础值只维护在 `design-tokens.json`，`scripts/copy-static.mjs` 生成 `dist/renderer/ui-tokens.css`。共享按钮使用 `src/renderer/ui.css` 的 `.ui-button`、`.primary`、`.ui-icon`；页面负责局部排列。
+精确基础值只维护在 `design-tokens.json`，`scripts/copy-static.mjs` 生成 `dist/renderer/ui-tokens.css`。共享按钮使用 `src/renderer/ui.css` 的 `.ui-button`、`.primary`、`.ui-icon`；页面负责局部排列。文件类型图标颜色统一走 `design-tokens.json` 的 `--ui-file-*`，不在 `fileExplorer.css` 新增硬编码色值。
 
 布局以 `src/main/windowLayout.ts` 为准，由 `src/main/workspaceLayoutController.ts` 统一应用与广播，`src/renderer/workspaceLayout.js` 消费矩形、处理拖动和 dock 测量；项目导航由 `src/renderer/workspaceNavigation.js` 管理，文件区文件／改动标签的内容切换由 `src/renderer/fileWorkspace.js` 与 `src/renderer/editorTabs.js` 管理，测试为 `test/fileWorkspace.test.ts`。布局决策见 `docs/adr/2026-10-07-workspace-ui-shell-layout.md`，测试为 `test/windowLayout.test.ts`、`test/workspaceLayoutController.test.ts`；复制菜单由 `src/renderer/editorToolbar.js` 管理；本批变更快照由 `src/main/tools/changeReview.ts` 管理，界面由 `src/renderer/preview.js` 管理；输入区交互由 `src/renderer/promptComposer.js` 管理。交互验收见对应 `test/` 测试与 `src/main/layoutProbe.ts` 的 Electron UI 探针。
 

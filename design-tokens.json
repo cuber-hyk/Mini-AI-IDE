@@ -10,5 +10,27 @@
   "ui-radius": { "$type": "dimension", "$value": "6px" },
   "ui-control": { "$type": "color", "$value": "#292929" },
   "ui-hover": { "$type": "color", "$value": "#2c2c2e" },
-  "ui-selected": { "$type": "color", "$value": "#353638" }
+  "ui-selected": { "$type": "color", "$value": "#353638" },
+
+  "ui-file-folder": { "$type": "color", "$value": "#d6b976" },
+  "ui-file-lang": { "$type": "color", "$value": "#79a9e8" },
+  "ui-file-script": { "$type": "color", "$value": "#8fbcb3" },
+  "ui-file-web": { "$type": "color", "$value": "#dc947c" },
+  "ui-file-framework": { "$type": "color", "$value": "#79c8df" },
+  "ui-file-config": { "$type": "color", "$value": "#9aa7c0" },
+  "ui-file-data": { "$type": "color", "$value": "#dcc66f" },
+  "ui-file-doc": { "$type": "color", "$value": "#aab8cb" },
+  "ui-file-pdf": { "$type": "color", "$value": "#e08a82" },
+  "ui-file-office": { "$type": "color", "$value": "#7fc5a5" },
+  "ui-file-media": { "$type": "color", "$value": "#bd9bce" },
+  "ui-file-audio": { "$type": "color", "$value": "#d99ec2" },
+  "ui-file-video": { "$type": "color", "$value": "#e08a82" },
+  "ui-file-font": { "$type": "color", "$value": "#b9b3a4" },
+  "ui-file-archive": { "$type": "color", "$value": "#c5ac87" },
+  "ui-file-package": { "$type": "color", "$value": "#d3a06a" },
+  "ui-file-build": { "$type": "color", "$value": "#b6c98a" },
+  "ui-file-git": { "$type": "color", "$value": "#dc947c" },
+  "ui-file-ci": { "$type": "color", "$value": "#9bb6d8" },
+  "ui-file-editor": { "$type": "color", "$value": "#8fb8d8" },
+  "ui-file-license": { "$type": "color", "$value": "#c7b98f" }
 }

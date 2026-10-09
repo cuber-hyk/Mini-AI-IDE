@@ -133,7 +133,9 @@ export class FileService {
     }
 
     const like: DirEntryLike[] = dirents.map((d) => ({ name: d.name, isDirectory: d.isDirectory() }));
-    const { shown, truncated } = filterAndSortEntries(like, DEFAULT_LIST_POLICY);
+    // 文件树显示点文件（.gitignore/.editorconfig 等），但跳过 .git 目录本身；AI 上下文摘要仍用默认隐藏策略。
+    const treePolicy = { ...DEFAULT_LIST_POLICY, hideDotfiles: false, skipDirs: [...DEFAULT_LIST_POLICY.skipDirs, '.git'] };
+    const { shown, truncated } = filterAndSortEntries(like, treePolicy);
 
     const entries: DirEntry[] = [];
     for (const e of shown) {

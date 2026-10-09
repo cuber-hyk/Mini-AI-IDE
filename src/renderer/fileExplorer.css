@@ -5,17 +5,31 @@
 .tree-icon svg { width: 100%; height: 100%; }
 .tree-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .tree-file > .tree-row .tree-label::before { content: none; }
-.tree-icon-folder, .tree-icon-folder-open { color: #d6b976; }
-.tree-icon-typescript, .tree-icon-config { color: #79a9e8; }
-.tree-icon-javascript, .tree-icon-python { color: #dcc66f; }
-.tree-icon-react { color: #79c8df; }
-.tree-icon-vue { color: #7fc5a5; }
-.tree-icon-html, .tree-icon-svelte, .tree-icon-git { color: #dc947c; }
-.tree-icon-style { color: #be9bdf; }
-.tree-icon-markdown, .tree-icon-text { color: #aab8cb; }
-.tree-icon-image { color: #bd9bce; }
-.tree-icon-package, .tree-icon-archive { color: #c5ac87; }
-.tree-icon-terminal, .tree-icon-code { color: #8fbcb3; }
+/* 纸张底形用 currentColor 取类型色；品牌标自带 fill，不受此影响。 */
+.tree-icon-folder { color: #9aa4ae; }
+.tree-icon-folder-open { color: #5b8def; }
+.tree-icon-typescript, .tree-icon-javascript, .tree-icon-python, .tree-icon-go,
+.tree-icon-rust, .tree-icon-java, .tree-icon-csharp, .tree-icon-c, .tree-icon-cpp,
+.tree-icon-php, .tree-icon-ruby, .tree-icon-swift, .tree-icon-kotlin, .tree-icon-lua,
+.tree-icon-r, .tree-icon-sql, .tree-icon-react, .tree-icon-vue, .tree-icon-svelte,
+.tree-icon-astro { color: var(--ui-file-lang); }
+.tree-icon-json, .tree-icon-yaml, .tree-icon-toml, .tree-icon-ini,
+.tree-icon-xml, .tree-icon-csv, .tree-icon-env { color: var(--ui-file-data); }
+.tree-icon-markdown, .tree-icon-text, .tree-icon-log { color: var(--ui-file-doc); }
+.tree-icon-pdf { color: var(--ui-file-pdf); }
+.tree-icon-word, .tree-icon-excel, .tree-icon-ppt, .tree-icon-epub { color: var(--ui-file-office); }
+.tree-icon-image { color: var(--ui-file-media); }
+.tree-icon-audio { color: var(--ui-file-audio); }
+.tree-icon-video { color: var(--ui-file-video); }
+.tree-icon-font { color: var(--ui-file-font); }
+.tree-icon-archive, .tree-icon-compressed { color: var(--ui-file-archive); }
+.tree-icon-package, .tree-icon-bun, .tree-icon-deno, .tree-icon-docker { color: var(--ui-file-package); }
+.tree-icon-makefile, .tree-icon-cmake, .tree-icon-gradle { color: var(--ui-file-build); }
+.tree-icon-git { color: var(--ui-file-git); }
+.tree-icon-shell, .tree-icon-powershell, .tree-icon-batch { color: var(--ui-file-script); }
+.tree-icon-code { color: var(--ui-file-script); }
+.tree-icon-config, .tree-icon-license { color: var(--ui-file-config); }
+.tree-icon-other, .tree-icon-file { color: var(--ui-file-config); }
 .file-menu { min-width: 210px; padding: 5px; border-radius: 9px; }
 .file-menu button { border-radius: 4px; padding: 7px 10px; font-size: 13px; }
 .file-menu .file-menu-separator { border: 0; border-top: 1px solid var(--ui-border); margin: 4px 5px; }
