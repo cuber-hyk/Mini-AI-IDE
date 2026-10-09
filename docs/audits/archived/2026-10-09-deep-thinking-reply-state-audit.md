@@ -24,7 +24,7 @@ source_of_truth: code
 
 | ID | Severity | Status | Finding | Evidence | Owner Plan | Branch/Commit | Verification | Closeout |
 |---|---|---|---|---|---|---|---|---|
-| DT-001 | P1 | resolved | 完成判据将深度思考区和正式答案区的两个 markdown 候选误判为不明确的回复框，阻断自动采集及手动采集后的自动发送 | 现场 frameCandidateIndexes 为 [0, 1]；修复前 replyObservation 要求所有 markdown 候选数恰为 1；发送前 verify 要求 complete | docs/plans/archived/2026-10-09-deep-thinking-reply-state.md | codex/fix-deep-thinking-reply-state | 现场结构回归修复前 unknown、修复后 complete；相关 106 项测试通过；构建通过；用户于 2026-10-09 确认复测通过并批准提交合并发布 | fixed：正式答案分支仅统计正式答案候选；保留生成、中断及控件核验 |
+| DT-001 | P1 | verified | 完成判据将深度思考区和正式答案区的两个 markdown 候选误判为不明确的回复框，阻断自动采集及手动采集后的自动发送 | 现场 frameCandidateIndexes 为 [0, 1]；修复前 replyObservation 要求所有 markdown 候选数恰为 1；发送前 verify 要求 complete | docs/plans/archived/2026-10-09-deep-thinking-reply-state.md | codex/fix-deep-thinking-reply-state，4d87ff1 | 现场结构回归修复前 unknown、修复后 complete；相关 106 项测试通过；构建通过；用户于 2026-10-09 确认复测通过并批准提交合并发布 | fixed：正式答案分支仅统计正式答案候选；保留生成、中断及控件核验 |
 
 状态识别选文档序最后一个顶层 markdown 候选。修复前 DeepSeek 主回复分支要求该回复 frame 内只有一个 markdown 候选，因而误计思考区。完成判断还要求复制、可用重新生成、朗读和已知发送图标同时存在。
 
@@ -44,7 +44,7 @@ source_of_truth: code
 - Commands run: 现场结构最小 DOM 回放；`pnpm exec tsx --test test/deepseekReplyState.test.ts` 验证修复前新增完成用例失败；相关采集/继续/回传九个测试文件验证 106 项通过、0 失败、0 跳过；`pnpm run build` 验证编译和作用域检查通过。
 - 修复后回归覆盖普通与深度思考完成、生成、中断、重新生成控件缺失/禁用/隐藏、未知输入图标、同框多条正式答案；已有历史与续写测试保持通过。
 - 官网验收：用户于 2026-10-09 回复“通过，可以提交合并，然后发布最新版本”，确认修复通过。
-- Not verified: 未提供的生成过程 DOM 及其他平台结构变更。
+- 证据边界：回归依据用户提供的现场结构，结论限于该结构；未来官网结构变化须另行诊断。
 - 文档校验与最终差异审查记录在关联计划中。
 
 ## Git Visibility
