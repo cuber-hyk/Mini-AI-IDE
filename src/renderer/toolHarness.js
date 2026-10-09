@@ -195,7 +195,7 @@
       clearRules.disabled = configuring || !state || unavailable || state.busy;
       undo.hidden = !state || (!state.canUndo && !undoing);
       more.hidden = undo.hidden;
-      copy.textContent = copying ? '正在复制…' : '复制本批结果';
+      copy.title = copying ? '正在复制…' : '复制本批结果';
       const returned = state && state.resultReturn;
       const hasAttachments = Boolean(returned && returned.attachmentCount > 0);
       send.hidden = !hasAttachments;

@@ -147,7 +147,7 @@ it('JSON格式错误归入批次失败卡片，复制统一结果；不伪造具
   ui.publish(state({ batchError: { status: 'failed', error: diagnostic }, message: '工具批次校验失败，未执行' }));
   assert.equal(ui.nodes['tool-panel'].open, true);
   assert.equal(ui.nodes['tool-activity'].textContent, '格式错误');
-  assert.equal(ui.nodes['tool-copy'].textContent, '复制本批结果');
+  assert.equal(ui.nodes['tool-copy'].title, '复制本批结果');
   assert.equal(ui.nodes['tool-copy'].disabled, false);
   assert.equal(ui.nodes['tool-message'].hidden, true);
   const items = ui.nodes['tool-results'].children;
@@ -296,7 +296,7 @@ it('新状态刷新保留已展开的工具详情，不自动打开其他结果'
 it('最新批次等待时清空旧详情并禁用复制，只在收到本批真实结果后启用', async () => {
   const ui = setup(); await flush();
   ui.publish(state({ results: [result] }));
-  assert.equal(ui.nodes['tool-copy'].textContent, '复制本批结果');
+  assert.equal(ui.nodes['tool-copy'].title, '复制本批结果');
   assert.equal(ui.nodes['tool-results'].children.length, 1);
   ui.publish(state({ busy: true, results: [], message: '等待新批次执行' }));
   assert.equal(ui.nodes['tool-results'].children.length, 0);

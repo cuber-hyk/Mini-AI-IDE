@@ -1,8 +1,9 @@
-.local-prompt-options { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; padding: 8px 0 4px; font-size: 12px; }
+.local-prompt-options { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 8px 0 4px; font-size: 12px; }
 .local-prompt-options label { display: flex; align-items: center; gap: 6px; }
 .local-prompt-options input { accent-color: var(--ui-accent); margin: 0; }
-#btn-add-prompt-attachment { display: inline-flex; align-items: center; gap: 6px; }
-#btn-add-prompt-attachment svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+#btn-add-prompt-attachment { display: grid; place-items: center; width: 24px; height: 24px; padding: 0; border: 0; background: transparent; color: #fff; flex: 0 0 auto; }
+#btn-add-prompt-attachment:hover:not(:disabled) { background: var(--ui-hover); }
+#btn-add-prompt-attachment svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
 .local-prompt-options span { color: var(--text-dim); }
 .prompt-attachments { min-width: 0; }
 .prompt-attachment-list { display: flex; flex-wrap: wrap; gap: 6px; }

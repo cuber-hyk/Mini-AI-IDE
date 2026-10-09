@@ -84,8 +84,10 @@
 @media (prefers-reduced-motion: reduce) { .tool-panel.has-completion > summary, .has-completion .tool-completion-notice { animation: none; } }
 .tool-result-actions { position: absolute; top: 5px; right: 8px; display: flex; align-items: center; gap: 6px; }
 .tool-result-actions .ui-button, .tool-result-actions .ui-icon { height: 28px; font-size: 12px; }
-.tool-result-actions .ui-icon { width: 28px; background: transparent; border-color: transparent; font-size: 20px; }
-.tool-panel:not(.has-results) + .tool-result-actions > .ui-button { display: none; }
+.tool-result-actions .ui-icon { display: grid; place-items: center; width: 28px; background: transparent; border-color: transparent; font-size: 20px; }
+.tool-result-actions .ui-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.tool-actions-sep { width: 1px; height: 16px; background: var(--ui-border); margin: 0 3px; flex: none; }
+.tool-panel:not(.has-results) + .tool-result-actions > button, .tool-panel:not(.has-results) + .tool-result-actions > .tool-actions-sep { display: none; }
 .tool-panel:not(.has-results) + .tool-result-actions { position: absolute; top: 5px; right: 8px; padding: 0; }
 .tool-dock:has(.tool-panel:not(.has-results)) .tool-panel-summary { padding-right: 44px; }
 .tool-panel.has-attachments > .tool-panel-summary { padding-right: 10px; }
