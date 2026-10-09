@@ -1,11 +1,11 @@
 ---
 artifact_type: audit
-status: active
+status: archived
 created: 2026-10-02
 updated: 2026-10-07
 owner: 胡运宽
 scope: P0a 自动化特征核验（默认 Electron 构建、未打补丁、未伪装）
-source_of_truth: ["docs/plans/2026-10-02-mini-ai-ide-poc.md","docs/adr/2026-10-02-zero-injection-and-automation-trace-baseline.md","docs/adr/2026-10-02-honest-electron-identity.md","tools/trace-verifier/","docs/audits/2026-10-02-p0a-trace-verification-raw.json"]
+source_of_truth: ["docs/plans/archived/2026-10-02-mini-ai-ide-poc.md","docs/adr/2026-10-02-zero-injection-and-automation-trace-baseline.md","docs/adr/2026-10-02-honest-electron-identity.md","tools/trace-verifier/","docs/audits/2026-10-02-p0a-trace-verification-raw.json"]
 ---
 
 # P0a 自动化特征核验报告

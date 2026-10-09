@@ -1,11 +1,11 @@
 ---
 artifact_type: audit
-status: active
+status: archived
 created: 2026-10-02
 updated: 2026-10-07
 owner: 胡运宽
 scope: P0b 可达性与登录实测（真实访问 chat.deepseek.com，全人工操作）
-source_of_truth: ["docs/plans/2026-10-02-mini-ai-ide-poc.md","docs/adr/2026-10-02-zero-injection-and-automation-trace-baseline.md","docs/adr/2026-10-02-honest-electron-identity.md","tools/reachability-probe/","docs/audits/2026-10-02-p0b-reachability-raw.json","docs/audits/2026-10-02-p0b-experiment-noident.json"]
+source_of_truth: ["docs/plans/archived/2026-10-02-mini-ai-ide-poc.md","docs/adr/2026-10-02-zero-injection-and-automation-trace-baseline.md","docs/adr/2026-10-02-honest-electron-identity.md","tools/reachability-probe/","docs/audits/2026-10-02-p0b-reachability-raw.json","docs/audits/2026-10-02-p0b-experiment-noident.json"]
 ---
 
 # P0b 可达性与登录实测报告

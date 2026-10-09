@@ -1,11 +1,11 @@
 ---
 artifact_type: audit
-status: active
+status: archived
 created: 2026-10-02
 updated: 2026-10-07
 owner: 胡运宽
 scope: P2 外壳实现核验（三视图架构、会话复用、文件访问 IPC、渲染进程隔离）
-source_of_truth: ["docs/plans/2026-10-02-mini-ai-ide-poc.md","docs/adr/2026-10-02-filesystem-permission-model.md","docs/adr/2026-10-02-honest-electron-identity.md","docs/capabilities/app-shell.md","docs/capabilities/local-file-access.md","src/main/selfTest.ts"]
+source_of_truth: ["docs/plans/archived/2026-10-02-mini-ai-ide-poc.md","docs/adr/2026-10-02-filesystem-permission-model.md","docs/adr/2026-10-02-honest-electron-identity.md","docs/capabilities/app-shell.md","docs/capabilities/local-file-access.md","src/main/selfTest.ts"]
 ---
 
 # P2 外壳实现核验报告

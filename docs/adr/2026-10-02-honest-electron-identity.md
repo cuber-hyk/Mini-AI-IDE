@@ -115,4 +115,4 @@ source_of_truth: [src/shared/userAgent.ts, src/main/index.ts, test/limits-and-ua
 - 验收判据：`docs/adr/2026-10-02-zero-injection-and-automation-trace-baseline.md`（ADR-0003）
 - 嵌入方式选型：`docs/adr/2026-10-02-filesystem-permission-model.md`（ADR-0002）
 - 能力文档：`docs/capabilities/app-shell.md`、`docs/capabilities/session-persistence.md`
-- 计划：`docs/plans/2026-10-02-mini-ai-ide-poc.md`
+- 计划：`docs/plans/archived/2026-10-02-mini-ai-ide-poc.md`

@@ -62,4 +62,4 @@ source_of_truth: ["https://www.electronjs.org/docs/latest/tutorial/web-embeds","
 ## 关联
 
 - 能力文档：`docs/capabilities/local-file-access.md`
-- 计划：`docs/plans/2026-10-02-mini-ai-ide-poc.md`（步骤 P2）
+- 计划：`docs/plans/archived/2026-10-02-mini-ai-ide-poc.md`（步骤 P2）

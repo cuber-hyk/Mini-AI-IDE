@@ -1,6 +1,6 @@
 ---
 artifact_type: audit
-status: active
+status: archived
 created: 2026-10-08
 updated: 2026-10-08
 scope: "147689e 后新会话首轮自动采集遗漏：官网直接发送、本地发送与历史基线交接"

@@ -55,7 +55,7 @@
 | 领域 | 入口 |
 |---|---|
 | 需求来源（初步想法，非最终裁决） | `IDE接入网页版AI.md` |
-| 活跃计划 | `docs/plans/2026-10-02-mini-ai-ide-poc.md` |
+| 活跃计划 | 无（当前无进行中的计划；历史计划见 `docs/plans/archived/`） |
 | 决策记录 | `docs/adr/` |
 | 回程机制（一键同步） | `docs/capabilities/return-path-and-format-contract.md` |
 | 明确编辑协议与复制上下文 | `src/shared/returnPath.ts`、`snippet.ts`、`formatSpec.ts`；应用与基线 owner `src/main/returnPathService.ts`；默认面板资源由 `scripts/copy-static.mjs` 生成 |

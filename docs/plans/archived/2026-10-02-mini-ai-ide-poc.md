@@ -1,6 +1,6 @@
 ---
 artifact_type: plan
-status: active
+status: archived
 created: 2026-10-02
 updated: 2026-10-02
 owner: 胡运宽
