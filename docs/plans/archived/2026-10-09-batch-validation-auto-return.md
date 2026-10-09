@@ -68,3 +68,9 @@ CHANGELOG、AGENTS、tool-harness 与 human-machine-boundary 能力、已有批�
 - BVR-R1（P3）：本次插入重复 Fixed 分类标题；已由主代理核对并删除多余标题，保留原 UI 条目。
 - 未新增或执行测试，未启动 Electron 或连接真实官网验证。本次新行为不能用构建或静态审查替代运行验收。
 - Distill 核对：当前行为已写入 tool-harness、human-machine-boundary 能力及原批次校验回传 ADR；AGENTS 与 context-map 指向当前规则和资格 owner。无新增稳定术语或 UI 规则，不修改 CONTEXT/DESIGN。
+
+## 提交合并证据
+
+用户显式批准后，修复提交 ea7f585b71d484f08cd04b157585a9fb3e547d70 已合并到 master，合并提交 95d54a813e72f8c8e84d516ec3a1a1a36b02a7ab。保留主分支此前的 UI 与文档归档改动；合并后的 pnpm run build 通过，git diff --check 通过。未执行 git push、发布或测试。
+
+主分支全库文档校验仍失败：品牌字体/文件树归档计划缺 created，且此前归档的 p2-shell、p3-return-path-logic、first-turn-auto-collection 三份审计被提示含未解决事项；另有 DESIGN 路径等警告。这些不是本次新增发现或本任务产物，不宣称全库生命周期门通过。
