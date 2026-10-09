@@ -7,7 +7,8 @@ import { COMPLETION_SCRIPT } from '../src/main/tools/replyObservation';
 
 // 固定输入来自用户现场；不是从实现里的 SVG 常量生成另一套相同规则。
 const fixture = JSON.parse(readFileSync(path.join(__dirname, 'fixtures/deepseek-reply-controls.json'), 'utf8'));
-function page() {
+const thinkingFixture = JSON.parse(readFileSync(path.join(__dirname, 'fixtures/deepseek-thinking-reply-structure.json'), 'utf8'));
+function page(thinking = false) {
   const button = (data: any) => {
     const attributes: any = { 'aria-label': data.aria, 'aria-disabled': data.ariaDisabled };
     const control: any = {
@@ -35,7 +36,16 @@ function page() {
     querySelectorAll: () => [code.control],
   };
   roots.push(reply);
-  const document: any = { querySelectorAll: (selector: string) => selector.includes('markdown') || selector.includes('main-content') ? roots : selector.includes('button') ? controls : [] };
+  if (thinking) {
+    const thought: any = { ...reply, className: thinkingFixture.rootClasses[0], contains: (node: any) => node === thought };
+    reply.className = thinkingFixture.rootClasses[1];
+    roots.unshift(thought);
+    const contains = frame.contains;
+    frame.contains = (node: any) => node === thought || contains(node);
+  }
+  const document: any = { querySelectorAll: (selector: string) => selector === '.ds-assistant-message-main-content'
+    ? roots.filter(node => node.className.split(/\s+/).includes('ds-assistant-message-main-content'))
+    : selector.includes('markdown') ? roots : selector.includes('button') ? controls : [] };
   return { copy, regenerate, read, send, code, roots, footer, controls, reply,
     state: () => vm.runInNewContext(COMPLETION_SCRIPT, { document }),
   };
@@ -44,14 +54,32 @@ function page() {
 it('现场无标签复制/重新生成图标、朗读与发送箭头组合能确认最新回复结束', () => {
   const p = page(); assert.equal(p.state(), 'complete');
 });
+it('深度思考区与正式答案同框时属于同一条回复，完整结束控件应允许采集与回传', () => {
+  const p = page(true);
+  assert.equal(p.roots.length, thinkingFixture.candidateCount);
+  assert.equal(p.state(), 'complete');
+});
+it('深度思考模式下生成和中断仍优先于已有完成页脚', () => {
+  const p = page(true); p.send.attributes['aria-label'] = '停止生成';
+  assert.equal(p.state(), 'generating');
+  p.send.attributes['aria-label'] = null;
+  const next = { ...p.read.control, className: 'ds-button', textContent: '继续生成', getAttribute: () => null };
+  p.controls.push(next); p.footer.push(next);
+  assert.equal(p.state(), 'interrupted');
+});
+it('深度思考区不能放宽跨回复隔离，同框两条正式答案仍不能确认结束', () => {
+  const p = page(true); const other = { ...p.reply };
+  p.roots.unshift(other); p.footer.push(other);
+  assert.equal(p.state(), 'unknown');
+});
 it('回复代码框的复制和扩展复制按钮不能证明结束', () => {
   const p = page(); p.footer.splice(0, 3);
   p.footer.push({ ...p.copy.control, className: 'c2f-code-card-copy-button', textContent: '复制到Word' });
   assert.notEqual(p.state(), 'complete');
 });
 it('重新生成禁用、缺失或隐藏时不自动采集', () => {
-  for (const mode of ['disabled', 'hidden', 'missing']) {
-    const p = page();
+  for (const thinking of [false, true]) for (const mode of ['disabled', 'hidden', 'missing']) {
+    const p = page(thinking);
     if (mode === 'disabled') p.regenerate.attributes['aria-disabled'] = 'true';
     if (mode === 'hidden') p.regenerate.control.visible = false;
     if (mode === 'missing') p.footer.splice(1, 1);
@@ -59,8 +87,10 @@ it('重新生成禁用、缺失或隐藏时不自动采集', () => {
   }
 });
 it('输入区图标未知时不把复制控件或旧生成状态当结束', () => {
-  const p = page(); p.send.control.icon = 'unrecognized stop or input mode';
-  assert.equal(p.state(), 'unknown');
+  for (const thinking of [false, true]) {
+    const p = page(thinking); p.send.control.icon = 'unrecognized stop or input mode';
+    assert.equal(p.state(), 'unknown');
+  }
 });
 it('历史回复控件不能用于最新回复，明确生成状态优先于已有完成控件', () => {
   const p = page();

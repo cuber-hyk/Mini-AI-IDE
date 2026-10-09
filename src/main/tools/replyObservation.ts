@@ -33,7 +33,8 @@ export const COMPLETION_SCRIPT = `(() => {
   if (hasClasses(reply, ['ds-assistant-message-main-content'])) {
     // 现场原生按钮没有可读标签；只认当前回复的原生页脚与已知发送图标组合。
     const frame = reply.closest('.ds-message')?.parentElement;
-    if (!frame || nodes.filter(node => frame.contains(node)).length !== 1) return 'unknown';
+    // 深度思考区也是 markdown；同框唯一性只统计正式答案，思考区不算另一条回复。
+    if (!frame || nodes.filter(node => frame.contains(node) && hasClasses(node, ['ds-assistant-message-main-content'])).length !== 1) return 'unknown';
     const outsideCode = e => !reply.contains(e) && !e.closest('pre,code,[class*="code-block"]');
     const enabled = e => !e.disabled && e.getAttribute('aria-disabled') !== 'true' && !hasClasses(e, ['ds-button--disabled']);
     const icon = (e, prefix) => Array.from(e.querySelectorAll('svg path')).some(p => String(p.getAttribute('d') || '').replace(/\\s+/g, ' ').startsWith(prefix));

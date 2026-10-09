@@ -1,0 +1,8 @@
+{
+  "candidateCount": 2,
+  "rootClasses": [
+    "ds-markdown",
+    "ds-markdown ds-assistant-message-main-content"
+  ],
+  "frameCandidateIndexes": [0, 1]
+}
