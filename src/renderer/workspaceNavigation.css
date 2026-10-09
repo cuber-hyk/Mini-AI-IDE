@@ -62,7 +62,6 @@ body { display: block; }
 .requirement-panel:not([open]) ~ .prompt-actions .prompt-options { display: none; }
 .tool-result-actions { position: static; justify-content: flex-end; padding: 0 10px 6px; }
 .tool-panel-summary { padding-right: 10px; }
-.update-panel { width: min(360px, var(--file-width, 360px)); max-width: calc(100vw - 32px); }
 
 /* 文件和目录都有连续顶栏，正文起点统一由主进程预算决定。 */
 .toolbar .editor-tabs { flex: 1 1 auto; height: 100%; border: 0; background: transparent; }

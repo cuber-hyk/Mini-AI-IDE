@@ -16,20 +16,23 @@ function fixture() {
     check: async () => { calls.push('check'); state.revision++; },
     download: async () => { calls.push('download'); state.revision++; },
     install: async () => { calls.push('install'); state.revision++; } };
-  const channels = registerApplicationUpdateIpc(ipc, editor, updater);
-  const event = { sender: editor, senderFrame: editor.mainFrame } as IpcMainInvokeEvent;
-  return { channels, editor, event, calls, state,
+  const dialog = { mainFrame: {} } as WebContents;
+  const channels = registerApplicationUpdateIpc(ipc, { editor, dialog: () => dialog, updater,
+    open: async () => { calls.push('open'); }, close: () => { calls.push('close'); } });
+  const event = { sender: dialog, senderFrame: dialog.mainFrame } as IpcMainInvokeEvent;
+  const editorEvent = { sender: editor, senderFrame: editor.mainFrame } as IpcMainInvokeEvent;
+  return { channels, editor, event, editorEvent, calls, state,
     invoke: (channel: string, input = event, ...args: unknown[]) => handlers.get(channel)!(input, ...args) };
 }
 
-it('更新状态与动作仅允许本地编辑器主frame，网页和子frame不能查询或安装', async () => {
+it('更新入口按编辑器与专用窗口主frame分工，网页和子frame不能查询或安装', async () => {
   const f = fixture();
   for (const channel of f.channels) {
     for (const event of [
       { sender: {}, senderFrame: f.editor.mainFrame },
       { sender: f.editor, senderFrame: {} },
       { sender: f.editor, senderFrame: null },
-    ]) await assert.rejects(f.invoke(channel, event as IpcMainInvokeEvent), /仅供本地编辑器/);
+    ]) await assert.rejects(f.invoke(channel, event as IpcMainInvokeEvent), /指定本地界面/);
   }
   assert.deepEqual(f.calls, []);
 });
@@ -37,8 +40,8 @@ it('更新状态与动作仅允许本地编辑器主frame，网页和子frame不
 it('所有更新IPC拒绝额外参数，不能通过路径或URL指挥主进程', async () => {
   const f = fixture();
   for (const channel of f.channels) {
-    await assert.rejects(f.invoke(channel, f.event, { url: 'https://example.test', path: 'C:\\other.exe' }), /不接受参数/);
-    await assert.rejects(f.invoke(channel, f.event, undefined), /不接受参数/);
+    await assert.rejects(f.invoke(channel, channel === CHANNELS.openUpdatePanel ? f.editorEvent : f.event, { url: 'https://example.test', path: 'C:\\other.exe' }), /不接受参数/);
+    await assert.rejects(f.invoke(channel, channel === CHANNELS.openUpdatePanel ? f.editorEvent : f.event, undefined), /不接受参数/);
   }
   assert.deepEqual(f.calls, []);
 });

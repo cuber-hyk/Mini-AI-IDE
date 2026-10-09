@@ -34,6 +34,7 @@ export const CHANNELS = {
   installUpdate: 'ui:install-update',
   updateState: 'ui:update-state',
   openUpdatePanel: 'ui:open-update-panel',
+  closeUpdatePanel: 'ui:close-update-panel',
   /** 渲染进程请求系统目录选择对话框（唯一取得路径的合法入口） */
   chooseRoot: 'fs:choose-root',
   getRecentRoots: 'fs:recent-roots',
@@ -556,11 +557,9 @@ export interface EditorBridge {
   clearToolRules(): Promise<ToolState>;
   undoToolChange(): Promise<{ ok: boolean; error?: string }>;
   getUpdateState(): Promise<ApplicationUpdateState>;
-  checkForUpdate(): Promise<ApplicationUpdateState>;
-  downloadUpdate(): Promise<ApplicationUpdateState>;
-  installUpdate(): Promise<ApplicationUpdateState>;
   onUpdateState(listener: (state: ApplicationUpdateState) => void): void;
-  onOpenUpdatePanel(listener: () => void): void;
+  openUpdatePanel(): Promise<void>;
+  onUpdatePanelClosed(listener: () => void): void;
   chooseRoot(): Promise<RootInfo>;
   getRecentRoots(): Promise<string[]>;
   openRecentRoot(index: number): Promise<RootInfo>;

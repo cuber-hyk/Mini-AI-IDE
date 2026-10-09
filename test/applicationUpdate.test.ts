@@ -36,23 +36,31 @@ function updateUi(overrides: Record<string, unknown> = {}) {
   nodes['update-panel'].hidden = true;
   const doc = element(); const win = element();
   nodes['update-wrap'].contains = value => Object.values(nodes).includes(value as any);
-  let publish: (value: unknown) => void = () => {};
-  let open: () => void = () => {};
+  const subscribers: Array<(value: any) => void> = [];
+  let closed = () => {};
   const calls: string[] = [];
+  function open() { nodes['update-panel'].hidden = false; nodes['update-panel'].focus(); }
   const bridge = {
     async getUpdateState() { calls.push('get'); return state(); },
     async checkForUpdate() { calls.push('check'); return state({ checked: true, revision: 1 }); },
     async downloadUpdate() { calls.push('download'); return state({ status: 'downloading', busy: true, revision: 2 }); },
     async installUpdate() { calls.push('install'); return state({ status: 'installing', busy: true, revision: 3 }); },
-    onUpdateState(fn: typeof publish) { publish = fn; }, onOpenUpdatePanel(fn: typeof open) { open = fn; },
+    async closeUpdatePanel() { nodes['update-panel'].hidden = true; closed(); },
+    onUpdateState(fn: (value: any) => void) { subscribers.push(fn); },
     ...overrides,
   };
-  const window = { ...win, setupApplicationUpdate: null as any };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/renderer/applicationUpdate.js'), 'utf8'), {
-    window, document: { getElementById(id: string) { return nodes[id]; }, createElement() { return element(); }, addEventListener: doc.addEventListener },
-  });
-  const controller = window.setupApplicationUpdate(bridge);
-  return { nodes, doc, win, calls, controller, publish(value: unknown) { publish(value); }, open() { open(); } };
+  const window = { ...win, setupApplicationUpdate: null as any, setupUpdateDialog: null as any };
+  const context = { window, document: { getElementById(id: string) { return nodes[id]; },
+    createElement() { return element(); }, addEventListener: doc.addEventListener } };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/renderer/applicationUpdate.js'), 'utf8'), context);
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/renderer/updateDialog.js'), 'utf8'), context);
+  window.setupApplicationUpdate({
+    getUpdateState: async () => state(), onUpdateState: bridge.onUpdateState,
+    async openUpdatePanel() { open(); }, onUpdatePanelClosed(fn: () => void) { closed = fn; },
+  }, () => {});
+  const controller = window.setupUpdateDialog(bridge);
+  return { nodes, doc, win, calls, controller, publish(value: unknown) { subscribers.forEach(fn => fn(value)); }, open };
+
 }
 
 async function flush() { for (let i = 0; i < 6; i++) await Promise.resolve(); }
@@ -131,18 +139,15 @@ it('下载只能由主按钮触发，关闭浮层后继续接收进度且不会�
   assert.deepEqual(ui.calls, ['get', 'download', 'install']);
 });
 
-it('Escape 与关闭按钮回到图标，外点、失焦和后台事件不会抢编辑焦点', async () => {
+it('Escape 与关闭按钮回到图标；独立窗口失焦和编辑区外点不会关闭窗口', async () => {
   const ui = updateUi(); await flush(); ui.open();
-  await ui.nodes['update-wrap'].fire('keydown', { key: 'Escape', preventDefault() {} });
+  await ui.doc.fire('keydown', { key: 'Escape', preventDefault() {} });
   assert.equal(ui.nodes['update-panel'].hidden, true); assert.equal(ui.nodes['btn-update'].focused, true);
   ui.nodes['btn-update'].focused = false; ui.open();
   await ui.doc.fire('pointerdown', { target: {} });
-  assert.equal(ui.nodes['update-panel'].hidden, true); assert.equal(ui.nodes['btn-update'].focused, false);
-  ui.open(); await ui.nodes['update-wrap'].fire('focusout', { relatedTarget: ui.nodes['update-action'] });
-  assert.equal(ui.nodes['update-panel'].hidden, false);
-  await ui.nodes['update-wrap'].fire('focusout', { relatedTarget: {} });
-  assert.equal(ui.nodes['update-panel'].hidden, true);
-  ui.open(); await ui.win.fire('blur'); assert.equal(ui.nodes['update-panel'].hidden, true);
+  assert.equal(ui.nodes['update-panel'].hidden, false); assert.equal(ui.nodes['btn-update'].focused, false);
+  await ui.win.fire('blur'); assert.equal(ui.nodes['update-panel'].hidden, false);
+  await ui.nodes['update-close'].fire('click'); assert.equal(ui.nodes['update-panel'].hidden, true);
 });
 
 it('下载失败重试下载，检查失败重试检查，不支持环境说明原因并禁用动作', async () => {

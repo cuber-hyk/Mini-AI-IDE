@@ -38,6 +38,7 @@ import { WorkspaceController } from './workspaceController';
 import { configureWorkspaceProbe, runWorkspaceProbe } from './workspaceProbe';
 import { createApplicationUpdater, type ApplicationUpdater } from './appUpdater';
 import { registerApplicationUpdateIpc } from './applicationUpdateIpc';
+import { ApplicationUpdateWindow } from './applicationUpdateWindow';
 import { createToolIntegration, readAutoReply, registerToolShutdown } from './tools/integration';
 
 /* ------------------------------------------------------------------ *
@@ -565,27 +566,36 @@ async function loadLocalView(
   const localPromptChannels = localPrompt.register();
   // 先注册只读变更桥，再加载会立即请求初始状态的面板。
   await loadLocalView(previewView, 'preview.html');
+  const updateWindow = new ApplicationUpdateWindow(win, () => updater!.getState(), () => {
+    if (!editorView.webContents.isDestroyed()) { editorView.webContents.focus(); editorView.webContents.send(CHANNELS.closeUpdatePanel); }
+  });
+  const openUpdateWindow = () => updateWindow.open();
   updater = createApplicationUpdater({
     window: win,
     disabled: SELF_TEST || UI_PROBE || DIAGNOSE,
     onStateChanged: state => {
       buildApplicationMenu();
       if (!editorView.webContents.isDestroyed()) editorView.webContents.send(CHANNELS.updateState, state);
+      updateWindow.publish(state);
     },
-    onOpenPanel: () => {
-      if (!editorView.webContents.isDestroyed()) {
-        editorView.webContents.focus();
-        editorView.webContents.send(CHANNELS.openUpdatePanel);
+    onOpenPanel: () => { void openUpdateWindow().catch(error => { if (!win.isDestroyed()) dialog.showErrorBox('软件更新', String(error)); }); },
+    approveInstall: async () => {
+      const restore = updateWindow.visible;
+      updateWindow.hide();
+      try {
+        return await workspaceController.run(async () => {
+          if (win.isDestroyed() || closePending || !await workspaceController.editor.canLeave()) return false;
+          return !win.isDestroyed();
+        });
+      } finally {
+        if (restore && !win.isDestroyed()) await openUpdateWindow();
       }
     },
-    approveInstall: () => workspaceController.run(async () => {
-      if (win.isDestroyed() || closePending || !await workspaceController.editor.canLeave()) return false;
-      return !win.isDestroyed();
-    }),
   });
   const registeredChannels = [
     ...tools.channels, ...localPromptChannels,
-    ...registerApplicationUpdateIpc(ipcMain, editorView.webContents, updater),
+    ...registerApplicationUpdateIpc(ipcMain, { editor: editorView.webContents, dialog: () => updateWindow.contents,
+      updater, open: openUpdateWindow, close: () => updateWindow.hide(true) }),
     ...registerFileIpc(fileService, {
       chooseRoot: () => workspaceController.chooseRoot(), getState: () => workspace.getState(),
       write: (relative, text) => workspaceController.write(relative, text),
@@ -1094,6 +1104,7 @@ async function loadLocalView(
     });
   });
   win.on('closed', () => {
+    updateWindow.dispose();
     updater?.dispose();
     workspaceController.editor.reset();
     app.quit();

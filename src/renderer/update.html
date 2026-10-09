@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'none'; connect-src 'none'" />
+  <title>软件更新</title>
+  <link rel="stylesheet" href="./ui-tokens.css" />
+  <link rel="stylesheet" href="./ui.css" />
+  <link rel="stylesheet" href="./applicationUpdate.css" />
+</head>
+<body class="update-dialog">
+  <section id="update-panel" class="update-panel" role="dialog" aria-modal="false" aria-labelledby="update-heading" tabindex="-1">
+    <div class="update-header"><span class="update-eyebrow">软件更新</span><button id="update-close" type="button" class="ui-icon update-close" title="关闭更新窗口" aria-label="关闭更新窗口"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg></button></div>
+    <h2 id="update-heading">检查新版本</h2>
+    <div id="update-versions" class="update-versions"></div>
+    <p id="update-message" class="update-message" aria-live="polite" aria-atomic="true"></p>
+    <div id="update-notes-section" class="update-notes-section" hidden>
+      <h3>更新内容</h3><p id="update-notes" class="update-notes"></p>
+      <button id="update-notes-toggle" type="button" class="update-text-button" aria-expanded="false" aria-controls="update-notes" hidden>展开完整说明</button>
+    </div>
+    <div id="update-progress-wrap" class="update-progress-wrap" hidden>
+      <div class="update-progress-label"><span>正在下载</span><span id="update-percent"></span></div>
+      <progress id="update-progress" max="100" value="0" aria-label="更新下载进度"></progress>
+    </div>
+    <div class="update-footer"><span id="update-hint" class="update-hint">由你选择何时更新</span><button id="update-action" type="button" class="ui-button primary">检查更新</button></div>
+  </section>
+<script src="./updateDialog.js"></script>
+</body>
+</html>

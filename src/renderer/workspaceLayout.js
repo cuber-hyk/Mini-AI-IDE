@@ -23,7 +23,6 @@
       const layout = state.layout; const content = layout.contentBounds; const file = layout.fileBounds;
       scale = layout.editorBounds.width ? window.innerWidth / layout.editorBounds.width : 1;
       document.documentElement.style.setProperty('--layout-scale', String(scale));
-      document.documentElement.style.setProperty('--file-width', file.width * scale + 'px');
       rectangle(navigation, layout.workspaceBounds); navigation.hidden = !layout.workspaceVisible;
       const workspaceCollapse = document.getElementById('workspace-collapse');
       workspaceCollapse.hidden = !state.fileMaximized || !layout.workspaceVisible;
