@@ -35,6 +35,10 @@ before(() => {
   fs.writeFileSync(path.join(root, 'bin.dat'), Buffer.from([0x00, 0x01, 0x02]));
   fs.mkdirSync(path.join(root, 'sub'));
   fs.writeFileSync(path.join(root, 'sub', 'b.txt'), 'sub file\n', 'utf8');
+  fs.writeFileSync(path.join(root, '.gitignore'), 'node_modules\n', 'utf8');
+  fs.writeFileSync(path.join(root, '.editorconfig'), 'root = true\n', 'utf8');
+  fs.mkdirSync(path.join(root, '.git'));
+  fs.writeFileSync(path.join(root, '.git', 'HEAD'), 'ref: refs/heads/main\n', 'utf8');
 });
 
 after(() => {
@@ -63,6 +67,17 @@ describe('FileService', () => {
     assert.equal(bin?.textLike, false);
     const sub = r.entries.find((e) => e.name === 'sub');
     assert.equal(sub?.textLike, null);
+  });
+
+  it('文件树显示点文件但跳过 .git 目录本身', async () => {
+    const svc = new FileService();
+    svc.setRoot(root);
+    const r = await svc.listDir('');
+    assert.equal(r.ok, true);
+    const names = r.entries.map((e) => e.name);
+    assert.ok(names.includes('.gitignore'), '.gitignore 应可见');
+    assert.ok(names.includes('.editorconfig'), '.editorconfig 应可见');
+    assert.equal(names.includes('.git'), false, '.git 目录应被跳过');
   });
 
   it('读取 UTF-8 文件并返回元信息', async () => {

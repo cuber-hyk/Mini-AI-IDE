@@ -13,6 +13,10 @@
 
 ### Changed
 
+- 文件树类型图标扩充到约 75 类：新增语言（Rust/Java/C#/C/C++/PHP/Ruby/Swift/Kotlin/Lua/R/SQL/GraphQL）、前端框架（Angular/Astro/Tailwind）、数据与配置（JSON/YAML/TOML/INI/XML/CSV/ENV）、文档与媒体（PDF/Office/ePub/音频/视频/字体）、包管理与构建（npm/pnpm/yarn/bun/deno/Docker/Make/CMake/Gradle/Maven）以及 GitHub/GitLab/VS Code、LICENSE/README/CHANGELOG 等特殊文件名，并支持 `*.d.ts`、`*.module.css`、`*.test.ts`、`*.config.js`、`*.min.js` 等复合后缀。
+- 文件树类型图标颜色统一收敛到 `design-tokens.json` 的 `--ui-file-*`，`fileExplorer.css` 不再硬编码色值；README、LICENSE 等特殊文件名优先于扩展名。
+- 文件树类型图标改为参考 deepseek-harness 的视觉：普通文件用折角纸张底 + 白色符号，高频语言用彩色品牌标；文件夹关闭态灰描边、打开态蓝描边；`package.json` 用绿色 Node JS 六边形标，`pnpm-lock.yaml`/`design-tokens.json` 按扩展名显示 YAML/JSON 标。
+- 文件树显示点文件（如 `.gitignore`、`.editorconfig`），但跳过 `.git` 目录本身；AI 上下文摘要仍保持隐藏点文件。
 - 输出格式补充上限调整为 10,000 字，完整内置模板增加论文及局部图片附件工具示例。
 - 本地需求确认发送成功后清空本次正文、技能选择和附件；发送失败或状态未知时保留内容，发送等待期间新写的下一条需求也保留。
 
