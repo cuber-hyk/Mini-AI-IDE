@@ -5,7 +5,17 @@ body { display: block; }
 .layout { position: absolute; inset: 0; display: block; pointer-events: none; }
 .layout > * { pointer-events: auto; }
 .workspace-navigation { display: flex; flex-direction: column; background: var(--ui-surface); border-right: 1px solid var(--ui-border); overflow: hidden; padding: 20px 12px 12px; }
-.workspace-brand { display: flex; align-items: center; gap: 6px; padding: 0 8px 28px; font-size: 22px; font-weight: 600; white-space: nowrap; }
+/* 品牌字体 Baloo 2（OFL，本地字体文件）；仅用于左上角品牌名。 */
+@font-face {
+  font-family: 'Baloo 2';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url(./fonts/Baloo2-700.ttf) format('truetype');
+}
+.workspace-brand { display: flex; align-items: center; gap: 7px; padding: 0 8px 28px; white-space: nowrap; }
+.workspace-brand-mark { width: 24px; height: 24px; flex: none; color: var(--ui-text); }
+.workspace-brand-name { font-family: 'Baloo 2', 'Segoe UI', system-ui, sans-serif; font-weight: 700; font-size: 23px; line-height: 1; letter-spacing: .01em; padding-top: 3px; }
 .workspace-brand > .workspace-product { font-size: 11px; border: 1px solid var(--ui-border); border-radius: 4px; padding: 1px 4px; }
 .workspace-brand .update-wrap { display: flex; flex: 0 0 auto; }
 .workspace-brand .update-trigger { width: 26px; height: 26px; }
