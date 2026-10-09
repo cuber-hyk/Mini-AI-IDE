@@ -14,6 +14,8 @@ Windows x64 NSIS 安装版从公开 GitHub 仓库 `cuber-hyk/Mini-AI-IDE` 的正
 
 ApplicationUpdateWindow 持有与主 BaseWindow 关联的非模态 BrowserWindow。首次和重复打开都复用唯一窗口并在主窗口中心显示；宽 460px，无发布说明时高 360px、有说明时高 540px，按当前显示器 workArea 钳制。关闭与 Escape 只隐藏窗口，下载由应用级 UpdateService 持有；失焦不关闭，重新打开保留进度与说明展开状态。应用主窗口真正关闭时销毁该窗口。安装前暂时隐藏更新窗口，完成未保存文件确认后恢复，避免遮挡确认对话框。
 
+更新窗口正文用状态头（图标 + 标题 + 副标题）表达当前阶段：成功态绿色勾、警告态橙色、更新/下载中蓝色；版本以卡片块展示当前版本与目标版本，右侧标注语义（当前版本 / 可更新至 / 待安装）；主按钮按动作分权——无更新时为普通按钮，可下载/可安装时才用强调色，底部提示位于按钮上方。窗口只保留单层边框，面板铺满窗口。图标经 `createElementNS` 构建，远程说明仍为纯文本，均不进入 `innerHTML`。
+
 主入口 `createApplicationUpdater()` 将独立更新窗口、帮助菜单和应用生命周期接到 `UpdateService`。`appUpdater.ts` 负责 electron-updater 和任务栏进度；`updateService.ts` 负责显式动作与唯一状态；`updateInstaller.ts` 仅启动已校验的 NSIS 安装包，等待进程启动事件成功再允许退出。`applicationUpdateIpc.ts` 按主 frame 和具体 WebContents 身份限定入口：编辑器只查询状态与打开窗口；专用更新窗口可查询、检查、下载、安装及关闭。所有请求零参数，不接纳 URL、更新源或安装器路径。updatePreload 只暴露这些窄更新接口与状态订阅，不暴露文件、工具或官网能力；编辑器 preload 不再提供更新执行动作。revision递增，渲染层忽略迟到的旧快照。
 
 ## 更新流程

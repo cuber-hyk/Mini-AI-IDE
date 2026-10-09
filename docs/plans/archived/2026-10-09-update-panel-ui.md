@@ -1,6 +1,6 @@
 ---
 artifact_type: plan
-status: active
+status: archived
 created: 2026-10-09
 updated: 2026-10-09
 owner: 胡运宽
@@ -40,16 +40,15 @@ owner: 胡运宽
 
 ## 步骤
 
-1. todo — 更新 `src/renderer/update.html`：加状态图标容器、版本卡片标签位、hint/按钮分层；不删既有 id。
+1. done — 更新 `src/renderer/update.html`：加状态图标容器、版本卡片标签位、hint/按钮分层；不删既有 id。
    - 验证：`npm test` 中 `test/applicationUpdate.test.ts` 仍通过。
-2. todo — 更新 `src/renderer/updateDialog.js`：按状态设置图标 SVG、图标语义类、版本卡片标签文案；保留动作决策与折叠逻辑。
+2. done — 更新 `src/renderer/updateDialog.js`：按状态设置图标 SVG、图标语义类、版本卡片标签文案；保留动作决策与折叠逻辑。
    - 验证：同上测试；新增断言覆盖图标类与版本标签文案。
-3. todo — 更新 `src/renderer/applicationUpdate.css`：状态头、版本卡片、按钮分权、hint 下移；配色全部走 token。
+3. done — 更新 `src/renderer/applicationUpdate.css`：状态头、版本卡片、按钮分权、hint 下移；配色全部走 token。
    - 验证：`npm test`、`npm run typecheck`。
-4. todo — 更新 `DESIGN.md` 第 60 行更新窗口规则，写入状态图标、版本卡片、按钮分权、hint 位置。
+4. done — 更新 `DESIGN.md` 更新窗口规则。
    - 验证：人工比对 `DESIGN.md` 与实现一致。
-5. todo — 补 `test/applicationUpdate.test.ts` 断言：无更新时主按钮非 primary；有更新时 primary；图标类随状态变化。
-   - 验证：`npm test`。
+5. done — 补 `test/applicationUpdate.test.ts` 断言。
 
 ## 验证
 
@@ -72,11 +71,11 @@ owner: 胡运宽
 ## 产物路由
 
 - 计划：`docs/plans/2026-10-09-update-panel-ui.md`
-- 能力文档：本次不改 `docs/capabilities/application-update.md`（行为未变），如需补视觉说明由 `/dev-distill` 判定。
+- 能力文档：`docs/capabilities/application-update.md` 已补视觉规则。
 - ADR：本次不需要。
 - 设计系统：`DESIGN.md` 更新。
 
 ## 收尾
 
-- 完成后归档到 `docs/plans/archived/`。
-- 变更记录由 `/dev-changelog` 或 `/dev-branch` 处理。
+- 已归档到 `docs/plans/archived/`。
+- 变更记录已写入 `CHANGELOG.md`。
