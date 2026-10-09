@@ -1,5 +1,5 @@
-/** 本地需求附件暂存：只接收用户选择/拖入的文件，主进程持有真实路径并按需流式读取。 */
-import { createReadStream } from 'node:fs';
+/** 主进程附件暂存：调用 owner 负责用户选择或工具授权，真实路径与字节不进入网页桥。 */
+import type { Stats } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -16,7 +16,16 @@ const TYPES: Readonly<Record<string, string>> = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp', '.gif': 'image/gif',
 };
 
-interface StoredAttachment extends PromptAttachment { path?: string; bytes?: Uint8Array }
+interface FileIdentity { dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number }
+interface StoredAttachment extends PromptAttachment { path?: string; requestedPath?: string; identity?: FileIdentity; bytes?: Uint8Array }
+const identity = ({ dev, ino, size, mtimeMs, ctimeMs }: Stats): FileIdentity => ({ dev, ino, size, mtimeMs, ctimeMs });
+const sameFile = (stat: Stats, expected: FileIdentity) => stat.isFile() && Object.entries(expected).every(([key, value]) => stat[key as keyof FileIdentity] === value);
+
+async function verifyFile(file: StoredAttachment): Promise<void> {
+  const real = await fs.realpath(file.requestedPath!);
+  const stat = await fs.lstat(file.path!);
+  if (real !== file.path || !sameFile(stat, file.identity!)) throw new Error(`附件已变化，请重新添加：${file.name}`);
+}
 
 export class LocalPromptAttachments {
   private readonly files = new Map<string, StoredAttachment>();
@@ -40,7 +49,7 @@ export class LocalPromptAttachments {
       const key = process.platform === 'win32' ? absolute.toLowerCase() : absolute;
       if (seen.has(key)) continue;
       seen.add(key);
-      prepared.push({ id: randomUUID(), name: path.basename(absolute), size: stat.size, mediaType, path: absolute });
+      prepared.push({ id: randomUUID(), name: path.basename(absolute), size: stat.size, mediaType, path: absolute, requestedPath: candidate, identity: identity(stat) });
     }
     if (generation !== this.generation) throw new Error('项目已切换，未添加附件');
     if (this.files.size + prepared.length > MAX_PROMPT_ATTACHMENTS) throw new Error(`一次最多添加 ${MAX_PROMPT_ATTACHMENTS} 个附件`);
@@ -69,6 +78,7 @@ export class LocalPromptAttachments {
   clear(): void { this.generation++; this.files.clear(); }
 
   async resolve(ids: unknown): Promise<PromptAttachmentData[]> {
+    const generation = this.generation;
     if (!Array.isArray(ids) || ids.length > MAX_PROMPT_ATTACHMENTS || ids.some(id => typeof id !== 'string') || new Set(ids).size !== ids.length)
       throw new Error('附件列表无效');
     const result: PromptAttachmentData[] = [];
@@ -78,13 +88,36 @@ export class LocalPromptAttachments {
       if (file.bytes) {
         if (file.bytes.byteLength !== file.size || file.size > MAX_PROMPT_ATTACHMENT_BYTES) throw new Error(`附件已变化，请重新添加：${file.name}`);
       } else {
-        const stat = await fs.stat(file.path!);
-        if (!stat.isFile() || stat.size !== file.size || stat.size > MAX_PROMPT_ATTACHMENT_BYTES) throw new Error(`附件已变化，请重新添加：${file.name}`);
+        await verifyFile(file);
       }
+      const current = () => generation === this.generation && this.files.get(id) === file;
+      if (!current()) throw new Error('附件已失效，请重新添加');
       result.push({ id: file.id, name: file.name, size: file.size, mediaType: file.mediaType,
         stream: async function* () {
-          if (file.bytes) { for (let offset = 0; offset < file.bytes.length; offset += 1024 * 1024) yield file.bytes.slice(offset, offset + 1024 * 1024); }
-          else for await (const chunk of createReadStream(file.path!, { highWaterMark: 1024 * 1024 })) yield chunk;
+          if (!current()) throw new Error('附件已失效，请重新添加');
+          if (file.bytes) {
+            for (let offset = 0; offset < file.bytes.length; offset += 1024 * 1024) {
+              if (!current()) throw new Error('附件已失效，请重新添加');
+              yield file.bytes.slice(offset, offset + 1024 * 1024);
+            }
+          } else {
+            await verifyFile(file);
+            const handle = await fs.open(file.path!, 'r');
+            try {
+              if (!sameFile(await handle.stat(), file.identity!)) throw new Error(`附件已变化，请重新添加：${file.name}`);
+              let offset = 0;
+              while (offset < file.size) {
+                if (!current()) throw new Error('附件已失效，请重新添加');
+                const buffer = Buffer.alloc(Math.min(1024 * 1024, file.size - offset));
+                const { bytesRead } = await handle.read(buffer, 0, buffer.length, offset);
+                if (!bytesRead) throw new Error(`附件已变化，请重新添加：${file.name}`);
+                offset += bytesRead; yield buffer.subarray(0, bytesRead);
+              }
+              if (!current()) throw new Error('附件已失效，请重新添加');
+              if (!sameFile(await handle.stat(), file.identity!)) throw new Error(`附件已变化，请重新添加：${file.name}`);
+              await verifyFile(file);
+            } finally { await handle.close(); }
+          }
         } });
     }
     return result;

@@ -21,6 +21,8 @@
     const message = document.getElementById('tool-message');
     const results = document.getElementById('tool-results');
     const copy = document.getElementById('tool-copy');
+    const send = document.getElementById('tool-send-results');
+    const returnNotice = document.getElementById('tool-return-notice');
     const undo = document.getElementById('tool-undo');
     const clearRules = document.getElementById('tool-clear-rules');
     const more = document.getElementById('tool-more-toggle');
@@ -34,6 +36,10 @@
     let eventVersion = 0;
     let configuring = false;
     let copying = false;
+    let sending = false;
+    let returnedIdentity;
+    let returnMessage = '';
+    let returnError = false;
     const stopping = new Set();
     let undoing = false;
     let localMessage = '';
@@ -187,6 +193,15 @@
       undo.hidden = !state || (!state.canUndo && !undoing);
       more.hidden = false;
       copy.textContent = copying ? '正在复制…' : '复制本批结果';
+      const returned = state && state.resultReturn;
+      const hasAttachments = Boolean(returned && returned.attachmentCount > 0);
+      send.hidden = !hasAttachments;
+      panel.classList.toggle('has-attachments', hasAttachments);
+      send.disabled = !hasAttachments || sending || configuring || state.busy || state.config.automatic || !returned.canSend || returnedIdentity === returnIdentity();
+      send.textContent = sending || returned && returned.phase === 'sending' ? '正在发送附件…' : '发送本批附件';
+      send.title = state && state.config.automatic ? '自动继续已开启，由 IDE 自动发送本批结果与附件' : '将当前批工具结果与已授权附件一起发送给 AI';
+      returnNotice.textContent = hasAttachments ? returnMessage || returned.message : '';
+      returnNotice.classList.toggle('is-error', returnError || Boolean(hasAttachments && returned.phase === 'paused'));
       const notice = localMessage || (state ? state.message : '正在读取工具状态…');
       const awaitingContinuation = /等待继续生成/.test(notice);
       const needsAttention = !awaitingContinuation && /未执行|无法|失败|停止|没有|无效|变化|等待确认|权限拒绝/.test(notice);
@@ -238,6 +253,7 @@
 
     function receive(next) {
       state = next;
+      returnMessage = ''; returnError = false;
       localMessage = ''; localError = false;
       render();
       const batchError = state.batchError ? state.batchError.error : '';
@@ -245,6 +261,10 @@
       lastBatchError = batchError;
       receiveCompletion();
       layout.refresh();
+    }
+
+    function returnIdentity() {
+      return state ? JSON.stringify([state.completion, state.results.filter(function (item) { return item.tool === 'attach_file'; }).map(function (item) { return [item.batch_id, item.request_id, item.data && item.data.id]; })]) : '';
     }
 
     async function configure(patch) {
@@ -322,6 +342,27 @@
         localMessage = '结果已复制，请粘贴并发送给 AI。';
       } catch (error) { localMessage = '复制结果失败：' + (error instanceof Error ? error.message : String(error)); localError = true; }
       finally { copying = false; render(); }
+    });
+    send.addEventListener('click', async function () {
+      if (send.disabled || sending) return;
+      const identity = returnIdentity();
+      sending = true; returnMessage = ''; returnError = false; render();
+      try {
+        const outcome = await bridge.sendToolResults();
+        if (identity !== returnIdentity()) return;
+        if (outcome.ok) { returnedIdentity = identity; returnMessage = '本批结果与附件已发送，等待 AI 回复。'; }
+        else {
+          if (outcome.uncertain) returnedIdentity = identity;
+          returnMessage = (outcome.uncertain ? '发送状态未知，请检查官网，未重复发送：' : '附件发送未完成：') + (outcome.error || '请查看官网状态');
+          returnError = true;
+        }
+      } catch (error) {
+        if (identity === returnIdentity()) {
+          // IPC 断开不能判断是否已点击官网发送按钮，由用户检查后处理。
+          returnedIdentity = identity;
+          returnMessage = '附件发送状态未知，请检查官网：' + (error instanceof Error ? error.message : String(error)); returnError = true;
+        }
+      } finally { sending = false; render(); }
     });
     async function stopCommand(result) {
       const key = JSON.stringify([result.batch_id, result.request_id, result.data.process_id]);

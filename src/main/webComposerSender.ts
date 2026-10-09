@@ -220,7 +220,6 @@ export class WebComposerSender {
 
   async send(text: string, expectedSession: string, kind: 'results' | 'prompt' = 'results', current: () => boolean = () => true, attachments: readonly PromptAttachmentData[] = []): Promise<WebSendResult> {
     if (this.reserved) return { ok: false, error: '已有内容正在发送' };
-    if (attachments.length && kind !== 'prompt') return { ok: false, error: '工具结果回传不支持附件' };
     this.reserved = true; this.kind = kind;
     try { return await this.sendReserved(text, expectedSession, current, attachments); }
     finally { this.reserved = false; this.kind = undefined; }

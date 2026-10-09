@@ -16,6 +16,9 @@ function context(path: string, body: string, whole = false): string {
   return whole ? buildWholeFileText(path, body).text : buildSnippetText({ relPath: path, text: body, startLine: 1 }).text;
 }
 const examples: SpecExample[] = [
+  { title: '回传论文与局部图片', note: '工具权限批准后暂存；当前批完成再通过官方附件通道回传。', inShort: false,
+    input: '读取 paper.pdf，并查看已用本地命令生成的 figure.png。',
+    output: batch('example-attachments', [request('paper', 'attach_file', { path: 'paper.pdf' }), request('figure', 'attach_file', { path: 'figure.png' })]) },
   { title: '按名称加载技能', note: '只读取目录中真实可用技能的完整说明，不自动执行技能脚本。', inShort: false,
     input: '技能目录有 review，用它审阅当前项目。',
     output: batch('example-skill', [request('skill', 'load_skill', { name: 'review' })]) },
@@ -89,10 +92,10 @@ export function normalizeVariant(v: unknown): FormatSpecVariant {
 
 /**
  * 自定义格式要求的长度上限（字符）。
- * 8000 字足够写进整套约定与示例；再长会挤占 prompt 里"用户需求 + 目录结构"的注意力。
+ * 10000 字容纳当前完整工具约定与示例，并限制补充格式占用的上下文。
  * 超限时**截断而不是拒绝**：用户点保存时提示一次，内容仍保留（不让他白写一遍）。
  */
-export const MAX_CUSTOM_FORMAT_SPEC_LENGTH = 8000;
+export const MAX_CUSTOM_FORMAT_SPEC_LENGTH = 10000;
 
 /**
  * 分版本的自定义内容。

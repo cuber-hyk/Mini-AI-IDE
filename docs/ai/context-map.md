@@ -20,6 +20,8 @@
 
 工具实际文件变更由 `src/main/tools/changeReview.ts` 留存本批执行快照，`changes.ts` 提供实际修改与撤销事件，`integration.ts` 绑定项目／会话／批次；右侧文件正文的只读 Diff 界面为 `src/renderer/preview.*` 和 `src/main/previewPreload.ts`。回归入口为 `test/toolChangeReview.test.ts`、`test/toolReviewIntegration.test.ts`、`test/changeTree.test.ts`。文件树类型图标由 `src/renderer/fileIcons.js` 和 `fileExplorer.css` 管理。
 
+工具附件回传先读 `docs/adr/2026-10-09-tool-attachment-return.md`；协议唯一入口 `attach_file` 在 `src/shared/toolProtocol.ts`，当前选择附件由 `src/main/tools/attachments.ts` 持有并复用 `localPromptAttachments.ts`，自动/手动批次发送资格由 `src/main/tools/resultReturn.ts` 管理，`integration.ts` 核验官网最新正式批次并接线。`sendToolResults` 只供编辑器主 frame 零参数调用，不接收任意路径或正文；验证为 `test/toolAttachmentIntegration.test.ts`、`test/toolAttachments.test.ts`、`test/toolResultReturn.test.ts` 及 UI/原生运输夹具。
+
 自动继续先读 `docs/adr/2026-10-08-output-driven-collection.md`、`docs/capabilities/human-machine-boundary.md`、`docs/adr/2026-10-07-automatic-result-return-boundary.md`：`src/main/tools/autoContinuation.ts` 拥有完成事件、作用域与计时，`webResultSender.ts` 调用唯一运输 `src/main/webComposerSender.ts`，`integration.ts` 接线和发送前复核。UI 单开关和间隔仍由 `src/renderer/toolHarness.js` 管理；测试为 `test/autoContinuation.test.ts`、`test/webResultSender.test.ts`，原生本地夹具为 `tools/verify-web-result-sender.cjs`，不替代真实官网验收。差异连续阅读、可收起导航、上下文展开、换行及主动临时拓宽由 `preview.js/css` 管理，读 `test/changeTree.test.ts` 和 `src/main/layoutProbe.ts`。
 
 继续生成的共用只读控件谓词由 `src/main/tools/replyContinuation.ts` 管理，供 replyObservation 的中断状态与 replyChangeWatcher 的真实续写动作使用；等待及补全调度由 autoCollector 管理。回归入口为 `test/deepseekReplyState.test.ts`、`test/replyChangeWatcher.test.ts`、`test/toolAutoCollector.test.ts`、`test/replyObservation.test.ts`、`test/toolIntegration.test.ts`。

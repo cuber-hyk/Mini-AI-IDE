@@ -142,6 +142,20 @@ app.whenReady().then(async () => {
     const s = await state(); assert.equal(s.clicks, 1); assert.deepEqual(s.receivedFiles, [[{ name: 'note.txt', size: 4, type: 'text/plain' }]]);
     assert.equal(s.fileChanges, 1); assert.equal(s.files.length, 0);
   });
+  await test('工具结果经同一官方通道发送图片、PDF、Word和混合附件，每批仅一次上传与点击', async () => {
+    const file = (name, mediaType) => ({ id: name, name, mediaType, size: 4, async *stream() { yield Buffer.from('data'); } });
+    const image = file('figure.png', 'image/png'), pdf = file('paper.pdf', 'application/pdf');
+    const word = file('report.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    for (const attachments of [[image], [pdf], [word], [image, pdf, word]]) {
+      await setup('window.consumeFilesOnChange = true; window.hideImageNames = true; window.uploadDelay = 100');
+      const text = JSON.stringify({ tool_results: attachments.map(item => ({ tool: 'attach_file', status: 'done', data: { name: item.name } })) });
+      const result = await sender.send(text, sessionKeyOf(window.webContents.getURL()), 'results', () => true, attachments);
+      assert.equal(result.ok, true, JSON.stringify(result));
+      const current = await state(); assert.equal(current.clicks, 1); assert.equal(current.fileChanges, 1); assert.deepEqual(current.received, [text]);
+      assert.deepEqual(current.receivedFiles[0].map(item => item.name), attachments.map(item => item.name));
+      assert.equal(current.localBridge, 'undefined');
+    }
+  });
   await test('真实官网层级：文档首轮后，无文件名的外层图片预览仍随第二轮正文发送', async () => {
     await setup('window.consumeFilesOnChange = true; window.hideImageNames = true');
     const document = { id: 'document', name: 'note.txt', size: 4, mediaType: 'text/plain', async *stream() { yield Buffer.from('note'); } };
@@ -450,6 +464,27 @@ app.whenReady().then(async () => {
     } finally { await system.dispose(); ToolFiles.prototype.execute=executeFile; }
   });
   previousWindow.destroy();
+  await test('本地附件动作行在窄列换行，不遮住状态或产生水平溢出，发送按钮保留可读名称', async () => {
+    const localHtml = fs.readFileSync(path.join(root, 'src/renderer/index.html'), 'utf8');
+    const dock = localHtml.match(/<section id="tool-dock"[\s\S]*?<\/section>/)[0];
+    const styles = ['ui-tokens.css', 'ui.css', 'toolHarness.css'].map(name => fs.readFileSync(path.join(root, 'dist/renderer', name), 'utf8')).join('\n');
+    fs.writeFileSync(fixturePath, `<!doctype html><meta charset="utf-8"><style>${styles}\nbody{margin:0;display:block}</style>${dock}`);
+    await window.loadFile(fixturePath);
+    for (const width of [240, 360, 620]) {
+      const measured = await window.webContents.executeJavaScript(`(() => {
+        const dock = document.getElementById('tool-dock'), panel = document.getElementById('tool-panel');
+        dock.style.width = '${width}px'; panel.classList.add('has-attachments');
+        const send = document.getElementById('tool-send-results'); send.hidden = false; send.disabled = false;
+        document.getElementById('tool-return-notice').textContent = '附件已暂存，等待本批结果发送';
+        const area = dock.getBoundingClientRect(), summary = panel.querySelector('summary').getBoundingClientRect();
+        const buttons = Array.from(dock.querySelector('.tool-result-actions').querySelectorAll('button')).filter(item => !item.hidden && item.offsetWidth);
+        return { overflow: dock.scrollWidth > dock.clientWidth, name: send.getAttribute('aria-label'), label: send.textContent, area: { left: area.left, right: area.right }, summaryBottom: summary.bottom, rects: buttons.map(item => ({name:item.id, left:item.getBoundingClientRect().left, right:item.getBoundingClientRect().right, top:item.getBoundingClientRect().top})),
+          fits: buttons.every(item => { const r = item.getBoundingClientRect(); return r.left >= area.left - .5 && r.right <= area.right + .5 && r.top >= summary.bottom - .5; }) };
+      })()`);
+      assert.equal(measured.overflow, false, '宽度 ' + width); assert.equal(measured.fits, true, '按钮宽度 ' + width + ': ' + JSON.stringify(measured));
+      assert.ok(measured.name || measured.label.trim(), '发送操作需要可读名称');
+    }
+  });
   console.log('原生离线 DOM 夹具：通过 ' + passed + '，未连接官方网页；不证明官方网页接受合成发送。');
 }).catch(error => { console.error(error.stack || error); process.exitCode = 1; }).finally(async () => {
   if (sender) await sender.dispose();

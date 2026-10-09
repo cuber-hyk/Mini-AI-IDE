@@ -560,7 +560,7 @@ async function loadLocalView(
     sender: { send: (text, session, _kind, current, attachments) => tools.sendLocalPrompt(text, session, current, attachments), cancel: kind => composerSender.cancel(kind) },
     resolveWorkspacePath: relative => fileService.resolveSafePath(relative).then(result => result.ok ? { ok: true, absolute: result.absolute } : { ok: false, error: result.error }),
     root: () => fileService.getRoot(), session: () => sessionKeyOf(webView.webContents.getURL()),
-    busy: () => { const state = tools.getState(); return state.busy || ['countdown', 'sending', 'waiting_tools'].includes(state.continuation?.phase ?? ''); },
+    busy: () => { const state = tools.getState(); return state.busy || state.resultReturn?.phase === 'sending' || ['countdown', 'sending', 'waiting_tools'].includes(state.continuation?.phase ?? ''); },
     copy: text => clipboard.writeText(text), disabled: SELF_TEST || (UI_PROBE && !WORKSPACE_PROBE) || DIAGNOSE });
   const localPromptChannels = localPrompt.register();
   // 先注册只读变更桥，再加载会立即请求初始状态的面板。

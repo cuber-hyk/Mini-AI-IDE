@@ -1,9 +1,9 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-08
+updated: 2026-10-09
 owner: 胡运宽
-source_of_truth: [docs/capabilities/skills-and-local-prompt.md, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, src/renderer/workspaceLayout.js, src/main/workspaceLayoutController.ts, src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, tools/verify-web-result-sender.cjs, src/shared/toolJsonDiagnostic.ts, src/main/tools/resultClipboard.ts, src/renderer/toolExecutionClock.js, test/toolJsonDiagnostic.test.ts, test/toolResultClipboard.test.ts, test/toolExecutionClock.test.ts, test/toolExecutionIntegration.test.ts, src/shared/toolProtocol.ts, src/main/tools/harness.ts, src/main/tools/store.ts, src/main/tools/files.ts, src/main/tools/processes.ts, src/main/tools/changes.ts, src/main/tools/autoCollector.ts, src/main/tools/replyObservation.ts, src/main/tools/replyContinuation.ts, src/main/tools/replyChangeWatcher.ts, src/main/tools/integration.ts, src/renderer/toolHarness.js, src/renderer/toolHarness.css, src/renderer/toolPanelLayout.js, src/renderer/toolResultPresentation.js, test/toolProtocol.test.ts, test/toolHarness.test.ts, test/toolIntegration.test.ts, test/toolAutoCollector.test.ts, test/replyObservation.test.ts, test/replyChangeWatcher.test.ts, test/toolHarnessUi.test.ts, test/toolPanelLayout.test.ts, test/toolResultPresentation.test.ts, test/deepseekReplyState.test.ts, test/toolChanges.test.ts, test/toolProcesses.test.ts]
+source_of_truth: [docs/adr/2026-10-09-tool-attachment-return.md, src/main/tools/attachments.ts, src/main/tools/resultReturn.ts, test/toolAttachmentIntegration.test.ts, test/toolAttachments.test.ts, test/toolResultReturn.test.ts, docs/capabilities/skills-and-local-prompt.md, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, src/renderer/workspaceLayout.js, src/main/workspaceLayoutController.ts, src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, tools/verify-web-result-sender.cjs, src/shared/toolJsonDiagnostic.ts, src/main/tools/resultClipboard.ts, src/renderer/toolExecutionClock.js, test/toolJsonDiagnostic.test.ts, test/toolResultClipboard.test.ts, test/toolExecutionClock.test.ts, test/toolExecutionIntegration.test.ts, src/shared/toolProtocol.ts, src/main/tools/harness.ts, src/main/tools/store.ts, src/main/tools/files.ts, src/main/tools/processes.ts, src/main/tools/changes.ts, src/main/tools/autoCollector.ts, src/main/tools/replyObservation.ts, src/main/tools/replyContinuation.ts, src/main/tools/replyChangeWatcher.ts, src/main/tools/integration.ts, src/renderer/toolHarness.js, src/renderer/toolHarness.css, src/renderer/toolPanelLayout.js, src/renderer/toolResultPresentation.js, test/toolProtocol.test.ts, test/toolHarness.test.ts, test/toolIntegration.test.ts, test/toolAutoCollector.test.ts, test/replyObservation.test.ts, test/replyChangeWatcher.test.ts, test/toolHarnessUi.test.ts, test/toolPanelLayout.test.ts, test/toolResultPresentation.test.ts, test/deepseekReplyState.test.ts, test/toolChanges.test.ts, test/toolProcesses.test.ts]
 ---
 
 # 能力：通用本地工具
@@ -20,6 +20,7 @@ AI 输出规范请求，IDE 只读采集、校验、按权限执行并显示真�
 
 | 工具 | 内容 |
 |---|---|
+| attach_file | 明确请求上传受支持的真实文件；工具权限批准后暂存当前批附件，done 不表示官网已接收 |
 | get_project_info | 真实根目录、平台、目录概况 |
 | load_skill | 固定项目/全局技能目录按名称加载完整 SKILL.md，项目同名优先，不执行资源 |
 | list_directory | 目录、深度、条目上限 |
@@ -91,7 +92,13 @@ DeepSeek 主回复使用当前回复页脚的原生复制、可用重新生成�
 
 限定发送与输出采集独立；后续只读 DOM 变化触发完整结束快照核验，合成 click 不冒充真实用户事件。
 
-`webResultSender.ts` 是唯一网页写 owner，仅官方 DeepSeek 当前会话、唯一可见 textarea 与已知发送 SVG 的局部关联，隔离世界 1005；采集/监听仍只读世界 1004。输入为空且页面空闲才以原生 value setter、input 和 click 填入并提交同源纯文本结果，不读取剪贴板、不写 HTML、不保存用户草稿。未知控件、已有草稿或用户改写暂停；点击前取消只清理自有文本，点击后不确定、超时或异常不重试。网页始终无 IPC/文件桥，AI HTTP 仍由 Chromium 发起。
+`webResultSender.ts` 是工具发送门面，唯一网页写运输 owner 为 `webComposerSender.ts`，仅官方 DeepSeek 当前会话、唯一可见 textarea 与已知发送 SVG 的局部关联，隔离世界 1005；采集/监听仍只读世界 1004。输入为空且页面空闲才以原生 value setter、input 和 click 填入并提交同源结果正文，不读取剪贴板、不写 HTML、不保存用户草稿。未知控件、已有草稿或用户改写暂停；点击前取消只清理自有文本，点击后不确定、超时或异常不重试。网页始终无 IPC/文件桥，AI HTTP 仍由 Chromium 发起。
+
+`attach_file({path})` 经工具权限暂存当前选择的真实文件，支持现有图片、PDF/Word、表格、幻灯片及文本附件，单文件最多 100 MiB、每批最多 50 个。ask 模式对项目内附件也审批，批准明确包含上传到官网；rules/full 继续使用现有规则。授权指纹包含真实路径和文件身份；暂存及运输复核文件变化。done 仅表示暂存，data 只有 id/name/size/mediaType，不包含路径能力或文件字节。`ToolAttachments` 拥有内存 ID 与当前选择，历史恢复不重建附件，切项目/会话/批次及取消使旧附件失效。
+
+当前完整真实批次由 `ToolResultReturn` 统一发送：automatic 开启时沿用完成事件与间隔；关闭时工具栏有附件才显示“发送本批附件”。手动 IPC 零参数，仅编辑器主 frame，可用资格仍须整批实际结束并核对官网最新正式批次。拒绝、取消、未知、历史及无执行不发送。唯一 sender 通过官方文件控件上传全部附件，等待预览和进度结束后提交整批正文一次；首次尝试后失败/未知暂停，不重复上传。工具摘要只显示已暂存，独立发送状态才显示官网回执。
+
+`read_file` 继续只读文本；PDF/Word 可经 attach_file 上传原文件。技能需要 PDF 页或局部图时，通过已授权 run_command 使用真实可用的本地工具提取，再请求 attach_file。不会扫描命令日志猜测附件，也不把二进制编码进工具 JSON。新工具的完整提示词示例由 formatSpec 生成，补充格式上限 10,000 字以容纳完整内置模板。
 
 规则验收入口为 `test/autoContinuation.test.ts`、`test/webResultSender.test.ts`、`test/toolIntegration.test.ts`；原生 sender 验收为 `tools/verify-web-result-sender.cjs` 的本地 Electron 夹具。真实官网尚未验收，不能据夹具断言平台接受合成发送。
 

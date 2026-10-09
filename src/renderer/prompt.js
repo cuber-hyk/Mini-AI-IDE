@@ -54,7 +54,7 @@
   let state = null;
   /** 当前正在编辑的版本 */
   let active = 'short';
-  let maxLength = 8000;
+  let maxLength = 10000;
   /** `getState()` 的失败重试次数（吸收"注册还没完成"这类时序抖动） */
   const LOAD_RETRIES = 4;
 

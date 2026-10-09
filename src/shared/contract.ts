@@ -23,6 +23,7 @@ export const CHANNELS = {
   setToolConfig: 'tools:set-config',
   toolState: 'tools:state',
   copyToolResults: 'tools:copy-results',
+  sendToolResults: 'tools:send-results',
   cancelTools: 'tools:cancel',
   stopToolCommand: 'tools:stop-command',
   clearToolRules: 'tools:clear-rules',
@@ -551,6 +552,7 @@ export interface EditorBridge {
   setToolConfig(config: Partial<ToolConfig>): Promise<ToolState>;
   onToolState(listener: (state: ToolState) => void): void;
   copyToolResults(): Promise<{ ok: boolean; error?: string }>;
+  sendToolResults(): Promise<{ ok: boolean; error?: string; uncertain?: boolean }>;
   cancelTools(): Promise<ToolState>;
   stopToolCommand(target: { batch_id: string; request_id: string; process_id: string }): Promise<ToolState>;
   clearToolRules(): Promise<ToolState>;

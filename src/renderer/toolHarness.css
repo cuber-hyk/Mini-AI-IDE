@@ -58,6 +58,8 @@
 .tool-result-actions { position: absolute; top: 5px; right: 8px; display: flex; align-items: center; gap: 6px; }
 .tool-result-actions .ui-button, .tool-result-actions .ui-icon { height: 28px; font-size: 12px; }
 .tool-result-actions .ui-icon { width: 28px; background: transparent; border-color: transparent; font-size: 20px; }
+.tool-panel.has-attachments > .tool-panel-summary { padding-right: 10px; }
+.tool-panel.has-attachments + .tool-result-actions { position: static; justify-content: flex-end; flex-wrap: wrap; padding: 0 8px 6px; }
 .tool-more { width: min(210px, calc(100vw - 16px)); padding: 5px; }
 .tool-more .tool-auto-label { padding: 9px 10px; color: var(--ui-text); }
 .tool-more button { display: block; width: 100%; border: 0; background: transparent; color: var(--ui-text); padding: 8px 10px; text-align: left; font: inherit; cursor: pointer; border-radius: var(--ui-radius); }

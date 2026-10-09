@@ -33,3 +33,10 @@ it('修改参数确定且保留空白，空新建允许，空 old_string 拒绝'
   assert.equal(parseToolBatch(batch([{ id: 'edit', tool: 'apply_changes', args: { changes: [{ path: 'a', operation: 'replace', edits: [{ old_string: '', new_string: 'x' }] }] } }])).kind, 'error');
   assert.match(TOOL_PROTOCOL_PROMPT, /最终确定/); assert.match(TOOL_PROTOCOL_PROMPT, /备选方案/);
 });
+it('附件必须来自明确 attach_file 请求，拒绝缺失路径与正文或上传地址参数', () => {
+  for (const args of [{}, { path: '' }, { path: '   ' }, { path: 1 }, { path: 'paper.pdf', bytes: 'aGVsbG8=' }, { path: 'a.png', url: 'https://example.com' }])
+    assert.equal(parseToolBatch(batch([{ id: 'attachment', tool: 'attach_file', args }])).kind, 'error');
+  assert.equal(parseToolBatch(batch([{ id: 'attachment', tool: 'attach_file', args: { path: '论文.pdf' } }])).kind, 'batch');
+  assert.match(TOOL_PROTOCOL_PROMPT, /done 仅表示当前批已暂存/);
+  assert.match(TOOL_PROTOCOL_PROMPT, /受工具权限审批/);
+});

@@ -26,7 +26,7 @@ function state(overrides: Record<string, unknown> = {}) {
 function setup(overrides: Record<string, unknown> = {}, audioConstructor?: unknown) {
   const ids = ['tool-permission', 'tool-automatic', 'tool-dirty-policy', 'tool-permission-hint', 'tool-count',
     'tool-activity', 'tool-message', 'tool-results', 'tool-copy', 'tool-cancel', 'tool-clear-rules', 'tool-undo',
-    'tool-panel', 'tool-completion-notice', 'tool-sound-notice', 'tool-completion-sound', 'tool-more-toggle', 'tool-copy-notice', 'tool-auto-copy', 'tool-send-interval', 'tool-continue-notice', 'tool-interval-down', 'tool-interval-up'];
+    'tool-panel', 'tool-completion-notice', 'tool-sound-notice', 'tool-completion-sound', 'tool-more-toggle', 'tool-copy-notice', 'tool-auto-copy', 'tool-send-interval', 'tool-continue-notice', 'tool-interval-down', 'tool-interval-up', 'tool-send-results', 'tool-return-notice'];
   const nodes = Object.fromEntries(ids.map(id => [id, element()]));
   let current = state();
   let publish: (value: any) => void = () => {};
@@ -37,6 +37,7 @@ function setup(overrides: Record<string, unknown> = {}, audioConstructor?: unkno
     onToolState(fn: typeof publish) { publish = fn; },
     async setToolConfig(patch: any) { calls.push(JSON.parse(JSON.stringify(patch))); current = state({ ...current, config: { ...current.config, ...patch } }); return current; },
     async copyToolResults() { calls.push('copy'); return { ok: true }; },
+    async sendToolResults(...args: unknown[]) { calls.push(['send', ...args]); return { ok: true }; },
     async stopToolCommand(target: any) { calls.push(JSON.parse(JSON.stringify(target))); return current; },
     async clearToolRules() { calls.push('clear'); return current; },
     async undoToolChange() { calls.push('undo'); publish(state({ ...current, canUndo: false })); return { ok: true }; },
@@ -59,6 +60,74 @@ function setup(overrides: Record<string, unknown> = {}, audioConstructor?: unkno
 
 async function flush() { for (let i = 0; i < 8; i++) await Promise.resolve(); }
 const result = { batch_id: 'inspect', request_id: 'read', tool: 'read_file', status: 'done', data: { text: '真实文件内容' } };
+
+function attachmentState(overrides: Record<string, unknown> = {}) {
+  return state({
+    results: [{ ...result, tool: 'attach_file', data: { id: 'attachment-a', name: '论文.pdf', size: 1024 } }],
+    completion: { id: 1, batch_id: 'inspect', outcome: 'success' },
+    resultReturn: { canSend: true, attachmentCount: 1, phase: 'ready', message: '1 个附件待发送' }, ...overrides,
+  });
+}
+
+it('附件手动发送入口仅显示当前批附件，依owner资格与自动开关禁用，不改变自动继续摘要', async () => {
+  const ui = setup(); await flush();
+  assert.equal(ui.nodes['tool-send-results'].hidden, true);
+  ui.publish(attachmentState());
+  assert.equal(ui.nodes['tool-send-results'].hidden, false); assert.equal(ui.nodes['tool-send-results'].disabled, false);
+  assert.equal(ui.nodes['tool-return-notice'].textContent, '1 个附件待发送');
+  ui.publish(attachmentState({ busy: true })); assert.equal(ui.nodes['tool-send-results'].disabled, true);
+  ui.publish(attachmentState({ resultReturn: { canSend: false, attachmentCount: 1, phase: 'paused', message: '当前批已失效' } }));
+  assert.equal(ui.nodes['tool-send-results'].disabled, true); assert.equal(ui.nodes['tool-return-notice'].textContent, '当前批已失效');
+  assert.equal(ui.nodes['tool-return-notice'].classList.contains('is-error'), true);
+  ui.publish(attachmentState({ config: { automatic: true }, continuation: { phase: 'sending', message: '自动上传中' }, resultReturn: { canSend: true, attachmentCount: 1, phase: 'sending', message: '正在上传1个附件' } }));
+  assert.equal(ui.nodes['tool-send-results'].disabled, true); assert.equal(ui.nodes['tool-activity'].textContent, '正在发送结果');
+  assert.equal(ui.nodes['tool-return-notice'].textContent, '正在上传1个附件');
+});
+
+it('发送当前批附件的IPC不携带正文路径ID，等待期间防双击，成功回执不重复发送', async () => {
+  let finish!: (result: unknown) => void; const args: unknown[][] = [];
+  const ui = setup({ sendToolResults: (...input: unknown[]) => { args.push(input); return new Promise(resolve => { finish = resolve; }); } }); await flush();
+  ui.publish(attachmentState());
+  const pending = ui.nodes['tool-send-results'].fire('click'); await flush();
+  assert.equal(ui.nodes['tool-send-results'].disabled, true); assert.equal(ui.nodes['tool-send-results'].textContent, '正在发送附件…');
+  await ui.nodes['tool-send-results'].fire('click'); assert.deepEqual(args, [[]]);
+  finish({ ok: true }); await pending;
+  assert.equal(ui.nodes['tool-send-results'].disabled, true); assert.match(ui.nodes['tool-return-notice'].textContent, /已发送/);
+  await ui.nodes['tool-send-results'].fire('click'); assert.equal(args.length, 1);
+});
+
+it('未知附件发送回执与IPC异常显示具体原因，不能当作发送成功或再次点击', async () => {
+  for (const sendToolResults of [async () => ({ ok: false, uncertain: true, error: '发送按钮点击后无法确认' }), async () => { throw new Error('IPC disconnected'); }]) {
+    const ui = setup({ sendToolResults }); await flush(); ui.publish(attachmentState());
+    await ui.nodes['tool-send-results'].fire('click');
+    assert.equal(ui.nodes['tool-send-results'].disabled, true);
+    assert.match(ui.nodes['tool-return-notice'].textContent, /状态未知/);
+    assert.match(ui.nodes['tool-return-notice'].textContent, /无法确认|IPC disconnected/);
+    assert.equal(ui.nodes['tool-return-notice'].classList.contains('is-error'), true);
+    assert.doesNotMatch(ui.nodes['tool-return-notice'].textContent, /已发送/);
+  }
+});
+
+it('旧批附件发送回执不能覆盖新批状态，新批是否可发送仍由owner判断', async () => {
+  let fail!: (error: Error) => void;
+  const ui = setup({ sendToolResults: () => new Promise((_resolve, reject) => { fail = reject; }) }); await flush(); ui.publish(attachmentState());
+  const pending = ui.nodes['tool-send-results'].fire('click'); await flush();
+  ui.publish(attachmentState({ completion: { id: 2, batch_id: 'new', outcome: 'success' }, resultReturn: { canSend: true, attachmentCount: 1, phase: 'ready', message: '新批附件待发送' } }));
+  fail(new Error('旧批已失效')); await pending;
+  assert.equal(ui.nodes['tool-return-notice'].textContent, '新批附件待发送');
+  assert.equal(ui.nodes['tool-send-results'].disabled, false);
+});
+
+it('附件发送失败保留owner原因和暂停状态，按钮有键盘名称且窄列动作可换行', async () => {
+  const ui = setup({ async sendToolResults() { ui.publish(attachmentState({ resultReturn: { canSend: false, attachmentCount: 1, phase: 'paused', message: '官网已有草稿' } })); return { ok: false, error: '官网已有草稿，未覆盖' }; } }); await flush(); ui.publish(attachmentState());
+  await ui.nodes['tool-send-results'].fire('click');
+  assert.equal(ui.nodes['tool-send-results'].disabled, true); assert.match(ui.nodes['tool-return-notice'].textContent, /官网已有草稿，未覆盖/);
+  const html = fs.readFileSync(path.join(__dirname, '../src/renderer/index.html'), 'utf8');
+  assert.match(html, /id="tool-send-results"[^>]*type="button"[^>]*class="ui-button"[^>]*>发送本批附件<\/button>/);
+  assert.match(html, /id="tool-return-notice"[^>]*aria-live="polite"/);
+  const css = fs.readFileSync(path.join(__dirname, '../src/renderer/toolHarness.css'), 'utf8');
+  assert.match(css, /\.tool-panel\.has-attachments \+ \.tool-result-actions\s*\{[^}]*position: static[^}]*flex-wrap: wrap/);
+});
 
 it('自动继续显示倒计时或暂停原因，间隔设置可修改，无轮次输入', async () => {
   const ui = setup(); await flush();

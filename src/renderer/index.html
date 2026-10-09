@@ -109,7 +109,7 @@
     <section id="tool-dock" class="tool-dock" aria-label="工具结果面板">
     <div id="tool-resizer" class="tool-resizer" role="separator" aria-label="调整工具面板高度" aria-orientation="horizontal" aria-valuemin="80" aria-valuemax="260" aria-valuenow="160" tabindex="0" title="拖动调整高度；方向键调整，双击复位" hidden></div>
     <details id="tool-panel" class="tool-panel">
-      <summary class="tool-panel-summary"><span>工具结果</span><span id="tool-count" class="tool-count">0 项</span><span id="tool-activity" class="tool-activity"></span><span id="tool-completion-notice" class="tool-completion-notice" role="status" aria-live="polite" aria-atomic="true"></span><span id="tool-continue-notice" class="tool-completion-notice" role="status" aria-live="polite"></span><span id="tool-copy-notice" class="tool-completion-notice" role="status" aria-live="polite"></span><span id="tool-sound-notice" class="tool-sound-notice" role="status" aria-live="polite"></span></summary>
+      <summary class="tool-panel-summary"><span>工具结果</span><span id="tool-count" class="tool-count">0 项</span><span id="tool-activity" class="tool-activity"></span><span id="tool-completion-notice" class="tool-completion-notice" role="status" aria-live="polite" aria-atomic="true"></span><span id="tool-continue-notice" class="tool-completion-notice" role="status" aria-live="polite"></span><span id="tool-copy-notice" class="tool-completion-notice" role="status" aria-live="polite"></span><span id="tool-return-notice" class="tool-completion-notice" role="status" aria-live="polite"></span><span id="tool-sound-notice" class="tool-sound-notice" role="status" aria-live="polite"></span></summary>
       <div id="tool-panel-body" class="tool-panel-body">
         <p id="tool-message" class="tool-message" role="status" aria-live="polite" aria-atomic="true">正在读取工具状态…</p>
         <div id="tool-results" class="tool-results" aria-label="工具调用结果"></div>
@@ -118,6 +118,7 @@
     <div class="tool-result-actions">
       <button id="tool-view-changes" type="button" class="ui-button">查看改动</button>
       <button id="tool-copy" type="button" class="ui-button" disabled>复制本批结果</button>
+      <button id="tool-send-results" type="button" class="ui-button" title="将当前批工具结果与已授权附件一起发送给 AI" disabled hidden>发送本批附件</button>
       <div id="tool-more-wrap" class="tool-more-wrap">
         <button id="tool-more-toggle" type="button" class="ui-icon" aria-label="工具结果设置与操作" title="工具结果设置与操作（自动复制、撤销）" aria-haspopup="dialog" aria-expanded="false" aria-controls="tool-more">⋯</button>
         <div id="tool-more" class="tool-more" role="dialog" aria-label="工具结果设置与操作" hidden>

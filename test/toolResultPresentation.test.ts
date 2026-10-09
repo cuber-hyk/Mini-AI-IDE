@@ -9,6 +9,16 @@ const window = {} as { describeToolResult: (result: unknown) => { label: string;
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/renderer/toolResultPresentation.js'), 'utf8'), { window });
 const describe = (tool: ToolName, data?: unknown, extra: Partial<ToolResult> = {}) => window.describeToolResult({ batch_id: 'b', request_id: 'r', tool, status: 'done', data, ...extra });
 
+it('附件工具展示真实名称和字节数，暂存结果不能声称已上传', () => {
+  const summary = describe('attach_file', { id: 'private-id', name: '论文图1.png', size: 1024, mediaType: 'image/png' });
+  assert.equal(summary.label, '暂存附件'); assert.equal(summary.target, '论文图1.png');
+  assert.equal(summary.detail, '已暂存，待发送 · 1024 字节'); assert.doesNotMatch(summary.detail, /已上传/);
+  const failed = describe('attach_file', { name: '论文.pdf', size: 100 }, { status: 'failed', error: '文件已变化' });
+  assert.equal(failed.detail, '文件已变化');
+  assert.equal(describe('attach_file', { size: -1 }).detail, '已暂存，待发送');
+  assert.equal(describe('attach_file', { name: 'a.pdf', size: 200 }, { status: 'permission_denied' }).detail, '');
+});
+
 it('加载技能展示真实技能名而非技能正文或资源目录', () => {
   const summary = describe('load_skill', { name: 'review', content: '私有说明', resourceRoot: 'C:\\private' });
   assert.equal(summary.label, '加载技能'); assert.equal(summary.target, 'review'); assert.equal(summary.detail, '');

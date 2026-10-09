@@ -3,7 +3,7 @@
   'use strict';
   const labels = {
     get_project_info: '项目概况', list_directory: '查看目录', search_files: '查找文件',
-    read_file: '读取文件', search_text: '搜索文本', apply_changes: '修改文件', load_skill: '加载技能',
+    read_file: '读取文件', attach_file: '暂存附件', search_text: '搜索文本', apply_changes: '修改文件', load_skill: '加载技能',
     run_command: '运行命令', get_process_output: '读取进程输出', stop_process: '停止进程',
   };
   const object = function (value) { return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; };
@@ -19,6 +19,7 @@
     const paths = outcomes.map(function (outcome) { return text(object(outcome).path); }).filter(Boolean);
     let target = text(data.path) || text(data.root) || text(data.process_id);
     if (result.tool === 'load_skill') target = text(data.name);
+    if (result.tool === 'attach_file') target = text(data.name);
     if (result.tool === 'apply_changes') target = paths.length === 1 ? paths[0] : paths.length > 1 ? paths.length + ' 个目标' : '';
     const details = [];
     const error = brief(result.error);
@@ -29,6 +30,12 @@
     // 尚未执行/结果未知不能用残留 data 声称完成了读取或修改。
     if (result.status === 'done' || result.status === 'failed') {
       switch (result.tool) {
+        case 'attach_file':
+          if (result.status === 'done') {
+            details.push('已暂存，待发送');
+            if (integer(data.size)) details.push(data.size + ' 字节');
+          }
+          break;
         case 'get_project_info':
         case 'list_directory':
           if (Array.isArray(data.entries)) details.push(data.entries.length + ' 项');

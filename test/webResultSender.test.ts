@@ -111,13 +111,11 @@ it('关闭工具自动继续不能取消正在准备的用户需求，反向也�
   }
 });
 
-it('附件只能从本地需求通道上传，工具结果通道拒绝附件', async () => {
+it('需求与已授权工具结果共用官方附件运输，均先上传再发送正文', async () => {
   const f = fixture();
   const attachment = { id: 'file-1', name: 'brief.pdf', size: 3, mediaType: 'application/pdf',
     async *stream() { yield new Uint8Array([1, 2, 3]); } };
   try {
-    assert.equal((await f.sender.send('tools result', 'https://chat.deepseek.com/a/chat/one', 'results', () => true, [attachment])).ok, false);
-    assert.equal(f.scripts.length, 0);
     f.web.executeJavaScriptInIsolatedWorld = async (_world: number, entries: { code: string }[]) => {
       const code = entries[0]!.code; f.scripts.push(code);
       if (code.includes('input[type="file"]') && code.includes('globalThis["__miniAIComposerAttachments"] =')) return { ok: true };
@@ -132,6 +130,9 @@ it('附件只能从本地需求通道上传，工具结果通道拒绝附件', a
     assert.ok(f.scripts.some(code => code.includes('brief.pdf')));
     assert.ok(f.scripts.some(code => code.includes('atob(')));
     assert.ok(f.scripts.some(code => code.includes('const represented = expected.every')));
+    assert.equal(f.scripts.length, 7);
+    f.scripts.length = 0;
+    assert.equal((await f.sender.send('真实工具结果', 'https://chat.deepseek.com/a/chat/one', 'results', () => true, [attachment])).ok, true);
     assert.equal(f.scripts.length, 7);
   } finally { await f.sender.dispose(); }
 });

@@ -74,3 +74,44 @@ it('剪贴板图片只接纳明确的图片 MIME 与有限字节，并可流式�
   for await (const chunk of resolved!.stream()) chunks.push(...chunk);
   assert.deepEqual(chunks, [1, 2, 3]);
 });
+
+it('同大小内容修改或同路径文件对象替换都必须重新选择附件', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mini-prompt-attachments-'));
+  try {
+    const file = path.join(root, 'a.pdf'); await fs.writeFile(file, 'before');
+    const attachments = new LocalPromptAttachments();
+    const [changed] = await attachments.stage([file]);
+    await fs.writeFile(file, 'change'); await fs.utimes(file, new Date(), new Date(Date.now() + 10_000));
+    await assert.rejects(() => attachments.resolve([changed!.id]), /附件已变化/);
+    const [replaced] = await attachments.stage([file]);
+    await fs.rename(file, path.join(root, 'old.pdf')); await fs.writeFile(file, 'change');
+    await assert.rejects(() => attachments.resolve([replaced!.id]), /附件已变化/);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+it('准备流后再修改文件或清空暂存，仍不能上传失效内容', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mini-prompt-attachments-'));
+  try {
+    const file = path.join(root, 'a.pdf'); await fs.writeFile(file, 'before');
+    const attachments = new LocalPromptAttachments(); const [item] = await attachments.stage([file]);
+    const [resolved] = await attachments.resolve([item!.id]);
+    await fs.writeFile(file, 'changed');
+    await assert.rejects(async () => { for await (const _chunk of resolved!.stream()) {} }, /附件已变化/);
+    const [fresh] = await attachments.stage([file]); const [freshStream] = await attachments.resolve([fresh!.id]);
+    attachments.clear();
+    await assert.rejects(async () => { for await (const _chunk of freshStream!.stream()) {} }, /附件已失效/);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
+it('选择目录链接中的文件后链接改指向，不能上传另一目标', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mini-prompt-attachments-'));
+  try {
+    const first = path.join(root, 'first'); const second = path.join(root, 'second'); const link = path.join(root, 'link');
+    await fs.mkdir(first); await fs.mkdir(second);
+    await fs.writeFile(path.join(first, 'a.pdf'), 'first'); await fs.writeFile(path.join(second, 'a.pdf'), 'other');
+    await fs.symlink(first, link, 'junction');
+    const attachments = new LocalPromptAttachments(); const [item] = await attachments.stage([path.join(link, 'a.pdf')]);
+    await fs.unlink(link); await fs.symlink(second, link, 'junction');
+    await assert.rejects(() => attachments.resolve([item!.id]), /附件已变化/);
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
