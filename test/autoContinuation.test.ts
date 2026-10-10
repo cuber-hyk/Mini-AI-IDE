@@ -58,16 +58,42 @@ it('关闭取消本批发送，不取消工具或回滚结果；重开不发送�
   assert.equal(f.owner.getState().phase, 'waiting_user', '重新开启应反映运行状态，但不能复活旧发送');
   f.update(completed(2)); t.mock.timers.tick(3000); await flush(); assert.equal(f.sent.length, 1);
 });
-it('纯对话、无实际执行、拒绝、中断、未知和停止等待用户处理', async t => {
+it('纯对话、无实际执行、普通取消、未知和未确认结束的停止仍等待用户处理', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] }); const f = fixture(); t.after(() => f.owner.dispose());
   f.update({ config, busy: false, results: [], message: '普通对话' }); assert.equal(f.owner.getState().phase, 'waiting_user');
-  for (const [index, status] of ['permission_denied', 'cancelled', 'unknown'].entries()) {
+  for (const [index, status] of ['cancelled', 'unknown'].entries()) {
     f.update(completed(index + 1, 'read_file', status as ToolResult['status'])); assert.equal(f.owner.getState().phase, 'paused');
     t.mock.timers.tick(3000); await flush();
   }
-  const stopped = completed(4, 'run_command'); stopped.results[0]!.data = { status: 'stopped' }; f.update(stopped); assert.equal(f.owner.getState().phase, 'paused');
+  const stopped = completed(4, 'run_command'); stopped.results[0]!.data = { status: 'stopped' }; delete stopped.results[0]!.finished_at; f.update(stopped); assert.equal(f.owner.getState().phase, 'paused');
   const noExecution = completed(5); delete noExecution.results[0]!.started_at; f.update(noExecution); assert.equal(f.owner.getState().phase, 'waiting_user');
   t.mock.timers.tick(3000); await flush(); assert.equal(f.sent.length, 0);
+});
+it('超时和单条命令停止回传真实部分输出一次，整批取消仍阻断', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  for (const status of ['failed', 'cancelled', 'done'] as const) {
+    const f = fixture(); t.after(() => f.owner.dispose());
+    const state = completed(1, 'run_command', status);
+    state.results[0]!.data = { status: 'stopped', timed_out: status === 'failed', cleanup_pending: false, stdout: 'before-stop', exit_code: 1 };
+    f.update(state); assert.equal(f.owner.getState().phase, 'countdown', status);
+    t.mock.timers.tick(3000); await flush();
+    assert.deepEqual(f.sent, [{ text: formatToolResults(state.results), session: 'chat' }]);
+    f.update(state); t.mock.timers.tick(3000); await flush(); assert.equal(f.sent.length, 1);
+    const cancelled = completed(2, 'run_command', status); cancelled.results[0]!.data = state.results[0]!.data;
+    cancelled.completion!.cancelled = true; f.update(cancelled);
+    t.mock.timers.tick(3000); await flush(); assert.equal(f.sent.length, 1); assert.equal(f.owner.getState().phase, 'paused');
+  }
+});
+it('全批权限拒绝及依赖跳过回传未执行事实，普通依赖跳过不产生发送资格', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] }); const f = fixture(); t.after(() => f.owner.dispose());
+  const denied = completed(1, 'run_command', 'permission_denied');
+  delete denied.results[0]!.started_at; delete denied.results[0]!.finished_at; delete denied.results[0]!.data;
+  denied.results[0]!.error = '权限拒绝；工具未执行';
+  denied.results.push({ batch_id: 'batch-1', request_id: 'dependent', tool: 'read_file', status: 'skipped_dependency', error: '前置请求被拒绝' });
+  f.update(denied); assert.equal(f.owner.getState().phase, 'countdown');
+  t.mock.timers.tick(3000); await flush(); assert.equal(f.sent[0]!.text, formatToolResults(denied.results));
+  const skipped = completed(2, 'read_file', 'skipped_dependency'); delete skipped.results[0]!.started_at;
+  f.update(skipped); t.mock.timers.tick(3000); await flush(); assert.equal(f.sent.length, 1); assert.equal(f.owner.getState().phase, 'waiting_user');
 });
 it('解析层格式错误也自动发送，正文与复制结果同源', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 }); const f = fixture(); t.after(() => f.owner.dispose());

@@ -15,6 +15,19 @@ export interface ToolBatchError { status: 'failed'; error: string }
 export interface ToolContinuationState { phase: 'off' | 'waiting_tools' | 'countdown' | 'sending' | 'waiting_reply' | 'waiting_user' | 'paused'; message: string; dueAt?: number }
 export interface ToolResultReturnState { canSend: boolean; attachmentCount: number; phase: 'ready' | 'sending' | 'sent' | 'paused'; message: string }
 export interface ToolState { config: ToolConfig; results: ToolResult[]; message: string; busy: boolean; storageError?: string; canUndo?: boolean; hasRunningProcesses?: boolean; batchError?: ToolBatchError; clipboard?: { id: number; ok: boolean; error?: string }; completion?: { id: number; batch_id: string; outcome: 'success' | 'error'; cancelled?: boolean; validation_failed?: true }; continuation?: ToolContinuationState; resultReturn?: ToolResultReturnState }
+/** run_command 已真实结束且进程清理完成时，stopped 回执才具备回传资格。 */
+export function isCompletedStoppedCommand(result: ToolResult): boolean {
+  if (result.tool !== 'run_command' || result.started_at === undefined || result.finished_at === undefined) return false;
+  const data = result.data as { status?: string; timed_out?: boolean; cleanup_pending?: boolean } | undefined;
+  if (data?.status !== 'stopped' || data.cleanup_pending === true) return false;
+  return data.timed_out === true ? result.status === 'failed' : ['cancelled', 'done', 'failed'].includes(result.status);
+}
+/** 完整批次的权限拒绝回执可用于反馈，即使没有工具实际启动。 */
+export function isPermissionDenialReceipt(state: ToolState): boolean {
+  return !state.busy && !!state.completion && !state.completion.cancelled && state.results.length > 0 &&
+    state.results.every(result => result.batch_id === state.completion!.batch_id && ['permission_denied', 'skipped_dependency'].includes(result.status)) &&
+    state.results.some(result => result.status === 'permission_denied');
+}
 /** 只有 harness 确认的执行前整批校验错误可作为未执行回执自动发送。 */
 export function isBatchValidationFailure(state: ToolState): boolean {
   return !state.busy && !state.batchError && state.completion?.validation_failed === true &&

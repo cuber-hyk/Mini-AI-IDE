@@ -34,6 +34,30 @@ it('当前完整真实批次手动发送正文及字节流一次，自动与手�
   assert.equal((await automatic.owner.send('automatic')).ok, true);
 });
 
+it('超时和单条命令停止的部分输出可回传，整批取消和清理中仍不能发送', async () => {
+  for (const status of ['failed', 'cancelled', 'done'] as const) {
+    for (const block of ['none', 'batch-cancel', 'cleanup'] as const) {
+      const f = fixture(true);
+      f.owner.begin({ kind: 'batch', selection: { root: 'root', session: 'chat', batch: { protocol_version: 1, batch_id: 'batch', requests: [{ id: 'run', tool: 'run_command', args: { command: 'test', shell: 'powershell' } }] } } });
+      f.context.state.results = [{ batch_id: 'batch', request_id: 'run', tool: 'run_command', status, started_at: 1, finished_at: 2,
+        data: { status: 'stopped', timed_out: status === 'failed', cleanup_pending: block === 'cleanup', stdout: 'before-stop' } }];
+      if (block === 'batch-cancel') f.context.state.completion!.cancelled = true;
+      assert.equal((await f.owner.send('automatic')).ok, block === 'none', status + '/' + block);
+      assert.equal(f.sent.length, block === 'none' ? 1 : 0);
+      if (block === 'none') assert.equal(f.sent[0]![0], formatToolResults(f.context.state.results));
+    }
+  }
+});
+
+it('纯权限拒绝自动回传拒绝事实，不读取或上传被拒绝附件且不重试', async () => {
+  const f = fixture(true);
+  f.context.state.results = [{ batch_id: 'batch', request_id: 'file', tool: 'attach_file', status: 'permission_denied', error: '权限拒绝；工具未执行' }];
+  assert.equal((await f.owner.send('automatic')).ok, true);
+  assert.equal(f.sent[0]![0], formatToolResults(f.context.state.results));
+  assert.deepEqual(f.sent[0]![3], []); assert.equal(f.resolved, 0);
+  assert.equal((await f.owner.send('automatic')).ok, false); assert.equal(f.sent.length, 1);
+});
+
 it('拒绝、取消、未知、历史、未执行及后台清理都不能发送附件', async () => {
   for (const scenario of ['denied', 'cancelled', 'unknown', 'history', 'no-execution', 'busy', 'process', 'cleanup', 'scope']) {
     const f = fixture(); const state = f.context.state;

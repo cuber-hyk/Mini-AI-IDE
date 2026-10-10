@@ -1,7 +1,7 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-09
+updated: 2026-10-10
 owner: 胡运宽
 source_of_truth: [docs/adr/2026-10-09-batch-error-auto-return.md, docs/adr/2026-10-09-tool-attachment-return.md, src/main/tools/attachments.ts, src/main/tools/resultReturn.ts, test/toolAttachmentIntegration.test.ts, test/toolAttachments.test.ts, test/toolResultReturn.test.ts, docs/capabilities/skills-and-local-prompt.md, docs/adr/2026-10-08-local-prompt-attachments.md, src/main/localPromptAttachments.ts, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, docs/adr/2026-10-07-automatic-result-return-boundary.md, src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, src/main/tools/integration.ts, src/main/tools/autoCollector.ts, src/main/tools/replyChangeWatcher.ts, src/main/preload.ts, src/shared/toolProtocol.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, tools/verify-web-result-sender.cjs]
 ---
@@ -27,7 +27,7 @@ source_of_truth: [docs/adr/2026-10-09-batch-error-auto-return.md, docs/adr/2026-
 
 `automatic` 是同一个持久开关，默认关闭，包含变化触发采集、权限执行及结果发送，无轮数或最大轮数设置。`sendIntervalSeconds` 为 0–300 的整数秒，默认 3；倒计时在本批真正结束后开始，等待工具或权限时不计时。
 
-真实工具结果须来自当前项目/会话/批次的新完成事件，至少一个 done/failed 结果有真实 `started_at`。实际执行失败的输出可回传供 AI 修复。后台启动不表示完成，等待本批进程退出与树清理。解析层 `batchError` 由 Harness 保存独立诊断 ID 和采集原文，经 `ToolResultReturn` 核验当前来源、空执行结果及官网原文匹配后自动回传，不读取附件；正文与「复制本批结果」字节一致。执行前整批校验错误由 Harness 在全部失败回执保存后标记当前 completion.validation_failed，全部 failed 且无执行时间和数据时，经当前正式批次复核可回传完整请求回执，不读取或上传附件。解析和整批校验错误共享最多连续回传 5 次、第 6 次暂停等待人工的额度；仅正常执行结果成功发送或实际切换项目/会话后计数归零，批次变化、取消倒计时和关闭再开启不清零。拒绝、取消/中断、unknown、无实际执行的普通批次和纯对话不回传；重启历史、重复广播或状态查询不产生发送。见 `../adr/2026-10-09-batch-error-auto-return.md`。
+真实工具结果须来自当前项目/会话/批次的新完成事件。至少一个 done/failed 结果有真实 `started_at` 可回传；超时或用户停止的单条 `run_command` 也可回传，但须有真实开始和结束时间、`data.status: 'stopped'` 且进程树清理完成。单条停止的部分输出会如实标记 cancelled；超时仍按 failed 回传。纯权限拒绝及其依赖跳过构成的完整批次可发送拒绝回执，不执行被拒绝工具且不上传附件；普通依赖跳过不单独产生发送资格。整批取消、普通取消、unknown、清理中的命令、未执行的普通失败、纯对话及历史/重复状态仍不回传。后台启动不表示完成，等待本批进程退出与树清理。解析层 `batchError` 由 Harness 保存独立诊断 ID 和采集原文，经 `ToolResultReturn` 核验当前来源、空执行结果及官网原文匹配后自动回传，不读取附件；正文与「复制本批结果」字节一致。执行前整批校验错误由 Harness 在全部失败回执保存后标记当前 completion.validation_failed，全部 failed 且无执行时间和数据时，经当前正式批次复核可回传完整请求回执，不读取或上传附件。解析和整批校验错误共享最多连续回传 5 次，第 6 次暂停等待人工的额度；仅正常执行结果成功发送或实际切项目/会话后计数归零，批次变化、取消倒计时和关闭再开启不清零。见 `../adr/2026-10-09-batch-error-auto-return.md`。
 
 关闭开关在配置写盘前先取消计时及待发送，不中断当前本地工具。用户新发送、项目/会话切换或导航作废旧发送资格。发送前再次读取最新回复及结束状态，复核其正式批次与当前工具结果，不能发送旧批输出。`AutoContinuation` 管理状态、计时与完成事件去重；`integration.ts` 联结批次、作用域和网页 sender。
 

@@ -11,20 +11,29 @@ import { ReturnPathService } from '../src/main/returnPathService';
 import { CHANNELS } from '../src/shared/contract';
 import type { ToolState } from '../src/shared/toolProtocol';
 
-async function fixture(t: { after(fn: () => Promise<void>): void }) {
+async function fixture(t: { after(fn: () => Promise<void>): void }, enableAutomatic = false) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'tool-execution-ui-'));
   const files = new FileService(); files.setRoot(root);
   const handlers = new Map<string, (...args: any[]) => any>(); const broadcasts: ToolState[] = []; const copies: string[] = [];
   const editor: any = { mainFrame: {}, isDestroyed: () => false, send(_channel: string, state: ToolState) { broadcasts.push(state); } };
-  let url = 'https://chat.deepseek.com/a/chat/native';
-  const web: any = Object.assign(new EventEmitter(), { getURL: () => url, isDestroyed: () => false });
+  let url = 'https://chat.deepseek.com/a/chat/native'; let reply = ''; let approvalResponse = 0;
+  const sent: string[] = [];
+  let waiter: ((value: unknown) => void) | undefined;
+  const web: any = Object.assign(new EventEmitter(), { getURL: () => url, isDestroyed: () => false,
+    executeJavaScript: async () => ({ replies: [reply], completion: 'complete' }),
+    executeJavaScriptInIsolatedWorld: async (_world: number, entries: { code: string }[]) => {
+      if (entries[0]!.code.includes('previous.waiter = resolve')) return new Promise(resolve => { waiter = resolve; });
+      if (entries[0]!.code.includes('previous.dispose();')) { waiter?.(false); waiter = undefined; }
+      return true;
+    } });
   const system = await createToolIntegration({ files, web, editor, ipc: { handle(c: string, f: any) { handlers.set(c, f); } } as any,
     returnPath: new ReturnPathService(files), workspace: { editor: { isDirty: () => false, current: { documents: [] } }, run: (fn: any) => fn() } as any,
-    storePath: path.join(root, 'state.json'), disabled: true, ask: async () => ({ response: 0, checkboxChecked: false }), notifyFile() {}, copy(text) { copies.push(text); } });
+    sender: { async send(text, _session, _kind, current) { assert.equal(current(), true); sent.push(text); return { ok: true }; }, async cancel() {}, async dispose() {} },
+    storePath: path.join(root, 'state.json'), disabled: !enableAutomatic, ask: async () => ({ response: approvalResponse, checkboxChecked: false }), notifyFile() {}, copy(text) { copies.push(text); } });
   t.after(async () => { await system.dispose(); await fs.rm(root, { recursive: true, force: true }); });
   const call = (channel: string, ...args: unknown[]) => handlers.get(channel)!({ sender: editor, senderFrame: editor.mainFrame }, ...args);
   await call(CHANNELS.setToolConfig, { permission: 'full' });
-  return { root, files, system, copies, broadcasts, call, switchSession() { url = 'https://chat.deepseek.com/a/chat/other'; system.reset(); } };
+  return { root, files, system, copies, broadcasts, sent, call, setReply(text: string) { reply = text; }, deny() { approvalResponse = 2; }, switchSession() { url = 'https://chat.deepseek.com/a/chat/other'; system.reset(); } };
 }
 
 async function until(predicate: () => boolean) {
@@ -32,6 +41,40 @@ async function until(predicate: () => boolean) {
   while (!predicate()) { assert.ok(Date.now() < deadline, '真实进程应在限时内完成'); await delay(25); }
 }
 const batch = (id: string, windowsCommand: string, unixCommand: string, background = false) => '```mini-ai-tools\n' + JSON.stringify({ protocol_version: 1, batch_id: id, requests: [{ id: 'cmd', tool: 'run_command', args: { command: process.platform === 'win32' ? windowsCommand : unixCommand, shell: process.platform === 'win32' ? 'powershell' : 'bash', background, timeout_ms: 60_000 } }] }) + '\n```';
+
+it('真实超时、逐条中断及权限拒绝通过完整执行与回传链路一次发送，取消整批仍停止', async t => {
+  for (const scenario of ['timeout', 'stop', 'denied', 'cancel-batch'] as const) {
+    const f = await fixture(t, true);
+    await f.call(CHANNELS.setToolConfig, { automatic: true, permission: scenario === 'denied' ? 'ask' : 'full', sendIntervalSeconds: 0 });
+    if (scenario === 'denied') f.deny();
+    const text = batch('terminal-' + scenario, "Write-Output 'before-stop'; Start-Sleep -Seconds 30", 'printf before-stop; sleep 30').replace('60000', scenario === 'timeout' ? '3000' : '60000');
+    f.setReply(text); await f.system.accept(text, 'complete');
+    if (scenario === 'stop' || scenario === 'cancel-batch') {
+      await until(() => !!(f.system.getState().results[0]?.data as any)?.process_id);
+      await delay(1000);
+      const processId = (f.system.getState().results[0]!.data as any).process_id;
+      if (scenario === 'stop') await f.call(CHANNELS.stopToolCommand, { batch_id: 'terminal-' + scenario, request_id: 'cmd', process_id: processId });
+      else await f.call(CHANNELS.cancelTools);
+    }
+    await until(() => !!f.system.getState().completion && !f.system.getState().busy);
+    if (scenario === 'cancel-batch') {
+      await delay(50); assert.equal(f.sent.length, 0); assert.equal(f.copies.length, 0); assert.equal(f.system.getState().completion!.cancelled, true);
+      continue;
+    }
+    await until(() => {
+      const state = f.system.getState();
+      assert.notEqual(state.continuation?.phase, 'paused', scenario + ': ' + JSON.stringify(state));
+      return state.continuation?.phase === 'waiting_reply';
+    });
+    assert.equal(f.sent.length, 1, scenario);
+    const result = JSON.parse(f.sent[0]!).tool_results[0];
+    assert.equal(result.status, scenario === 'timeout' ? 'failed' : scenario === 'stop' ? 'cancelled' : 'permission_denied');
+    if (scenario === 'denied') { assert.equal(result.started_at, undefined); assert.equal(result.data, undefined); assert.equal(f.copies.length, 0); }
+    else { assert.equal(result.data.status, 'stopped'); assert.equal(result.data.cleanup_pending, false); assert.match(result.data.stdout, /before-stop/); assert.equal(f.copies.length, 1); assert.equal(f.sent[0], f.copies[0]); }
+    for (let i = 0; i < 3; i++) await f.call(CHANNELS.getToolState);
+    await delay(25); assert.equal(f.sent.length, 1, '重复状态不重发');
+  }
+});
 
 it('真实文件修改、读取和搜索批次自动复制，失败回执保留，关闭开关与重复采集不复制', async t => {
   const f = await fixture(t);
@@ -117,7 +160,7 @@ it('逐条中断前后台命令不取消同批其他进程或后续无依赖请�
   await f.call(CHANNELS.stopToolCommand, { batch_id: 'separate', request_id: 'background', process_id: background });
   assert.equal(f.system.getState().hasRunningProcesses, false);
   assert.equal((f.system.getState().results.find(r => r.request_id === 'background')?.data as any).status, 'stopped');
-  assert.equal(f.copies.length, 0);
+  assert.equal(f.copies.length, 1, '本批全部进程清理结束后复制停止事实与部分输出');
 });
 
 it('含多个请求但校验不通过时统一返回批次错误，不执行合法的前一条也不伪造失败工具身份', async t => {
