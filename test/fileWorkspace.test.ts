@@ -85,6 +85,10 @@ it('关闭工具只隐藏标签，恢复与异常定位保留正文；迟到定�
   const owner = context.window.setupFileWorkspace(bridge);
   owner.attachTabs({ setReview() {}, setTools(open: boolean, active: boolean) { tools.push([open, active]); } });
   const result = node('result'); result.dataset.key = 'failed-request'; node('tool-results').children.push(result);
+  publish({ fileVisible: false, toolsVisible: false });
+  events['tool-attention']({ detail: { kind: 'batch' } });
+  assert.equal(patches.length, 0, '普通工具批次不能覆盖用户主动折叠的右侧面板');
+  publish({ fileVisible: true, toolsVisible: false });
   events['tool-attention']({ detail: { kind: 'batch' } });
   assert.deepEqual(patches.at(-1), { toolsVisible: true, previewVisible: false, fileVisible: true });
   publish({ toolsVisible: true });
@@ -101,9 +105,19 @@ it('关闭工具只隐藏标签，恢复与异常定位保留正文；迟到定�
   await owner.closeTools(); publish({ toolsVisible: false });
   assert.deepEqual(tools.at(-1), [false, false]); assert.equal(node('monaco').inert, false);
   assert.equal(node('tool-results').children[0], result); assert.equal(node('tool-results').scrollTop, 145);
-  await owner.openTools(); assert.deepEqual(patches.at(-1), { toolsVisible: true, previewVisible: false, fileVisible: true });
+  publish({ fileVisible: false, toolsVisible: false });
+  await owner.openTools(); assert.deepEqual(patches.at(-1), { toolsVisible: true, previewVisible: false, fileVisible: true }, '用户主动查看工具仍能恢复右侧面板');
   publish({ toolsVisible: true }); publish({ previewVisible: true });
   const before = patches.length; await owner.closeTools(); assert.equal(patches.length, before, '关闭非活动工具不能抢占 Diff');
+  for (const detail of [{ key: 'approval-request' }, { key: 'failed-request' }, {}]) {
+    publish({ fileVisible: false, toolsVisible: false });
+    const openedBeforeAttention = patches.length;
+    events['tool-attention']({ detail });
+    assert.equal(patches.length, openedBeforeAttention + 1);
+    assert.deepEqual(patches.at(-1), { toolsVisible: true, previewVisible: false, fileVisible: true }, '批准、失败及回传暂停仍自动展开');
+    publish({ fileVisible: true, toolsVisible: true });
+    for (let i = 0; i < 6; i++) await Promise.resolve();
+  }
   events['tool-attention']({ detail: { key: 'failed-request' } }); publish({ toolsVisible: true });
   for (let i = 0; i < 6; i++) await Promise.resolve();
   assert.equal(result.open, true); assert.equal(result.scrolled, true);

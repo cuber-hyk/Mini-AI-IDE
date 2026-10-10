@@ -411,10 +411,17 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     check('新增撤销核对文件对象身份，同名同内容外部重建不能删除', !(await undo()).ok && fs.existsSync(path.join(a, 'valid/new.ts')));
     fs.unlinkSync(path.join(a, 'valid/new.ts')); fs.renameSync(path.join(a, 'valid/original.ts'), path.join(a, 'valid/new.ts'));
     check('移回本次创建对象后可重试撤销', (await undo()).ok && !fs.existsSync(path.join(a, 'valid')));
+    await evaluate("document.getElementById('file-collapse').click()");
+    await waitFor("document.querySelector('.editor-wrap').hidden");
     const read = await collect([{ id: 'read', tool: 'read_file', args: { path: 'protocol.txt' } }]);
-    check('新读取批次仍自动打开工具标签', await evaluate("document.querySelector('#editor-tabs [data-kind=tools][aria-selected=true]') !== null"));
+    check('右侧折叠后新读取批次正常完成且保持折叠', read.results[0]?.status === 'done' && await evaluate("document.querySelector('.editor-wrap').hidden && document.getElementById('tool-workspace').hidden"));
     check('查询批次清空上批差异，工具结果仍正常', read.results[0]?.status === 'done' && (await reviewState()).records.length === 0 && await previewEvaluate("document.getElementById('pv-meta').textContent === '0 文件'"));
+    await webbar.executeJavaScript("document.getElementById('btn-tool-workspace').click()", true);
+    check('用户手动查看工具仍恢复折叠的右侧面板', await waitFor("!document.querySelector('.editor-wrap').hidden && document.querySelector('#editor-tabs [data-kind=tools][aria-selected=true]') !== null"));
+    await evaluate("document.getElementById('file-collapse').click()");
+    await waitFor("document.querySelector('.editor-wrap').hidden");
     const invalid = await loadReply('{"protocol_version":1,"batch_id":"broken","requests":[');
+    check('折叠后批次校验失败仍自动恢复并显示工具详情', await waitFor("!document.querySelector('.editor-wrap').hidden && !document.getElementById('tool-workspace').hidden"));
     check('无效 JSON 由工具结果给出明确批次错误，不写盘', invalid.ok && await waitFor("window.editorBridge.getToolState().then(state => Boolean(state.batchError && state.batchError.error.includes('JSON')))") && fs.readFileSync(protocolFile, 'utf8') === protocolBefore);
     // 正式入口拒绝旧文件块，不能借历史上下文触发第二条人工写盘路径。
     fs.writeFileSync(fixture, '<!doctype html><meta charset="utf-8"><main class="ds-markdown"><h3>文件：protocol.txt</h3><h3>操作：覆盖全文</h3><pre><code>legacy content</code></pre></main>');

@@ -3,6 +3,7 @@
   'use strict';
   window.setupFileWorkspace = function (bridge) {
     let previewVisible = false;
+    let fileVisible = true;
     let reviewOpen = false;
     let toolsVisible = false;
     let toolsOpen = false;
@@ -38,7 +39,7 @@
     }
     document.addEventListener('tool-attention', function (event) {
       const batch = event.detail && event.detail.kind === 'batch';
-      if (batch && toolsVisible) return;
+      if (batch && (!fileVisible || toolsVisible)) return;
       const opened = toolsVisible ? Promise.resolve() : openTools();
       const version = navigationVersion;
       void opened.then(function () {
@@ -76,6 +77,7 @@
     bridge.onChromeState(function (state) {
       const visible = Boolean(state.previewVisible);
       previewVisible = visible;
+      fileVisible = state.fileVisible !== false;
       toolsVisible = Boolean(state.toolsVisible);
       if (visible) reviewOpen = true;
       if (toolsVisible) toolsOpen = true;
