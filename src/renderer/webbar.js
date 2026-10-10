@@ -5,11 +5,42 @@
   const el = {
     collect: document.getElementById('btn-collect'), status: document.getElementById('collect-status'),
     workspaceToggle: document.getElementById('btn-workspace-toggle'),
+    toolStatus: document.getElementById('tool-workspace-status'),
+    toolOpen: document.getElementById('btn-tool-workspace'),
   };
   if (!bridge || Object.values(el).some(function (node) { return !node; })) return;
   const restore = document.getElementById('btn-file-restore');
   el.workspaceToggle.addEventListener('click', function () { void bridge.toggleWorkspace(); });
   restore.addEventListener('click', function () { void bridge.restoreFileWorkspace(); });
+  let summary;
+  let countdownTimer;
+  let statusReceived = false;
+  function renderToolStatus() {
+    if (!summary) return;
+    const countdown = summary.phase === 'countdown' && Number.isFinite(summary.dueAt)
+      ? ' · ' + Math.max(0, Math.ceil((summary.dueAt - Date.now()) / 1000)) + ' 秒后回传' : '';
+    const count = summary.count > 0 ? ' · ' + summary.count + ' 项' : '';
+    const message = summary.message + count + countdown;
+    el.toolStatus.textContent = message;
+    el.toolStatus.title = message + '；自动继续：' + (summary.automatic ? '开' : '关');
+    el.toolStatus.classList.toggle('warn', ['approval', 'failed', 'paused'].includes(summary.phase));
+    el.toolStatus.classList.toggle('running', ['running', 'countdown', 'sending'].includes(summary.phase));
+    el.toolOpen.title = '查看工具：' + message;
+    if (countdownTimer !== undefined) window.clearTimeout(countdownTimer);
+    countdownTimer = undefined;
+    if (summary.phase === 'countdown' && Number.isFinite(summary.dueAt) && summary.dueAt > Date.now())
+      countdownTimer = window.setTimeout(renderToolStatus, 250);
+  }
+  bridge.onToolWorkspaceStatus(function (state) { statusReceived = true; summary = state; renderToolStatus(); });
+  void bridge.getToolWorkspaceStatus().then(function (state) {
+    if (!statusReceived) { summary = state; renderToolStatus(); }
+  }).catch(function () {
+    if (!statusReceived) { el.toolStatus.textContent = '工具状态读取失败'; el.toolStatus.classList.add('warn'); }
+  });
+  el.toolOpen.addEventListener('click', async function () {
+    try { await bridge.openToolWorkspace(); }
+    catch (error) { feedback('打开工具失败：' + (error instanceof Error ? error.message : String(error)), true); }
+  });
   bridge.onChromeState(function (state) {
     restore.hidden = state.fileVisible !== false;
     const workspaceVisible = !state.layout || state.layout.workspaceVisible !== false;

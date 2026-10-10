@@ -38,6 +38,7 @@ interface Options {
   review?: WebContents;
   notifyReview?: (state: ChangeReviewState) => void;
   settingsChanged?: () => void;
+  notifyState?: (state: ToolState) => void;
   sender?: Pick<WebResultSender, 'send' | 'cancel' | 'dispose'>;
   skills?: SkillService;
 }
@@ -162,6 +163,15 @@ export async function createToolIntegration(options: Options) {
   const processes = new ToolProcesses(() => {
     if (!disposed && harness) harness.refreshProcesses();
   });
+  const broadcast = (state: ToolState) => {
+    if (disposed) return;
+    const notification = clipboard.notification(state);
+    const current: ToolState = { ...state, canUndo: changes.canUndo, hasRunningProcesses: processes.hasRunning,
+      ...(notification ? { clipboard: notification } : {}), ...(continuation ? { continuation: continuation.getState() } : {}),
+      ...(resultReturn ? { resultReturn: resultReturn.getState({ root: options.files.getRoot(), session: sessionKeyOf(options.web.getURL()), state }) } : {}) };
+    if (!options.editor.isDestroyed()) options.editor.send(CHANNELS.toolState, current);
+    options.notifyState?.(current);
+  };
   const publish = (state: ToolState) => {
     traceCollection('integration.publish', { busy: state.busy, completion: state.completion ? { id: state.completion.id, cancelled: state.completion.cancelled } : null,
       resultCount: state.results.length, resultStatuses: state.results.map(result => ({ id: result.request_id, status: result.status })), batchError: state.batchError ?? null,
@@ -171,7 +181,7 @@ export async function createToolIntegration(options: Options) {
     watcher.setEnabled(!options.disabled && !automaticSuspended && state.config.automatic);
     if (!disposed) clipboard.complete(state);
     continuation?.observe({ root: options.files.getRoot(), session: sessionKeyOf(options.web.getURL()), diagnostic: harness.getDiagnostic(), state: options.disabled || automaticSuspended ? { ...state, config: { ...state.config, automatic: false } } : state });
-    if (!options.editor.isDestroyed()) options.editor.send(CHANNELS.toolState, { ...state, canUndo: changes.canUndo, hasRunningProcesses: processes.hasRunning, clipboard: clipboard.notification(state), continuation: continuation?.getState(), resultReturn: resultReturn?.getState({ root: options.files.getRoot(), session: sessionKeyOf(options.web.getURL()), state }) });
+    broadcast(state);
     options.settingsChanged?.();
   };
   const approveDirty = async (relative: string): Promise<boolean> => {
@@ -248,7 +258,7 @@ export async function createToolIntegration(options: Options) {
   };
   resultReturn = new ToolResultReturn({
     current: () => ({ root: options.files.getRoot(), session: sessionKeyOf(options.web.getURL()), state: harness.getState(), diagnostic: harness.getDiagnostic() }),
-    changed: () => { if (!disposed && !options.editor.isDestroyed()) options.editor.send(CHANNELS.toolState, getState()); },
+    changed: () => broadcast(getState()),
     attachments: state => toolAttachments.resolve(state.results),
     send: (text, session, current, files) => sender.send(text, session, 'results', current, files),
     verify: async (_text, session, current, source) => {
@@ -266,7 +276,7 @@ export async function createToolIntegration(options: Options) {
   continuation = new AutoContinuation({
     current: () => ({ root: options.files.getRoot(), session: sessionKeyOf(options.web.getURL()), state: getState(), diagnostic: harness.getDiagnostic() }),
     cancelSend: () => sender.cancel('results'),
-    changed: () => { if (!disposed && !options.editor.isDestroyed()) options.editor.send(CHANNELS.toolState, getState()); },
+    changed: () => broadcast(getState()),
     send: async (text, session, current) => {
       return resultReturn!.send('automatic', () => {
         const state = harness.getState();

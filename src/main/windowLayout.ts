@@ -7,7 +7,8 @@ export const WEB_BAR_HEIGHT = 40;
 export const WORKSPACE_DEFAULT_WIDTH = 240;
 export const FILE_DEFAULT_WIDTH = 700;
 export const TREE_DEFAULT_WIDTH = 190;
-export const FILE_HEADER_HEIGHT = 108;
+export const FILE_HEADER_HEIGHT = 36;
+export const TREE_HEADER_HEIGHT = 108;
 export const DOCK_DEFAULT_HEIGHT = 100;
 
 export interface WorkspaceLayoutOptions {
@@ -19,6 +20,7 @@ export interface WorkspaceLayoutOptions {
   treeVisible?: boolean;
   dockHeight?: number;
   previewVisible?: boolean;
+  toolsVisible?: boolean;
   fileMaximized?: boolean;
 }
 
@@ -39,6 +41,7 @@ export interface Layout {
   fileVisible: boolean;
   treeVisible: boolean;
   previewVisible: boolean;
+  toolsVisible: boolean;
   workspaceWidth: number;
   fileWidth: number;
   treeWidth: number;
@@ -58,7 +61,8 @@ export function computeLayout(
   const fileVisible = options.fileVisible !== false;
   const maximized = fileVisible && options.fileMaximized === true;
   const treeVisible = fileVisible && options.treeVisible !== false;
-  const previewVisible = fileVisible && options.previewVisible === true;
+  const toolsVisible = fileVisible && options.toolsVisible === true;
+  const previewVisible = fileVisible && !toolsVisible && options.previewVisible === true;
   // 窄窗口优先保护 AI 与编辑正文；极小窗口同比缩减下限。
   const workspaceMinimum = workspaceVisible ? 120 : 0;
   const fileMinimum = fileVisible ? EDITOR_MIN_WIDTH : 0;
@@ -79,6 +83,7 @@ export function computeLayout(
   const dockHeight = maximized ? 0 : clamp(rounded(options.dockHeight, DOCK_DEFAULT_HEIGHT), 0, bodyHeight - Math.min(120, Math.floor(bodyHeight / 2)));
   const webHeight = maximized ? 0 : bodyHeight - dockHeight;
   const headerHeight = Math.min(FILE_HEADER_HEIGHT, h);
+  const treeHeaderHeight = Math.min(TREE_HEADER_HEIGHT, h);
   const treeWidth = treeVisible
     ? clamp(rounded(options.treeWidth, TREE_DEFAULT_WIDTH), Math.min(120, Math.max(0, fileWidth - 240)), Math.max(0, fileWidth - 240))
     : 0;
@@ -95,13 +100,14 @@ export function computeLayout(
     fileBounds: { x: fileX, y: 0, width: fileWidth, height: h },
     contentBounds,
     treePaneBounds: { x: fileX + fileWidth - treeWidth, y: 0, width: treeWidth, height: treeWidth > 0 ? h : 0 },
-    treeBounds: { x: fileX + fileWidth - treeWidth, y: headerHeight, width: treeWidth, height: treeWidth > 0 ? h - headerHeight : 0 },
+    treeBounds: { x: fileX + fileWidth - treeWidth, y: treeHeaderHeight, width: treeWidth, height: treeWidth > 0 ? h - treeHeaderHeight : 0 },
     previewBounds: previewVisible ? { ...contentBounds } : { x: fileX, y: headerHeight, width: 0, height: 0 },
     dividerX: fileX,
     workspaceVisible,
     fileVisible,
     treeVisible,
     previewVisible,
+    toolsVisible,
     workspaceWidth,
     fileWidth,
     treeWidth,

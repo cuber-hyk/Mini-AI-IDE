@@ -36,37 +36,19 @@
         <aside class="pm-side">
           <div class="pm-side-title">内置默认要求什么</div>
           <ul class="pm-side-list">
-            <li><b>写清目标文件</b>：代码块上方一行 <code>### 文件：相对路径</code></li>
-            <li><b>声明操作</b>：<code>### 操作：替换／新建／覆盖全文</code></li>
-            <li><b>替换精确原文</b>：SEARCH／REPLACE，SEARCH 非空且唯一匹配，不带定位行号、不用省略号</li>
-            <li><b>新建／覆盖给全文</b>：新建目标不存在，覆盖目标存在；复制上下文不暗示覆盖</li>
-            <li><b>围栏必须成对闭合</b>，长度按内容自适应（内容含反引号时外层加长）</li>
+            <li><b>唯一执行协议</b>：正式请求使用 <code>mini-ai-tools</code> JSON 批次</li>
+            <li><b>明确路径和操作</b>：替换、新建、覆盖全文各有明确含义</li>
+            <li><b>替换精确原文</b>：原文非空且唯一匹配，不用省略号或定位行号</li>
+            <li><b>权限由 IDE 决定</b>：工具请求不代表已经执行</li>
+            <li><b>完整示例</b>：涵盖文件、技能、附件、命令与进程控制</li>
           </ul>
           <div class="pm-side-note">
-            当前只接受明确操作的新协议，旧行号格式不可应用。<br />
-            自定义原文会保留，请检查后继续使用，或载入默认并保存；已有网页对话需手动粘贴新版格式。
+            自定义内容作为补充，程序始终附带强制工具协议。旧行号格式不可应用。<br />
+            已有网页对话需由用户提交新版初始化或手动粘贴格式要求。
           </div>
         </aside>
 
         <section class="pm-main">
-          <!--
-            版本页签（用户设计）：简洁版 / 完整版**各自独立**编辑与保存。
-            为什么分页签而不是"一个框加一个下拉"：两版内容差异较大（示例数不同），
-            页签能让用户直接看到"这一版现在是什么"，而不是切一次弹一次。
-          -->
-          <div class="pm-tabs" role="tablist" aria-label="提示词版本">
-            <button type="button" class="pm-tab" role="tab" data-variant="short" aria-selected="true">
-              简洁版
-              <span class="pm-tab-sub">6 个示例 · 日常默认</span>
-            </button>
-            <button type="button" class="pm-tab" role="tab" data-variant="full" aria-selected="false">
-              完整版
-              <span class="pm-tab-sub">13 个示例 · 逐条详解</span>
-            </button>
-            <span class="pm-tab-spacer"></span>
-            <span id="pm-tab-using" class="pm-tab-using" title="底部双段开关当前选中的版本就是它"></span>
-          </div>
-
           <div class="pm-row">
             <span class="pm-label">格式要求正文</span>
             <span id="pm-status" class="pm-status"></span>

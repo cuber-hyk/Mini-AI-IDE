@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { it } from 'node:test';
-import { computeLayout, EDITOR_MIN_WIDTH, WEB_MIN_WIDTH, WEB_BAR_HEIGHT } from '../src/main/windowLayout';
+import { computeLayout, EDITOR_MIN_WIDTH, WEB_MIN_WIDTH, WEB_BAR_HEIGHT, FILE_HEADER_HEIGHT, TREE_HEADER_HEIGHT } from '../src/main/windowLayout';
 
 it('工作区在左、AI 在中，编辑正文与 Diff 在目录树左侧', () => {
   const layout = computeLayout(1600, 900, { previewVisible: true });
@@ -12,7 +12,8 @@ it('工作区在左、AI 在中，编辑正文与 Diff 在目录树左侧', () =
   assert.equal(layout.treeBounds.x + layout.treeBounds.width, 1600);
   assert.deepEqual(layout.previewBounds, layout.contentBounds);
   assert.equal(layout.treePaneBounds.y, 0);
-  assert.equal(layout.treeBounds.y, layout.contentBounds.y);
+  assert.equal(layout.contentBounds.y, FILE_HEADER_HEIGHT);
+  assert.equal(layout.treeBounds.y, TREE_HEADER_HEIGHT);
   assert.equal(layout.treePaneBounds.x, layout.treeBounds.x);
   assert.equal(layout.webBounds.y, WEB_BAR_HEIGHT);
   assert.equal(layout.webBounds.y + layout.webBounds.height, layout.dockBounds.y);
@@ -47,12 +48,33 @@ it('隐藏侧栏保留恢复入口，隐藏目录或 Diff 将空间还给文件�
   assert.equal(hidden.fileBounds.width, 0);
   assert.equal(hidden.treeVisible, false);
   assert.equal(hidden.previewVisible, false);
+  assert.equal(hidden.toolsVisible, false);
   assert.equal(hidden.contentBounds.width, 0);
   assert.ok(hidden.webBounds.width > all.webBounds.width);
   const noTree = computeLayout(1600, 900, { treeVisible: false });
   assert.equal(noTree.treeBounds.width, 0);
   assert.ok(noTree.contentBounds.width > all.contentBounds.width);
   assert.equal(noTree.previewBounds.width, 0);
+});
+
+it('文件正文直接接标签栏，目录路径和操作只占目录区高度', () => {
+  const layout = computeLayout(1600, 900);
+  assert.equal(layout.contentBounds.y, 36);
+  assert.equal(layout.contentBounds.height, 864);
+  assert.equal(layout.treeBounds.y, 108);
+  assert.equal(layout.treeBounds.height, 792);
+});
+
+it('工具标签复用文件正文空间并阻止原生 Diff 覆盖，官网高度不受影响', () => {
+  const normal = computeLayout(1600, 900, { dockHeight: 180 });
+  const tools = computeLayout(1600, 900, { dockHeight: 180, toolsVisible: true, previewVisible: true });
+  assert.equal(tools.toolsVisible, true);
+  assert.equal(tools.previewVisible, false);
+  assert.equal(tools.previewBounds.width, 0);
+  assert.equal(tools.previewBounds.height, 0);
+  assert.deepEqual(tools.contentBounds, normal.contentBounds);
+  assert.deepEqual(tools.webBounds, normal.webBounds);
+  assert.equal(computeLayout(1600, 900, { toolsVisible: true, fileVisible: false }).toolsVisible, false);
 });
 
 it('小窗口与异常尺寸下所有区域都保持在视口内', () => {

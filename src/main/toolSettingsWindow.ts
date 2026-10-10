@@ -35,7 +35,7 @@ export class ToolSettingsWindow {
     if (this.disposed || this.parent.isDestroyed()) return;
     const generation = ++this.generation; const root = this.getRoot();
     if (!this.window || this.window.isDestroyed()) {
-      const window = new BrowserWindow({ parent: this.parent, modal: false, title: '工具与提示词', show: false,
+      const window = new BrowserWindow({ parent: this.parent, modal: false, title: '工具设置', show: false,
         width: 370, height: 600, frame: false, resizable: false, movable: false, minimizable: false, maximizable: false,
         skipTaskbar: true, backgroundColor: '#1c1c1c', autoHideMenuBar: true,
         webPreferences: { preload: path.join(__dirname, 'toolSettingsPreload.js'), contextIsolation: true,

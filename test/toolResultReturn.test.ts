@@ -34,6 +34,19 @@ it('当前完整真实批次手动发送正文及字节流一次，自动与手�
   assert.equal((await automatic.owner.send('automatic')).ok, true);
 });
 
+it('用户主动新一轮仅使旧回执失效，不表示回传失败，空来源同样不产生暂停', async () => {
+  for (const previous of ['empty', 'sent'] as const) {
+    const f = fixture();
+    if (previous === 'empty') { f.owner.begin(null); f.context.state.results = []; delete f.context.state.completion; }
+    else await f.owner.send('manual');
+    f.owner.invalidate();
+    const state = f.owner.getState(f.context);
+    assert.equal(state.phase, 'invalidated'); assert.equal(state.canSend, false);
+    assert.match(state.message, /已发起新一轮/);
+    assert.equal((await f.owner.send('manual')).ok, false);
+  }
+});
+
 it('超时和单条命令停止的部分输出可回传，整批取消和清理中仍不能发送', async () => {
   for (const status of ['failed', 'cancelled', 'done'] as const) {
     for (const block of ['none', 'batch-cancel', 'cleanup'] as const) {

@@ -14,7 +14,7 @@ function fixture() {
   const channels = registerToolSettingsIpc({ handle(channel, handler) { handlers.set(channel, handler); } }, {
     editor, panel: () => panel, current: () => current, viewport: () => ({ width: 1200, height: 800 }), getState: () => state,
     open: async anchor => { calls.push(anchor); }, close: () => { calls.push('close'); },
-    configure: async patch => { calls.push(patch); Object.assign(state.config, patch); }, clearRules: async () => { calls.push('clear'); }, openPrompt: () => { calls.push('prompt'); },
+    configure: async patch => { calls.push(patch); Object.assign(state.config, patch); }, clearRules: async () => { calls.push('clear'); },
   });
   const event = (sender: WebContents) => ({ sender, senderFrame: sender.mainFrame }) as IpcMainInvokeEvent;
   return { state, calls, channels, editor, panel, event, setCurrent(value: boolean) { current = value; },
@@ -56,7 +56,7 @@ it('只能保存四项声明式设置，不能提升权限、开启 automatic �
 });
 it('关闭或切项目使旧浮层修改失效，忙碌/无项目/存储损坏时不清除规则', async () => {
   const f = fixture(); f.setCurrent(false);
-  for (const channel of [CHANNELS.setToolSettings, CHANNELS.clearToolRules, CHANNELS.openToolPromptSettings]) {
+  for (const channel of [CHANNELS.setToolSettings, CHANNELS.clearToolRules]) {
     await assert.rejects(f.invoke(channel, undefined, ...(channel === CHANNELS.setToolSettings ? [{ autoCopyResults: false }] : [])), /已关闭或项目已变化/);
   }
   f.setCurrent(true);
@@ -66,11 +66,12 @@ it('关闭或切项目使旧浮层修改失效，忙碌/无项目/存储损坏�
   }
   assert.deepEqual(f.calls, []);
 });
-it('清理、提示词和关闭均为无参数动作，提示词入口先关闭原生浮层', async () => {
+it('清理和关闭均为无参数动作，浮层不提供提示词编辑通道', async () => {
   const f = fixture();
-  for (const channel of [CHANNELS.getToolSettingsState, CHANNELS.clearToolRules, CHANNELS.openToolPromptSettings, CHANNELS.closeToolSettings]) {
+  for (const channel of [CHANNELS.getToolSettingsState, CHANNELS.clearToolRules, CHANNELS.closeToolSettings]) {
     await assert.rejects(f.invoke(channel, undefined, { root: 'other' }), /参数数量/);
   }
-  await f.invoke(CHANNELS.clearToolRules); await f.invoke(CHANNELS.openToolPromptSettings);
-  assert.deepEqual(f.calls, ['clear', 'close', 'prompt']);
+  await f.invoke(CHANNELS.clearToolRules); await f.invoke(CHANNELS.closeToolSettings);
+  assert.deepEqual(f.calls, ['clear', 'close']);
+  assert.ok(!f.channels.includes('tools:open-prompt-settings'));
 });

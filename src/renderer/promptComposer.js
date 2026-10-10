@@ -1,8 +1,7 @@
-/* 提示词版本与输入高度；需求提交由本地输入 owner 提供。 */
+/* 提示词状态与输入高度；需求提交由本地输入 owner 提供。 */
 window.setupPromptComposer = function (bridge, setInfo, localPrompt) {
   const el = {
     requirement: document.getElementById('requirement'),
-    variantSwitch: document.getElementById('variant-switch'),
     custom: document.getElementById('prompt-custom'),
   };
   (function setupRequirementAutoGrow() {
@@ -85,74 +84,26 @@ window.setupPromptComposer = function (bridge, setInfo, localPrompt) {
     });
   })();
 
-  const sw = el.variantSwitch;
-  const opts = Array.from(sw.querySelectorAll('.variant-opt'));
   let status = null;
-  let switching = false;
   let revision = 0;
-  let localBusy = false;
-
-  function updateBusy() {
-    opts.forEach(function (b) { b.disabled = switching || localBusy; });
-    sw.setAttribute('aria-busy', String(switching));
-    localPrompt.setComposerBusy(switching || !status);
-  }
-
   function paint(next) {
     status = next;
-    sw.dataset.variant = next.variant;
-    sw.setAttribute('aria-checked', String(next.variant === 'full'));
-    opts.forEach(function (b) {
-      b.setAttribute('aria-pressed', String(b.dataset.variant === next.variant));
-    });
-    el.custom.hidden = !(next.variant === 'full' ? next.fullIsCustom : next.shortIsCustom);
-    el.custom.title = '当前使用自定义原文，请在提示词设置中检查是否满足明确操作的新协议；旧行号格式不可应用';
-    el.custom.setAttribute('aria-label', '使用自定义提示词，请检查新协议');
-    updateBusy();
+    el.custom.hidden = !next.isCustom;
+    el.custom.title = '当前使用自定义原文；强制工具协议由程序统一附带，可在提示词设置中修改';
+    el.custom.setAttribute('aria-label', '使用自定义提示词');
+    localPrompt.setComposerBusy(false);
   }
-
-  async function applyVariant(variant) {
-    if (switching || localBusy) return;
-    switching = true;
-    updateBusy();
-    try {
-      await bridge.setFormatSpecVariant(variant);
-      // 读取落盘状态；切换失败时界面仍保留之前实际使用的版本。
-      await refresh();
-    } catch (err) {
-      setInfo('切换提示词版本失败：' + (err && err.message ? err.message : String(err)), true);
-    } finally {
-      switching = false;
-      updateBusy();
-    }
-  }
-
-  opts.forEach(function (b) {
-    b.addEventListener('click', function () { void applyVariant(b.dataset.variant); });
-  });
-  sw.addEventListener('keydown', function (e) {
-    if (e.target !== sw) return; // 子按钮使用原生键盘点击，避免冒泡后二次切换。
-    if (e.key === ' ' || e.key === 'Enter' || e.key === 'Spacebar') {
-      e.preventDefault();
-      void applyVariant(sw.dataset.variant === 'full' ? 'short' : 'full');
-    }
-  });
-
   async function refresh() {
     const version = ++revision;
     const next = await bridge.getPromptStatus();
     if (version === revision) paint(next);
   }
   bridge.onPromptStatus(function (next) {
-    revision += 1; // 广播比尚未返回的初始查询更新。
+    revision += 1;
     paint(next);
   });
-  localPrompt.onBusy(function (value) { localBusy = value; updateBusy(); });
-  updateBusy();
+  localPrompt.setComposerBusy(!status);
   void refresh().catch(function (err) {
     setInfo('读取提示词设置失败：' + (err && err.message ? err.message : String(err)), true);
-    // 状态未知时提交禁用；版本按钮始终保留重试入口。
-    updateBusy();
   });
 };
-

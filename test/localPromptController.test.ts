@@ -5,7 +5,7 @@ import { CHANNELS } from '../src/shared/contract';
 
 function fixture() {
   let root: string | null = null; let session = 'https://chat.deepseek.com/a/chat/one'; let busy = false;
-  let saved = { localPrompt: { includeInitialization: true}, formatSpecVariant: 'short', customFormatSpecShort: null, customFormatSpecFull: null };
+  let saved = { localPrompt: { includeInitialization: true}, customFormatSpec: null as string | null };
   const sent: Array<{text: string; session: string; kind: string; attachments?: unknown}> = []; const cancellations: unknown[] = [];
   const handlers = new Map<string, Function>(); const editor = { mainFrame: {} };
   const options: any = { ipc: { handle(name: string, fn: Function) { handlers.set(name, fn); } }, editor,
@@ -21,6 +21,7 @@ function fixture() {
   const input = { requirement: '/review 审阅代码', root: null, skills: ['review'] };
   const event = { sender: editor, senderFrame: editor.mainFrame };
   return { controller, options, input, sent, cancellations, handlers, event,
+    setCustom(value: string) { saved.customFormatSpec = value; },
     setRoot(value: string | null) { root = value; }, setSession(value: string) { session = value; }, setBusy(value: boolean) { busy = value; } };
 }
 
@@ -117,4 +118,14 @@ it('三个附件入口在暂存等待期间切项目均拒绝迟到结果，仅�
     finish([{ id: 'old-file' }]); await rejected;
     assert.deepEqual(removed, ['old-file']); assert.equal(clears, 1);
   }
+});
+
+it('唯一自定义初始化与复制共用协议，关闭初始化不会携带格式要求', async () => {
+  const { resolveFormatSpec } = await import('../src/shared/formatSpec');
+  const f = fixture(); const custom = '\n用户原文补充\n'; f.setCustom(custom);
+  await f.controller.send(f.input);
+  assert.ok(f.sent[0]!.text.includes(resolveFormatSpec(custom)));
+  f.controller.setOptions({ includeInitialization: false });
+  await f.controller.send(f.input);
+  assert.ok(!f.sent[1]!.text.includes(custom));
 });

@@ -8,6 +8,7 @@
     initialized = true;
     const layout = window.setupToolPanelLayout();
     const clock = window.createToolExecutionClock();
+    const attention = window.createToolAttention();
     const permission = document.getElementById('tool-permission');
     const permissionControl = document.getElementById('tool-permission-control');
     const automatic = document.getElementById('tool-automatic');
@@ -42,7 +43,6 @@
     let lastCompletionId;
     let feedbackTimer;
     const audio = window.createToolCompletionSound();
-    let lastBatchError = '';
     let continuationTimer;
     const statusLabels = {
       running: '执行中', pending_permission: '等待授权', done: '完成', failed: '失败',
@@ -251,15 +251,16 @@
       layout.refresh();
     }
 
-    function receive(next) {
+    function receive(next, baseline) {
       state = next;
       returnMessage = ''; returnError = false;
       localMessage = ''; localError = false;
       render();
-      const batchError = state.batchError ? state.batchError.error : '';
-      if (state.storageError) panel.open = true;
-      if (batchError && batchError !== lastBatchError) panel.open = true;
-      lastBatchError = batchError;
+      const fresh = attention.receive(state, baseline);
+      if (fresh.length) {
+        panel.open = true;
+        document.dispatchEvent(new CustomEvent('tool-attention', { detail: fresh[0] }));
+      }
       receiveCompletion();
       layout.refresh();
     }
@@ -368,11 +369,11 @@
       if (visibility.restoreFocus) settingsToggle.focus();
     });
     window.addEventListener('beforeunload', function () { audio.dispose(); });
-    bridge.onToolState(function (next) { eventVersion += 1; receive(next); });
+    bridge.onToolState(function (next) { eventVersion += 1; receive(next, !state); });
     render();
     const initialVersion = eventVersion;
     bridge.getToolState().then(function (next) {
-      if (initialVersion === eventVersion) receive(next);
+      if (initialVersion === eventVersion) receive(next, true);
     }).catch(function (error) {
       if (!state) { localMessage = '读取工具状态失败：' + (error instanceof Error ? error.message : String(error)); localError = true; render(); }
     });

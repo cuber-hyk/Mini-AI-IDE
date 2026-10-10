@@ -119,35 +119,45 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     await web.loadURL(initialWebUrl);
     initialWebUrl = web.getURL();
     await evaluate("document.querySelector('#tree .tree-row[data-rel-path=\"a.txt\"]').click()");
-    check('点击文件真实打开', await waitFor("document.getElementById('file-name').textContent === 'a.txt'"));
+    check('点击文件真实打开', await waitFor("(document.querySelector('#editor-tabs [data-kind=file][aria-selected=true]')?.getAttribute('data-path') ?? '未打开文件') === 'a.txt'"));
     const selectionProbe = await evaluate<{ok: boolean; visible: boolean}>("window.__uiSelectionProbe()");
     check('选区右上角浮动复制按钮在真实文件中可见', selectionProbe.ok && selectionProbe.visible, selectionProbe);
     await evaluate("window.__tabModelA = window.monaco.editor.getEditors()[0].getModel(); window.monaco.editor.getEditors()[0].executeEdits('workspace-probe',[{range:window.__tabModelA.getFullModelRange(),text:'tab draft A'}]); window.monaco.editor.getEditors()[0].pushUndoStop(); window.monaco.editor.getEditors()[0].setPosition({lineNumber:1,column:5})");
     await evaluate("document.querySelector('#tree .tree-row[data-rel-path=\"tabs.txt\"]').click()");
-    check('两个文件各有顶部标签', await waitFor("document.querySelectorAll('#editor-tabs [role=tab]').length === 2 && document.getElementById('file-name').textContent === 'tabs.txt'"));
+    check('两个文件各有顶部标签', await waitFor("document.querySelectorAll('#editor-tabs [data-kind=file]').length === 2 && (document.querySelector('#editor-tabs [data-kind=file][aria-selected=true]')?.getAttribute('data-path') ?? '未打开文件') === 'tabs.txt'"));
     await evaluate("window.monaco.editor.getEditors()[0].getModel().setValue('tab draft B'); document.querySelector('#editor-tabs [role=tab][data-path=\"a.txt\"]').click()");
-    check('点击标签恢复草稿、同一模型及光标', await waitFor("document.getElementById('file-name').textContent === 'a.txt'") && await evaluate("window.monaco.editor.getEditors()[0].getModel() === window.__tabModelA && window.__tabModelA.getValue() === 'tab draft A' && window.monaco.editor.getEditors()[0].getPosition().column === 5"));
+    check('点击标签恢复草稿、同一模型及光标', await waitFor("(document.querySelector('#editor-tabs [data-kind=file][aria-selected=true]')?.getAttribute('data-path') ?? '未打开文件') === 'a.txt'") && await evaluate("window.monaco.editor.getEditors()[0].getModel() === window.__tabModelA && window.__tabModelA.getValue() === 'tab draft A' && window.monaco.editor.getEditors()[0].getPosition().column === 5"));
     check('各标签独立显示未保存标记', await evaluate("document.querySelectorAll('#editor-tabs .editor-tab.dirty').length === 2"));
     await evaluate("window.monaco.editor.getEditors()[0].trigger('workspace-probe','undo',null)");
     check('切换标签后撤销栈仍有效', await evaluate("window.monaco.editor.getEditors()[0].getModel().getValue() === 'A original'"));
     await evaluate("window.monaco.editor.getEditors()[0].trigger('workspace-probe','redo',null)");
     check('重做恢复当前标签草稿', await evaluate("window.monaco.editor.getEditors()[0].getModel().getValue() === 'tab draft A'"));
+    const dockHeightBeforeTools = await evaluate<number>("document.getElementById('collaboration-dock').getBoundingClientRect().height");
+    const toolsBeforeClose = await evaluate<string>('window.editorBridge.getToolState().then(state=>JSON.stringify(state))');
+    await webbar.executeJavaScript("document.getElementById('btn-tool-workspace').click()", true);
+    check('官网顶部查看工具打开右侧标签，保留文件模型和草稿且不挤占官网高度', await waitFor("document.querySelector('#editor-tabs [data-kind=tools][aria-selected=true]') !== null && !document.getElementById('tool-workspace').hidden") && await evaluate<boolean>("window.monaco.editor.getEditors()[0].getModel() === window.__tabModelA && window.__tabModelA.getValue() === 'tab draft A'") && await evaluate<number>("document.getElementById('collaboration-dock').getBoundingClientRect().height") === dockHeightBeforeTools);
+    await evaluate("document.querySelector('#editor-tabs [data-kind=tools]').parentElement.querySelector('.editor-tab-close').click()");
+    check('工具标签可关闭并恢复当前文件，草稿与工具 owner 状态仍保留', await waitFor("document.querySelector('#editor-tabs [data-kind=tools]') === null && document.getElementById('tool-workspace').hidden") && await evaluate<boolean>("window.monaco.editor.getEditors()[0].getModel() === window.__tabModelA && window.__tabModelA.getValue() === 'tab draft A'") && toolsBeforeClose === await evaluate<string>('window.editorBridge.getToolState().then(state=>JSON.stringify(state))'));
+    await webbar.executeJavaScript("document.getElementById('btn-tool-workspace').click()", true);
+    await waitFor("document.querySelector('#editor-tabs [data-kind=tools][aria-selected=true]') !== null");
     await evaluate("window.__workspacePositionA = window.monaco.editor.getEditors()[0].getPosition(); document.getElementById('tool-view-changes').click()");
     check('切到本批 Diff 保留同一文件草稿与光标，目录仍在最右', await waitFor("document.querySelector('#editor-tabs [data-kind=review][aria-selected=true]') !== null") && await evaluate("window.monaco.editor.getEditors()[0].getModel() === window.__tabModelA && window.__tabModelA.getValue() === 'tab draft A' && window.monaco.editor.getEditors()[0].getPosition().equals(window.__workspacePositionA) && !document.getElementById('sidebar').hidden"));
+    await evaluate("document.querySelector('#editor-tabs [data-kind=tools]').parentElement.querySelector('.editor-tab-close').click()");
+    check('关闭非活动工具标签不抢走当前 Diff', await waitFor("document.querySelector('#editor-tabs [data-kind=tools]') === null && document.querySelector('#editor-tabs [data-kind=review][aria-selected=true]') !== null"));
     await evaluate("document.querySelector('#editor-tabs [data-kind=file][data-path=\"a.txt\"]').click()");
-    check('返回编辑保持原文件模型和草稿', await waitFor("!document.body.classList.contains('file-diff-visible')") && await evaluate("window.monaco.editor.getEditors()[0].getModel() === window.__tabModelA && window.__tabModelA.getValue() === 'tab draft A'"));
+    check('返回编辑保持原文件模型和草稿', await waitFor("!document.body.classList.contains('file-diff-visible')") && await evaluate<boolean>("window.monaco.editor.getEditors()[0].getModel() === window.__tabModelA && window.__tabModelA.getValue() === 'tab draft A'"));
     check('切回文件保留改动标签，关闭改动不影响草稿', await evaluate("document.querySelector('#editor-tabs [data-kind=review]') !== null"));
     await evaluate("document.querySelector('#editor-tabs [data-kind=review]').parentElement.querySelector('.editor-tab-close').click()");
-    check('改动标签可关闭且保持当前文件', await waitFor("document.querySelector('#editor-tabs [data-kind=review]') === null") && await evaluate("window.monaco.editor.getEditors()[0].getModel() === window.__tabModelA && window.__tabModelA.getValue() === 'tab draft A'"));
+    check('改动标签可关闭且保持当前文件', await waitFor("document.querySelector('#editor-tabs [data-kind=review]') === null") && await evaluate<boolean>("window.monaco.editor.getEditors()[0].getModel() === window.__tabModelA && window.__tabModelA.getValue() === 'tab draft A'"));
     await evaluate("document.querySelector('#editor-tabs [role=tab][data-path=\"a.txt\"]').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true}))");
-    check('方向键可切换标签且恢复另一草稿', await waitFor("document.getElementById('file-name').textContent === 'tabs.txt'") && await evaluate("window.monaco.editor.getEditors()[0].getModel().getValue() === 'tab draft B'"));
+    check('方向键可切换标签且恢复另一草稿', await waitFor("(document.querySelector('#editor-tabs [data-kind=file][aria-selected=true]')?.getAttribute('data-path') ?? '未打开文件') === 'tabs.txt'") && await evaluate("window.monaco.editor.getEditors()[0].getModel().getValue() === 'tab draft B'"));
     choice = 2; await evaluate("document.querySelector('#editor-tabs .editor-tab-close[data-path=\"a.txt\"]').click()"); await pause();
-    check('关闭非活动脏标签取消后两个草稿保留', await evaluate("document.querySelectorAll('#editor-tabs [role=tab]').length === 2 && window.monaco.editor.getEditors()[0].getModel().getValue() === 'tab draft B'"));
+    check('关闭非活动脏标签取消后两个草稿保留', await evaluate("document.querySelectorAll('#editor-tabs [data-kind=file]').length === 2 && window.monaco.editor.getEditors()[0].getModel().getValue() === 'tab draft B'"));
     choice = 0; await evaluate("document.querySelector('#editor-tabs .editor-tab-close[data-path=\"a.txt\"]').click()");
-    check('关闭非活动标签保存到对应文件', await waitFor("document.querySelectorAll('#editor-tabs [role=tab]').length === 1") && fs.readFileSync(path.join(a, 'a.txt'), 'utf8') === 'tab draft A' && await evaluate("document.getElementById('file-name').textContent === 'tabs.txt'"));
+    check('关闭非活动标签保存到对应文件', await waitFor("document.querySelectorAll('#editor-tabs [data-kind=file]').length === 1") && fs.readFileSync(path.join(a, 'a.txt'), 'utf8') === 'tab draft A' && await evaluate("(document.querySelector('#editor-tabs [data-kind=file][aria-selected=true]')?.getAttribute('data-path') ?? '未打开文件') === 'tabs.txt'"));
     choice = 1; await evaluate("document.querySelector('#editor-tabs .editor-tab-close[data-path=\"tabs.txt\"]').click()");
-    check('放弃最后一个标签回到空白页且不写盘', await waitFor("document.getElementById('file-name').textContent === '未打开文件'") && fs.readFileSync(path.join(a, 'tabs.txt'), 'utf8') === 'tab original');
-    await evaluate("document.querySelector('#tree .tree-row[data-rel-path=\"a.txt\"]').click()"); await waitFor("document.getElementById('file-name').textContent === 'a.txt'");
+    check('放弃最后一个标签回到空白页且不写盘', await waitFor("(document.querySelector('#editor-tabs [data-kind=file][aria-selected=true]')?.getAttribute('data-path') ?? '未打开文件') === '未打开文件'") && fs.readFileSync(path.join(a, 'tabs.txt'), 'utf8') === 'tab original');
+    await evaluate("document.querySelector('#tree .tree-row[data-rel-path=\"a.txt\"]').click()"); await waitFor("(document.querySelector('#editor-tabs [data-kind=file][aria-selected=true]')?.getAttribute('data-path') ?? '未打开文件') === 'a.txt'");
     // 只操作本地 Monaco，不向网页派发任何事件。
     await evaluate("window.monaco.editor.getEditors()[0].getModel().setValue('draft A')"); await pause();
     // 用真实不可写目标验证保存失败不会切换目录，随后恢复样例文件。
@@ -159,7 +169,7 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     picked = b; choice = 2; await evaluate("document.getElementById('workspace-add').click()"); await pause();
     check('取消切换保留目录和草稿', controller.workspace.getState().root === a && await evaluate("window.monaco.editor.getEditors()[0].getModel().getValue() === 'draft A'"));
     choice = 0; await evaluate("document.getElementById('workspace-add').click()");
-    check('保存后切换目录且清空旧编辑', await waitFor(`window.editorBridge.getRoot().then(s => s.root === ${JSON.stringify(b)})`) && await evaluate("document.getElementById('file-name').textContent === '未打开文件'"));
+    check('保存后切换目录且清空旧编辑', await waitFor(`window.editorBridge.getRoot().then(s => s.root === ${JSON.stringify(b)})`) && await evaluate("(document.querySelector('#editor-tabs [data-kind=file][aria-selected=true]')?.getAttribute('data-path') ?? '未打开文件') === '未打开文件'"));
     check('保存回执确实写入原目录', fs.readFileSync(path.join(a, 'a.txt'), 'utf8') === 'draft A' && fs.readFileSync(path.join(b, 'a.txt'), 'utf8') === 'B original');
     check('目录历史同步到最近列表', controller.workspace.getState().recentRoots[0] === b && controller.workspace.getState().recentRoots[1] === a);
     check('工作区列表保持加入顺序且切项目不导航官网', JSON.stringify(controller.workspace.getState().workspaceRoots) === JSON.stringify([a, b]) && web.getURL() === initialWebUrl && await waitFor("document.querySelectorAll('#workspace-list .workspace-project').length === 2"));
@@ -171,12 +181,12 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     check('新建目录自动展开', await waitFor("Boolean(document.querySelector('#tree .tree-row[data-rel-path=\"notes\"][aria-expanded=\"true\"][aria-selected=\"true\"]'))"));
     await evaluate("document.getElementById('file-new').click()"); await waitFor("Boolean(document.querySelector('.tree-name-input'))");
     await evaluate("const input=document.querySelector('.tree-name-input'); input.value='note.md'; input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));");
-    check('选中文件夹下新建文件并打开', await waitFor("document.getElementById('file-name').textContent === 'notes/note.md'") && fs.existsSync(path.join(a, 'notes/note.md')));
+    check('选中文件夹下新建文件并打开', await waitFor("(document.querySelector('#editor-tabs [data-kind=file][aria-selected=true]')?.getAttribute('data-path') ?? '未打开文件') === 'notes/note.md'") && fs.existsSync(path.join(a, 'notes/note.md')));
     await evaluate("window.monaco.editor.getEditors()[0].getModel().setValue('unsaved note')"); await pause();
     await evaluate("document.querySelector('#tree .tree-row[data-rel-path=\"notes/note.md\"]').dispatchEvent(new KeyboardEvent('keydown',{key:'F2',bubbles:true}))");
     await waitFor("Boolean(document.querySelector('.tree-name-input'))");
     await evaluate("const input=document.querySelector('.tree-name-input'); input.value='renamed.md'; input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));");
-    check('F2 改名更新路径并保留未保存缓冲', await waitFor("document.getElementById('file-name').textContent === 'notes/renamed.md'") && await evaluate("window.monaco.editor.getEditors()[0].getModel().getValue() === 'unsaved note'"));
+    check('F2 改名更新路径并保留未保存缓冲', await waitFor("(document.querySelector('#editor-tabs [data-kind=file][aria-selected=true]')?.getAttribute('data-path') ?? '未打开文件') === 'notes/renamed.md'") && await evaluate("window.monaco.editor.getEditors()[0].getModel().getValue() === 'unsaved note'"));
     check('文件树操作按钮有名称且处于可见范围', await evaluate(`['file-new','folder-new','file-refresh'].every(id => {
       const button = document.getElementById(id); const r = button.getBoundingClientRect();
       return Boolean(button.getAttribute('aria-label')) && r.width > 0 && r.left >= 0 && r.right <= innerWidth;
@@ -193,14 +203,14 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     check('树内重名错误可见且不覆盖文件', await waitFor("Boolean(document.querySelector('.tree-name-error').textContent)") && fs.readFileSync(path.join(a, 'notes/renamed.md'), 'utf8') === '');
     await evaluate("document.querySelector('.tree-name-input').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))");
     const renamedFolder = await evaluate<{ ok: boolean }>(`window.editorBridge.renameEntry('notes','renamed-notes',${JSON.stringify(a)})`);
-    check('文件夹改名更新内部文件路径并保留草稿', renamedFolder.ok && await waitFor("document.getElementById('file-name').textContent === 'renamed-notes/renamed.md'") && await evaluate("window.monaco.editor.getEditors()[0].getModel().getValue() === 'unsaved note'"));
+    check('文件夹改名更新内部文件路径并保留草稿', renamedFolder.ok && await waitFor("(document.querySelector('#editor-tabs [data-kind=file][aria-selected=true]')?.getAttribute('data-path') ?? '未打开文件') === 'renamed-notes/renamed.md'") && await evaluate("window.monaco.editor.getEditors()[0].getModel().getValue() === 'unsaved note'"));
     await evaluate("document.getElementById('tree').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:40,clientY:250}))");
     check('树空白右键提供新建与路径操作', await waitFor("document.querySelectorAll('.file-menu [role=menuitem]').length >= 6"));
     await evaluate("document.querySelector('.file-menu [role=menuitem]').click()"); await waitFor("Boolean(document.querySelector('.tree-name-input'))");
     await evaluate("const input=document.querySelector('.tree-name-input'); input.value='root-file.txt'; input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));");
-    check('空白菜单新建到根目录而非此前选中文件夹', await waitFor("document.getElementById('file-name').textContent === 'root-file.txt'") && fs.existsSync(path.join(a, 'root-file.txt')) && !fs.existsSync(path.join(a, 'renamed-notes/root-file.txt')));
+    check('空白菜单新建到根目录而非此前选中文件夹', await waitFor("(document.querySelector('#editor-tabs [data-kind=file][aria-selected=true]')?.getAttribute('data-path') ?? '未打开文件') === 'root-file.txt'") && fs.existsSync(path.join(a, 'root-file.txt')) && !fs.existsSync(path.join(a, 'renamed-notes/root-file.txt')));
     picked = b; choice = 2; await evaluate("document.getElementById('workspace-add').click()"); await pause();
-    check('当前标签干净时切换目录仍检查后台草稿', controller.workspace.getState().root === a && await evaluate("document.querySelectorAll('#editor-tabs [role=tab]').length === 2"));
+    check('当前标签干净时切换目录仍检查后台草稿', controller.workspace.getState().root === a && await evaluate("document.querySelectorAll('#editor-tabs [data-kind=file]').length === 2"));
     await evaluate("document.getElementById('sidebar').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:40,clientY:350})); document.querySelectorAll('.file-menu [role=menuitem]')[1].click()"); await waitFor("Boolean(document.querySelector('.tree-name-input'))");
     await evaluate("const input=document.querySelector('.tree-name-input'); input.value='root-folder'; input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));");
     check('侧栏空白菜单支持根目录新建文件夹', await waitFor("Boolean(document.querySelector('#tree .tree-row[data-rel-path=\"root-folder\"]'))") && fs.statSync(path.join(a, 'root-folder')).isDirectory());
@@ -212,10 +222,9 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     const savedRenamed = await evaluate<{ ok: boolean }>('window.editorBridge.confirmLeave()');
     check('改名后保存确实写向新路径', savedRenamed.ok && fs.readFileSync(path.join(a, 'renamed-notes/renamed.md'), 'utf8') === 'unsaved note' && !fs.existsSync(path.join(a, 'notes')));
     const deleted = await evaluate<{ ok: boolean }>(`window.editorBridge.trashEntry('renamed-notes/renamed.md', ${JSON.stringify(a)})`);
-    check('删除只关闭受影响标签并切回剩余文件', deleted.ok && !fs.existsSync(path.join(a, 'renamed-notes/renamed.md')) && await waitFor("document.getElementById('file-name').textContent === 'root-file.txt' && document.querySelectorAll('#editor-tabs [role=tab]').length === 1"));
+    check('删除只关闭受影响标签并切回剩余文件', deleted.ok && !fs.existsSync(path.join(a, 'renamed-notes/renamed.md')) && await waitFor("(document.querySelector('#editor-tabs [data-kind=file][aria-selected=true]')?.getAttribute('data-path') ?? '未打开文件') === 'root-file.txt' && document.querySelectorAll('#editor-tabs [data-kind=file]').length === 1"));
     // 所有工具修改从自有静态回复经过真实采集/权限/执行；右侧仅查看实际快照。
     await evaluate("window.editorBridge.setToolConfig({permission:'full',automatic:false,dirtyPolicy:'stop',autoCopyResults:false,sendIntervalSeconds:3})");
-    const dockBefore = await evaluate<string>('window.editorBridge.setWorkspaceLayout({}).then(state => JSON.stringify([state.layout.dockBounds, state.layout.webBounds]))');
     const settingsEvaluate = <T = unknown>(script: string): Promise<T> => {
       const contents = toolSettings(); if (!contents || contents.isDestroyed()) throw new Error('原生工具设置窗口尚未加载');
       return contents.executeJavaScript(script, true);
@@ -228,10 +237,18 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
       }
       return false;
     }
-    await evaluate("document.getElementById('tool-settings-toggle').click()");
+    await evaluate("document.getElementById('requirement-panel').open=true"); await pause(); await pause();
+    const dockBefore = await evaluate<string>('window.editorBridge.setWorkspaceLayout({}).then(state => JSON.stringify([state.layout.dockBounds, state.layout.webBounds]))');
+    await evaluate("document.getElementById('tool-settings-toggle').scrollIntoView({block:'nearest'}); document.getElementById('tool-settings-toggle').click()");
     await waitForSettings("document.getElementById('tool-send-interval')?.value === '3' && !document.getElementById('tool-interval-up').disabled");
     const settingsWindow = BrowserWindow.fromWebContents(toolSettings()!)!;
     check('设置是关联主窗口的独立非模态原生窗口', Boolean(settingsWindow?.isVisible() && settingsWindow.getParentWindow() && settingsWindow.webContents !== view));
+    const settingsSize = await settingsEvaluate<{ content: number; viewport: number }>("(() => { const panel = document.getElementById('tool-settings-panel'); return { content: panel.scrollHeight, viewport: panel.clientHeight }; })()");
+    check('正常高度完整显示工具设置，无需滚动', settingsSize.content <= settingsSize.viewport, settingsSize);
+    const shortSettings = await settingsEvaluate<{ content: number; viewport: number; scrollTop: number; hintTop: number; hintBottom: number; panelBottom: number }>("(() => { const panel = document.getElementById('tool-settings-panel'); const height = panel.style.height; try { panel.style.height = '260px'; panel.scrollTop = panel.scrollHeight; const hint = document.getElementById('tool-permission-hint').getBoundingClientRect(); return { content: panel.scrollHeight, viewport: panel.clientHeight, scrollTop: panel.scrollTop, hintTop: hint.top, hintBottom: hint.bottom, panelBottom: panel.getBoundingClientRect().bottom }; } finally { panel.style.height = height; panel.scrollTop = 0; } })()");
+    check('内容区域高度不足时可滚动访问底部说明', shortSettings.content > shortSettings.viewport && shortSettings.scrollTop > 0 && shortSettings.hintTop >= 0 && shortSettings.hintBottom <= shortSettings.panelBottom, shortSettings);
+    await settingsEvaluate("document.getElementById('tool-clear-rules').click()");
+    check('常规操作反馈出现后设置仍无需滚动', await waitForSettings("(() => { const panel = document.getElementById('tool-settings-panel'); return document.getElementById('tool-settings-notice').textContent.includes('已清除本项目') && panel.scrollHeight <= panel.clientHeight; })()"));
     check('打开设置不改变官网和 dock 高度', dockBefore === await evaluate<string>('window.editorBridge.setWorkspaceLayout({}).then(state => JSON.stringify([state.layout.dockBounds, state.layout.webBounds]))'));
     check('专用设置桥没有文件、工具执行和官网发送能力', await settingsEvaluate<boolean>("typeof window.editorBridge === 'undefined' && !('readFile' in window.toolSettingsBridge) && !('setToolConfig' in window.toolSettingsBridge) && !('sendPrompt' in window.toolSettingsBridge)"));
     await settingsEvaluate("document.getElementById('tool-interval-up').click()");
@@ -258,10 +275,12 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     check('设置关闭按钮收起并恢复齿轮焦点', await waitFor("document.activeElement?.id === 'tool-settings-toggle'") && !settingsWindow.isVisible());
     await evaluate("document.getElementById('tool-settings-toggle').click()");
     await waitForSettings("document.getElementById('tool-send-interval').value === '3'");
-    await settingsEvaluate("document.getElementById('btn-settings').click()");
+    check('工具设置浮层不再包含提示词编辑入口', await settingsEvaluate("document.getElementById('btn-settings') === null && document.getElementById('tool-settings-prompt') === null && !('openPrompt' in window.toolSettingsBridge)"));
+    await settingsEvaluate("document.getElementById('tool-settings-close').click()");
+    await evaluate('window.editorBridge.openPromptPanel()');
     await pause();
     const prompt = settingsWindow.getParentWindow()!.contentView.children.find(child => 'webContents' in child && (child.webContents as WebContents).getURL().endsWith('/prompt.html'));
-    check('原生设置提示词入口关闭浮层并打开现有编辑面板', !settingsWindow.isVisible() && Boolean(prompt?.getVisible()));
+    check('应用提示词入口仍打开现有编辑面板', !settingsWindow.isVisible() && Boolean(prompt?.getVisible()));
     if (prompt && 'webContents' in prompt) await (prompt.webContents as WebContents).executeJavaScript('window.promptBridge.close()', true);
     let batchSeq = 0;
     const fixture = path.join(directory, 'tool-reply.html');
@@ -289,20 +308,26 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     const undo = () => previewEvaluate<{ ok: boolean; error?: string }>('window.previewBridge.undoToolChange()');
     check('旧人工应用桥已移除，右侧只有查看与工具撤销', await evaluate<boolean>("['applyChange','undoSave','showDiffInEditor','stepDiff','onDiffData'].every(name => !(name in window.editorBridge))") && await previewEvaluate<boolean>("!('applyChange' in window.previewBridge) && typeof window.previewBridge.getReviewState === 'function'"));
     fs.writeFileSync(path.join(a, 'keep.txt'), 'keep original');
-    const changed = await collect([apply('write', [{ path: 'a.txt', operation: 'overwrite', content: 'A changed' }, { path: 'keep.txt', operation: 'overwrite', content: 'keep changed' }])]);
+    const writeRequests = [apply('write', [{ path: 'a.txt', operation: 'overwrite', content: 'A changed' }, { path: 'keep.txt', operation: 'overwrite', content: 'keep changed' }])];
+    const changed = await collect(writeRequests);
     const written = await reviewState();
     check('真实工具采集直接修改两文件，无需人工应用', changed.results[0]?.status === 'done' && fs.readFileSync(path.join(a, 'a.txt'), 'utf8') === 'A changed' && fs.readFileSync(path.join(a, 'keep.txt'), 'utf8') === 'keep changed');
     check('右侧记录实际执行前后快照与增删统计', written.records.length === 2 && written.records.every(record => record.status === 'applied' && typeof record.before === 'string' && typeof record.after === 'string' && record.diff) && written.records[0]?.before === 'draft A' && written.records[0]?.after === 'A changed', written.records);
-    check('工具修改不会自动抢走文件编辑区域', await evaluate("!document.body.classList.contains('file-diff-visible') && document.querySelector('#editor-tabs [data-kind=review]') === null"));
+    check('新工具批次自动打开工具页并保留文件模型', await evaluate("!document.body.classList.contains('file-diff-visible') && document.querySelector('#editor-tabs [data-kind=tools][aria-selected=true]') !== null && Boolean(window.monaco.editor.getEditors()[0].getModel())"));
+    await evaluate("document.querySelector('#editor-tabs [data-kind=tools]').parentElement.querySelector('.editor-tab-close').click()");
+    await waitFor("document.querySelector('#editor-tabs [data-kind=tools]') === null");
+    await loadReply(JSON.stringify({ protocol_version: 1, batch_id: 'workspace-' + batchSeq, requests: writeRequests }));
+    await pause();
+    check('关闭后重复采集不重开工具，结果与撤销能力保留', await evaluate<boolean>("window.editorBridge.getToolState().then(state => !state.busy && state.canUndo && state.results.length === 1 && document.querySelector('#editor-tabs [data-kind=tools]') === null)") && fs.readFileSync(path.join(a, 'a.txt'), 'utf8') === 'A changed');
     await evaluate("document.getElementById('tool-view-changes').click()");
     await waitFor("document.querySelector('#editor-tabs [data-kind=review][aria-selected=true]') !== null");
     await evaluate("window.editorBridge.setWorkspaceLayout({fileVisible:false})");
     await evaluate("document.getElementById('tool-view-changes').click()");
     check('文件区收起后查看改动可恢复区域与审阅标签', await waitFor("!document.querySelector('.editor-wrap').hidden && document.querySelector('#editor-tabs [data-kind=review][aria-selected=true]') !== null"));
-    const beforeView = await evaluate('document.getElementById("file-name").textContent');
+    const beforeView = await evaluate('window.monaco.editor.getEditors()[0].getModel()?.uri.toString()');
     check('右侧默认连续显示本批文件，差异正文占满高度且导航收起', await previewEvaluate("document.querySelectorAll('article[data-record-id]').length === 2 && document.getElementById('pv-navigation').hidden && document.getElementById('pv-detail').getBoundingClientRect().height > innerHeight * .8"));
     await previewEvaluate("document.getElementById('pv-navigate').click(); document.querySelector('.pv-select').click()");
-    check('查看差异不抢走编辑焦点文件，无重复应用按钮', await evaluate('document.getElementById("file-name").textContent') === beforeView && await previewEvaluate("Boolean(document.querySelector('.pv-diff')) && !Array.from(document.querySelectorAll('button')).some(button => /应用|创建文件/.test(button.textContent))"));
+    check('查看差异不抢走编辑焦点文件，无重复应用按钮', await evaluate('window.monaco.editor.getEditors()[0].getModel()?.uri.toString()') === beforeView && await previewEvaluate("Boolean(document.querySelector('.pv-diff')) && !Array.from(document.querySelectorAll('button')).some(button => /应用|创建文件/.test(button.textContent))"));
     check('文件树类型图标实际可见，文件夹开合图标独立于展开箭头', await evaluate("Boolean(document.querySelector('.tree-icon svg')) && Boolean(document.querySelector('.tree-icon-folder, .tree-icon-folder-open'))"));
     await capture(preview, 'review.png');
     const ordinaryWidth = await previewEvaluate<number>('innerWidth');
@@ -332,13 +357,13 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     await evaluate("document.getElementById('file-refresh').click()");
     await waitFor("Boolean(document.querySelector('#tree .tree-row[data-rel-path=\"a.txt\"]'))");
     await evaluate("document.querySelector('#tree .tree-row[data-rel-path=\"a.txt\"]').click()");
-    await waitFor("document.getElementById('file-name').textContent === 'a.txt'");
+    await waitFor("(document.querySelector('#editor-tabs [data-kind=file][aria-selected=true]')?.getAttribute('data-path') ?? '未打开文件') === 'a.txt'");
     await evaluate("window.monaco.editor.getEditors()[0].getModel().setValue('new local draft')"); await pause();
     await evaluate("document.querySelector('#editor-tabs [role=tab][data-path=\"root-file.txt\"]').click()");
     const dirty = await collect([apply('dirty-stop', [{ path: path.join(a, 'a.txt'), operation: 'overwrite', content: 'AI C' }])]);
     check('工具绝对路径同样尊重非活动标签草稿的停止策略', dirty.results[0]?.status === 'failed' && fs.readFileSync(path.join(a, 'a.txt'), 'utf8') === 'draft A');
     await evaluate("document.querySelector('#editor-tabs [role=tab][data-path=\"a.txt\"]').click()");
-    check('停止修改保留未保存内容 B', await waitFor("document.getElementById('file-name').textContent === 'a.txt'") && await evaluate("window.monaco.editor.getEditors()[0].getModel().getValue() === 'new local draft'"));
+    check('停止修改保留未保存内容 B', await waitFor("(document.querySelector('#editor-tabs [data-kind=file][aria-selected=true]')?.getAttribute('data-path') ?? '未打开文件') === 'a.txt'") && await evaluate("window.monaco.editor.getEditors()[0].getModel().getValue() === 'new local draft'"));
     await evaluate("window.editorBridge.setToolConfig({dirtyPolicy:'continue'})");
     const continued = await collect([apply('dirty-continue', [{ path: 'a.txt', operation: 'overwrite', content: 'AI C' }])]);
     check('继续策略用 AI 的 C 替换磁盘 A 与草稿 B，编辑器同步干净内容', continued.results[0]?.status === 'done' && fs.readFileSync(path.join(a, 'a.txt'), 'utf8') === 'AI C' && await waitFor("window.monaco.editor.getEditors()[0].getModel().getValue() === 'AI C' && !document.getElementById('dirty-flag').textContent"));
@@ -349,14 +374,16 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     const oldSnippet = await evaluate<{ ok: boolean }>(`window.editorBridge.copyNumberedSnippet(${JSON.stringify({ root: a, relPath: 'a.txt', text: 'old snippet', startLine: 1 })})`);
     check('切换项目清理变更与撤销，旧保存和片段不能污染新根', !oldSave.ok && !oldSnippet.ok && !(await undo()).ok && (await reviewState()).records.length === 0 && fs.readFileSync(path.join(b, 'a.txt'), 'utf8') === 'B original');
     await controller.openRecent(1); await waitFor("Boolean(document.querySelector('#tree .tree-row[data-rel-path=\"root-file.txt\"]'))");
-    await evaluate("document.querySelector('#tree .tree-row[data-rel-path=\"root-file.txt\"]').click()"); await waitFor("document.getElementById('file-name').textContent === 'root-file.txt'");
+    await evaluate("document.querySelector('#tree .tree-row[data-rel-path=\"root-file.txt\"]').click()"); await waitFor("(document.querySelector('#editor-tabs [data-kind=file][aria-selected=true]')?.getAttribute('data-path') ?? '未打开文件') === 'root-file.txt'");
 
     const createdText = 'const created = 1;\nconst second = 2;';
     const created = await collect([apply('create', [{ path: 'generated/deep/new.ts', operation: 'create', content: createdText }])]);
     const creationReview = await reviewState();
     check('工具新建直接创建多级目录，右侧为空原文到完整新文', created.results[0]?.status === 'done' && fs.readFileSync(path.join(a, 'generated/deep/new.ts'), 'utf8') === createdText && creationReview.records[0]?.before === '' && creationReview.records[0]?.after === createdText);
-    check('新建后的编辑器为真实可编辑模型，目录树同步刷新', await waitFor("document.getElementById('file-name').textContent === 'generated/deep/new.ts' && window.monaco.editor.getEditors()[0].getOption(window.monaco.editor.EditorOption.readOnly) === false && Boolean(document.querySelector('#tree .tree-row[data-rel-path=\"generated\"]'))"));
-    check('撤销新增删除本次文件和空目录并关闭对应标签', (await undo()).ok && !fs.existsSync(path.join(a, 'generated')) && await waitFor("document.getElementById('file-name').textContent === 'root-file.txt' && !document.querySelector('#tree .tree-row[data-rel-path=\"generated\"]')"));
+    await waitFor("document.querySelector('#editor-tabs [data-kind=file][data-path=\"generated/deep/new.ts\"]') !== null");
+    await evaluate("document.querySelector('#editor-tabs [data-kind=file][data-path=\"generated/deep/new.ts\"]').click()");
+    check('新建后的编辑器为真实可编辑模型，目录树同步刷新', await waitFor("(document.querySelector('#editor-tabs [data-kind=file][aria-selected=true]')?.getAttribute('data-path') ?? '未打开文件') === 'generated/deep/new.ts' && window.monaco.editor.getEditors()[0].getOption(window.monaco.editor.EditorOption.readOnly) === false && Boolean(document.querySelector('#tree .tree-row[data-rel-path=\"generated\"]'))"));
+    check('撤销新增删除本次文件和空目录并关闭对应标签', (await undo()).ok && !fs.existsSync(path.join(a, 'generated')) && await waitFor("(document.querySelector('#editor-tabs [data-kind=file][aria-selected=true]')?.getAttribute('data-path') ?? '未打开文件') === 'root-file.txt' && !document.querySelector('#tree .tree-row[data-rel-path=\"generated\"]')"));
     const empty = await collect([apply('empty', [{ path: 'empty-created.txt', operation: 'create', content: '' }])]);
     check('工具可创建真正空文件并撤销为不存在', empty.results[0]?.status === 'done' && fs.readFileSync(path.join(a, 'empty-created.txt'), 'utf8') === '' && (await undo()).ok && !fs.existsSync(path.join(a, 'empty-created.txt')));
     fs.writeFileSync(path.join(a, 'race.txt'), 'external content');
@@ -367,7 +394,7 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     const protocolBefore = 'head\nfirst();\nmid\nsecond();\ntail\n';
     fs.writeFileSync(protocolFile, protocolBefore);
     await evaluate("document.getElementById('file-refresh').click()"); await waitFor("Boolean(document.querySelector('#tree .tree-row[data-rel-path=\"protocol.txt\"]'))");
-    await evaluate("document.querySelector('#tree .tree-row[data-rel-path=\"protocol.txt\"]').click()"); await waitFor("document.getElementById('file-name').textContent === 'protocol.txt'");
+    await evaluate("document.querySelector('#tree .tree-row[data-rel-path=\"protocol.txt\"]').click()"); await waitFor("(document.querySelector('#editor-tabs [data-kind=file][aria-selected=true]')?.getAttribute('data-path') ?? '未打开文件') === 'protocol.txt'");
     const copiedText = '\n\tunsaved text  \n\n';
     await evaluate(`window.monaco.editor.getEditors()[0].getModel().setValue(${JSON.stringify(copiedText)})`); await pause();
     const copiedSelection = await evaluate<{ ok: boolean }>(`window.editorBridge.copyNumberedSnippet(${JSON.stringify({ root: a, relPath: 'protocol.txt', text: copiedText, startLine: 1 })})`);
@@ -385,6 +412,7 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     fs.unlinkSync(path.join(a, 'valid/new.ts')); fs.renameSync(path.join(a, 'valid/original.ts'), path.join(a, 'valid/new.ts'));
     check('移回本次创建对象后可重试撤销', (await undo()).ok && !fs.existsSync(path.join(a, 'valid')));
     const read = await collect([{ id: 'read', tool: 'read_file', args: { path: 'protocol.txt' } }]);
+    check('新读取批次仍自动打开工具标签', await evaluate("document.querySelector('#editor-tabs [data-kind=tools][aria-selected=true]') !== null"));
     check('查询批次清空上批差异，工具结果仍正常', read.results[0]?.status === 'done' && (await reviewState()).records.length === 0 && await previewEvaluate("document.getElementById('pv-meta').textContent === '0 文件'"));
     const invalid = await loadReply('{"protocol_version":1,"batch_id":"broken","requests":[');
     check('无效 JSON 由工具结果给出明确批次错误，不写盘', invalid.ok && await waitFor("window.editorBridge.getToolState().then(state => Boolean(state.batchError && state.batchError.error.includes('JSON')))") && fs.readFileSync(protocolFile, 'utf8') === protocolBefore);
@@ -396,6 +424,8 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     const longReport = '## 实验报告\n\n' + '输入大小、经典配置与实际实验的差异。'.repeat(40) + '\n\n' + 'a_very_long_identifier_'.repeat(35) + '\n';
     fs.writeFileSync(path.join(a, 'report.md'), '旧报告\n');
     await collect([apply('report', [{ path: 'report.md', operation: 'overwrite', content: longReport }])]);
+    await evaluate("document.getElementById('tool-view-changes').click()");
+    await waitFor("document.querySelector('#editor-tabs [data-kind=review][aria-selected=true]') !== null");
     check('长 Markdown 默认换行且差异不横向溢出', await previewEvaluate("document.getElementById('pv-detail').classList.contains('wrap') && document.getElementById('pv-detail').scrollWidth <= document.getElementById('pv-detail').clientWidth + 1 && document.querySelector('.pv-line-text').getBoundingClientRect().width > 0"));
     await previewEvaluate("document.getElementById('pv-wrap').click()");
     check('关闭自动换行后长代码可横向查看', await previewEvaluate("!document.getElementById('pv-detail').classList.contains('wrap') && Array.from(document.querySelectorAll('.pv-diff')).some(box => box.scrollWidth > box.clientWidth)"));
@@ -409,7 +439,7 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     await waitFor("Boolean(document.querySelector('#tree .tree-row[data-rel-path=\"scroll-tab-9.txt\"]'))");
     for (const relative of tabPaths) {
       await evaluate(`document.querySelector('#tree .tree-row[data-rel-path="${relative}"]').click()`);
-      await waitFor(`document.getElementById('file-name').textContent === '${relative}'`);
+      await waitFor(`(document.querySelector('#editor-tabs [data-kind=file][aria-selected=true]')?.getAttribute('data-path') ?? '未打开文件') === '${relative}'`);
     }
     check('切换活动标签自动滚入可见区域', await evaluate(`(() => {
       const host=document.getElementById('editor-tabs'), active=host.querySelector('[aria-selected="true"]');
@@ -430,7 +460,7 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
       return bar.height==='5px' && track.backgroundColor==='rgba(0, 0, 0, 0)' && button.display==='none';
     })()`));
     await evaluate("document.querySelector('#editor-tabs [role=tab][data-path=\"scroll-tab-0.txt\"]').click()");
-    await waitFor("document.getElementById('file-name').textContent === 'scroll-tab-0.txt'");
+    await waitFor("(document.querySelector('#editor-tabs [data-kind=file][aria-selected=true]')?.getAttribute('data-path') ?? '未打开文件') === 'scroll-tab-0.txt'");
     check('远端标签切回首项仍可见', await evaluate(`(() => {
       const host=document.getElementById('editor-tabs'), active=host.querySelector('[aria-selected="true"]');
       const h=host.getBoundingClientRect(), r=active.getBoundingClientRect();return r.left>=h.left-1 && r.right<=h.right+1;

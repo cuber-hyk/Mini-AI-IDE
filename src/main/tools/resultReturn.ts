@@ -29,7 +29,7 @@ export class ToolResultReturn {
   }
 
   invalidate(): void {
-    this.generation++; this.attempted = true; this.phase = 'paused'; this.message = '已发起新一轮，旧批结果与附件不再发送';
+    this.generation++; this.attempted = true; this.phase = 'invalidated'; this.message = '已发起新一轮，旧批结果与附件不再发送';
     this.options.changed();
   }
 

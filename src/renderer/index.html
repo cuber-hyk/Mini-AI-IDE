@@ -36,27 +36,21 @@
       <p id="workspace-message" class="workspace-message" role="status" aria-live="polite"></p>
       <p class="workspace-footnote">切换本地项目 · 官网对话保持不变</p>
     </nav>
-    <button id="workspace-restore" class="ui-icon workspace-restore" type="button" aria-label="展开工作区" title="展开工作区" hidden><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1"/><path d="M11 2.5v11"/></svg></button>
+    <button id="workspace-restore" class="ui-icon workspace-restore" type="button" aria-label="展开工作区" title="展开工作区" hidden><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1"/><path d="M11 2.5v11m2-6 1.5 1.5L13 9.5"/></svg></button>
     <div id="workspace-resizer" class="workspace-divider" role="separator" tabindex="0" aria-label="调整项目工作区宽度" aria-orientation="vertical"></div>
     <header class="toolbar">
-      <div id="editor-tabs" class="editor-tabs" role="tablist" aria-label="文件与改动预览" hidden></div>
+      <div id="editor-tabs" class="editor-tabs" role="tablist" aria-label="文件、工具与改动" hidden></div>
       <span class="spacer"></span>
-      <!--
-        这里原本有个「保存 (Ctrl+S)」按钮，已按用户意见移除：
-        Ctrl+S 是人人都会的快捷键，为它单独占一个工具栏按钮不划算，
-        而工具栏宽度在按钮变多后已经很挤。
-        保存能力**没有丢** —— 快捷键注册在 Monaco 上（见 renderer.js 的 initMonaco）：
-          window.monaco.KeyMod.CtrlCmd | window.monaco.KeyCode.KeyS
-        未保存状态改由工具栏的「● 未保存」文字 + 文件名旁的白点提示（见 renderDirty）。
-      -->
+      <!-- 保存沿用 Ctrl+S，未保存状态在文件标签与工具栏显示。 -->
       <span id="dirty-flag" class="dirty"></span>
-      <button id="file-maximize" class="ui-icon" type="button" title="文件区全屏" aria-label="文件区全屏" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><path class="maximize-mark" d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/><path class="restore-mark" d="M6 2v4H2M14 6h-4V2M10 14v-4h4M2 10h4v4"/></svg></button>
-      <button id="file-collapse" class="ui-icon" type="button" aria-label="收起文件工作区" title="收起文件工作区"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1"/><path d="M11 2.5v11"/></svg></button>
+      <button id="btn-sidebar" class="ui-icon" type="button" title="展开目录树（Ctrl+B）" aria-label="展开目录树" hidden><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6-2 2 2 2"/><rect x="6" y="2.5" width="8.5" height="11" rx="1"/><path d="M11 2.5v11"/></svg></button>
+      <button id="file-maximize" class="ui-icon" type="button" title="最大化文件区" aria-label="最大化文件区" aria-pressed="false"><svg viewBox="0 0 16 16" aria-hidden="true"><path class="maximize-mark" d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/><path class="restore-mark" d="M6 2v4H2M14 6h-4V2M10 14v-4h4M2 10h4v4"/></svg></button>
+      <button id="file-collapse" class="ui-icon" type="button" aria-label="收起文件工作区" title="收起文件工作区"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1"/><path d="M11 2.5v11m2-6 1.5 1.5L13 9.5"/></svg></button>
     </header>
 
     <main class="layout">
       <aside id="sidebar" class="sidebar">
-        <div class="sidebar-title"><span class="sidebar-caption"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 13V3h5l2 2h6v8z"/></svg>文件</span><span class="spacer"></span><button id="tree-collapse" class="ui-icon" type="button" title="收起目录树" aria-label="收起目录树"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1"/><path d="M11 2.5v11"/></svg></button></div>
+        <div class="sidebar-title"><span class="sidebar-caption"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 13V3h5l2 2h6v8z"/></svg>文件</span><span class="spacer"></span><button id="tree-collapse" class="ui-icon" type="button" title="收起目录树" aria-label="收起目录树"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1"/><path d="M11 2.5v11m2-6 1.5 1.5L13 9.5"/></svg></button></div>
         <div class="sidebar-head"><span id="tree-root-path" class="tree-root-path" title="">未选择项目</span><span class="spacer"></span>
           <button id="file-new" type="button" class="ui-icon" title="新建文件" aria-label="新建文件"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 1.5h6l3 3V8M3 1.5v13h4M9 1.5v3h3M11 9v6M8 12h6"/></svg></button>
           <button id="folder-new" type="button" class="ui-icon" title="新建文件夹" aria-label="新建文件夹"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.5 13V3h5l2 2h6v3M10.5 9v6M7.5 12h6"/></svg></button>
@@ -69,32 +63,14 @@
       <div id="sidebar-resizer" class="sidebar-resizer" title="拖动调整目录树宽度（双击复位）"></div>
 
       <section class="editor-wrap">
-        <div class="editor-head">
-          <span id="root-label" class="root-label">未打开目录</span>
-          <button id="btn-sidebar" type="button" class="icon-btn" title="显示/隐藏目录树（Ctrl+B）">
-            <svg viewBox="0 0 16 16" aria-hidden="true">
-              <rect x="1.5" y="2.5" width="13" height="11" rx="1.5" />
-              <path d="M6.5 2.5v11" />
-            </svg>
-          </button>
-          <span id="file-name" class="file-name">未打开文件</span>
-          <span id="file-dot" class="file-dot" title="有未保存的修改" hidden></span>
-          <span class="spacer"></span>
-
-        </div>
         <div id="monaco" class="monaco"></div>
         <div id="workspace-welcome" class="workspace-welcome" hidden></div>
         <div id="info" class="info">未打开文件</div>
       </section>
 
-      <!-- 分隔条：位于编辑器视图最右侧；拖动它调整左右分栏 -->
-      <div id="resizer" class="resizer" title="拖动调整左右宽度"></div>
-    </main>
-
-    <div id="collaboration-dock" class="collaboration-dock">
+      <section id="tool-workspace" class="tool-workspace" aria-label="工具" hidden>
     <section id="tool-dock" class="tool-dock" aria-label="工具结果面板">
-    <div id="tool-resizer" class="tool-resizer" role="separator" aria-label="调整工具面板高度" aria-orientation="horizontal" aria-valuemin="80" aria-valuemax="260" aria-valuenow="160" tabindex="0" title="拖动调整高度；方向键调整，双击复位" hidden></div>
-    <details id="tool-panel" class="tool-panel">
+    <details id="tool-panel" class="tool-panel" open>
       <summary class="tool-panel-summary">
         <span class="tool-panel-heading"><span>工具结果</span><span id="tool-count" class="tool-count">0 项</span></span>
         <span class="tool-panel-status">
@@ -126,7 +102,13 @@
       </div>
     </div>
     </section>
+      </section>
 
+      <!-- 分隔条：位于编辑器视图最右侧；拖动它调整左右分栏 -->
+      <div id="resizer" class="resizer" title="拖动调整左右宽度"></div>
+    </main>
+
+    <div id="collaboration-dock" class="collaboration-dock">
     <!-- 变更列表在右侧独立视图（见 preview.html），输入区仍属于编辑器。 -->
     <footer class="prompt-bar">
       <div class="prompt-shell">
@@ -148,21 +130,12 @@
         <div id="skill-chips" class="skill-chips" aria-label="已选技能" hidden></div>
         <div class="skill-preview-controls"><button id="skill-preview-close" type="button" class="ui-button">收起技能说明</button></div>
         <pre id="skill-preview" class="skill-preview" aria-label="技能说明" hidden></pre>
+        <div id="prompt-actions" class="prompt-actions">
         <div id="local-prompt-options" class="local-prompt-options">
           <button id="btn-add-prompt-attachment" type="button" class="ui-icon" title="添加文档或图片，最多 50 个，每个不超过 100 MB" aria-label="添加附件"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
           <label title="新对话或需要重新说明规则时勾选"><input id="prompt-initialization" type="checkbox" checked disabled />附带初始化提示词</label>
         </div>
-        </details>
-        <div id="prompt-actions" class="prompt-actions">
-          <div class="prompt-options">
-            <div class="variant-switch" id="variant-switch" role="switch" aria-checked="false"
-                 tabindex="0" title="切换提示词的详细程度：简洁版（6 个示例）/ 完整版（14 个示例）。点击或按空格切换">
-              <span class="variant-thumb" aria-hidden="true"></span>
-              <button type="button" class="variant-opt" data-variant="short" aria-pressed="true">简洁</button>
-              <button type="button" class="variant-opt" data-variant="full" aria-pressed="false">完整</button>
-            </div>
-            <span id="prompt-custom" class="prompt-custom" title="当前使用自定义版本" role="img" aria-label="当前使用自定义版本" hidden></span>
-          </div>
+          <span id="prompt-custom" class="prompt-custom" title="当前使用自定义提示词" role="img" aria-label="当前使用自定义提示词" hidden></span>
         <div class="tool-controls">
           <div id="tool-permission-control" class="tool-permission-control" data-permission="ask">
           <label class="tool-permission-label" for="tool-permission" title="工具执行权限">
@@ -181,12 +154,13 @@
         </div>
         <span class="spacer"></span>
         <div id="tool-settings-wrap" class="tool-settings-wrap">
-          <button id="tool-settings-toggle" type="button" class="ui-icon" aria-label="工具与提示词设置" title="工具与提示词设置" aria-haspopup="dialog" aria-expanded="false">
+          <button id="tool-settings-toggle" type="button" class="ui-icon" aria-label="工具设置" title="工具设置" aria-haspopup="dialog" aria-expanded="false">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.95 5.31L10.19 2.67L13.81 2.67L14.05 5.31L15.29 5.82L17.31 4.12L19.88 6.69L18.18 8.71L18.69 9.95L21.33 10.19L21.33 13.81L18.69 14.05L18.18 15.29L19.88 17.31L17.31 19.88L15.29 18.18L14.05 18.69L13.81 21.33L10.19 21.33L9.95 18.69L8.71 18.18L6.69 19.88L4.12 17.31L5.82 15.29L5.31 14.05L2.67 13.81L2.67 10.19L5.31 9.95L5.82 8.71L4.12 6.69L6.69 4.12L8.71 5.82Z"/><circle cx="12" cy="12" r="3"/></svg>
           </button>
         </div>
         <button id="btn-send-prompt" type="button" class="ui-button primary prompt-send" aria-label="发送需求" title="发送需求" disabled><svg class="prompt-send-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-7 7 7-7 7 7"/></svg><span class="prompt-send-spinner" aria-hidden="true"></span></button>
         </div>
+        </details>
       </div>
     </footer>
     </div>
@@ -208,6 +182,7 @@
     <script src="./toolPanelLayout.js"></script>
     <script src="./toolExecutionClock.js"></script>
     <script src="./toolCompletionSound.js"></script>
+    <script src="./toolAttention.js"></script>
     <script src="./toolHarness.js"></script>
   </body>
 </html>

@@ -271,6 +271,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   // 判断依据：代码里只有 `webContents.send(CHANNELS.x)`、没有 `ipcMain.handle(CHANNELS.x)`。
   const oneWayChannels: string[] = [
     CHANNELS.toolState,
+    CHANNELS.toolWorkspaceStatus,
     CHANNELS.toolSettingsState,
     CHANNELS.toolSettingsVisibility,
     CHANNELS.updateState,
@@ -299,7 +300,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   let preloadSrcCheck: { ok: boolean; detail: string } = { ok: false, detail: '未读取到 preload.js' };
   try {
     // 所有本地视图的窄桥一起核对，包括只读变更查看的 review 通道。
-    const preloadFiles = ['preload.js', 'previewPreload.js', 'webbarPreload.js', 'promptPreload.js', 'toolSettingsPreload.js'];
+    const preloadFiles = ['preload.js', 'previewPreload.js', 'webbarPreload.js', 'promptPreload.js', 'toolSettingsPreload.js', 'updatePreload.js'];
     const literals: string[] = [];
     const perFile: Record<string, string[]> = {};
     for (const f of preloadFiles) {
@@ -431,6 +432,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       };
       if (layoutBindings[id]) return !layoutJs.includes(layoutBindings[id]!);
       if (id === 'btn-send-prompt') return !/send\.addEventListener\('click'/.test(localPromptJs);
+      if (id === 'btn-add-prompt-attachment') return !/addAttachment\.addEventListener\('click'/.test(localPromptJs);
       if (id === 'skill-preview-close') return !/getElementById\('skill-preview-close'\)\.addEventListener\('click'/.test(localPromptJs);
       if (id === 'workspace-add') return !navigationJs.includes("getElementById('workspace-add').addEventListener('click'");
       if (id === 'tool-view-changes') return !fileWorkspaceJs.includes("getElementById('tool-view-changes').addEventListener('click'");
@@ -605,8 +607,9 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       const wbPreload = fs.readFileSync(path.join(__dirname, 'webbarPreload.js'), 'utf8');
       const wbBridgeOk = /exposeInMainWorld\('webbarBridge'/.test(wbPreload) &&
         wbPreload.includes("'return:collect'") && wbPreload.includes("'ui:toggle-workspace'") &&
+        wbPreload.includes("'tools:get-workspace-status'") && wbPreload.includes("'tools:workspace-status'") && wbPreload.includes("'tools:open-workspace'") &&
         wbPreload.includes("'ui:restore-file-workspace'") && !/ui:set-web-visible|ui:set-preview-panel/.test(wbPreload);
-      add('N4', '官网顶栏 preload 仅暴露只读采集、单一工作区切换和文件区恢复', wbBridgeOk, { wbBridgeOk });
+      add('N4', '官网顶栏 preload 仅暴露只读采集、工具摘要及窄面板恢复', wbBridgeOk, { wbBridgeOk });
     } catch (err) {
       add('N1', '网页区工具条界面契约检查', false, `读取失败：${err instanceof Error ? err.message : String(err)}`);
     }
@@ -653,7 +656,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       const hasSave = /id="pm-save"/.test(pmHtml) && /el\.save\.addEventListener\('click',\s*save\)/.test(pmJs);
       const hasReset = /id="pm-reset"/.test(pmHtml) && /el\.reset\.addEventListener\('click',\s*resetToDefault\)/.test(pmJs);
       const hasCancel = /id="pm-cancel"/.test(pmHtml) && /el\.cancel\.addEventListener\('click',\s*close\)/.test(pmJs);
-      const hasDirtyState = /未保存/.test(pmJs) && /\.dirty =/.test(pmJs);
+      const hasDirtyState = /未保存/.test(pmJs) && /const dirty =/.test(pmJs);
       add('Y3', '提示词面板：具备编辑框 + 保存/恢复默认/取消，且回显"未保存"状态', hasEditorArea && hasSave && hasReset && hasCancel && hasDirtyState, {
         hasEditorArea,
         hasSave,
@@ -662,27 +665,13 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
         hasDirtyState,
       });
 
-      /*
-       * Y3b：**版本页签**（用户设计）。
-       *
-       * 面板要能分别查看/编辑"简洁版"与"完整版" —— 两版各有自己的内置默认与自定义。
-       * 断言 HTML 里确实有两个页签、JS 里确实有 perVariant 的独立编辑态。
-       */
-      const hasTabs =
-        (pmHtml.match(/class="pm-tab"/g) ?? []).length === 2 &&
-        /data-variant="short"/.test(pmHtml) &&
-        /data-variant="full"/.test(pmHtml);
-      const tabSwitching = /perVariant\s*=\s*\{/.test(pmJs) && /function switchTo\(/.test(pmJs);
-      add('Y3b', '提示词面板：两个版本页签 + 各自的独立编辑态（切走不丢草稿）', hasTabs && tabSwitching, {
-        tabCount: (pmHtml.match(/class="pm-tab"/g) ?? []).length,
-        tabSwitching,
-      });
+      add('Y3b', '提示词面板只有唯一编辑器，不保留旧版本页签',
+        !/data-variant|pm-tab/.test(pmHtml) && !/perVariant|switchTo/.test(pmJs), { singleEditor: true });
 
       /*
        * Y4：「恢复默认」必须是**两步**（载入编辑框 → 用户再点保存），不能一键直接落库。
        * 一键清空是**不可撤销**的：用户辛苦写的格式约定会瞬间消失。
        * 断言方式是读 resetToDefault 的实现里到底是"写编辑框"还是"调 bridge.reset"。
-       * 分版本后载入的是**当前页签那一版**的默认全文（state[active].defaultSpec）。
        */
       const resetFnBody = /function resetToDefault\(\)\s*\{([\s\S]*?)\n  \}/.exec(pmJs)?.[1] ?? '';
       const resetLoadsEditor = /el\.editor\.value\s*=/.test(resetFnBody) && /defaultSpec/.test(resetFnBody);
@@ -693,11 +682,11 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       });
 
       // Y5：Esc 关闭 + Ctrl+S 保存（浮层类界面的通用约定，也是本窗口里最自然的键位）
-      const escCloses = /e\.key === 'Escape'/.test(pmJs) && /close\(\)/.test(pmJs);
-      const ctrlSSaves = /e\.key === 's'/.test(pmJs) && /void save\(\)/.test(pmJs);
+      const escCloses = /event\.key === 'Escape'/.test(pmJs) && /close\(\)/.test(pmJs);
+      const ctrlSSaves = /event\.key\.toLowerCase\(\) === 's'/.test(pmJs) && /void save\(\)/.test(pmJs);
       add('Y5', '提示词面板：Esc 关闭、Ctrl+S 保存', escCloses && ctrlSSaves, { escCloses, ctrlSSaves });
 
-      // Y6：独立 preload 暴露窄 bridge，通道名与契约一致；save/reset 必须带 variant 参数
+      // Y6：独立 preload 暴露窄 bridge，通道名与契约一致；save 仅带原文，reset 无参数
       const pmPreload = fs.readFileSync(path.join(__dirname, 'promptPreload.js'), 'utf8');
       const pmBridgeOk =
         /exposeInMainWorld\('promptBridge'/.test(pmPreload) &&
@@ -705,57 +694,36 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
         pmPreload.includes("'ui:save-prompt-spec'") &&
         pmPreload.includes("'ui:reset-prompt-spec'") &&
         pmPreload.includes("'ui:close-prompt-panel'") &&
-        /save:\s*\(variant, spec\)\s*=>\s*electron_1\.ipcRenderer\.invoke\(CH\.save, variant, spec\)/.test(pmPreload) &&
-        /reset:\s*\(variant\)\s*=>\s*electron_1\.ipcRenderer\.invoke\(CH\.reset, variant\)/.test(pmPreload);
-      add('Y6', '提示词面板：独立 preload 暴露窄 bridge，通道名正确且 save/reset 带版本参数', pmBridgeOk, {
+        /save:\s*\(spec\)\s*=>\s*electron_1\.ipcRenderer\.invoke\(CH\.save, spec\)/.test(pmPreload) &&
+        /reset:\s*\(\)\s*=>\s*electron_1\.ipcRenderer\.invoke\(CH\.reset\)/.test(pmPreload);
+      add('Y6', '提示词面板：独立 preload 暴露窄 bridge，通道名正确且只编辑唯一设置', pmBridgeOk, {
         exposeInMainWorld: /exposeInMainWorld\('promptBridge'/.test(pmPreload),
-        saveWithVariant: /save:\s*\(variant, spec\)\s*=>\s*electron_1\.ipcRenderer\.invoke\(CH\.save, variant, spec\)/.test(pmPreload),
+        saveWithText: /save:\s*\(spec\)\s*=>\s*electron_1\.ipcRenderer\.invoke\(CH\.save, spec\)/.test(pmPreload),
       });
 
       /*
        * Y7：**设置菜单里必须有那一行** —— 这是用户点名要的入口
        *（"在 IDE 顶部增加一列 Settings，增加一个关于修改 prompt 的行"）。
-       * 同时要求编辑器工具栏也有一枚齿轮（面板/菜单都不在编辑器进程里，
-       * 齿轮是"我在编辑器里就能随手打开"的那条路）。
+       * 工具设置不再重复提供提示词入口，提示词仍由应用设置统一打开。
        */
       const settingsMenu = /label:\s*'设置'/.test(mainTs) && /label:\s*'修改提示词…'/.test(mainTs);
       const toolSettingsHtml = fs.readFileSync(path.join(rendererDir, 'toolSettings.html'), 'utf8');
       const toolSettingsJs = fs.readFileSync(path.join(rendererDir, 'toolSettings.js'), 'utf8');
-      const gearInEditor = /id="tool-settings-toggle"/.test(html) && /id="btn-settings"/.test(toolSettingsHtml);
-      const gearOpensPanel = /bridge\.openPrompt\(\)/.test(toolSettingsJs) && /openPromptPanel:\s*'ui:open-prompt-panel'/.test(preloadTs);
-      add('Y7', '提示词编辑入口齐备：设置菜单及工具设置浮层（均通往同一面板）', settingsMenu && gearInEditor && gearOpensPanel, {
+      const noDuplicatePromptEntry = !/id="btn-settings"|id="tool-settings-prompt"/.test(toolSettingsHtml) && !/bridge\.openPrompt\(\)/.test(toolSettingsJs);
+      const promptBridge = /openPromptPanel:\s*'ui:open-prompt-panel'/.test(preloadTs);
+      add('Y7', '提示词由应用设置统一编辑，工具设置不重复提供入口', settingsMenu && noDuplicatePromptEntry && promptBridge, {
         settingsMenu,
-        gearInEditor,
-        gearOpensPanel,
+        noDuplicatePromptEntry,
+        promptBridge,
       });
 
-      /*
-       * Y8：**用户内容必须真的被用上**。
-       *
-       * 分版本后链路变成：
-       *   ① 编辑器需求提交 → LocalPromptController → resolveFormatSpec(customSpecsOf(...), variant)
-       *   ② File 菜单「只复制输出格式要求」→ 同一条 customSpecsOf 取值
-       *   ③ 面板读写的是 settings.customFormatSpecShort / customFormatSpecFull
-       * 任一条漏了就回到"改了没用"（最坏的失败形态：用户以为生效了）。
-       * 另外还要求开关状态（formatSpecVariant）在两个方向上都有 handler。
-       */
+      // 唯一自定义字段贯通初始化、复制与面板，旧字段仅可在加载迁移处读取。
       const promptControllerTs = fs.readFileSync(path.join(srcMainDir, 'localPromptController.ts'), 'utf8');
-      const usesInLocalPrompt = /formatSpec:\s*resolveFormatSpec/.test(promptControllerTs) && /customFormatSpecShort/.test(promptControllerTs) && /customFormatSpecFull/.test(promptControllerTs);
-      const usesInCopyFormat = /resolveFormatSpec\(customSpecsOf\(/.test(mainTs) &&
-        /formatSpecVariant/.test(mainTs);
-      const panelReadsSetting =
-        /customFormatSpecShort/.test(mainTs) &&
-        /customFormatSpecFull/.test(mainTs) &&
-        /customFormatSpecShort:\s*string \| null/.test(settingsTs) &&
-        /customFormatSpecFull:\s*string \| null/.test(settingsTs);
-      const hasToggleLink = /ipcMain\.handle\(CHANNELS\.getFormatSpecVariant/.test(mainTs) &&
-        /ipcMain\.handle\(CHANNELS\.setFormatSpecVariant/.test(mainTs);
-      add('Y8', '自定义内容真的被用上（分版本三条链路 + 开关状态可读写）', usesInLocalPrompt && usesInCopyFormat && panelReadsSetting && hasToggleLink, {
-        usesInLocalPrompt,
-        usesInCopyFormat,
-        panelReadsSetting,
-        hasToggleLink,
-      });
+      const usesInLocalPrompt = /resolveFormatSpec\(settings\.customFormatSpec\)/.test(promptControllerTs);
+      const usesInCopyFormat = /resolveFormatSpec\(settings\.get\(\)\.customFormatSpec\)/.test(mainTs);
+      const panelReadsSetting = /customSpec: cur\.customFormatSpec/.test(mainTs) && /customFormatSpec: string \| null/.test(settingsTs);
+      add('Y8', '唯一自定义贯通初始化、复制与面板', usesInLocalPrompt && usesInCopyFormat && panelReadsSetting,
+        { usesInLocalPrompt, usesInCopyFormat, panelReadsSetting });
 
       // Y9：几何 —— 面板是浮层，必须有最小可读尺寸，且显示时居中（不是贴 0,0 的小窗）
       const panelGeometry = /PROMPT_PANEL_MIN_WIDTH\s*=\s*(\d+)/.exec(mainTs)?.[1];
@@ -801,49 +769,19 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
        * 副本会悄悄过期，那时面板在失败分支会显示一份**过时**的要求，比空白更糟。
        */
       const defaultsScript = fs.readFileSync(path.join(rendererDir, 'formatSpecDefaults.js'), 'utf8');
-      const sandbox = { window: {} as { formatSpecDefaults?: { short: string; full: string } } };
+      const sandbox = { window: {} as { formatSpecDefaults?: string } };
       vm.runInNewContext(defaultsScript, sandbox, { timeout: 1000 });
       const fallback = sandbox.window.formatSpecDefaults;
       const hasFallback = /window\.formatSpecDefaults/.test(pmJs) && /formatSpecDefaults\.js/.test(pmHtml) && /el\.editor\.value\s*=/.test(pmJs);
-      const fallbackMatchesDefault = fallback?.short === getFormatSpec('short') && fallback?.full === getFormatSpec('full');
+      const fallbackMatchesDefault = fallback === getFormatSpec();
       const hasRetry = /const LOAD_RETRIES/.test(pmJs) && /load\(tries \+ 1\)/.test(pmJs);
-      add('Y12', '提示词面板：构建生成两版默认兜底与权威模板逐字一致，加载失败可重试', hasFallback && fallbackMatchesDefault && hasRetry, { hasFallback, fallbackMatchesDefault, hasRetry });
+      add('Y12', '提示词面板：构建生成完整默认兜底与权威模板逐字一致，加载失败可重试', hasFallback && fallbackMatchesDefault && hasRetry, { hasFallback, fallbackMatchesDefault, hasRetry });
 
-      /*
-       * Y14：**底部双段开关**（用户设计）。
-       *
-       * "开 = 完整版（FULL），关 = 简洁版（SHORT）"，放在需求输入框旁。
-       * 断言：HTML 有开关结构（两个选项）、JS 有读写持久化（get/set）、
-       * 键盘可达（Space/Enter），以及样式表里画了滑块。
-       */
-      const editorCss = fs.readFileSync(path.join(rendererDir, 'style.css'), 'utf8');
-      const swHtml =
-        /id="variant-switch"/.test(html) &&
-        (html.match(/class="variant-opt"/g) ?? []).length === 2 &&
-        /data-variant="short"/.test(html) &&
-        /data-variant="full"/.test(html);
-      const swJs =
-        /setupPromptComposer/.test(js) &&
-        /bridge\.setFormatSpecVariant/.test(js) &&
-        /bridge\.getPromptStatus/.test(js) &&
-        /e\.key === ' '/.test(js);
-      const swCss = /\.variant-switch\s*\{/.test(editorCss) && /\.variant-thumb\s*\{/.test(editorCss);
-      add('Y14', '底部双段开关：结构 + 持久化读写 + 键盘可达 + 样式', swHtml && swJs && swCss, {
-        swHtml,
-        swJs,
-        swCss,
-      });
-
-      /*
-       * Y15：**开关状态必须贯通到实际发出去的内容**。
-       *
-       * 最坏的失败形态：界面显示"完整版"，但本地需求仍按短版拼 —— 用户无从察觉。
-       * 断言本地需求链路确实读了 settings.formatSpecVariant。
-       */
-      const variantUsedInLocalPrompt = /resolveFormatSpec[\s\S]{0,250}settings\.formatSpecVariant/.test(promptControllerTs);
-      add('Y15', '开关状态贯通：需求提交链路确实读取 formatSpecVariant', variantUsedInLocalPrompt, {
-        variantUsedInLocalPrompt,
-      });
+      add('Y14', '提示词版本选择已移除，输入区仍读取唯一自定义状态',
+        !/id="variant-switch"/.test(html) && !/setFormatSpecVariant/.test(js) && /bridge\.getPromptStatus/.test(js), { singleStatus: true });
+      add('Y15', '旧版本字段只在一次设置迁移中读取',
+        !/formatSpecVariant|customFormatSpecShort|customFormatSpecFull/.test(promptControllerTs) &&
+        /formatSpecMigrationVersion/.test(settingsTs) && /prompt-upgrade-backup/.test(settingsTs), { migratedSettings: true });
 
       /*
        * Y13：保存失败时**不清空编辑框**。
@@ -866,19 +804,18 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     //理由（用户原话）："正常的折叠展开不都是在对应板块顶部增加图标按钮吗，
     //     没见过有这种带文字的按钮"。目录树开关移到编辑器顶部条，网页开关移到网页区顶栏。
     const toolbarBlock = /<header class="toolbar">([\s\S]*?)<\/header>/.exec(html)?.[1] ?? '';
-    const toolbarHasTextToggles = /id="btn-sidebar"/.test(toolbarBlock) || /id="btn-web"/.test(toolbarBlock);
+    const toolbarHasTextToggles = /id="btn-web"/.test(toolbarBlock) || /id="btn-sidebar"[^>]*>\s*目录树/.test(toolbarBlock);
     add('O1', '全局工具栏已移除带文字的「目录树」「AI 网页」按钮', toolbarBlock.length > 0 && !toolbarHasTextToggles, {
       toolbarFound: toolbarBlock.length > 0,
       stillHasSidebarBtn: /id="btn-sidebar"/.test(toolbarBlock),
       stillHasWebBtn: /id="btn-web"/.test(toolbarBlock),
     });
 
-    // O2：目录树开关是编辑器顶部条里的**图标按钮**（有 svg、无文字），且仍受 Ctrl+B 控制
-    const editorHead = /<div class="editor-head">([\s\S]*?)<div id="monaco"/.exec(html)?.[1] ?? '';
-    const sidebarBtnInHead = /id="btn-sidebar"[^>]*class="icon-btn"/.test(editorHead) && /<svg/.test(editorHead);
+    // 目录树恢复入口归共用标签栏，不再增加第二行路径栏。
+    const sidebarBtnInHead = /id="btn-sidebar"[^>]*class="ui-icon"/.test(toolbarBlock) && /<svg/.test(toolbarBlock) && !/class="editor-head"/.test(html);
     const ctrlBKept = /e\.key === 'b'/.test(js);
-    add('O2', '目录树开关为编辑器顶部条内的图标按钮，且 Ctrl+B 快捷键保留', sidebarBtnInHead && ctrlBKept, {
-      inEditorHead: sidebarBtnInHead,
+    add('O2', '目录树恢复入口在共用标签栏，移除第二行路径栏且保留 Ctrl+B', sidebarBtnInHead && ctrlBKept, {
+      inTabBar: sidebarBtnInHead,
       ctrlBKept,
     });
 
@@ -902,7 +839,9 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     // 主提交按钮保持圆形图标，并具有可访问名称。
     const harnessCss = fs.readFileSync(path.join(rendererDir, 'toolHarness.css'), 'utf8');
     const sendRule = /\.prompt-actions \.prompt-send\s*\{([^}]*)\}/.exec(harnessCss)?.[1] ?? '';
-    const circleStyle = /border-radius:\s*50%/.test(sendRule) && /width:\s*36px/.test(sendRule) && /height:\s*36px/.test(sendRule);
+    const sendWidth = /width:\s*(\d+)px/.exec(sendRule)?.[1];
+    const sendHeight = /height:\s*(\d+)px/.exec(sendRule)?.[1];
+    const circleStyle = /border-radius:\s*50%/.test(sendRule) && Number(sendWidth) > 0 && sendWidth === sendHeight;
     const namedSend = /id="btn-send-prompt"[^>]*aria-label="发送需求"/.test(html);
     add('O4', '需求提交按钮保持圆形且具有可访问名称', circleStyle && namedSend, { circleStyle, namedSend });
 
@@ -1053,7 +992,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     const promptGeometry = await input.editorView.webContents.executeJavaScript(`(() => {
       const bar = document.querySelector('.prompt-bar'), rect = bar.getBoundingClientRect();
       const dock = document.getElementById('collaboration-dock').getBoundingClientRect();
-      const ids = ['requirement', 'variant-switch', 'tool-permission', 'tool-automatic', 'tool-settings-toggle', 'btn-send-prompt'];
+      const ids = ['requirement', 'btn-add-prompt-attachment', 'prompt-initialization', 'tool-permission', 'tool-automatic', 'tool-settings-toggle', 'btn-send-prompt'];
       return {
         editorShrinkable: getComputedStyle(document.querySelector('.editor-wrap')).minHeight === '0px',
         withinBudget: rect.top >= dock.top - 1 && rect.bottom <= dock.bottom + 1 && dock.bottom <= innerHeight + 1 && dock.left >= 0 && dock.right <= innerWidth + 1,
@@ -1465,10 +1404,8 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     const hasExpandedState = /const expanded = new Set\(\)/.test(js);
     add('L4', '目录树为可展开结构且保持展开状态', hasTreeChildren && hasExpandedState, { hasTreeChildren, hasExpandedState });
 
-    // 未保存标记：文件头白点存在且默认隐藏
-    const dotInHtml = /id="file-dot"/.test(html);
-    const dotHidden = /class="file-dot"[^>]*hidden/.test(html) || /id="file-dot"[^>]*hidden/.test(html);
-    add('L5', '未保存标记（文件头白点）存在且默认隐藏', dotInHtml && dotHidden, { dotInHtml, dotHidden });
+    const dirtyTabMarker = /\.editor-tab\.dirty \.editor-tab-label::after/.test(css) && /doc\.dirty/.test(tabsJs);
+    add('L5', '未保存状态在文件标签显示，不再增加文件头白点', dirtyTabMarker && !/id="file-dot"/.test(html), { dirtyTabMarker });
   } catch (err) {
     add('L1', '渲染进程界面契约检查', false, `读取失败：${err instanceof Error ? err.message : String(err)}`);
   }
@@ -1484,9 +1421,9 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   add('F1', '回程解析：每块紧邻文件与明确操作均被识别', parsed.blocks.length === 2 && parsed.blocks[0]?.filePath === 'src/demo.ts' && parsed.blocks[0]?.operation === 'overwrite' && parsed.blocks[1]?.filePath === 'other.py' && parsed.blocks[1]?.operation === 'create', parsed.blocks.map(block => ({ file: block.filePath, operation: block.operation })));
   add('F2', '协议正文中的路径注释按字面保存，不剥除内容', parsed.blocks[1]?.code === '# other.py\nprint("hi")', parsed.blocks[1]?.code);
   // 全部输出示例采用唯一工具协议；外层示例和输入上下文不能触发执行。
-  const templateChecks = (variant: 'short' | 'full') => {
-    const fences = splitFences(getFormatSpec(variant)); const operations = new Set<string>();
-    let valid = fences.length > 0 && fences.length % 2 === 0 && parseToolBatch(getFormatSpec(variant)).kind === 'none';
+  const templateChecks = () => {
+    const fences = splitFences(getFormatSpec()); const operations = new Set<string>();
+    let valid = fences.length > 0 && fences.length % 2 === 0 && parseToolBatch(getFormatSpec()).kind === 'none';
     for (let i = 0; i < fences.length; i += 2) {
       if (parseToolBatch(fences[i]!.body).kind !== 'none') valid = false;
       const output = parseToolBatch(fences[i + 1]!.body);
@@ -1497,8 +1434,8 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     }
     return { valid, examples: fences.length / 2, operations: [...operations].sort() };
   };
-  const shortExamples = templateChecks('short'); const fullExamples = templateChecks('full');
-  add('F3', '两版提示词全部工具示例合法，外层示例与复制上下文不触发执行', shortExamples.valid && fullExamples.valid, { shortExamples, fullExamples });
+  const fullExamples = templateChecks();
+  add('F3', '完整提示词全部工具示例合法，外层示例与复制上下文不触发执行', fullExamples.valid, fullExamples);
 
   /*
    * F3b：格式模板里的**每一段围栏必须自洽成对**。
@@ -1521,19 +1458,17 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     for (const m of text.match(/`{3,}/g) || []) counts[String(m.length)] = (counts[String(m.length)] ?? 0) + 1;
     return Object.fromEntries(Object.entries(counts).filter(([, n]) => n % 2 !== 0));
   };
-  const shortUnbalanced = unbalanced(getFormatSpec('short'));
-  const fullUnbalanced = unbalanced(getFormatSpec('full'));
+  const fullUnbalanced = unbalanced(getFormatSpec());
   add(
     'F3b',
     '格式模板里的围栏全部成对（不存在没人闭合的围栏 → 不会带偏模型输出）',
-    Object.keys(shortUnbalanced).length === 0 && Object.keys(fullUnbalanced).length === 0,
-    { shortUnbalanced, fullUnbalanced }
+    Object.keys(fullUnbalanced).length === 0,
+    { fullUnbalanced }
   );
 
-  const specAll = getFormatSpec('short') + getFormatSpec('full');
-  add('F3c', '格式模板实际覆盖替换、新建、覆盖全文且不输出定位范围', shortExamples.valid && JSON.stringify(shortExamples.operations) === '["create","overwrite","replace"]' && !/### 范围：/.test(specAll), shortExamples);
-  add('F3d', '完整版十四组示例统一通过正式工具解析', fullExamples.valid && fullExamples.examples === 14, fullExamples);
-  add('F3g', '简洁版六组高频示例逐一通过正式工具解析', shortExamples.valid && shortExamples.examples === 6, shortExamples);
+  const specAll = getFormatSpec();
+  add('F3c', '格式模板实际覆盖替换、新建、覆盖全文且不输出定位范围', fullExamples.valid && JSON.stringify(fullExamples.operations) === '["create","overwrite","replace"]' && !/### 范围：/.test(specAll), fullExamples);
+  add('F3d', '完整模板十五组示例统一通过正式工具解析', fullExamples.valid && fullExamples.examples === 15, fullExamples);
   add(
     'F3e',
     '正式工具标记不可由普通 JSON 或旧文件块代替',
@@ -1729,13 +1664,13 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   const assembled = buildPrompt({
     requirement: '把 greeting 改成 hello',
     context: { root: ctx.root, environment: ctx.environment, tree: ctx.tree },
-    formatSpec: getFormatSpec('short'),
+    formatSpec: getFormatSpec(),
     targetFiles: ['hello.ts'],
   });
   add(
     'I1',
     'prompt 组装包含需求/工作环境/目录结构/格式要求四段',
-    /## 用户需求/.test(assembled) && /## 工作环境/.test(assembled) && /## 目录结构/.test(assembled) && assembled.endsWith(getFormatSpec('short')) && assembled.includes(TOOL_PROTOCOL_PROMPT),
+    /## 用户需求/.test(assembled) && /## 工作环境/.test(assembled) && /## 目录结构/.test(assembled) && assembled.endsWith(getFormatSpec()) && assembled.includes(TOOL_PROTOCOL_PROMPT),
     assembled.slice(0, 120)
   );
   add('I2', '工作环境摘要含真实运行环境与工作目录', ctx.environment.length > 0 && ctx.root === fixtures.root, {

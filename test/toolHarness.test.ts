@@ -49,6 +49,31 @@ async function fixture(t: { after: (fn: () => Promise<void>) => void }) {
   };
 }
 
+test('新批次在校验和批准前广播开始，重复采集及重启历史不伪造开始事件', async t => {
+  const f = await fixture(t);
+  const states: ToolState[] = [];
+  f.setOnChange(state => states.push(state));
+  f.setPrepare(async () => {
+    assert.equal(states.at(-1)?.batchStart?.batch_id, 'batch-1');
+    assert.deepEqual(states.at(-1)?.results, []);
+    assert.deepEqual(f.asked, []);
+  });
+  await f.harness.collect(text([run]));
+  const start = f.harness.state.batchStart!;
+  assert.ok(start.id > 0);
+  await f.harness.collect(text([run]));
+  assert.deepEqual(f.harness.state.batchStart, start);
+  const restored = f.makeHarness();
+  await restored.collect(text([run]));
+  assert.equal(restored.state.batchStart, undefined);
+  assert.equal(restored.state.restored, true);
+  assert.equal(restored.state.results[0]?.status, 'permission_denied');
+  f.setPrepare(async () => undefined);
+  f.setSession('another');
+  await f.harness.collect(text([read]));
+  assert.ok(f.harness.state.batchStart!.id > start.id);
+});
+
 test('诊断来源只在新采集内容时创建，重复采集和取消保留标识，切 scope 清除', async t => {
   const f = await fixture(t); const bad = '```mini-ai-tools\n{}\n```';
   await f.harness.collect(bad);
@@ -273,6 +298,7 @@ test('copying after reopening the IDE is empty until a current batch is actually
   await next.collect(text([run]));
   assert.equal(next.getCopyResults().length, 1);
   assert.equal(next.state.completion, undefined, '历史去重状态恢复不能当作新一轮完成提示');
+  assert.equal(next.state.restored, true, '历史回执不能作为新异常自动打开工具标签');
   assert.equal(next.state.results[0]?.data, undefined, '正文未落盘，重新采集只恢复去重元数据');
   assert.equal(next.state.results[0]?.status, 'done');
   assert.deepEqual(f.executed, ['run']);

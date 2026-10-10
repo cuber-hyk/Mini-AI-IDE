@@ -12,7 +12,7 @@ export class WorkspaceLayoutController {
   constructor(private readonly win: BaseWindow,
     private readonly views: { editor: WebContentsView; web: WebContentsView; webbar: WebContentsView; preview: WebContentsView },
     private readonly settings: SettingsStore, private readonly changed: () => void) {
-    this.options = { ...(settings.get().workspaceLayout ?? {}), previewVisible: false };
+    this.options = { ...(settings.get().workspaceLayout ?? {}), previewVisible: false, toolsVisible: false };
     const [width, height] = win.getContentSize();
     this.layout = computeLayout(width!, height!, this.options);
   }
@@ -23,7 +23,8 @@ export class WorkspaceLayoutController {
       layout,
       fileVisible: this.options.fileVisible !== false,
       fileMaximized: this.options.fileMaximized === true,
-      previewVisible: this.options.previewVisible === true && this.options.fileVisible !== false,
+      previewVisible: layout.previewVisible,
+      toolsVisible: layout.toolsVisible,
       previewWidth: layout.contentBounds.width,
       previewMaxWidth: Math.max(layout.contentBounds.width,
         layout.editorBounds.width - layout.workspaceBounds.width - 360 - layout.treeBounds.width),
@@ -49,12 +50,14 @@ export class WorkspaceLayoutController {
 
   update(patch: WorkspaceLayoutOptions, persist = true) {
     if (this.win.isDestroyed()) return this.state;
-    if (patch.previewVisible === false && this.temporaryFileWidth !== null) {
+    const widths = { ...patch };
+    if (widths.toolsVisible === true) widths.previewVisible = false;
+    else if (widths.previewVisible === true) widths.toolsVisible = false;
+    if (widths.previewVisible === false && this.temporaryFileWidth !== null) {
       this.options.fileWidth = this.temporaryFileWidth;
       this.temporaryFileWidth = null;
     }
     if (patch.fileVisible === false) this.options.fileMaximized = false;
-    const widths = { ...patch };
     for (const key of ['workspaceWidth', 'fileWidth', 'treeWidth'] as const) {
       if (widths[key] !== undefined) widths[key] = Math.max(1, widths[key]!);
     }
@@ -118,12 +121,12 @@ export class WorkspaceLayoutController {
       for (const [key, value] of Object.entries(raw)) {
         if (['workspaceWidth', 'fileWidth', 'treeWidth', 'dockHeight'].includes(key)) {
           if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 10000) throw new Error('布局宽高无效');
-        } else if (['workspaceVisible', 'fileVisible', 'treeVisible', 'previewVisible', 'fileMaximized'].includes(key)) {
+        } else if (['workspaceVisible', 'fileVisible', 'treeVisible', 'previewVisible', 'toolsVisible', 'fileMaximized'].includes(key)) {
           if (typeof value !== 'boolean') throw new Error('布局显隐无效');
         } else throw new Error('未知布局参数');
         patch[key] = value as number | boolean;
       }
-      return this.update(patch, Object.keys(patch).some(key => !['dockHeight', 'previewVisible', 'fileMaximized'].includes(key)));
+      return this.update(patch, Object.keys(patch).some(key => !['dockHeight', 'previewVisible', 'toolsVisible', 'fileMaximized'].includes(key)));
     });
     ipcMain.handle(CHANNELS.setSplit, (event, width: unknown) => {
       trusted(event, true);

@@ -19,8 +19,8 @@ import { WebComposerSender } from './webComposerSender';
 import { app, BaseWindow, clipboard, dialog, ipcMain, Menu, session, WebContentsView } from 'electron';
 import * as path from 'node:path';
 
-import { CHANNELS, type PromptPanelState, type PromptComposerStatus, type PromptVariantState, type SavePromptSpecResult, type ReturnPreview, type RootInfo } from '../shared/contract';
-import { getFormatSpec, resolveFormatSpec, normalizeVariant, MAX_CUSTOM_FORMAT_SPEC_LENGTH, type CustomFormatSpecs, type FormatSpecVariant } from '../shared/formatSpec';
+import { CHANNELS, type PromptPanelState, type PromptComposerStatus, type SavePromptSpecResult, type ReturnPreview, type RootInfo } from '../shared/contract';
+import { getFormatSpec, resolveFormatSpec, MAX_CUSTOM_FORMAT_SPEC_LENGTH } from '../shared/formatSpec';
 import { buildSnippetText } from '../shared/snippet';
 import { checkUaConsistency, stripSelfDeclarations } from '../shared/userAgent';
 import { FileService } from './fileService';
@@ -28,10 +28,11 @@ import { registerFileIpc } from './ipc';
 import { createFixtures } from './fixtures';
 import { runSelfTest } from './selfTest';
 import { runDiagnose } from './diagnose';
-import { SettingsStore, PRODUCTION_SETTINGS_FILE, SELF_TEST_SETTINGS_FILE, type Settings } from './settings';
+import { SettingsStore, PRODUCTION_SETTINGS_FILE, SELF_TEST_SETTINGS_FILE } from './settings';
 import { buildContextSummary } from './contextSummary';
 import { ReturnPathService } from './returnPathService';
 import { WorkspaceLayoutController } from './workspaceLayoutController';
+import { registerToolWorkspaceStatus } from './toolWorkspaceStatus';
 import { runLayoutProbe } from './layoutProbe';
 import { WorkspaceService } from './workspaceService';
 import { WorkspaceController } from './workspaceController';
@@ -103,7 +104,15 @@ async function bootstrap(): Promise<void> {
   await app.whenReady();
 
   const fileService = new FileService();
-  const settings = new SettingsStore(SELF_TEST ? SELF_TEST_SETTINGS_FILE : PRODUCTION_SETTINGS_FILE);
+  let settings: SettingsStore;
+  try {
+    settings = new SettingsStore(SELF_TEST ? SELF_TEST_SETTINGS_FILE : PRODUCTION_SETTINGS_FILE);
+  } catch (err) {
+    if (!SELF_TEST && !UI_PROBE && !WORKSPACE_PROBE) {
+      dialog.showErrorBox('设置读取或升级失败', err instanceof Error ? err.message : String(err));
+    }
+    throw err;
+  }
   const saved = settings.get();
   const workspace = new WorkspaceService(fileService, settings);
   const targetSession = session.fromPartition(SESSION_PARTITION);
@@ -193,7 +202,7 @@ async function bootstrap(): Promise<void> {
   });
 
   /**
-   * 提示词编辑面板：**独立视图**，默认隐藏，点设置菜单/工具栏齿轮时才显示。
+   * 提示词编辑面板：**独立视图**，默认隐藏，通过应用菜单或快捷键显示。
    *
    * 为什么不做成编辑器里的 DOM 弹层：编辑器渲染进程的 CSP 是 `default-src 'none'`，
    * 且它持有的是**文件系统能力**（save/writeFile）。让"编辑提示词文本"这件事
@@ -252,50 +261,17 @@ async function bootstrap(): Promise<void> {
     return { x: Math.round((w - width) / 2), y, width, height };
   }
 
-  /**
-   * 从设置里取出分版本的自定义内容，喂给 `resolveFormatSpec`。
-   *
-   * 单独抽一个函数是因为只复制格式要求与面板状态
-   * 必须都从这里拿，才能保证"能改也真的改了"——分散取值最容易漏掉某一条。
-   */
-  function customSpecsOf(s: Settings): CustomFormatSpecs {
-    return { short: s.customFormatSpecShort, full: s.customFormatSpecFull };
-  }
-
-  /**
-   * 收集面板需要的全部状态。
-   *
-   * `defaultSpec` 每次现取（而不是缓存）——「恢复默认」必须拿到**当前版本**的默认文本；
-   * 缓存会让"升级后点恢复默认，拿回的还是旧版模板"这种问题静默发生。
-   *
-   * 分版本返回：面板要能分别展示/编辑简洁版与完整版。
-   */
   function promptPanelState(): PromptPanelState {
     const cur = settings.get();
-    const mk = (variant: FormatSpecVariant): PromptVariantState => {
-      const custom = variant === 'full' ? cur.customFormatSpecFull : cur.customFormatSpecShort;
-      return {
-        defaultSpec: getFormatSpec(variant),
-        customSpec: custom,
-        isCustom: typeof custom === 'string' && custom.trim().length > 0,
-      };
-    };
     return {
-      variant: cur.formatSpecVariant,
-      short: mk('short'),
-      full: mk('full'),
-      updatedAt: cur.customFormatSpecUpdatedAt,
-      maxLength: MAX_CUSTOM_FORMAT_SPEC_LENGTH,
+      defaultSpec: getFormatSpec(), customSpec: cur.customFormatSpec,
+      isCustom: Boolean(cur.customFormatSpec?.trim()),
+      updatedAt: cur.customFormatSpecUpdatedAt, maxLength: MAX_CUSTOM_FORMAT_SPEC_LENGTH,
     };
   }
 
   function promptStatus(): PromptComposerStatus {
-    const cur = settings.get();
-    return {
-      variant: cur.formatSpecVariant,
-      shortIsCustom: Boolean(cur.customFormatSpecShort?.trim()),
-      fullIsCustom: Boolean(cur.customFormatSpecFull?.trim()),
-    };
+    return { isCustom: Boolean(settings.get().customFormatSpec?.trim()) };
   }
 
   function broadcastPromptStatus(): void {
@@ -423,42 +399,23 @@ async function loadLocalView(
     return { ok: true };
   });
 
-  /**
-   * 保存用户自定义内容（**按版本**）。
-   *
-   * 语义（与面板文案一致）：**内容为空白 ⇒ 等同于恢复默认**。
-   * 这样"清空并保存"与"点恢复默认"是同一个结果，用户不会走到
-   * "保存了一个空格式要求、提示词里那段约定凭空消失"的状态
-   *（那会让模型输出无法被解析，且没有任何报错）。
-   */
-  ipcMain.handle(
-    CHANNELS.savePromptSpec,
-    (_e, variant: unknown, spec: unknown): SavePromptSpecResult => {
-      const v = normalizeVariant(variant);
-      const raw = typeof spec === 'string' ? spec : '';
-      const text = raw.slice(0, MAX_CUSTOM_FORMAT_SPEC_LENGTH);
-      const key = v === 'full' ? 'customFormatSpecFull' : 'customFormatSpecShort';
-      if (text.trim().length === 0) {
-        settings.update({ [key]: null, customFormatSpecUpdatedAt: null });
-        broadcastPromptStatus();
-        process.stdout.write(`[prompt] 自定义格式要求（${v}）已清空，回到内置默认\n`);
-        return { ok: true, variant: v, state: promptPanelState(), resetToDefault: true };
-      }
-      settings.update({ [key]: text, customFormatSpecUpdatedAt: new Date().toISOString() });
-      broadcastPromptStatus();
-      // 只记长度：格式要求是用户内容，不整段写日志
-      process.stdout.write(`[prompt] 已保存自定义格式要求（${v}，${text.length} 字符）\n`);
-      return { ok: true, variant: v, state: promptPanelState() };
-    }
-  );
-
-  ipcMain.handle(CHANNELS.resetPromptSpec, (_e, variant: unknown): SavePromptSpecResult => {
-    const v = normalizeVariant(variant);
-    const key = v === 'full' ? 'customFormatSpecFull' : 'customFormatSpecShort';
-    settings.update({ [key]: null, customFormatSpecUpdatedAt: null });
+  /** 空白或默认原文恢复内置；设置保存失败通过 IPC 拒绝向面板显式报告。 */
+  ipcMain.handle(CHANNELS.savePromptSpec, (_e, spec: unknown): SavePromptSpecResult => {
+    if (typeof spec !== 'string') throw new Error('提示词必须是文本');
+    if (spec.length > MAX_CUSTOM_FORMAT_SPEC_LENGTH) throw new Error('提示词超出长度上限，内容未保存');
+    const text = spec;
+    const resetToDefault = !text.trim() || text.trim() === getFormatSpec().trim();
+    settings.update({ customFormatSpec: resetToDefault ? null : text,
+      customFormatSpecUpdatedAt: resetToDefault ? null : new Date().toISOString() });
     broadcastPromptStatus();
-    process.stdout.write(`[prompt] 已恢复默认格式要求（${v}）\n`);
-    return { ok: true, variant: v, state: promptPanelState(), resetToDefault: true };
+    process.stdout.write(`[prompt] 已保存格式要求（${text.length} 字符）\n`);
+    return { ok: true, state: promptPanelState(), resetToDefault };
+  });
+
+  ipcMain.handle(CHANNELS.resetPromptSpec, (): SavePromptSpecResult => {
+    settings.update({ customFormatSpec: null, customFormatSpecUpdatedAt: null });
+    broadcastPromptStatus();
+    return { ok: true, state: promptPanelState(), resetToDefault: true };
   });
 
   ipcMain.handle(CHANNELS.closePromptPanel, () => {
@@ -471,6 +428,8 @@ async function loadLocalView(
  * 顺序本身不是根因（换顺序失败对象会飘移），但先加载几个小页面、
  * 让它们与编辑器页面错开，可以减少并发创建渲染进程的压力。
  */
+  const toolWorkspaceStatus = registerToolWorkspaceStatus({ ipc: ipcMain, webbar: webBarView.webContents,
+    open: () => layoutController.update({ toolsVisible: true, previewVisible: false, fileVisible: true }) });
   await loadLocalView(webBarView, 'webbar.html');
   // 提示词面板：同样是本地页面。它的 handler 已在上方注册完毕（见那段注释）。
   await loadLocalView(promptView, 'prompt.html');
@@ -485,28 +444,14 @@ async function loadLocalView(
    * 边界（ADR-0003 零注入）：**只写剪贴板，不写网页**。
    * 用户随后自己把它粘贴到提示词里——发出去的动作仍然是人的。
    */
-  ipcMain.handle(CHANNELS.copyFormatSpec, (_e, variant: unknown) => {
-    // 版本由调用方指定（不传则回落到当前开关状态）；有自定义内容就用自定义
-    //（"用户可以改系统 prompt"的落点之一）
-    const s = settings.get();
-    const v = variant === undefined || variant === null ? s.formatSpecVariant : normalizeVariant(variant);
-    const text = resolveFormatSpec(customSpecsOf(s), v);
+  ipcMain.handle(CHANNELS.copyFormatSpec, () => {
+    const text = resolveFormatSpec(settings.get().customFormatSpec);
     try {
       clipboard.writeText(text);
       return { ok: true, length: text.length };
     } catch (err) {
       return { ok: false, length: 0, error: err instanceof Error ? err.message : String(err) };
     }
-  });
-
-  ipcMain.handle(CHANNELS.getFormatSpecVariant, () => settings.get().formatSpecVariant);
-
-  ipcMain.handle(CHANNELS.setFormatSpecVariant, (_e, variant: unknown) => {
-    const v = normalizeVariant(variant);
-    settings.update({ formatSpecVariant: v });
-    broadcastPromptStatus();
-    process.stdout.write(`[format] 提示词版本已切换为 ${v}\n`);
-    return v;
   });
 
   /*
@@ -527,7 +472,7 @@ async function loadLocalView(
       if (info.revision !== announcedRevision) {
         announcedRevision = info.revision ?? announcedRevision;
         localPrompt?.cancel();
-        layoutController.update({ previewVisible: false }, false);
+        layoutController.update({ previewVisible: false, toolsVisible: false }, false);
         returnPath.clear();
         tools.reset();
       }
@@ -540,6 +485,7 @@ async function loadLocalView(
     }, () => tools.getReviewState().records.length > 0 || returnPath.undoCount > 0);
   const tools = await createToolIntegration({
     ipc: ipcMain, editor: editorView.webContents, web: webView.webContents,
+    notifyState: toolWorkspaceStatus.publish,
     review: previewView.webContents, skills,
     // Keep the full sender contract: local prompts pass their current-scope guard and staged attachments.
     sender: composerSender,
@@ -609,13 +555,13 @@ async function loadLocalView(
       viewport: () => { const bounds = editorView.getBounds(), zoom = editorView.webContents.getZoomFactor(); return { width: bounds.width / zoom, height: bounds.height / zoom }; },
       open: anchor => { const parent = win.getContentBounds(), editor = editorView.getBounds(), zoom = editorView.webContents.getZoomFactor();
         return toolSettingsWindow!.open({ x: parent.x + editor.x + anchor.x * zoom, y: parent.y + editor.y + anchor.y * zoom, width: anchor.width * zoom, height: anchor.height * zoom }); },
-      close: () => toolSettingsWindow!.hide(true), configure: tools.configure, clearRules: tools.clearRules, openPrompt: showPromptPanel }),
+      close: () => toolSettingsWindow!.hide(true), configure: tools.configure, clearRules: tools.clearRules }),
     ...registerApplicationUpdateIpc(ipcMain, { editor: editorView.webContents, dialog: () => updateWindow.contents,
       updater, open: openUpdateWindow, close: () => updateWindow.hide(true) }),
     ...registerFileIpc(fileService, {
       chooseRoot: () => workspaceController.chooseRoot(), getState: () => workspace.getState(),
       write: (relative, text) => workspaceController.write(relative, text),
-    }), ...workspaceController.register(), ...layoutChannels,
+    }), ...workspaceController.register(), ...layoutChannels, ...toolWorkspaceStatus.channels,
   ];
 
   /**
@@ -769,37 +715,12 @@ async function loadLocalView(
               label: '只复制输出格式要求（不含上下文）',
               click: () => {
                 const s = settings.get();
-                const text = resolveFormatSpec(customSpecsOf(s), s.formatSpecVariant);
+                const text = resolveFormatSpec(s.customFormatSpec);
                 clipboard.writeText(text);
                 process.stdout.write(
-                  `[format] 已复制格式要求（${s.formatSpecVariant}，${text.length} 字符）到剪贴板\n`
+                  `[format] 已复制格式要求（${text.length} 字符）到剪贴板\n`
                 );
               },
-            },
-            {
-              // 与底部开关同一语义，但这里可以**指定版本**（不看当前开关状态）。
-              // 留着它是因为"临时想拿另一版"时不必先拨开关、拿完再拨回来。
-              label: '复制输出格式要求（指定版本）',
-              submenu: [
-                {
-                  label: '简洁版（Short）',
-                  click: () => {
-                    const s = settings.get();
-                    const text = resolveFormatSpec(customSpecsOf(s), 'short');
-                    clipboard.writeText(text);
-                    process.stdout.write(`[format] 已复制格式要求（short，${text.length} 字符）到剪贴板\n`);
-                  },
-                },
-                {
-                  label: '完整版（Full）',
-                  click: () => {
-                    const s = settings.get();
-                    const text = resolveFormatSpec(customSpecsOf(s), 'full');
-                    clipboard.writeText(text);
-                    process.stdout.write(`[format] 已复制格式要求（full，${text.length} 字符）到剪贴板\n`);
-                  },
-                },
-              ],
             },
             // 与「设置」菜单同一动作：菜单里放两份是**有意的**
             //（用户找"改提示词"时既可能从 File 找、也可能从 Settings 找）
@@ -859,13 +780,10 @@ async function loadLocalView(
               //（与 View 菜单的勾选项同一条路径，见 buildApplicationMenu 的调用点）。
               label: (() => {
                 const cur = settings.get();
-                const v = cur.formatSpecVariant;
-                const custom = v === 'full' ? cur.customFormatSpecFull : cur.customFormatSpecShort;
-                const using = typeof custom === 'string' && custom.trim().length > 0;
-                const vName = v === 'full' ? '完整版' : '简洁版';
-                return using
-                  ? `提示词：${vName} · 自定义（${custom.split('\n').length} 行）`
-                  : `提示词：${vName} · 内置默认`;
+                const custom = cur.customFormatSpec;
+                return custom?.trim()
+                  ? `提示词：自定义（${custom.split('\n').length} 行）`
+                  : '提示词：内置默认';
               })(),
               enabled: false,
             },

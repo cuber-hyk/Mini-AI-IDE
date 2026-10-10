@@ -7,7 +7,6 @@
 import type { LocalPromptInput, LocalPromptOptions, LocalPromptResult, PromptAttachment } from './localPrompt';
 import type { SkillCatalog, LoadedSkill } from './skills';
 import type { TextMeta } from './limits';
-import type { FormatSpecVariant } from './formatSpec';
 import type { ApplicationUpdateState } from './applicationUpdate';
 import type { ToolConfig, ToolState } from './toolProtocol';
 import type { ToolSettingsAnchor, ToolSettingsVisibility } from './toolSettings';
@@ -23,6 +22,10 @@ export const CHANNELS = {
   getToolState: 'tools:get-state',
   setToolConfig: 'tools:set-config',
   toolState: 'tools:state',
+  /** 本地官网顶栏只接收工具状态摘要，不接收正文或本地路径。 */
+  getToolWorkspaceStatus: 'tools:get-workspace-status',
+  toolWorkspaceStatus: 'tools:workspace-status',
+  openToolWorkspace: 'tools:open-workspace',
   copyToolResults: 'tools:copy-results',
   sendToolResults: 'tools:send-results',
   cancelTools: 'tools:cancel',
@@ -34,7 +37,6 @@ export const CHANNELS = {
   setToolSettings: 'tools:set-settings',
   toolSettingsState: 'tools:settings-state',
   toolSettingsVisibility: 'tools:settings-visibility',
-  openToolPromptSettings: 'tools:open-prompt-settings',
   undoToolChange: 'tools:undo',
   getUpdateState: 'ui:get-update-state',
   checkForUpdate: 'ui:check-for-update',
@@ -130,18 +132,19 @@ export const CHANNELS = {
   closePromptPanel: 'ui:close-prompt-panel',
   /** 主进程 → 编辑器：请求打开提示词编辑面板（菜单/快捷键/设置按钮都汇聚到这里） */
   openPromptPanel: 'ui:open-prompt-panel',
-  /**
-   * 编辑器 ↔ 主进程：读 / 写当前使用的提示词版本（底部双段开关的状态）。
-   *
-   * 为什么不用 `ui:copy-format-spec` 顺带解决：那个通道是**动作**（复制到剪贴板），
-   * 而开关要的是**状态**（当前是哪一版、切换后要持久化）。混在一起会让
-   * "每拨一次开关就顺带复制一次"这种副作用出现。
-   */
+  /** 单一提示词的自定义状态；查询与广播均不产生复制副作用。 */
   getPromptStatus: 'ui:get-prompt-status',
   promptStatus: 'ui:prompt-status',
-  getFormatSpecVariant: 'ui:get-format-spec-variant',
-  setFormatSpecVariant: 'ui:set-format-spec-variant',
 } as const;
+
+/** 官网顶栏的最小只读摘要；不包含工具参数、结果正文、路径或权限设置。 */
+export interface ToolWorkspaceStatus {
+  phase: 'loading' | 'idle' | 'running' | 'approval' | 'failed' | 'countdown' | 'sending' | 'waiting_reply' | 'waiting_user' | 'paused' | 'done';
+  message: string;
+  count: number;
+  automatic: boolean;
+  dueAt?: number;
+}
 
 export interface DirEntry {
   name: string;
@@ -239,6 +242,7 @@ export interface WorkspaceLayoutPatch {
   treeVisible?: boolean;
   dockHeight?: number;
   previewVisible?: boolean;
+  toolsVisible?: boolean;
 }
 
 export interface CopyFormatResult {
@@ -441,72 +445,27 @@ export interface UndoResult {
  * 提示词编辑面板（用户自定义"输出格式要求"）
  * ------------------------------------------------------------------ */
 
-/** 输入区只读取版本与自定义标记，不接收提示词全文。 */
-export interface PromptComposerStatus {
-  variant: FormatSpecVariant;
-  shortIsCustom: boolean;
-  fullIsCustom: boolean;
-}
-
-/**
- * 面板需要的全部状态。
- *
- * 关键设计：面板**同时**给出「内置默认原文」与「用户当前内容」两份。
- *  - 只给一份的话，面板无法回答"我改了什么 / 改回默认会变成什么"；
- *  - 面板里不做 diff 渲染，而是分成两个可见区（默认要点摘要 + 编辑框），
- *    用户随时能点「恢复默认」拿回原文 —— 比自己比对更不容易出错。
- */
-/**
- * 单个版本（简洁版 / 完整版）在面板里的状态。
- *
- * 面板做成**分版本**的：每个版本各有自己的内置默认与自定义内容，
- * 用户在"A 版"上的编辑不会影响"B 版"。
- */
-export interface PromptVariantState {
-  /** 该版本的内置默认原文，用于「恢复默认」与"与默认不同"的判定 */
-  defaultSpec: string;
-  /** 该版本已保存的自定义内容；null 表示当前用内置默认 */
-  customSpec: string | null;
-  /** 该版本是否正在使用自定义内容 */
-  isCustom: boolean;
-}
+/** 输入区只接收自定义标记，不接收提示词全文。 */
+export interface PromptComposerStatus { isCustom: boolean }
 
 export interface PromptPanelState {
-  /** 当前生效版本（底部双段开关的状态） */
-  variant: FormatSpecVariant;
-  /** 简洁版状态 */
-  short: PromptVariantState;
-  /** 完整版状态 */
-  full: PromptVariantState;
-  /** 自定义内容的保存时间（ISO）；两版都没自定义时为 null */
+  defaultSpec: string;
+  customSpec: string | null;
+  isCustom: boolean;
   updatedAt: string | null;
-  /** 自定义内容长度上限 */
   maxLength: number;
 }
-
 export interface SavePromptSpecResult {
   ok: boolean;
-  /** 保存后的完整状态（面板据此刷新按钮与提示，无需再请求一次） */
   state: PromptPanelState;
-  /** 保存的是哪个版本（面板据此给出准确回执） */
-  variant: FormatSpecVariant;
-  /** 是否回落到了默认（内容空白 ⇒ 视同恢复默认） */
   resetToDefault?: boolean;
   error?: string;
 }
-
-/**
- * 提示词面板的桥接口（独立 preload 暴露为 `window.promptBridge`）。
- *
- * 边界与其它面板一致：**不能读文件、不能访问 Node、不能触碰网页**。
- * 它能做的只有"读这一份设置 / 写这一份设置"。
- */
+/** 独立面板仅可读取、保存和恢复唯一提示词设置。 */
 export interface PromptPanelBridge {
   getState(): Promise<PromptPanelState>;
-  /** 保存指定版本的自定义内容（空内容 ⇒ 该版本恢复默认） */
-  save(variant: FormatSpecVariant, spec: string): Promise<SavePromptSpecResult>;
-  /** 把指定版本恢复为内置默认 */
-  reset(variant: FormatSpecVariant): Promise<SavePromptSpecResult>;
+  save(spec: string): Promise<SavePromptSpecResult>;
+  reset(): Promise<SavePromptSpecResult>;
   close(): Promise<{ ok: boolean }>;
 }
 
@@ -592,7 +551,7 @@ export interface EditorBridge {
   readFile(relPath: string): Promise<ReadFileResult>;
   sliceFile(relPath: string, startLine: number, endLine: number): Promise<SliceFileResult>;
   writeFile(relPath: string, text: string, root: string): Promise<WriteFileResult>;
-  /** 读取/订阅输入区当前设置（版本与自定义布尔状态）。 */
+  /** 读取/订阅输入区当前设置（自定义布尔状态）。 */
   getPromptStatus(): Promise<PromptComposerStatus>;
   onPromptStatus(listener: (status: PromptComposerStatus) => void): void;
   /** 上报期望的编辑器宽度（像素）；主进程会做最小宽度约束并回传实际值 */
@@ -603,13 +562,6 @@ export interface EditorBridge {
    * **程序不会把它送进输入框**——需要用户自己粘贴到提示词里（零注入边界，见 ADR-0003）。
    */
   copyFormatSpec(): Promise<CopyFormatResult>;
-  /**
-   * 读当前使用的提示词版本（底部双段开关的初始状态）。
-   * 启动时渲染进程据此把开关拨到正确位置——不读就会"显示简洁版、实际发的是完整版"。
-   */
-  getFormatSpecVariant(): Promise<FormatSpecVariant>;
-  /** 切换提示词版本并持久化（返回落盘后的实际值，供渲染进程校正显示） */
-  setFormatSpecVariant(variant: FormatSpecVariant): Promise<FormatSpecVariant>;
   /** 取工作环境摘要（当前目录 + 目录树 + 运行环境），用于界面预览 */
   getContext(): Promise<ContextSummary>;
   /** 按初始化和技能选择组装用户需求，经唯一受控运输提交到官网。 */

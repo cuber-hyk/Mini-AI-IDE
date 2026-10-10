@@ -53,6 +53,7 @@ it('布局写入仅接受受信本地主 frame，网页和子 frame 不能改变
   for (const sender of [f.views.editor.webContents, f.views.web.webContents, f.views.webbar.webContents, f.views.preview.webContents]) {
     const event = { sender, senderFrame: sender === f.views.editor.webContents ? {} : sender.mainFrame };
     assert.throws(() => f.withEvent(event, CHANNELS.setWorkspaceLayout, { fileWidth: 800 }), /主 frame/);
+    assert.throws(() => f.withEvent(event, CHANNELS.setWorkspaceLayout, { toolsVisible: true }), /主 frame/);
   }
   assert.equal(JSON.stringify(f.controller.state), before);
   assert.equal(f.writes.length, 0);
@@ -88,7 +89,7 @@ it('布局白名单拒绝未知字段和非法数值，整个无效 patch 不得
   const f = await fixture(); const before = JSON.stringify(f.controller.state);
   for (const patch of [null, [], 2, { webVisible: false }, { fileWidth: Number.NaN },
     { fileWidth: Infinity }, { fileWidth: -1 }, { fileWidth: 10001 }, { treeVisible: 'true' },
-    { workspaceWidth: 250, unknown: 1 }]) {
+    { workspaceWidth: 250, unknown: 1 }, { toolsVisible: 'true' }]) {
     assert.throws(() => f.invoke(CHANNELS.setWorkspaceLayout, patch));
     assert.equal(JSON.stringify(f.controller.state), before);
   }
@@ -134,6 +135,44 @@ it('原生 Diff 只占正文区域，目录树始终在最右且不会被预览�
   assert.equal(f.views.preview.bounds.x + f.views.preview.bounds.width, layout.treeBounds.x);
   assert.equal(layout.treeBounds.x + layout.treeBounds.width, 1600);
   assert.ok(layout.treeBounds.width > 0);
+});
+
+it('工具标签与原生 Diff 互斥，关闭工具展示不污染持久布局', async () => {
+  const f = await fixture(); const saved = f.settings.get();
+  f.invoke(CHANNELS.setWorkspaceLayout, { previewVisible: true });
+  f.invoke(CHANNELS.setWorkspaceLayout, { toolsVisible: true });
+  assert.equal(f.controller.state.toolsVisible, true);
+  assert.equal(f.controller.state.previewVisible, false);
+  assert.equal(f.views.preview.visible, false, '原生预览不能挡住本地工具正文');
+  assert.equal(f.controller.layout.previewBounds.width, 0);
+  f.invoke(CHANNELS.setWorkspaceLayout, { toolsVisible: false });
+  assert.equal(f.controller.state.toolsVisible, false);
+  assert.equal(f.controller.state.previewVisible, false, '关闭工具不会恢复先前的 Diff');
+  assert.deepEqual(f.settings.get(), saved);
+  assert.equal(f.writes.length, 0);
+  f.invoke(CHANNELS.setWorkspaceLayout, { toolsVisible: true });
+  f.invoke(CHANNELS.setPreviewPanel, 500);
+  assert.equal(f.controller.state.toolsVisible, false);
+  assert.equal(f.controller.state.previewVisible, true);
+  f.invoke(CHANNELS.setPreviewPanel, 0);
+  assert.equal(f.writes.length, 1, '只有显式预览宽度调整保存偏好，工具显隐不持久化');
+  assert.equal('toolsVisible' in f.settings.get().workspaceLayout, false);
+  assert.equal(saved.workspaceLayout.treeVisible, f.settings.get().workspaceLayout.treeVisible);
+});
+
+it('从临时拓宽 Diff 切换到工具恢复原宽度，文件区隐藏后恢复仍保留工具选择', async () => {
+  const f = await fixture(); const initial = f.controller.layout.fileBounds.width;
+  f.invoke(CHANNELS.setPreviewPanel, 700, true);
+  assert.ok(f.controller.layout.fileBounds.width > initial);
+  f.invoke(CHANNELS.setWorkspaceLayout, { toolsVisible: true });
+  assert.equal(f.controller.layout.fileBounds.width, initial);
+  assert.equal(f.views.preview.visible, false);
+  assert.equal(f.writes.length, 0);
+  f.invoke(CHANNELS.setWorkspaceLayout, { fileVisible: false });
+  assert.equal(f.controller.state.toolsVisible, false);
+  f.invoke(CHANNELS.setWorkspaceLayout, { fileVisible: true });
+  assert.equal(f.controller.state.toolsVisible, true);
+  assert.equal(f.controller.state.previewVisible, false);
 });
 
 it('临时拓宽 Diff 关闭后恢复文件区宽度，整个过程不保存临时宽度', async () => {

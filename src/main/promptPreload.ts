@@ -18,9 +18,8 @@ const CH = {
 
 const bridge = {
   getState: () => ipcRenderer.invoke(CH.getState),
-  // 按版本保存/重置：面板有两个页签，各自独立
-  save: (variant: string, spec: string) => ipcRenderer.invoke(CH.save, variant, spec),
-  reset: (variant: string) => ipcRenderer.invoke(CH.reset, variant),
+  save: (spec: string) => ipcRenderer.invoke(CH.save, spec),
+  reset: () => ipcRenderer.invoke(CH.reset),
   close: () => ipcRenderer.invoke(CH.close),
 };
 

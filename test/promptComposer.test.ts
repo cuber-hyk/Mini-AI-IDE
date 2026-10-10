@@ -3,13 +3,13 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vm from 'node:vm';
 import { it } from 'node:test';
-import { FORMAT_SPEC_SHORT, FORMAT_SPEC_FULL } from '../src/shared/formatSpec';
+import { FORMAT_SPEC } from '../src/shared/formatSpec';
 import { buildWholeFileText } from '../src/shared/snippet';
 
 const source = fs.readFileSync(path.join(__dirname, '../src/renderer/promptComposer.js'), 'utf8');
 const panelSource = fs.readFileSync(path.join(__dirname, '../src/renderer/prompt.js'), 'utf8');
 const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
-type Status = { variant: string; shortIsCustom: boolean; fullIsCustom: boolean };
+type Status = { isCustom: boolean };
 
 function element(variant = '') {
   const listeners: Record<string, (event: unknown) => unknown> = {};
@@ -26,12 +26,10 @@ function element(variant = '') {
 }
 
 function setup(overrides: Record<string, unknown> = {}) {
-  const input = element(); const short = element('short'); const full = element('full');
-  const sw = element(); const custom = element();
+  const input = element(); const custom = element();
   const requirementPanel = { ...element(), open: true };
   const actions = { offsetHeight: 30 };
-  sw.querySelectorAll = () => [short, full];
-  let current: Status = { variant: 'full', shortIsCustom: false, fullIsCustom: true };
+  let current: Status = { isCustom: true };
   let listener: (status: Status) => void = () => {};
   let resized = () => {};
   let observer = () => {};
@@ -39,12 +37,11 @@ function setup(overrides: Record<string, unknown> = {}) {
   const messages: Array<{ text: string; warn: boolean }> = [];
   const writes: string[] = [];
   const nodes: Record<string, unknown> = {
-    requirement: input, 'requirement-panel': requirementPanel, 'variant-switch': sw, 'prompt-custom': custom, 'prompt-actions': actions,
+    requirement: input, 'requirement-panel': requirementPanel, 'prompt-custom': custom, 'prompt-actions': actions,
   };
   const bridge = {
     async getPromptStatus() { return current; },
     onPromptStatus(fn: typeof listener) { listener = fn; },
-    async setFormatSpecVariant(v: string) { writes.push(v); current = { ...current, variant: v }; listener(current); return v; },
     ...overrides,
   };
   const sandbox = {
@@ -63,7 +60,7 @@ function setup(overrides: Record<string, unknown> = {}) {
   sandbox.window.setupPromptComposer(bridge, (text: string, warn = false) => messages.push({ text, warn }), {
     setComposerBusy(value: boolean) { composerBusy = value; }, onBusy() {},
   });
-  return { input, short, full, sw, custom, requirementPanel, messages, writes,
+  return { input, custom, requirementPanel, messages, writes,
     narrow() { sandbox.window.innerHeight = 600; actions.offsetHeight = 80; resized(); },
     publish(next: Status) { current = next; listener(next); },
     resize() { resized(); }, observe() { observer(); },
@@ -85,65 +82,24 @@ it('收起需求保留草稿与高度，重新展开时按当前内容调整', (
   assert.equal(ui.input.style.height, '174px');
 });
 
-it('读取持久化版本，并在切换、保存或恢复默认后显示对应自定义状态', async () => {
+it('初始化与保存广播只更新唯一自定义状态，不存在版本切换', async () => {
   const ui = setup(); await flush();
-  assert.equal(ui.sw.dataset.variant, 'full'); assert.equal(ui.custom.hidden, false);
-  assert.equal(ui.custom.attrs['aria-label'], '使用自定义提示词，请检查新协议');
-  ui.short.fire('click'); await flush();
-  assert.deepEqual(ui.writes, ['short']); assert.equal(ui.custom.hidden, true);
-  ui.publish({ variant: 'short', shortIsCustom: true, fullIsCustom: true });
-  assert.equal(ui.custom.hidden, false);
-  ui.publish({ variant: 'short', shortIsCustom: false, fullIsCustom: true });
-  assert.equal(ui.custom.hidden, true);
+  assert.equal(ui.custom.hidden, false); assert.equal(ui.composerBusy, false);
+  assert.equal(ui.custom.attrs['aria-label'], '使用自定义提示词');
+  ui.publish({ isCustom: false }); assert.equal(ui.custom.hidden, true);
 });
-
-it('切换失败保持实际版本；切换期间禁止提交，避免界面与发出的版本不同', async () => {
-  let reject: (err: Error) => void = () => {};
-  const ui = setup({ setFormatSpecVariant: () => new Promise((_resolve, no) => { reject = no; }) });
-  await flush(); ui.short.fire('click');
-  assert.equal(ui.composerBusy, true);
-  reject(new Error('落盘失败')); await flush();
-  assert.equal(ui.sw.dataset.variant, 'full'); assert.equal(ui.composerBusy, false);
-  assert.match(ui.messages.at(-1)!.text, /切换.*失败/);
-});
-
-it('子按钮的原生键盘点击只切换一次，容器键盘操作也能切换', async () => {
-  const ui = setup(); await flush();
-  ui.sw.fire('keydown', { target: ui.short, key: 'Enter', preventDefault() { throw new Error('不应拦截子按钮'); } });
-  assert.equal(ui.writes.length, 0);
-  ui.short.fire('click'); await flush();
-  ui.sw.fire('keydown', { target: ui.sw, key: ' ', preventDefault() {} }); await flush();
-  assert.deepEqual(ui.writes, ['short', 'full']);
-});
-
 it('初始查询晚于设置广播时，旧查询不会覆盖已生效的新设置', async () => {
   let resolve: (status: Status) => void = () => {};
   const ui = setup({ getPromptStatus: () => new Promise((yes) => { resolve = yes; }) });
-  ui.publish({ variant: 'short', shortIsCustom: true, fullIsCustom: false });
-  resolve({ variant: 'full', shortIsCustom: false, fullIsCustom: false }); await flush();
-  assert.equal(ui.sw.dataset.variant, 'short'); assert.equal(ui.custom.hidden, false);
+  ui.publish({ isCustom: true });
+  resolve({ isCustom: false }); await flush();
+  assert.equal(ui.custom.hidden, false);
 });
-
-it('读取和连续重试都失败时保留版本按钮，服务恢复后能继续切换并提交', async () => {
-  let available = false;
-  const ui = setup({
-    getPromptStatus: async () => {
-      if (!available) throw null;
-      return { variant: 'short', shortIsCustom: false, fullIsCustom: false };
-    },
-    setFormatSpecVariant: async () => {
-      if (!available) throw new Error('暂时不可用');
-      return 'short';
-    },
-  });
-  await flush();
-  assert.equal(ui.composerBusy, true); assert.equal(ui.short.disabled, false);
-  for (let i = 0; i < 2; i++) {
-    ui.short.fire('click'); await flush();
-    assert.equal(ui.short.disabled, false); assert.equal(ui.composerBusy, true);
-  }
-  available = true; ui.short.fire('click'); await flush();
-  assert.equal(ui.sw.dataset.variant, 'short'); assert.equal(ui.composerBusy, false);
+it('状态读取失败显式报告并保持提交禁用，设置广播后恢复', async () => {
+  const ui = setup({ getPromptStatus: async () => { throw new Error('暂时不可用'); } });
+  await flush(); assert.equal(ui.composerBusy, true);
+  assert.match(ui.messages.at(-1)!.text, /读取提示词设置失败/);
+  ui.publish({ isCustom: false }); assert.equal(ui.composerBusy, false);
 });
 
 it('长输入到上限后滚动；删除与宽度变化后收缩，观察高度变化不会循环增长', async () => {
@@ -163,39 +119,45 @@ it('窄窗口操作栏换行后压缩长输入，常用控件仍保留高度预�
   assert.equal(ui.input.style.height, '160px'); assert.equal(ui.input.style.overflowY, 'auto');
 });
 
-function panelFixture(fail = false) {
-  const names = ['close', 'editor', 'status', 'count', 'hint', 'usage', 'reset', 'cancel', 'save', 'tab-using'];
-  const nodes = Object.fromEntries(names.map(name => ['pm-' + name, Object.assign(element(), { className: '', innerHTML: '', classList: { toggle() {} } })]));
-  const tabs = [element('short'), element('full')].map(tab => Object.assign(tab, { classList: { toggle() {} } }));
-  const state = { variant: 'short', maxLength: 8000, updatedAt: null,
-    short: { defaultSpec: FORMAT_SPEC_SHORT, isCustom: true, customSpec: '\n我的旧行号约定原文\n' },
-    full: { defaultSpec: FORMAT_SPEC_FULL, isCustom: false, customSpec: null } };
-  let saves = 0;
-  const sandbox = { window: { formatSpecDefaults: { short: FORMAT_SPEC_SHORT, full: FORMAT_SPEC_FULL },
+function panelFixture(fail = false, saveFail = false) {
+  const names = ['close', 'editor', 'status', 'count', 'hint', 'usage', 'reset', 'cancel', 'save'];
+  const nodes = Object.fromEntries(names.map(name => ['pm-' + name, Object.assign(element(), { className: '', classList: { toggle() {} } })]));
+  const state = { maxLength: 10000, updatedAt: null, defaultSpec: FORMAT_SPEC, isCustom: true, customSpec: '\n我的自定义原文\n' as string | null };
+  const saves: string[] = [];
+  const sandbox = { window: { formatSpecDefaults: FORMAT_SPEC,
     setTimeout(fn: () => void) { fn(); }, promptBridge: {
       async getState() { if (fail) throw new Error('未能读取状态'); return state; },
-      async save() { saves++; return { ok: false }; }, async close() {} } },
-    document: { getElementById: (name: string) => nodes[name], querySelectorAll: () => tabs, addEventListener() {} } };
+      async save(text: string) {
+        saves.push(text); if (saveFail) throw new Error('设置落盘失败');
+        state.isCustom = text !== FORMAT_SPEC; state.customSpec = state.isCustom ? text : null;
+        return { ok: true, state, resetToDefault: !state.isCustom };
+      }, async close() {} } },
+    document: { getElementById: (name: string) => nodes[name], addEventListener() {} } };
   vm.createContext(sandbox); vm.runInContext(panelSource, sandbox);
-  return { nodes, tabs, state, saves: () => saves };
+  return { nodes, state, saves };
 }
-it('提示词设置明确提示检查自定义新协议，保留原文和两版独立草稿，恢复默认不立即落库', async () => {
+it('唯一提示词编辑原文保留，恢复默认仅载入，保存后才替换生效内容', async () => {
   const f = panelFixture(); await flush();
-  assert.equal(f.nodes['pm-editor'].value, f.state.short.customSpec);
-  assert.match(f.nodes['pm-hint'].textContent, /请检查/); assert.match(f.nodes['pm-hint'].textContent, /旧行号格式不可应用/);
-  f.nodes['pm-editor'].value = '简洁草稿\n'; f.nodes['pm-editor'].fire('input');
-  f.tabs[1].fire('click'); assert.equal(f.nodes['pm-editor'].value, FORMAT_SPEC_FULL);
-  f.nodes['pm-editor'].value = '完整草稿\n'; f.nodes['pm-editor'].fire('input');
-  f.tabs[0].fire('click'); assert.equal(f.nodes['pm-editor'].value, '简洁草稿\n');
-  f.nodes['pm-reset'].fire('click'); assert.equal(f.nodes['pm-editor'].value, FORMAT_SPEC_SHORT);
-  assert.equal(f.saves(), 0); assert.equal(f.state.short.customSpec, '\n我的旧行号约定原文\n');
-  f.tabs[1].fire('click'); assert.equal(f.nodes['pm-editor'].value, '完整草稿\n');
+  assert.equal(f.nodes['pm-editor'].value, f.state.customSpec);
+  assert.match(f.nodes['pm-hint'].textContent, /请检查/);
+  f.nodes['pm-reset'].fire('click'); assert.equal(f.nodes['pm-editor'].value, FORMAT_SPEC);
+  assert.equal(f.saves.length, 0); assert.equal(f.state.customSpec, '\n我的自定义原文\n');
+  await f.nodes['pm-save'].fire('click');
+  assert.deepEqual(f.saves, [FORMAT_SPEC]); assert.equal(f.state.customSpec, null);
+  assert.equal(f.nodes['pm-save'].disabled, true);
 });
-it('主进程状态读取失败时两版均使用权威生成默认，不显示旧协议或空白占位', async () => {
+it('设置读取失败显示权威完整默认，但不能覆盖未知自定义', async () => {
   const f = panelFixture(true); await flush(); await flush(); await flush();
-  assert.equal(f.nodes['pm-editor'].value, FORMAT_SPEC_SHORT);
-  f.tabs[1].fire('click'); assert.equal(f.nodes['pm-editor'].value, FORMAT_SPEC_FULL);
-  assert.equal(f.nodes['pm-reset'].disabled, true); assert.equal(f.saves(), 0);
+  assert.equal(f.nodes['pm-editor'].value, FORMAT_SPEC);
+  assert.equal(f.nodes['pm-reset'].disabled, true); assert.equal(f.nodes['pm-save'].disabled, true);
+  assert.match(f.nodes['pm-hint'].textContent, /读取设置失败/); assert.equal(f.saves.length, 0);
+});
+it('设置保存失败保留唯一草稿并可重试', async () => {
+  const f = panelFixture(false, true); await flush();
+  const draft = '\n未保存草稿\n'; f.nodes['pm-editor'].value = draft; f.nodes['pm-editor'].fire('input');
+  await f.nodes['pm-save'].fire('click');
+  assert.equal(f.nodes['pm-editor'].value, draft); assert.equal(f.nodes['pm-save'].disabled, false);
+  assert.match(f.nodes['pm-hint'].textContent, /保存失败/); assert.equal(f.state.customSpec, '\n我的自定义原文\n');
 });
 
 it('选区复制没有全文回退，纯空白选区仍保留原文', async () => {

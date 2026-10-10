@@ -15,7 +15,8 @@ class Element {
   appendChild(child: Element) { this.children.push(child); }
   contains() { return false; }
   querySelectorAll() { return this.children.flatMap(child => child.children).filter(child => child.attrs.role === 'tab'); }
-  focus() {} scrollIntoView() {}
+  focused = false;
+  focus() { this.focused = true; } scrollIntoView() {}
 }
 
 it('改动按需与文件共用标签栏，切回文件保留改动标签，关闭改动不关闭草稿文件', async () => {
@@ -52,4 +53,28 @@ it('改动按需与文件共用标签栏，切回文件保留改动标签，关�
   assert.equal(files[0].dirty, true, '关闭改动不会改变文件草稿');
   owner.render([], null); owner.setReview(true, false);
   assert.equal(host.querySelectorAll()[0].attrs['aria-selected'], 'false', '无文件时退出预览也不能误选改动标签');
+});
+
+it('工具和改动有独立标签身份，键盘切换定位正确，关闭工具不关闭文件', async () => {
+  const host = new Element(); const calls: string[] = [];
+  const context: any = { window: {}, document: { activeElement: null, createElement: () => new Element() } };
+  vm.runInNewContext(fs.readFileSync('src/renderer/editorTabs.js', 'utf8'), context);
+  const owner = context.window.createEditorTabs(host, {
+    open: async (path: string) => { calls.push(path); }, close: () => { calls.push('close-file'); },
+    openReview: async () => { calls.push('review'); }, closeReview: () => { calls.push('close-review'); },
+    openTools: async () => { calls.push('tools'); }, closeTools: () => { calls.push('close-tools'); },
+  });
+  owner.render([{ path: 'draft.ts', dirty: true }], 'draft.ts');
+  owner.setReview(true, false); owner.setTools(true, true);
+  const tabs = host.querySelectorAll();
+  assert.deepEqual(tabs.map(tab => tab.dataset.kind), ['file', 'tools', 'review']);
+  assert.deepEqual(tabs.map(tab => tab.attrs['aria-selected']), ['false', 'true', 'false']);
+  tabs[1].events.keydown({ key: 'End', preventDefault() {} });
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+  assert.deepEqual(calls, ['review']); assert.equal(tabs[2].focused, true); assert.equal(tabs[1].focused, false);
+  tabs[1].events.keydown({ key: 'Delete', preventDefault() {} });
+  assert.equal(calls.at(-1), 'close-tools');
+  owner.setTools(false, false);
+  assert.equal(host.querySelectorAll().length, 2);
+  assert.match(host.querySelectorAll()[0].attrs['aria-label'], /未保存/);
 });
