@@ -60,8 +60,6 @@ body { display: block; }
 .requirement-panel > summary > span { margin-left: 8px; color: var(--ui-muted); font-size: 11px; }
 .requirement-panel .requirement { display: block; margin-top: 6px; }
 .requirement-panel:not([open]) ~ .prompt-actions .prompt-options { display: none; }
-.tool-result-actions { position: static; justify-content: flex-end; padding: 0 10px 6px; }
-.tool-panel-summary { padding-right: 10px; }
 
 /* 文件和目录都有连续顶栏，正文起点统一由主进程预算决定。 */
 .toolbar .editor-tabs { flex: 1 1 auto; height: 100%; border: 0; background: transparent; }

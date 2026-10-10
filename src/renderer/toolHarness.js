@@ -11,24 +11,16 @@
     const permission = document.getElementById('tool-permission');
     const permissionControl = document.getElementById('tool-permission-control');
     const automatic = document.getElementById('tool-automatic');
-    const sendInterval = document.getElementById('tool-send-interval');
-    const intervalDown = document.getElementById('tool-interval-down');
-    const intervalUp = document.getElementById('tool-interval-up');
+    const settingsToggle = document.getElementById('tool-settings-toggle');
     const continueNotice = document.getElementById('tool-continue-notice');
-    const dirtyPolicy = document.getElementById('tool-dirty-policy');
-    const hint = document.getElementById('tool-permission-hint');
     const count = document.getElementById('tool-count');
     const activity = document.getElementById('tool-activity');
     const message = document.getElementById('tool-message');
     const results = document.getElementById('tool-results');
     const copy = document.getElementById('tool-copy');
-    const send = document.getElementById('tool-send-results');
     const returnNotice = document.getElementById('tool-return-notice');
     const undo = document.getElementById('tool-undo');
-    const clearRules = document.getElementById('tool-clear-rules');
     const more = document.getElementById('tool-more-toggle');
-    const sound = document.getElementById('tool-completion-sound');
-    const autoCopy = document.getElementById('tool-auto-copy');
     const copyNotice = document.getElementById('tool-copy-notice');
     const panel = document.getElementById('tool-panel');
     const completionNotice = document.getElementById('tool-completion-notice');
@@ -49,7 +41,7 @@
     let completionBaseline = false;
     let lastCompletionId;
     let feedbackTimer;
-    let audioContext;
+    const audio = window.createToolCompletionSound();
     let lastBatchError = '';
     let continuationTimer;
     const statusLabels = {
@@ -62,32 +54,42 @@
       panel.classList.toggle('has-completion', false);
       panel.classList.toggle('completion-error', false);
       completionNotice.textContent = '';
+      completionNotice.title = '';
+      renderStatusFeedback();
+    }
+
+    function renderStatusFeedback() {
+      const notices = [
+        { element: returnNotice, priority: returnError || returnNotice.classList.contains('is-error') ? 0 : 4 },
+        { element: continueNotice, priority: continueNotice.classList.contains('is-error') ? 1 : 5 },
+        { element: copyNotice, priority: copyNotice.classList.contains('is-error') ? 2 : 6 },
+        { element: completionNotice, priority: 3 },
+        { element: soundNotice, priority: 7 },
+      ].filter(function (item) { return item.element.textContent; });
+      notices.forEach(function (item) { item.element.classList.remove('is-visible'); });
+      if (!notices.length) return;
+      notices.sort(function (left, right) { return left.priority - right.priority; });
+      const active = notices[0].element;
+      active.classList.add('is-visible');
+      active.title = notices.map(function (item) { return item.element.textContent; }).join(' · ');
     }
 
     function soundFailure() {
       // 声音提示失败独立显示，不覆盖工具输出或执行状态。
       soundNotice.textContent = '音效未播放，可重新开启音效后重试。';
+      soundNotice.title = soundNotice.textContent;
+      renderStatusFeedback();
     }
 
     async function prepareSound() {
-      if (!audioContext) audioContext = new window.AudioContext();
-      if (audioContext.state === 'suspended') await audioContext.resume();
-      if (audioContext.state !== 'running') throw new Error('Audio is unavailable');
-      return audioContext;
+      return audio.prepare();
     }
 
     function playTone(context) {
-      const tone = context.createOscillator();
-      const gain = context.createGain();
-      const now = context.currentTime;
-      tone.type = 'sine'; tone.frequency.setValueAtTime(660, now);
-      gain.gain.setValueAtTime(0, now);
-      gain.gain.linearRampToValueAtTime(0.035, now + 0.015);
-      gain.gain.linearRampToValueAtTime(0, now + 0.15);
-      tone.connect(gain); gain.connect(context.destination);
-      tone.onended = function () { tone.disconnect(); gain.disconnect(); };
-      tone.start(now); tone.stop(now + 0.15);
+      audio.play(context);
       soundNotice.textContent = '';
+      soundNotice.title = '';
+      renderStatusFeedback();
     }
 
     async function playCompletionSound(id) {
@@ -107,7 +109,7 @@
         lastCompletionId = completion ? completion.id : undefined;
         return;
       }
-      if (!completion || state.busy) { clearFeedback(); soundNotice.textContent = ''; return; }
+      if (!completion || state.busy) { clearFeedback(); soundNotice.textContent = ''; soundNotice.title = ''; renderStatusFeedback(); return; }
       if (completion.id === lastCompletionId) return;
       lastCompletionId = completion.id;
       clearFeedback();
@@ -116,6 +118,8 @@
       panel.classList.toggle('completion-error', completion.outcome === 'error');
       completionNotice.textContent = completion.outcome === 'error'
         ? '⚠ 本批存在失败或未执行请求，请查看结果' : '✓ 结果已就绪';
+      completionNotice.title = completionNotice.textContent;
+      renderStatusFeedback();
       feedbackTimer = setTimeout(clearFeedback, 3200);
       if (state.config.completionSound) void playCompletionSound(completion.id);
     }
@@ -184,26 +188,20 @@
       panel.classList.toggle('has-results', Boolean(state && (state.results.length || state.batchError)));
       permission.disabled = configuring || !state || unavailable;
       automatic.disabled = configuring || !state || unavailable;
-      sendInterval.disabled = configuring || !state || unavailable;
-      intervalDown.disabled = configuring || !state || unavailable || Number(state.config.sendIntervalSeconds) <= 0;
-      intervalUp.disabled = configuring || !state || unavailable || Number(state.config.sendIntervalSeconds) >= 300;
-      dirtyPolicy.disabled = configuring || !state || unavailable;
-      sound.disabled = configuring || !state || unavailable;
-      autoCopy.disabled = configuring || !state || unavailable;
-      copy.disabled = copying || !state || (!state.results.length && !state.batchError);
-      undo.disabled = undoing || !state || state.busy || !state.canUndo;
-      clearRules.disabled = configuring || !state || unavailable || state.busy;
-      undo.hidden = !state || (!state.canUndo && !undoing);
-      more.hidden = undo.hidden;
-      copy.title = copying ? '正在复制…' : '复制本批结果';
       const returned = state && state.resultReturn;
       const hasAttachments = Boolean(returned && returned.attachmentCount > 0);
-      send.hidden = !hasAttachments;
+      const sendAttachments = Boolean(hasAttachments && !configuring && !state.busy && !state.config.automatic && returned.canSend && returnedIdentity !== returnIdentity());
+      const showSendAction = sendAttachments || sending && hasAttachments;
+      copy.dataset.action = showSendAction ? 'send' : 'copy';
+      copy.title = copying ? (sending ? '正在复制并发送本批结果与附件…' : '正在复制本批结果…') : showSendAction ? '发送本批结果与附件，并复制结果到剪贴板' : '复制本批结果到剪贴板';
+      copy.setAttribute('aria-label', copy.title);
+      copy.disabled = copying || !state || (!state.results.length && !state.batchError);
+      undo.disabled = undoing || !state || state.busy || !state.canUndo;
+      undo.hidden = !state || (!state.canUndo && !undoing);
+      more.hidden = undo.hidden;
       panel.classList.toggle('has-attachments', hasAttachments);
-      send.disabled = !hasAttachments || sending || configuring || state.busy || state.config.automatic || !returned.canSend || returnedIdentity === returnIdentity();
-      send.textContent = sending || returned && returned.phase === 'sending' ? '正在发送附件…' : '发送本批附件';
-      send.title = state && state.config.automatic ? '自动继续已开启，由 IDE 自动发送本批结果与附件' : '将当前批工具结果与已授权附件一起发送给 AI';
       returnNotice.textContent = hasAttachments ? returnMessage || returned.message : '';
+      returnNotice.title = returnNotice.textContent;
       returnNotice.classList.toggle('is-error', returnError || Boolean(hasAttachments && returned.phase === 'paused'));
       const notice = unavailable ? state.message : localMessage || (state ? state.message : '正在读取工具状态…');
       const awaitingContinuation = /等待继续生成/.test(notice);
@@ -224,7 +222,6 @@
       permissionControl.dataset.permission = state.config.permission;
       // 主进程先停止回传再保存配置；显示实际停止状态，避免保存期间开关反跳。
       automatic.checked = state.config.automatic && (!state.continuation || state.continuation.phase !== 'off');
-      sendInterval.value = String(state.config.sendIntervalSeconds === undefined ? 3 : state.config.sendIntervalSeconds);
       const continuing = state.continuation;
       if (continuing && !localMessage && !unavailable) {
         const labels = { sending: '正在发送结果', waiting_reply: '等待 AI 回复', waiting_user: '等待你回答', paused: '自动已暂停' };
@@ -238,19 +235,18 @@
         if (continuing.phase === 'paused') continueNotice.textContent = continuing.message;
         continueNotice.classList.toggle('is-error', continuing.phase === 'paused');
       }
-      dirtyPolicy.value = state.config.dirtyPolicy;
-      sound.checked = state.config.completionSound === true;
-      autoCopy.checked = state.config.autoCopyResults === true;
+      continueNotice.title = continueNotice.textContent;
       copyNotice.textContent = !state.clipboard || state.config.automatic && state.clipboard.ok ? '' : state.clipboard.ok ? '已自动复制本批结果，可粘贴给 AI' : '自动复制失败，请手动重试：' + state.clipboard.error;
+      copyNotice.title = copyNotice.textContent;
       copyNotice.classList.toggle('is-error', Boolean(state.clipboard && !state.clipboard.ok));
-      hint.textContent = unavailable ? '工具记录未加载，权限设置不可用；编辑文件和访问官网仍可使用。' : {
+      permission.title = unavailable ? '工具记录未加载，权限设置不可用；编辑文件和访问官网仍可使用。' : {
         ask: '项目内读取与搜索自动执行；修改与命令由 IDE 请求批准。',
         rules: '按本项目已记住的规则执行；未覆盖的调用由 IDE 请求批准。',
         full: '在当前 Windows 账户权限内执行，可访问项目外文件并运行联网命令。',
       }[state.config.permission];
-      permission.title = hint.textContent;
       const finished = state.results.filter(function (item) { return !['running', 'pending_permission'].includes(item.status); }).length;
       count.textContent = state.batchError ? '1 项校验失败' : state.results.length + ' 项' + (state.busy ? ' · 已返回 ' + finished : '');
+      renderStatusFeedback();
       renderResults();
       layout.refresh();
     }
@@ -286,48 +282,6 @@
 
     permission.addEventListener('change', function () { return configure({ permission: permission.value }); });
     automatic.addEventListener('change', function () { return configure({ automatic: automatic.checked }); });
-    sendInterval.addEventListener('change', function () {
-      const seconds = Number(sendInterval.value);
-      if (!sendInterval.value.trim() || !Number.isInteger(seconds) || seconds < 0 || seconds > 300) {
-        localMessage = '发送间隔须为 0–300 秒的整数'; localError = true; render(); return;
-      }
-      return configure({ sendIntervalSeconds: seconds });
-    });
-    [intervalDown, intervalUp].forEach(function (button, index) {
-      button.addEventListener('pointerdown', function (event) { event.preventDefault(); });
-      button.addEventListener('click', function () {
-        if (button.disabled) return;
-        sendInterval.stepUp(index === 0 ? -1 : 1);
-        return configure({ sendIntervalSeconds: Number(sendInterval.value) });
-      });
-    });
-    dirtyPolicy.addEventListener('change', function () { return configure({ dirtyPolicy: dirtyPolicy.value }); });
-    autoCopy.addEventListener('change', function () { return configure({ autoCopyResults: autoCopy.checked }); });
-    sound.addEventListener('change', async function () {
-      if (configuring || !state) return;
-      const enabled = sound.checked;
-      // 在开启手势内准备，保存成功后预听一次；启动读取配置不播放。
-      const prepared = enabled && !state.config.completionSound ? prepareSound().catch(function () { return null; }) : null;
-      if (!enabled) soundNotice.textContent = '';
-      await configure({ completionSound: enabled });
-      if (prepared) {
-        const context = await prepared;
-        if (!state.config.completionSound) return;
-        try { if (!context) throw new Error('Audio is unavailable'); playTone(context); }
-        catch (_error) { soundFailure(); }
-      }
-    });
-    clearRules.addEventListener('click', async function () {
-      if (clearRules.disabled || configuring) return;
-      configuring = true; localMessage = ''; localError = false; render();
-      const version = eventVersion;
-      try {
-        const next = await bridge.clearToolRules();
-        if (version === eventVersion) receive(next);
-        localMessage = '已清除本项目记住的规则；未覆盖的调用会请求批准。';
-      } catch (error) { localMessage = '清除规则失败：' + (error instanceof Error ? error.message : String(error)); localError = true; }
-      finally { configuring = false; render(); }
-    });
     undo.addEventListener('click', async function () {
       if (undo.disabled || undoing) return;
       undoing = true; localMessage = ''; localError = false; render();
@@ -340,34 +294,46 @@
     });
     copy.addEventListener('click', async function () {
       if (copy.disabled || copying) return;
-      copying = true; localMessage = ''; localError = false; render();
+      const identity = returnIdentity();
+      const sendAttachments = copy.dataset.action === 'send';
+      copying = true; sending = sendAttachments; returnMessage = ''; returnError = false; localMessage = ''; localError = false; render();
+      let copied = false;
       try {
         const outcome = await bridge.copyToolResults();
         if (!outcome.ok) throw new Error(outcome.error || '复制失败');
+        copied = true;
         localMessage = '结果已复制，请粘贴并发送给 AI。';
-      } catch (error) { localMessage = '复制结果失败：' + (error instanceof Error ? error.message : String(error)); localError = true; }
-      finally { copying = false; render(); }
-    });
-    send.addEventListener('click', async function () {
-      if (send.disabled || sending) return;
-      const identity = returnIdentity();
-      sending = true; returnMessage = ''; returnError = false; render();
+        render();
+      } catch (error) {
+        localMessage = '复制结果失败：' + (error instanceof Error ? error.message : String(error)); localError = true;
+        render();
+      }
       try {
-        const outcome = await bridge.sendToolResults();
-        if (identity !== returnIdentity()) return;
-        if (outcome.ok) { returnedIdentity = identity; returnMessage = '本批结果与附件已发送，等待 AI 回复。'; }
-        else {
-          if (outcome.uncertain) returnedIdentity = identity;
-          returnMessage = (outcome.uncertain ? '发送状态未知，请检查官网，未重复发送：' : '附件发送未完成：') + (outcome.error || '请查看官网状态');
-          returnError = true;
+        const stillCanSendAttachments = identity === returnIdentity() && state && !configuring && !state.busy && !state.config.automatic &&
+          state.resultReturn && state.resultReturn.canSend && returnedIdentity !== identity;
+        if (sendAttachments && stillCanSendAttachments) {
+          returnMessage = '正在提交本批结果与附件…'; render();
+          const outcome = await bridge.sendToolResults();
+          if (identity !== returnIdentity()) return;
+          if (outcome.ok) { returnedIdentity = identity; returnMessage = '本批结果与附件已发送，等待 AI 回复。'; }
+          else {
+            if (outcome.uncertain) returnedIdentity = identity;
+            returnMessage = (outcome.uncertain ? '发送状态未知，请检查官网，未重复发送：' : '本批结果与附件发送未完成：') + (outcome.error || '请查看官网状态');
+            returnError = true;
+          }
+        } else if (sendAttachments && identity === returnIdentity() && state && state.config.automatic) {
+          returnMessage = '自动继续已开启，由 IDE 负责回传。';
         }
       } catch (error) {
         if (identity === returnIdentity()) {
           // IPC 断开不能判断是否已点击官网发送按钮，由用户检查后处理。
           returnedIdentity = identity;
-          returnMessage = '附件发送状态未知，请检查官网：' + (error instanceof Error ? error.message : String(error)); returnError = true;
+          returnMessage = '发送状态未知，请检查官网，未重复发送：' + (error instanceof Error ? error.message : String(error)); returnError = true;
         }
-      } finally { sending = false; render(); }
+      } finally {
+        if (copied && !sendAttachments) localMessage = '结果已复制，请粘贴并发送给 AI。';
+        copying = false; sending = false; render();
+      }
     });
     async function stopCommand(result) {
       const key = JSON.stringify([result.batch_id, result.request_id, result.data.process_id]);
@@ -387,6 +353,21 @@
     if (!bridge || typeof bridge.getToolState !== 'function') {
       localMessage = '工具服务不可用，请重启应用。'; localError = true; render(); return;
     }
+    settingsToggle.addEventListener('click', async function () {
+      if (settingsToggle.disabled) return;
+      settingsToggle.disabled = true;
+      // 触发手势内准备主编辑器的完成音效；预听由独立浮层播放。
+      void prepareSound().catch(function () {});
+      const anchor = settingsToggle.getBoundingClientRect();
+      try { await bridge.openToolSettings({ x: anchor.x, y: anchor.y, width: anchor.width, height: anchor.height }); }
+      catch (error) { localMessage = '打开设置失败：' + (error instanceof Error ? error.message : String(error)); localError = true; render(); }
+      finally { settingsToggle.disabled = false; }
+    });
+    bridge.onToolSettingsVisibility(function (visibility) {
+      settingsToggle.setAttribute('aria-expanded', String(visibility.open));
+      if (visibility.restoreFocus) settingsToggle.focus();
+    });
+    window.addEventListener('beforeunload', function () { audio.dispose(); });
     bridge.onToolState(function (next) { eventVersion += 1; receive(next); });
     render();
     const initialVersion = eventVersion;

@@ -37,6 +37,7 @@ interface Options {
   copy: (text: string) => void;
   review?: WebContents;
   notifyReview?: (state: ChangeReviewState) => void;
+  settingsChanged?: () => void;
   sender?: Pick<WebResultSender, 'send' | 'cancel' | 'dispose'>;
   skills?: SkillService;
 }
@@ -171,6 +172,7 @@ export async function createToolIntegration(options: Options) {
     if (!disposed) clipboard.complete(state);
     continuation?.observe({ root: options.files.getRoot(), session: sessionKeyOf(options.web.getURL()), diagnostic: harness.getDiagnostic(), state: options.disabled || automaticSuspended ? { ...state, config: { ...state.config, automatic: false } } : state });
     if (!options.editor.isDestroyed()) options.editor.send(CHANNELS.toolState, { ...state, canUndo: changes.canUndo, hasRunningProcesses: processes.hasRunning, clipboard: clipboard.notification(state), continuation: continuation?.getState(), resultReturn: resultReturn?.getState({ root: options.files.getRoot(), session: sessionKeyOf(options.web.getURL()), state }) });
+    options.settingsChanged?.();
   };
   const approveDirty = async (relative: string): Promise<boolean> => {
     const policy = harness.getState().config.dirtyPolicy;
@@ -282,7 +284,7 @@ export async function createToolIntegration(options: Options) {
   };
   register(CHANNELS.getToolState, getState, 0);
   register(CHANNELS.sendToolResults, () => resultReturn!.send('manual', () => !disposed && !options.disabled), 0);
-  register(CHANNELS.setToolConfig, async config => {
+  const configure = async (config: unknown) => {
     if (config && typeof config === 'object' && (config as { automatic?: unknown }).automatic === true && !harness.getState().config.automatic) await sender.cancel('results');
     if (config && typeof config === 'object' && !Array.isArray(config) && (config as { automatic?: unknown }).automatic === false) {
       // 关闭先取消计时与等待发送，不等配置写盘，也不取消本地正在执行的工具。
@@ -291,7 +293,8 @@ export async function createToolIntegration(options: Options) {
     await harness.configure(config);
     if (config && typeof config === 'object' && (config as { automatic?: unknown }).automatic === true) automaticSuspended = false;
     publish(harness.getState()); return getState();
-  }, 1);
+  };
+  register(CHANNELS.setToolConfig, configure, 1);
   register(CHANNELS.copyToolResults, () => {
     const results = harness.getCopyResults();
     const batchError = harness.getState().batchError;
@@ -309,7 +312,6 @@ export async function createToolIntegration(options: Options) {
     harness.refreshProcesses();
     return getState();
   }, 1);
-  register(CHANNELS.clearToolRules, async () => { await harness.clearRules(); return getState(); }, 0);
   const undo = async () => { synchronizeChangeSession(); const result = await options.workspace.run(() => changes.undo()); publish(harness.getState()); return result; };
   register(CHANNELS.undoToolChange, undo, 0);
   if (options.review) {
@@ -326,7 +328,8 @@ export async function createToolIntegration(options: Options) {
   }
   publish(getState());
   return {
-    channels, getState, approveDirty,
+    channels, getState, approveDirty, configure,
+    clearRules: () => harness.clearRules(),
     /** 本地发送与输出采集独立；发送器自身核验地址和一次点击。 */
     async sendLocalPrompt(text: string, session: string, submissionCurrent: () => boolean, attachments: readonly PromptAttachmentData[] = []) {
       if (!submissionCurrent() || disposed || session !== sessionKeyOf(options.web.getURL())) return { ok: false, error: '项目、会话或发送选项已变化' };

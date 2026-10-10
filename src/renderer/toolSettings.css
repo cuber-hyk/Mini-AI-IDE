@@ -1,0 +1,14 @@
+/* 原生设置窗口承载自己的滚动，不参与编辑器 dock 几何。 */
+html, body { margin: 0; width: 100%; height: 100%; min-width: 0; overflow: hidden; background: var(--ui-surface); }
+body { color: var(--ui-text); font: 13px/1.6 'Segoe UI', 'Microsoft YaHei', sans-serif; }
+.tool-settings-panel { box-sizing: border-box; width: 100%; height: 100%; overflow: auto; padding: 16px; border: 1px solid var(--ui-border); border-radius: 10px; }
+.tool-settings-panel:focus { outline: none; }
+.tool-settings-head { align-items: center; }
+.tool-settings-head strong { display: block; font-size: 16px; }
+.tool-settings-head .ui-icon { display: grid; place-items: center; flex: none; font-size: 18px; }
+.tool-settings-body { gap: 14px; }
+.tool-setting-row > .tool-select { flex: 0 1 170px; }
+.tool-settings-notice { margin: 0 0 12px; color: var(--ui-muted); font-size: 11px; line-height: 1.6; }
+.tool-settings-notice:empty { display: none; }
+.tool-settings-notice.is-error { color: var(--ui-warning); }
+@media (max-width: 320px) { .tool-setting-row { flex-wrap: wrap; gap: 6px; } .tool-setting-row > .tool-select { width: 100%; flex-basis: 100%; } }

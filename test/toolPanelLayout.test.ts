@@ -60,8 +60,9 @@ it('键盘调整有上下限、关闭面板清理拖动，浮层Esc恢复焦点�
   handle.fire('keydown', { key: 'End' }); assert.equal(handle.attrs['aria-valuenow'], handle.attrs['aria-valuemax']);
   handle.fire('pointerdown', { button: 0, pointerId: 1, clientY: 400 }); nodes['tool-panel'].open = false; nodes['tool-panel'].fire('toggle');
   assert.equal(handle.hasPointerCapture(1), false); assert.equal(handle.hidden, true);
-  nodes['tool-settings-toggle'].fire('click'); assert.equal(nodes['tool-settings-panel'].hidden, false);
-  f.document.fire('keydown', { key: 'Escape' }); assert.equal(nodes['tool-settings-panel'].hidden, true); assert.equal(nodes['tool-settings-toggle'].focused, true);
-  nodes['tool-settings-toggle'].focused = false; nodes['tool-settings-toggle'].fire('click');
-  f.document.fire('pointerdown', { target: {} }); assert.equal(nodes['tool-settings-toggle'].focused, false);
+  nodes['tool-more-toggle'].fire('click'); assert.equal(nodes['tool-more'].hidden, false);
+  f.document.fire('keydown', { key: 'Escape' }); assert.equal(nodes['tool-more'].hidden, true); assert.equal(nodes['tool-more-toggle'].focused, true);
+  nodes['tool-more-toggle'].focused = false; nodes['tool-more-toggle'].fire('click');
+  f.document.fire('pointerdown', { target: {} }); assert.equal(nodes['tool-more-toggle'].focused, false);
+  nodes['tool-settings-toggle'].fire('click'); assert.equal(nodes['tool-settings-panel'].hidden, true, '布局 owner 不再打开或计量设置 DOM');
 });

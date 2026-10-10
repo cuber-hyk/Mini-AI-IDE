@@ -52,9 +52,7 @@
       const item = { close: close, isOpen: function () { return !surface.hidden; }, refresh: function () { if (trigger.hidden) close(false); else position(); } };
       popups.push(item);
     }
-    popup('tool-settings-wrap', 'tool-settings-toggle', 'tool-settings-panel', 'tool-settings-close');
     popup('tool-more-wrap', 'tool-more-toggle', 'tool-more');
-    document.getElementById('btn-settings').addEventListener('click', function () { popups[0].close(false); });
     document.addEventListener('keydown', function (event) {
       if (event.key !== 'Escape') return;
       const active = popups.find(function (item) { return item.isOpen(); });

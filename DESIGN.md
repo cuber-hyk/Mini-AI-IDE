@@ -14,9 +14,9 @@ token_source: design-tokens.json
 ## Layout Patterns
 
 - 输入框底部保留版本切换、带手掌/盾牌图标的权限、自动继续、设置和右下角圆形向上箭头发送；窄列允许换行，按实际操作栏高度限制文本框，保持常用控件可见。自动继续使用单开关；发送间隔（0–300 整数秒，默认 3）、未保存策略、音效、规则清理及提示词编辑入口集中在设置浮层，无轮数控件。说明只在浮层、悬停或异常详情中出现。
-- 工具结果默认收起，头部保留本批数量、简短状态和具名复制图标；每条运行中命令旁显示独立“中断”按钮，点击仅停止该命令及其子进程，其他命令保持运行。头部撤销图标菜单入口仅在有撤销项或正在撤销时显示，提供工具修改撤销；没有菜单项时隐藏入口，状态变化移除最后一项时关闭浮层；自动复制开关统一在设置的完成反馈分组。无结果时按状态内容自然收缩，不提供空面板拖动；有结果展开后可拖动分隔条调整高度，方向键及 Home／End 同样可用；高度预算保留官网阅读空间。仅展示最近一轮，列表用中文动作、真实目标与简短结果，状态仅显示一次，真实执行时长以秒显示；展开条目查看完整原始 JSON。缺失目标不猜测，失败、后台进程和截断必须明确显示。
+- 工具结果默认收起，摘要固定两行：第一行折叠入口、标题、本批数量与具名操作，第二行当前状态及完成/异常反馈。两行始终保留，完成提示消失、倒计时与等待状态切换不改变摘要高度；长文案单行省略，状态行显示优先级最高反馈，悬停提示聚合同时存在的所有反馈；完成反馈只让左侧细色条柔和淡入，提示文字平滑淡入，不闪亮整行背景。每条运行中命令旁显示独立“中断”按钮，点击仅停止该命令及其子进程，其他命令保持运行。头部撤销图标菜单入口仅在有撤销项或正在撤销时显示，提供工具修改撤销；没有菜单项时隐藏入口，状态变化移除最后一项时关闭浮层；自动复制开关统一在设置的完成反馈分组。无结果时只保留两行摘要与必要说明，不提供空面板拖动；有结果展开后可拖动分隔条调整高度，方向键及 Home／End 同样可用；高度预算保留官网阅读空间。仅展示最近一轮，列表用中文动作、真实目标与简短结果，状态仅显示一次，真实执行时长以秒显示；展开条目查看完整原始 JSON。缺失目标不猜测，失败、后台进程和截断必须明确显示。
 - JSON 格式错误在工具结果列表中显示展开的“批次校验”失败卡片，包含解析原因、可得的行列与短定位；不另铺全局长诊断、不执行错误请求。无法解析整批时不伪造具体工具名和请求 ID。复制仍使用“复制本批结果”，同一回执中的 batch_error 承载错误、tool_results 为空。当前工具批次真正执行结束可按设置自动复制整批一次，摘要明确显示自动复制成功或失败，手动按钮始终保留。“完成后自动复制结果”开关位于设置浮层的完成反馈分组。
-- 设置按执行与回传、完成反馈、提示词、权限规则分组；标签左对齐、控件右对齐，数字输入紧凑，规则清理独立，说明用弱化文本。设置与更多浮层限制在本地编辑器视口内，Escape 关闭并恢复触发按钮焦点；外点、焦点离开或窗口失焦关闭。浮层限定在本地 dock 矩形内；打开时由现有 dockHeight 临时预留空间并减少官网可见高度，需求区贴底且不被内嵌设置推开，关闭恢复。文件编辑区高度不变，提示词编辑仍由原独立视图承载。
+- 设置按执行与回传、完成反馈、提示词、权限规则分组；标签左对齐、控件右对齐，数字输入紧凑，规则清理独立，说明用弱化文本。设置使用关联主窗口的独立非模态原生窗口，靠齿轮向上展开，尺寸和位置钳制在主窗口及显示器可见范围内，内容内部滚动；不增加 dockHeight，也不改变官网或文件区高度。关闭和 Escape 恢复齿轮焦点，失焦、主窗口移动/缩放/最小化、切项目时收起且不抢焦点，主窗口关闭销毁。更多菜单仍在本地 dock 内由布局 owner 预留空间；提示词编辑仍由原独立视图承载。
 - 明确回复中断时，工具摘要显示“等待续写”，展开可查看等待原因；等待不会展开面板或产生工具完成动画/音效。完整工具结果就绪后沿用完成反馈。
 - 新批结果就绪时，工具面板摘要显示一次短暂高亮及成功/错误图标文案，不展开面板或抢焦点；遵循 prefers-reduced-motion。完成音效在工具设置中预选并保存，默认关闭，用户从关闭切到开启且保存成功后预听一次，此后每批至多一次；音频不可用独立提示，不覆盖真实工具状态。初始化、重复状态与历史批不提示。
 
@@ -25,7 +25,7 @@ token_source: design-tokens.json
 - 工具按预选权限执行修改，右侧正文占据文件头下方可用高度，直接连续展示本批匹配记录及真实差异。Diff 内部的批次文件导航默认收起，窄正文内打开时覆盖 Diff 正文、宽正文内并排；点击滚到对应记录，窄正文内随即收起并恢复导航按钮焦点，Escape 可收起。它与文件区最右的项目目录树职责不同，不能覆盖项目目录树。筛选只影响显示且明确标识筛选中；各文件独立保留差异／修改前／修改后选项，未改上下文默认折叠并可主动展开。长代码和 Markdown 默认自动换行，可关闭；同批状态更新保留阅读滚动与有效焦点，新批清理旧阅读状态。实际快照不随后续编辑变化，不提供重复应用、改路径或编辑器内联预览；撤销复用原工具入口并同步状态。
 - “展开查看”由用户主动临时拓宽文件区正文，可恢复之前宽度，不保存临时宽度；最大宽度沿用主进程真实预算，保留项目导航、AI 协作与文件区，窗口无额外空间时禁用。最右目录树保留，工具结果和本地需求编写位于中间 dock。
 - 工具摘要可显示发送倒计时、正在发送、等待 AI 回复、等待用户与暂停原因；关闭自动继续优先取消待发送，不显示为本地工具已中断。纯对话、权限拒绝、取消、未知或格式错误等待用户；手动复制保留，自动复制与发送使用独立状态提示。
-- 当前批有已授权附件时显示具名“发送本批附件”共用按钮与独立状态文字，动作行在窄列换行；自动继续开启、工具未结束、发送中或本批已尝试发送时禁用。附件工具完成只显示暂存，官网确认后才显示已发送；新批不展示旧发送回执，暂停原因不覆盖自动继续状态。
+- 工具结果栏使用一个自适应复制/发送图标按钮：无可手动发送附件或 automatic 开启时只复制；automatic 关闭且当前批有可发送附件时复制结果并经官网发送本批结果与附件。发送图标仅在可手动发送时显示；附件暂存、上传及官网结果沿用独立状态反馈，不因复制失败阻断发送。
 - 项目栏与文件区独立收起，最右目录树独立显隐。项目栏收起时没有保留窄条；工作区切换按钮固定在网页顶栏 DeepSeek 文案左侧，文件区收起按钮位于顶栏右侧。文件区全屏时网页顶栏隐藏，侧栏内保留工作区切换入口。项目、文件区、目录树的分隔条支持拖动与键盘调整，收起不覆盖展开宽度；Diff 临时拓宽不保存。常规布局中间官网可见，文件区全屏临时隐藏中间协作区。本地需求编写按需展开，保留简洁/完整切换及发送状态反馈。
 - 暗色、中性底色，主操作使用强调色；增加/删除统计同时用数字和颜色表达。
 
@@ -65,9 +65,9 @@ token_source: design-tokens.json
 
 布局以 `src/main/windowLayout.ts` 为准，由 `src/main/workspaceLayoutController.ts` 统一应用与广播，`src/renderer/workspaceLayout.js` 消费矩形、处理拖动和 dock 测量；项目导航由 `src/renderer/workspaceNavigation.js` 管理，文件区文件／改动标签的内容切换由 `src/renderer/fileWorkspace.js` 与 `src/renderer/editorTabs.js` 管理，测试为 `test/fileWorkspace.test.ts`。布局决策见 `docs/adr/2026-10-07-workspace-ui-shell-layout.md`，测试为 `test/windowLayout.test.ts`、`test/workspaceLayoutController.test.ts`；复制菜单由 `src/renderer/editorToolbar.js` 管理；本批变更快照由 `src/main/tools/changeReview.ts` 管理，界面由 `src/renderer/preview.js` 管理；输入区交互由 `src/renderer/promptComposer.js` 管理。交互验收见对应 `test/` 测试与 `src/main/layoutProbe.ts` 的 Electron UI 探针。
 
-本地工具面板与设置浮层尺寸、焦点和拖动由 `src/renderer/toolPanelLayout.js` 管理，纯结果摘要由 `src/renderer/toolResultPresentation.js` 管理，状态接线及复制由 `src/renderer/toolHarness.js` 管理；样式为 `src/renderer/toolHarness.css`。验收见 `test/toolPanelLayout.test.ts`、`test/toolResultPresentation.test.ts`、`test/toolHarnessUi.test.ts` 与 `test/promptComposer.test.ts`。
+本地工具面板与更多菜单尺寸、焦点和拖动由 `src/renderer/toolPanelLayout.js` 管理，纯结果摘要由 `src/renderer/toolResultPresentation.js` 管理，状态接线及复制由 `src/renderer/toolHarness.js` 管理；样式为 `src/renderer/toolHarness.css`。原生设置窗口的几何和生命周期由 `src/main/toolSettingsWindow.ts` 管理，窄设置 IPC 为 `src/main/toolSettingsIpc.ts`、`src/main/toolSettingsPreload.ts`，内容为 `src/renderer/toolSettings.html`、`src/renderer/toolSettings.js`、`src/renderer/toolSettings.css`；完成音效与预听共用 `src/renderer/toolCompletionSound.js`。验收见 `test/toolPanelLayout.test.ts`、`test/toolResultPresentation.test.ts`、`test/toolHarnessUi.test.ts`、`test/toolSettingsIpc.test.ts`、`test/toolSettingsWindow.test.ts`、`test/toolSettingsUi.test.ts`、`test/promptComposer.test.ts` 与 `src/main/workspaceProbe.ts`。
 
-差异连续阅读、上下文展开、导航和换行由 `src/renderer/preview.js`、`src/renderer/preview.css` 管理，临时宽度由 `src/main/workspaceLayoutController.ts` 与 `src/main/previewPreload.ts` 接线，验证见 `test/changeTree.test.ts` 和 `src/main/layoutProbe.ts`。自动继续状态由 `src/main/tools/autoContinuation.ts` 管理，网页限定写入由 `src/main/tools/webResultSender.ts` 管理；本地状态及间隔设置仍由 `src/renderer/toolHarness.js` 呈现。真实官方网页接受合成发送尚未验收。
+差异连续阅读、上下文展开、导航和换行由 `src/renderer/preview.js`、`src/renderer/preview.css` 管理，临时宽度由 `src/main/workspaceLayoutController.ts` 与 `src/main/previewPreload.ts` 接线，验证见 `test/changeTree.test.ts` 和 `src/main/layoutProbe.ts`。自动继续状态由 `src/main/tools/autoContinuation.ts` 管理，网页限定写入由 `src/main/tools/webResultSender.ts` 管理；本地状态由 `src/renderer/toolHarness.js` 呈现，间隔在原生设置窗口调整。真实官方网页接受合成发送尚未验收。
 
 软件更新图标和浮层由 `src/renderer/applicationUpdate.js`、`src/renderer/applicationUpdate.css` 管理；版本号和更新入口位于左侧工作区标题右侧，复用共用控件与token；业务状态由主进程 `UpdateService` 单一广播，本地视图不持有更新网络或安装器路径。
 

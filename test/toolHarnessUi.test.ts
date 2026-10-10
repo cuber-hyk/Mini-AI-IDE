@@ -8,11 +8,14 @@ function element() {
   const listeners: Record<string, Array<() => unknown>> = {};
   const classes = new Set<string>();
   return {
-    disabled: false, checked: false, open: false, value: '', textContent: '', className: '',
+    disabled: false, checked: false, open: false, value: '', textContent: '', className: '', hidden: false, focused: false,
+    attrs: {} as Record<string, string>,
     dataset: {} as Record<string, string>, children: [] as any[],
     addEventListener(name: string, handler: () => unknown) { (listeners[name] ??= []).push(handler); },
     fire(name: string) { return Promise.all((listeners[name] ?? []).map(fn => (fn as any)({ preventDefault() {}, stopPropagation() {} }))); },
-    classList: { toggle(name: string, on: boolean) { if (on) classes.add(name); else classes.delete(name); }, contains(name: string) { return classes.has(name); } },
+    classList: { toggle(name: string, on: boolean) { if (on) classes.add(name); else classes.delete(name); }, contains(name: string) { return classes.has(name); }, add(name: string) { classes.add(name); }, remove(name: string) { classes.delete(name); } },
+    setAttribute(name: string, value: string) { this.attrs[name] = value; },
+    getBoundingClientRect() { return { x: 500, y: 600, width: 30, height: 30 }; }, focus() { this.focused = true; },
     replaceChildren() { this.children = []; },
     appendChild(child: unknown) { this.children.push(child); },
     set innerHTML(_value: string) { throw new Error('Tool output must never become HTML'); },
@@ -24,13 +27,14 @@ function state(overrides: Record<string, unknown> = {}) {
 }
 
 function setup(overrides: Record<string, unknown> = {}, audioConstructor?: unknown) {
-  const ids = ['tool-permission-control', 'tool-permission', 'tool-automatic', 'tool-dirty-policy', 'tool-permission-hint', 'tool-count',
-    'tool-activity', 'tool-message', 'tool-results', 'tool-copy', 'tool-cancel', 'tool-clear-rules', 'tool-undo',
-    'tool-panel', 'tool-completion-notice', 'tool-sound-notice', 'tool-completion-sound', 'tool-more-toggle', 'tool-copy-notice', 'tool-auto-copy', 'tool-send-interval', 'tool-continue-notice', 'tool-interval-down', 'tool-interval-up', 'tool-send-results', 'tool-return-notice'];
+  const ids = ['tool-permission-control', 'tool-permission', 'tool-automatic', 'tool-count',
+    'tool-activity', 'tool-message', 'tool-results', 'tool-copy', 'tool-undo', 'tool-settings-toggle',
+    'tool-panel', 'tool-completion-notice', 'tool-sound-notice', 'tool-more-toggle', 'tool-copy-notice', 'tool-continue-notice', 'tool-return-notice'];
   const nodes = Object.fromEntries(ids.map(id => [id, element()]));
   let current = state();
   let publish: (value: any) => void = () => {};
   let ready: () => void = () => {};
+  let visibility: (state: any) => void = () => {};
   const calls: any[] = [];
   const bridge = {
     async getToolState() { calls.push('get'); return current; },
@@ -39,12 +43,14 @@ function setup(overrides: Record<string, unknown> = {}, audioConstructor?: unkno
     async copyToolResults() { calls.push('copy'); return { ok: true }; },
     async sendToolResults(...args: unknown[]) { calls.push(['send', ...args]); return { ok: true }; },
     async stopToolCommand(target: any) { calls.push(JSON.parse(JSON.stringify(target))); return current; },
-    async clearToolRules() { calls.push('clear'); return current; },
+    async openToolSettings(anchor: unknown) { calls.push(['settings', JSON.parse(JSON.stringify(anchor))]); },
+    onToolSettingsVisibility(fn: typeof visibility) { visibility = fn; },
     async undoToolChange() { calls.push('undo'); publish(state({ ...current, canUndo: false })); return { ok: true }; },
     ...overrides,
   };
-  const window = { editorBridge: bridge, setupToolHarness: null as any, setupToolPanelLayout: () => ({ refresh() {} }), createToolExecutionClock: () => ({ replace() {} }), AudioContext: audioConstructor };
+  const window = { editorBridge: bridge, setupToolHarness: null as any, setupToolPanelLayout: () => ({ refresh() {} }), createToolExecutionClock: () => ({ replace() {} }), AudioContext: audioConstructor, addEventListener() {} };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/renderer/toolResultPresentation.js'), 'utf8'), { window });
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/renderer/toolCompletionSound.js'), 'utf8'), { window });
   const timers = new Map<number, () => void>();
   let timerId = 0;
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/renderer/toolHarness.js'), 'utf8'), {
@@ -55,7 +61,7 @@ function setup(overrides: Record<string, unknown> = {}, audioConstructor?: unkno
     },
   });
   ready();
-  return { nodes, calls, timers, expireFeedback() { for (const callback of [...timers.values()]) callback(); }, publish(value: any) { current = value; publish(value); } };
+  return { nodes, calls, timers, visibility, expireFeedback() { for (const callback of [...timers.values()]) callback(); }, publish(value: any) { current = value; publish(value); } };
 }
 
 async function flush() { for (let i = 0; i < 8; i++) await Promise.resolve(); }
@@ -69,18 +75,18 @@ function attachmentState(overrides: Record<string, unknown> = {}) {
   });
 }
 
-it('附件手动发送入口仅显示当前批附件，依owner资格与自动开关禁用，不改变自动继续摘要', async () => {
+it('结果操作根据附件资格切换发送与复制，自动继续关闭时才手动发送附件', async () => {
   const ui = setup(); await flush();
-  assert.equal(ui.nodes['tool-send-results'].hidden, true);
+  assert.equal(ui.nodes['tool-copy'].disabled, true);
   ui.publish(attachmentState());
-  assert.equal(ui.nodes['tool-send-results'].hidden, false); assert.equal(ui.nodes['tool-send-results'].disabled, false);
+  assert.equal(ui.nodes['tool-copy'].dataset.action, 'send'); assert.equal(ui.nodes['tool-copy'].disabled, false);
   assert.equal(ui.nodes['tool-return-notice'].textContent, '1 个附件待发送');
-  ui.publish(attachmentState({ busy: true })); assert.equal(ui.nodes['tool-send-results'].disabled, true);
+  ui.publish(attachmentState({ busy: true })); assert.equal(ui.nodes['tool-copy'].dataset.action, 'copy');
   ui.publish(attachmentState({ resultReturn: { canSend: false, attachmentCount: 1, phase: 'paused', message: '当前批已失效' } }));
-  assert.equal(ui.nodes['tool-send-results'].disabled, true); assert.equal(ui.nodes['tool-return-notice'].textContent, '当前批已失效');
+  assert.equal(ui.nodes['tool-copy'].dataset.action, 'copy'); assert.equal(ui.nodes['tool-return-notice'].textContent, '当前批已失效');
   assert.equal(ui.nodes['tool-return-notice'].classList.contains('is-error'), true);
   ui.publish(attachmentState({ config: { automatic: true }, continuation: { phase: 'sending', message: '自动上传中' }, resultReturn: { canSend: true, attachmentCount: 1, phase: 'sending', message: '正在上传1个附件' } }));
-  assert.equal(ui.nodes['tool-send-results'].disabled, true); assert.equal(ui.nodes['tool-activity'].textContent, '正在发送结果');
+  assert.equal(ui.nodes['tool-copy'].dataset.action, 'copy'); assert.equal(ui.nodes['tool-activity'].textContent, '正在发送结果');
   assert.equal(ui.nodes['tool-return-notice'].textContent, '正在上传1个附件');
 });
 
@@ -88,19 +94,19 @@ it('发送当前批附件的IPC不携带正文路径ID，等待期间防双击�
   let finish!: (result: unknown) => void; const args: unknown[][] = [];
   const ui = setup({ sendToolResults: (...input: unknown[]) => { args.push(input); return new Promise(resolve => { finish = resolve; }); } }); await flush();
   ui.publish(attachmentState());
-  const pending = ui.nodes['tool-send-results'].fire('click'); await flush();
-  assert.equal(ui.nodes['tool-send-results'].disabled, true); assert.equal(ui.nodes['tool-send-results'].textContent, '正在发送附件…');
-  await ui.nodes['tool-send-results'].fire('click'); assert.deepEqual(args, [[]]);
+  const pending = ui.nodes['tool-copy'].fire('click'); await flush();
+  assert.equal(ui.nodes['tool-copy'].disabled, true); assert.match(ui.nodes['tool-copy'].title, /复制并发送/);
+  await ui.nodes['tool-copy'].fire('click'); assert.deepEqual(args, [[]]);
   finish({ ok: true }); await pending;
-  assert.equal(ui.nodes['tool-send-results'].disabled, true); assert.match(ui.nodes['tool-return-notice'].textContent, /已发送/);
-  await ui.nodes['tool-send-results'].fire('click'); assert.equal(args.length, 1);
+  assert.equal(ui.nodes['tool-copy'].dataset.action, 'copy'); assert.match(ui.nodes['tool-return-notice'].textContent, /已发送/);
+  await ui.nodes['tool-copy'].fire('click'); assert.equal(args.length, 1);
 });
 
 it('未知附件发送回执与IPC异常显示具体原因，不能当作发送成功或再次点击', async () => {
   for (const sendToolResults of [async () => ({ ok: false, uncertain: true, error: '发送按钮点击后无法确认' }), async () => { throw new Error('IPC disconnected'); }]) {
     const ui = setup({ sendToolResults }); await flush(); ui.publish(attachmentState());
-    await ui.nodes['tool-send-results'].fire('click');
-    assert.equal(ui.nodes['tool-send-results'].disabled, true);
+    await ui.nodes['tool-copy'].fire('click');
+    assert.equal(ui.nodes['tool-copy'].dataset.action, 'copy');
     assert.match(ui.nodes['tool-return-notice'].textContent, /状态未知/);
     assert.match(ui.nodes['tool-return-notice'].textContent, /无法确认|IPC disconnected/);
     assert.equal(ui.nodes['tool-return-notice'].classList.contains('is-error'), true);
@@ -111,35 +117,32 @@ it('未知附件发送回执与IPC异常显示具体原因，不能当作发送�
 it('旧批附件发送回执不能覆盖新批状态，新批是否可发送仍由owner判断', async () => {
   let fail!: (error: Error) => void;
   const ui = setup({ sendToolResults: () => new Promise((_resolve, reject) => { fail = reject; }) }); await flush(); ui.publish(attachmentState());
-  const pending = ui.nodes['tool-send-results'].fire('click'); await flush();
+  const pending = ui.nodes['tool-copy'].fire('click'); await flush();
   ui.publish(attachmentState({ completion: { id: 2, batch_id: 'new', outcome: 'success' }, resultReturn: { canSend: true, attachmentCount: 1, phase: 'ready', message: '新批附件待发送' } }));
   fail(new Error('旧批已失效')); await pending;
   assert.equal(ui.nodes['tool-return-notice'].textContent, '新批附件待发送');
-  assert.equal(ui.nodes['tool-send-results'].disabled, false);
+  assert.equal(ui.nodes['tool-copy'].dataset.action, 'send'); assert.equal(ui.nodes['tool-copy'].disabled, false);
 });
 
 it('附件发送失败保留owner原因和暂停状态，按钮有键盘名称且窄列动作可换行', async () => {
   const ui = setup({ async sendToolResults() { ui.publish(attachmentState({ resultReturn: { canSend: false, attachmentCount: 1, phase: 'paused', message: '官网已有草稿' } })); return { ok: false, error: '官网已有草稿，未覆盖' }; } }); await flush(); ui.publish(attachmentState());
-  await ui.nodes['tool-send-results'].fire('click');
-  assert.equal(ui.nodes['tool-send-results'].disabled, true); assert.match(ui.nodes['tool-return-notice'].textContent, /官网已有草稿，未覆盖/);
+  await ui.nodes['tool-copy'].fire('click');
+  assert.equal(ui.nodes['tool-copy'].dataset.action, 'copy'); assert.match(ui.nodes['tool-return-notice'].textContent, /官网已有草稿，未覆盖/);
   const html = fs.readFileSync(path.join(__dirname, '../src/renderer/index.html'), 'utf8');
-  assert.match(html, /id="tool-send-results"[^>]*type="button"[^>]*class="ui-button"[^>]*>发送本批附件<\/button>/);
+  assert.match(html, /id="tool-copy"[^>]*aria-label="[^"]+"/);
   assert.match(html, /id="tool-return-notice"[^>]*aria-live="polite"/);
-  const css = fs.readFileSync(path.join(__dirname, '../src/renderer/toolHarness.css'), 'utf8');
-  assert.match(css, /\.tool-panel\.has-attachments \+ \.tool-result-actions\s*\{[^}]*position: static[^}]*flex-wrap: wrap/);
+  assert.doesNotMatch(html, /id="tool-send-results"/);
 });
 
-it('自动继续显示倒计时或暂停原因，间隔设置可修改，无轮次输入', async () => {
+it('自动继续显示倒计时或暂停原因，间隔控件由独立设置浮层持有', async () => {
   const ui = setup(); await flush();
   ui.publish(state({ config: { permission: 'full', automatic: true, sendIntervalSeconds: 7 }, continuation: { phase: 'countdown', message: '即将发送', dueAt: Date.now() + 7000 } }));
   assert.equal(ui.nodes['tool-automatic'].checked, true); assert.match(ui.nodes['tool-activity'].textContent, /[67]s 后发送/);
-  assert.equal(ui.nodes['tool-send-interval'].value, '7');
   ui.publish(state({ config: { permission: 'full', automatic: true }, continuation: { phase: 'off', message: '已立即关闭，配置正在保存' } }));
   assert.equal(ui.nodes['tool-automatic'].checked, false);
   ui.publish(state({ config: { permission: 'full', automatic: true }, continuation: { phase: 'paused', message: '输入框已有草稿，未覆盖' } }));
   assert.equal(ui.nodes['tool-activity'].textContent, '自动已暂停'); assert.match(ui.nodes['tool-continue-notice'].textContent, /未覆盖/);
-  ui.nodes['tool-send-interval'].value = '4'; await ui.nodes['tool-send-interval'].fire('change'); assert.deepEqual(ui.calls.at(-1), { sendIntervalSeconds: 4 });
-  const calls = ui.calls.length; ui.nodes['tool-send-interval'].value = ''; await ui.nodes['tool-send-interval'].fire('change'); assert.equal(ui.calls.length, calls);
+  assert.equal(ui.nodes['tool-send-interval'], undefined);
 });
 it('JSON格式错误归入批次失败卡片，复制统一结果；不伪造具体工具调用', async () => {
   const ui = setup(); await flush();
@@ -147,7 +150,7 @@ it('JSON格式错误归入批次失败卡片，复制统一结果；不伪造具
   ui.publish(state({ batchError: { status: 'failed', error: diagnostic }, message: '工具批次校验失败，未执行' }));
   assert.equal(ui.nodes['tool-panel'].open, true);
   assert.equal(ui.nodes['tool-activity'].textContent, '格式错误');
-  assert.equal(ui.nodes['tool-copy'].title, '复制本批结果');
+  assert.match(ui.nodes['tool-copy'].title, /复制本批结果/);
   assert.equal(ui.nodes['tool-copy'].disabled, false);
   assert.equal(ui.nodes['tool-message'].hidden, true);
   const items = ui.nodes['tool-results'].children;
@@ -202,16 +205,6 @@ it('执行状态只显示一份，独立摘要保留真实原因；自动复制�
   assert.equal(ui.nodes['tool-copy'].disabled, false);
 });
 
-it('自动复制开关持久保存，勾选设置不主动复制历史输出', async () => {
-  const ui = setup(); await flush();
-  ui.nodes['tool-auto-copy'].checked = true; await ui.nodes['tool-auto-copy'].fire('change');
-  assert.deepEqual(ui.calls, ['get', { autoCopyResults: true }]);
-  assert.equal(ui.nodes['tool-auto-copy'].checked, true);
-  ui.nodes['tool-auto-copy'].checked = false; await ui.nodes['tool-auto-copy'].fire('change');
-  assert.deepEqual(ui.calls, ['get', { autoCopyResults: true }, { autoCopyResults: false }]);
-  assert.equal(ui.nodes['tool-auto-copy'].checked, false);
-});
-
 it('后台工具启动回执done仍显示真实进程运行/失败，不能让完成徽标掩盖报错', async () => {
   const ui = setup(); await flush();
   ui.publish(state({ hasRunningProcesses: true, results: [{ ...result, tool: 'run_command', data: { status: 'running' } }] }));
@@ -226,20 +219,18 @@ it('先读取用户已选择权限，启动不会执行工具或复制结果', a
   await flush();
   assert.equal(ui.nodes['tool-permission'].value, 'full');
   assert.equal(ui.nodes['tool-automatic'].checked, true);
-  assert.equal(ui.nodes['tool-dirty-policy'].value, 'continue');
-  assert.match(ui.nodes['tool-permission-hint'].textContent, /项目外文件/);
+  assert.match(ui.nodes['tool-permission'].title, /项目外文件/);
   assert.deepEqual(ui.calls, []);
 });
 
-it('底部选择权限、自动采集与草稿处理都通过同一持久配置接口', async () => {
+it('底部选择权限与自动继续使用原配置 owner，草稿处理迁至独立浮层', async () => {
   const ui = setup(); await flush();
   ui.nodes['tool-permission'].value = 'rules'; await ui.nodes['tool-permission'].fire('change');
   ui.nodes['tool-automatic'].checked = true; await ui.nodes['tool-automatic'].fire('change');
-  ui.nodes['tool-dirty-policy'].value = 'stop'; await ui.nodes['tool-dirty-policy'].fire('change');
-  assert.deepEqual(ui.calls, ['get', { permission: 'rules' }, { automatic: true }, { dirtyPolicy: 'stop' }]);
+  assert.deepEqual(ui.calls, ['get', { permission: 'rules' }, { automatic: true }]);
   assert.equal(ui.nodes['tool-permission'].value, 'rules');
   assert.equal(ui.nodes['tool-automatic'].checked, true);
-  assert.equal(ui.nodes['tool-dirty-policy'].value, 'stop');
+  assert.equal(ui.nodes['tool-dirty-policy'], undefined);
 });
 
 it('配置失败恢复真实权限，错误在折叠面板的摘要也可见', async () => {
@@ -296,7 +287,7 @@ it('新状态刷新保留已展开的工具详情，不自动打开其他结果'
 it('最新批次等待时清空旧详情并禁用复制，只在收到本批真实结果后启用', async () => {
   const ui = setup(); await flush();
   ui.publish(state({ results: [result] }));
-  assert.equal(ui.nodes['tool-copy'].title, '复制本批结果');
+  assert.match(ui.nodes['tool-copy'].title, /复制本批结果/);
   assert.equal(ui.nodes['tool-results'].children.length, 1);
   ui.publish(state({ busy: true, results: [], message: '等待新批次执行' }));
   assert.equal(ui.nodes['tool-results'].children.length, 0);
@@ -320,15 +311,14 @@ it('停止只在用户点击且本批运行时触发，权限拒绝与未知结�
   assert.deepEqual(ui.calls, ['get']);
 });
 
-it('清除规则与撤销文件修改必须由用户点击，撤销可用性来自主进程', async () => {
+it('撤销文件修改必须由用户点击，可用性来自主进程', async () => {
   const ui = setup(); await flush();
   await ui.nodes['tool-undo'].fire('click'); assert.deepEqual(ui.calls, ['get']);
   ui.publish(state({ canUndo: true, results: [{ ...result, tool: 'apply_changes' }] }));
   assert.equal(ui.nodes['tool-undo'].disabled, false);
   await ui.nodes['tool-undo'].fire('click');
   assert.equal(ui.nodes['tool-undo'].disabled, true);
-  await ui.nodes['tool-clear-rules'].fire('click');
-  assert.deepEqual(ui.calls, ['get', 'undo', 'clear']);
+  assert.deepEqual(ui.calls, ['get', 'undo']);
 });
 
 it('复制结构化失败不能显示复制成功，也不能触发后续发送', async () => {
@@ -408,32 +398,24 @@ it('权限拒绝或失败完成提示明确，未完成及切会话清空不会�
   assert.equal(ui.nodes['tool-completion-notice'].textContent, '');
 });
 
-it('音效默认关闭，开启保存成功后预听一次，随后每批只播放一次本地短音', async () => {
+it('原生设置保存音效后，主编辑器每批只播放一次完成短音', async () => {
   const audio = audioMock(); const ui = setup({}, audio.AudioContext); await flush();
-  assert.equal(ui.nodes['tool-completion-sound'].checked, false);
   ui.publish(state({ completion, results: [result] })); await flush();
   assert.equal(audio.creations, 0);
-  ui.nodes['tool-completion-sound'].checked = true; await ui.nodes['tool-completion-sound'].fire('change');
-  assert.deepEqual(ui.calls, ['get', { completionSound: true }]);
-  assert.equal(ui.nodes['tool-completion-sound'].checked, true);
-  assert.equal(audio.plays.length, 1, '用户主动开启时预听，不重放上次完成事件');
   const next = state({ config: { ...state().config, completionSound: true }, completion: { ...completion, id: 2 }, results: [result] });
   ui.publish(next); await flush(); ui.publish(next); await flush();
-  assert.equal(audio.plays.length, 2, '一次预听，加一次新批完成，相同完成不重播');
+  assert.equal(audio.plays.length, 1, '主编辑器只播放本批完成；预听在原生设置浮层');
   assert.equal(audio.plays[0].start, 20);
   assert.ok(Math.abs(audio.plays[0].stop! - 20.15) < 0.001);
   assert.ok(Math.max(...audio.volumes) <= 0.035);
-  ui.nodes['tool-completion-sound'].checked = false; await ui.nodes['tool-completion-sound'].fire('change');
   ui.publish(state({ completion: { ...completion, id: 3 }, results: [result] })); await flush();
-  assert.equal(audio.plays.length, 2);
+  assert.equal(audio.plays.length, 1);
   assert.match(ui.nodes['tool-completion-notice'].textContent, /结果已就绪/);
 });
 
 it('音效播放失败单独可见，不覆盖本批完成事实', async () => {
   class BrokenAudio { constructor() { throw new Error('Audio is blocked'); } }
   const ui = setup({}, BrokenAudio); await flush();
-  ui.nodes['tool-completion-sound'].checked = true; await ui.nodes['tool-completion-sound'].fire('change');
-  assert.match(ui.nodes['tool-sound-notice'].textContent, /音效未播放/);
   ui.publish(state({ config: { ...state().config, completionSound: true }, completion, results: [result], message: '完整工具结果已返回' })); await flush();
   assert.match(ui.nodes['tool-sound-notice'].textContent, /音效未播放/);
   assert.match(ui.nodes['tool-completion-notice'].textContent, /结果已就绪/);
@@ -459,30 +441,14 @@ it('音频准备迟到时不能为已经切走的会话播放旧完成提示', a
   assert.equal(ui.nodes['tool-completion-notice'].textContent, '');
 });
 
-it('音效设置保存失败恢复关闭状态，准备声音不产生通知音', async () => {
-  const audio = audioMock();
-  const ui = setup({ setToolConfig: async () => { throw new Error('设置未写入'); } }, audio.AudioContext); await flush();
-  ui.nodes['tool-completion-sound'].checked = true; await ui.nodes['tool-completion-sound'].fire('change');
-  assert.equal(ui.nodes['tool-completion-sound'].checked, false);
-  assert.match(ui.nodes['tool-message'].textContent, /设置未写入/);
-  ui.publish(state({ completion, results: [result] })); await flush();
-  assert.equal(audio.plays.length, 0);
-  assert.match(ui.nodes['tool-completion-notice'].textContent, /结果已就绪/);
+it('齿轮只打开原生浮层并同步可访问状态，关闭恢复焦点无需 DOM 设置面板', async () => {
+  const ui = setup(); await flush();
+  await ui.nodes['tool-settings-toggle'].fire('click');
+  assert.deepEqual(ui.calls, ['get', ['settings', { x: 500, y: 600, width: 30, height: 30 }]]);
+  ui.visibility({ open: true, restoreFocus: false }); assert.equal(ui.nodes['tool-settings-toggle'].attrs['aria-expanded'], 'true');
+  ui.visibility({ open: false, restoreFocus: true }); assert.equal(ui.nodes['tool-settings-toggle'].focused, true);
+  assert.equal(ui.nodes['tool-clear-rules'], undefined);
 });
-
-it('音效预听准备迟到时，已经关闭的设置不能发出声音', async () => {
-  let finish: () => void = () => {}; let played = 0;
-  class DelayedAudio {
-    state = 'suspended';
-    resume() { return new Promise<void>(resolve => { finish = () => { this.state = 'running'; resolve(); }; }); }
-    createOscillator() { played += 1; throw new Error('Cancelled preview must not play'); }
-  }
-  const ui = setup({}, DelayedAudio); await flush();
-  ui.nodes['tool-completion-sound'].checked = true; const enabling = ui.nodes['tool-completion-sound'].fire('change'); await flush();
-  ui.nodes['tool-completion-sound'].checked = false; await ui.nodes['tool-completion-sound'].fire('change');
-  finish(); await enabling; assert.equal(played, 0); assert.equal(ui.nodes['tool-sound-notice'].textContent, '');
-});
-
 it('工具完成样式遵守减少动画偏好且反馈和声音说明在折叠摘要内可访问', () => {
   const css = fs.readFileSync(path.join(__dirname, '../src/renderer/toolHarness.css'), 'utf8');
   const html = fs.readFileSync(path.join(__dirname, '../src/renderer/index.html'), 'utf8');

@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'none'; connect-src 'none'" />
+  <title>工具与提示词</title>
+  <link rel="stylesheet" href="./ui-tokens.css" />
+  <link rel="stylesheet" href="./ui.css" />
+  <link rel="stylesheet" href="./toolHarness.css" />
+  <link rel="stylesheet" href="./toolSettings.css" />
+</head>
+<body>
+          <section id="tool-settings-panel" class="tool-settings-panel" role="dialog" aria-modal="false" aria-labelledby="tool-settings-heading" tabindex="-1">
+            <div class="tool-settings-head"><div><strong id="tool-settings-heading">工具与提示词</strong><p>更改自动保存</p></div><button id="tool-settings-close" type="button" class="ui-icon" aria-label="关闭设置">×</button></div>
+            <p id="tool-settings-notice" class="tool-settings-notice" role="status" aria-live="polite"></p>
+            <div class="tool-settings-body">
+              <section class="tool-settings-group" aria-labelledby="tool-settings-execution"><h3 id="tool-settings-execution">执行与回传</h3>
+              <div class="tool-setting-row"><label for="tool-send-interval">自动发送间隔</label><div class="tool-interval-control"><div class="tool-interval">
+                <button id="tool-interval-down" type="button" class="ui-button" aria-label="减少自动发送间隔一秒" title="减少 1 秒" disabled>−</button>
+                <input id="tool-send-interval" class="tool-select" type="number" min="0" max="300" step="1" value="3" disabled />
+                <button id="tool-interval-up" type="button" class="ui-button" aria-label="增加自动发送间隔一秒" title="增加 1 秒" disabled>+</button>
+              </div><span>秒</span></div></div>
+              <div class="tool-setting-row"><label for="tool-dirty-policy">未保存内容</label>
+              <select id="tool-dirty-policy" class="tool-select" disabled>
+                <option value="ask">每次询问</option>
+                <option value="continue">继续：采用 AI 的修改结果</option>
+                <option value="stop">停止修改</option>
+              </select></div>
+              <p>“继续”会采用 AI 的修改，替换未保存草稿。</p></section>
+              <section class="tool-settings-group" aria-labelledby="tool-settings-feedback"><h3 id="tool-settings-feedback">完成反馈</h3>
+                <label class="tool-setting-row tool-auto-label">工具完成音效<input id="tool-completion-sound" type="checkbox" disabled /></label>
+                <label class="tool-setting-row tool-auto-label" title="本批工具真正结束后复制整批结果一次">完成后自动复制结果<input id="tool-auto-copy" type="checkbox" disabled /></label>
+              </section>
+              <section class="tool-settings-group" aria-labelledby="tool-settings-prompt"><h3 id="tool-settings-prompt">提示词</h3>
+                <button id="btn-settings" type="button" class="ui-button tool-settings-link" title="编辑提示词与格式要求（Ctrl+Shift+P）"><span>编辑提示词与格式要求</span><span aria-hidden="true">›</span></button>
+              </section>
+              <section class="tool-settings-group" aria-labelledby="tool-settings-rules"><h3 id="tool-settings-rules">权限规则</h3>
+                <button id="tool-clear-rules" type="button" class="ui-button" disabled>清除本项目已记住规则</button>
+                <p>不影响其他项目的规则。</p>
+              </section>
+              <span id="tool-permission-hint" class="tool-permission-hint"></span>
+            </div>
+          </section>
+<script src="./toolCompletionSound.js"></script>
+<script src="./toolSettings.js"></script>
+</body>
+</html>
