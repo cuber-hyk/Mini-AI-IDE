@@ -37,8 +37,6 @@
     sidebar: document.getElementById('sidebar'),
     sidebarResizer: document.getElementById('sidebar-resizer'),
     btnSidebar: document.getElementById('btn-sidebar'),
-    // 提示词设置入口（齿轮）：面板本体是独立视图，这里只是"打开"的入口
-    btnSettings: document.getElementById('btn-settings'),
   };
 
   /**
@@ -524,17 +522,7 @@
     if (state.editor) state.editor.layout();
   });
 
-  /*
-   * 提示词设置（齿轮）。
-   *
-   * 面板本体是**独立视图**，本渲染进程拿不到它、也不该去操作它 ——
-   * 这里只把"用户想打开面板"这个意图交给主进程（面板由主进程显示并居中摆放）。
-   * 打开后主进程会广播 `ui:open-prompt-panel`，据此把齿轮点亮成激活态。
-   */
-  el.btnSettings.addEventListener('click', function () {
-    void openPromptSettings();
-  });
-
+  // 快捷键通过主进程打开独立提示词编辑视图。
   async function openPromptSettings() {
     try {
       await bridge.openPromptPanel();
@@ -545,11 +533,7 @@
 
   bridge.onOpenPromptPanel(function () {
     // 面板已在主进程侧显示；这里只做视觉反馈（否则点了没反应的观感很差）
-    el.btnSettings.classList.add('active');
     setInfo('已在提示词设置面板里编辑「输出格式要求」——Esc 关闭');
-    window.setTimeout(function () {
-      el.btnSettings.classList.remove('active');
-    }, 1200);
   });
 
   // Ctrl+B 显示或隐藏本地目录树。

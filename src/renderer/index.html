@@ -95,7 +95,17 @@
     <section id="tool-dock" class="tool-dock" aria-label="工具结果面板">
     <div id="tool-resizer" class="tool-resizer" role="separator" aria-label="调整工具面板高度" aria-orientation="horizontal" aria-valuemin="80" aria-valuemax="260" aria-valuenow="160" tabindex="0" title="拖动调整高度；方向键调整，双击复位" hidden></div>
     <details id="tool-panel" class="tool-panel">
-      <summary class="tool-panel-summary"><span>工具结果</span><span id="tool-count" class="tool-count">0 项</span><span id="tool-activity" class="tool-activity"></span><span id="tool-completion-notice" class="tool-completion-notice" role="status" aria-live="polite" aria-atomic="true"></span><span id="tool-continue-notice" class="tool-completion-notice" role="status" aria-live="polite"></span><span id="tool-copy-notice" class="tool-completion-notice" role="status" aria-live="polite"></span><span id="tool-return-notice" class="tool-completion-notice" role="status" aria-live="polite"></span><span id="tool-sound-notice" class="tool-sound-notice" role="status" aria-live="polite"></span></summary>
+      <summary class="tool-panel-summary">
+        <span class="tool-panel-heading"><span>工具结果</span><span id="tool-count" class="tool-count">0 项</span></span>
+        <span class="tool-panel-status">
+          <span id="tool-activity" class="tool-activity">读取状态…</span>
+          <span id="tool-completion-notice" class="tool-completion-notice" role="status" aria-live="polite" aria-atomic="true"></span>
+          <span id="tool-continue-notice" class="tool-completion-notice" role="status" aria-live="polite"></span>
+          <span id="tool-copy-notice" class="tool-completion-notice" role="status" aria-live="polite"></span>
+          <span id="tool-return-notice" class="tool-completion-notice" role="status" aria-live="polite"></span>
+          <span id="tool-sound-notice" class="tool-sound-notice" role="status" aria-live="polite"></span>
+        </span>
+      </summary>
       <div id="tool-panel-body" class="tool-panel-body">
         <p id="tool-message" class="tool-message" role="status" aria-live="polite" aria-atomic="true">正在读取工具状态…</p>
         <div id="tool-results" class="tool-results" aria-label="工具调用结果"></div>
@@ -104,8 +114,10 @@
     <div class="tool-result-actions">
       <button id="tool-view-changes" type="button" class="ui-icon" title="查看改动" aria-label="查看改动"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2h5l3 3v9H4z"/><path d="M9 2v3h3"/></svg></button>
       <span class="tool-actions-sep" aria-hidden="true"></span>
-      <button id="tool-copy" type="button" class="ui-icon" title="复制本批结果" aria-label="复制本批结果" disabled><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="8" height="9" rx="1.5"/><path d="M3 11V3.5A1.5 1.5 0 0 1 4.5 2H11"/></svg></button>
-      <button id="tool-send-results" type="button" class="ui-button" title="将当前批工具结果与已授权附件一起发送给 AI" disabled hidden>发送本批附件</button>
+      <button id="tool-copy" type="button" class="ui-icon" title="复制本批结果到剪贴板" aria-label="复制本批结果到剪贴板" data-action="copy" disabled>
+        <svg class="tool-copy-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="8" height="9" rx="1.5"/><path d="M3 11V3.5A1.5 1.5 0 0 1 4.5 2H11"/></svg>
+        <svg class="tool-send-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 8h12M8 2l6 6-6 6"/></svg>
+      </button>
       <div id="tool-more-wrap" class="tool-more-wrap">
         <button id="tool-more-toggle" type="button" class="ui-icon" aria-label="工具结果操作" title="工具结果操作（撤销）" aria-haspopup="dialog" aria-expanded="false" aria-controls="tool-more" hidden><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8a5 5 0 1 1 1.5 3.5"/><path d="M3 4v4h4"/></svg></button>
         <div id="tool-more" class="tool-more" role="dialog" aria-label="工具结果操作" hidden>
@@ -159,7 +171,7 @@
               <g class="permission-shield"><path d="m12 3 8 4v6c0 4-5 7-8 8-3-1-8-4-8-8V7Z"/><path class="permission-rules" d="m9 10 3 2-3 2m5 1h2"/><path class="permission-full" d="M12 8v5m0 3v.2"/></g>
             </svg>
           </label>
-          <select id="tool-permission" class="tool-select" aria-label="工具执行权限" aria-describedby="tool-permission-hint" disabled>
+          <select id="tool-permission" class="tool-select" aria-label="工具执行权限" disabled>
             <option value="ask">请求批准</option>
             <option value="rules">按规则自动</option>
             <option value="full">完全访问权限</option>
@@ -169,39 +181,9 @@
         </div>
         <span class="spacer"></span>
         <div id="tool-settings-wrap" class="tool-settings-wrap">
-          <button id="tool-settings-toggle" type="button" class="ui-icon" aria-label="工具与提示词设置" title="工具与提示词设置" aria-haspopup="dialog" aria-expanded="false" aria-controls="tool-settings-panel">
+          <button id="tool-settings-toggle" type="button" class="ui-icon" aria-label="工具与提示词设置" title="工具与提示词设置" aria-haspopup="dialog" aria-expanded="false">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.95 5.31L10.19 2.67L13.81 2.67L14.05 5.31L15.29 5.82L17.31 4.12L19.88 6.69L18.18 8.71L18.69 9.95L21.33 10.19L21.33 13.81L18.69 14.05L18.18 15.29L19.88 17.31L17.31 19.88L15.29 18.18L14.05 18.69L13.81 21.33L10.19 21.33L9.95 18.69L8.71 18.18L6.69 19.88L4.12 17.31L5.82 15.29L5.31 14.05L2.67 13.81L2.67 10.19L5.31 9.95L5.82 8.71L4.12 6.69L6.69 4.12L8.71 5.82Z"/><circle cx="12" cy="12" r="3"/></svg>
           </button>
-          <section id="tool-settings-panel" class="tool-settings-panel" role="dialog" aria-modal="false" aria-labelledby="tool-settings-heading" tabindex="-1" hidden>
-            <div class="tool-settings-head"><div><strong id="tool-settings-heading">工具与提示词</strong><p>更改自动保存</p></div><button id="tool-settings-close" type="button" class="ui-icon" aria-label="关闭设置">×</button></div>
-            <div class="tool-settings-body">
-              <section class="tool-settings-group" aria-labelledby="tool-settings-execution"><h3 id="tool-settings-execution">执行与回传</h3>
-              <div class="tool-setting-row"><label for="tool-send-interval">自动发送间隔</label><div class="tool-interval-control"><div class="tool-interval">
-                <button id="tool-interval-down" type="button" class="ui-button" aria-label="减少自动发送间隔一秒" title="减少 1 秒" disabled>−</button>
-                <input id="tool-send-interval" class="tool-select" type="number" min="0" max="300" step="1" value="3" disabled />
-                <button id="tool-interval-up" type="button" class="ui-button" aria-label="增加自动发送间隔一秒" title="增加 1 秒" disabled>+</button>
-              </div><span>秒</span></div></div>
-              <div class="tool-setting-row"><label for="tool-dirty-policy">未保存内容</label>
-              <select id="tool-dirty-policy" class="tool-select" disabled>
-                <option value="ask">每次询问</option>
-                <option value="continue">继续：采用 AI 的修改结果</option>
-                <option value="stop">停止修改</option>
-              </select></div>
-              <p>“继续”会采用 AI 的修改，替换未保存草稿。</p></section>
-              <section class="tool-settings-group" aria-labelledby="tool-settings-feedback"><h3 id="tool-settings-feedback">完成反馈</h3>
-                <label class="tool-setting-row tool-auto-label">工具完成音效<input id="tool-completion-sound" type="checkbox" disabled /></label>
-                <label class="tool-setting-row tool-auto-label" title="本批工具真正结束后复制整批结果一次">完成后自动复制结果<input id="tool-auto-copy" type="checkbox" disabled /></label>
-              </section>
-              <section class="tool-settings-group" aria-labelledby="tool-settings-prompt"><h3 id="tool-settings-prompt">提示词</h3>
-                <button id="btn-settings" type="button" class="ui-button tool-settings-link" title="编辑提示词与格式要求（Ctrl+Shift+P）"><span>编辑提示词与格式要求</span><span aria-hidden="true">›</span></button>
-              </section>
-              <section class="tool-settings-group" aria-labelledby="tool-settings-rules"><h3 id="tool-settings-rules">权限规则</h3>
-                <button id="tool-clear-rules" type="button" class="ui-button" disabled>清除本项目已记住规则</button>
-                <p>不影响其他项目的规则。</p>
-              </section>
-              <span id="tool-permission-hint" class="tool-permission-hint"></span>
-            </div>
-          </section>
         </div>
         <button id="btn-send-prompt" type="button" class="ui-button primary prompt-send" aria-label="发送需求" title="发送需求" disabled><svg class="prompt-send-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-7 7 7-7 7 7"/></svg><span class="prompt-send-spinner" aria-hidden="true"></span></button>
         </div>
@@ -225,6 +207,7 @@
     <script src="./toolResultPresentation.js"></script>
     <script src="./toolPanelLayout.js"></script>
     <script src="./toolExecutionClock.js"></script>
+    <script src="./toolCompletionSound.js"></script>
     <script src="./toolHarness.js"></script>
   </body>
 </html>

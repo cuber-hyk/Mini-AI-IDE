@@ -10,6 +10,7 @@ import type { TextMeta } from './limits';
 import type { FormatSpecVariant } from './formatSpec';
 import type { ApplicationUpdateState } from './applicationUpdate';
 import type { ToolConfig, ToolState } from './toolProtocol';
+import type { ToolSettingsAnchor, ToolSettingsVisibility } from './toolSettings';
 
 export const CHANNELS = {
   getLocalPromptOptions: 'ui:get-local-prompt-options',
@@ -27,6 +28,13 @@ export const CHANNELS = {
   cancelTools: 'tools:cancel',
   stopToolCommand: 'tools:stop-command',
   clearToolRules: 'tools:clear-rules',
+  openToolSettings: 'tools:open-settings',
+  closeToolSettings: 'tools:close-settings',
+  getToolSettingsState: 'tools:get-settings-state',
+  setToolSettings: 'tools:set-settings',
+  toolSettingsState: 'tools:settings-state',
+  toolSettingsVisibility: 'tools:settings-visibility',
+  openToolPromptSettings: 'tools:open-prompt-settings',
   undoToolChange: 'tools:undo',
   getUpdateState: 'ui:get-update-state',
   checkForUpdate: 'ui:check-for-update',
@@ -554,7 +562,8 @@ export interface EditorBridge {
   sendToolResults(): Promise<{ ok: boolean; error?: string; uncertain?: boolean }>;
   cancelTools(): Promise<ToolState>;
   stopToolCommand(target: { batch_id: string; request_id: string; process_id: string }): Promise<ToolState>;
-  clearToolRules(): Promise<ToolState>;
+  openToolSettings(anchor: ToolSettingsAnchor): Promise<void>;
+  onToolSettingsVisibility(listener: (state: ToolSettingsVisibility) => void): void;
   undoToolChange(): Promise<{ ok: boolean; error?: string }>;
   getUpdateState(): Promise<ApplicationUpdateState>;
   onUpdateState(listener: (state: ApplicationUpdateState) => void): void;

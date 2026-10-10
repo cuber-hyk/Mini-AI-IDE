@@ -271,6 +271,8 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   // 判断依据：代码里只有 `webContents.send(CHANNELS.x)`、没有 `ipcMain.handle(CHANNELS.x)`。
   const oneWayChannels: string[] = [
     CHANNELS.toolState,
+    CHANNELS.toolSettingsState,
+    CHANNELS.toolSettingsVisibility,
     CHANNELS.updateState,
     CHANNELS.openUpdatePanel,
     CHANNELS.entryChanged,
@@ -297,7 +299,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   let preloadSrcCheck: { ok: boolean; detail: string } = { ok: false, detail: '未读取到 preload.js' };
   try {
     // 所有本地视图的窄桥一起核对，包括只读变更查看的 review 通道。
-    const preloadFiles = ['preload.js', 'previewPreload.js', 'webbarPreload.js', 'promptPreload.js'];
+    const preloadFiles = ['preload.js', 'previewPreload.js', 'webbarPreload.js', 'promptPreload.js', 'toolSettingsPreload.js'];
     const literals: string[] = [];
     const perFile: Record<string, string[]> = {};
     for (const f of preloadFiles) {
@@ -440,18 +442,10 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       if (explorerKey[id]) return !new RegExp(`options\\.${explorerKey[id]}\\.addEventListener\\('click'`).test(explorerJs);
       if (id.startsWith('tool-')) {
         if (id === 'tool-settings-toggle' || id === 'tool-more-toggle') {
-          const registered = id === 'tool-settings-toggle'
-            ? /popup\('tool-settings-wrap', 'tool-settings-toggle', 'tool-settings-panel', 'tool-settings-close'\)/.test(toolLayoutJs)
-            : /popup\('tool-more-wrap', 'tool-more-toggle', 'tool-more'\)/.test(toolLayoutJs);
-          return !registered || !/trigger\.addEventListener\('click'/.test(toolLayoutJs);
+          if (id === 'tool-settings-toggle') return !/settingsToggle\.addEventListener\('click'/.test(fs.readFileSync(path.join(rendererDir, 'toolHarness.js'), 'utf8'));
+          return !/popup\('tool-more-wrap', 'tool-more-toggle', 'tool-more'\)/.test(toolLayoutJs) || !/trigger\.addEventListener\('click'/.test(toolLayoutJs);
         }
-        if (id === 'tool-settings-close') return !/getElementById\(closeId\)\.addEventListener\('click'/.test(toolLayoutJs) || !/popup\('tool-settings-wrap', 'tool-settings-toggle', 'tool-settings-panel', 'tool-settings-close'\)/.test(toolLayoutJs);
         const toolJs = fs.readFileSync(path.join(rendererDir, 'toolHarness.js'), 'utf8');
-        if (id === 'tool-interval-down' || id === 'tool-interval-up') {
-          return !/const intervalDown = document\.getElementById\('tool-interval-down'\)/.test(toolJs) ||
-            !/const intervalUp = document\.getElementById\('tool-interval-up'\)/.test(toolJs) ||
-            !/\[intervalDown, intervalUp\]\.forEach\(function \(button, index\)\s*\{[\s\S]*?button\.addEventListener\('click'[\s\S]*?configure\(\{ sendIntervalSeconds: Number\(sendInterval\.value\) \}\)/.test(toolJs);
-        }
         const declaration = new RegExp(`const (\\w+) = document\\.getElementById\\('${id}'\\)`).exec(toolJs);
         return !declaration || !new RegExp(`\\b${declaration[1]}\\.addEventListener\\(`).test(toolJs);
       }
@@ -725,8 +719,10 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
        * 齿轮是"我在编辑器里就能随手打开"的那条路）。
        */
       const settingsMenu = /label:\s*'设置'/.test(mainTs) && /label:\s*'修改提示词…'/.test(mainTs);
-      const gearInEditor = /id="btn-settings"/.test(html) && /el\.btnSettings\.addEventListener\('click'/.test(js);
-      const gearOpensPanel = /bridge\.openPromptPanel\(\)/.test(js) && /openPromptPanel:\s*'ui:open-prompt-panel'/.test(preloadTs);
+      const toolSettingsHtml = fs.readFileSync(path.join(rendererDir, 'toolSettings.html'), 'utf8');
+      const toolSettingsJs = fs.readFileSync(path.join(rendererDir, 'toolSettings.js'), 'utf8');
+      const gearInEditor = /id="tool-settings-toggle"/.test(html) && /id="btn-settings"/.test(toolSettingsHtml);
+      const gearOpensPanel = /bridge\.openPrompt\(\)/.test(toolSettingsJs) && /openPromptPanel:\s*'ui:open-prompt-panel'/.test(preloadTs);
       add('Y7', '提示词编辑入口齐备：设置菜单及工具设置浮层（均通往同一面板）', settingsMenu && gearInEditor && gearOpensPanel, {
         settingsMenu,
         gearInEditor,

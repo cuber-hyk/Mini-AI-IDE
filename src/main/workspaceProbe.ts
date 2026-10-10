@@ -1,5 +1,5 @@
 /** 隔离临时目录、离线 Electron 本地界面验收；不接触官方网页或用户文件。 */
-import { app, clipboard, dialog, type WebContents } from 'electron';
+import { app, clipboard, dialog, BrowserWindow, type WebContents } from 'electron';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -17,7 +17,7 @@ export function configureWorkspaceProbe(): string {
   return directory;
 }
 
-export async function runWorkspaceProbe(view: WebContents, web: WebContents, preview: WebContents, controller: WorkspaceController, directory: string, webbar: WebContents) {
+export async function runWorkspaceProbe(view: WebContents, web: WebContents, preview: WebContents, controller: WorkspaceController, directory: string, webbar: WebContents, toolSettings: () => WebContents | null) {
   const checks: Array<{ name: string; pass: boolean; observed?: unknown }> = [];
   const screenshotErrors: Array<{ file: string; error: string }> = [];
   async function capture(contents: WebContents, file: string) {
@@ -106,7 +106,7 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     await evaluate("document.getElementById('requirement').dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}))");
     for(let i=0;i<100 && !await web.executeJavaScript('window.sent.length===1');i++) await pause();
     const delivered = await web.executeJavaScript('window.sent[0]') as string;
-    check('本地Enter提交用户需求与完整技能，初始化关闭且选择保持', delivered.includes('/review') && delivered.includes('PROJECT-SKILL') && !delivered.includes('唯一执行协议') && !delivered.includes('GLOBAL-SKILL') && await evaluate<boolean>("!document.getElementById('prompt-initialization').checked"));
+    check('本地Enter提交用户需求与完整技能，初始化关闭且选择保持', delivered.includes('/audit') && delivered.includes('PROJECT-SKILL') && !delivered.includes('唯一执行协议') && !delivered.includes('GLOBAL-SKILL') && await evaluate<boolean>("!document.getElementById('prompt-initialization').checked"));
     await web.executeJavaScript("document.querySelector('textarea').value='官网用户草稿'");
     await evaluate("document.getElementById('requirement').value='新的需求'; document.getElementById('requirement').dispatchEvent(new Event('input')); document.getElementById('btn-send-prompt').click()"); await pause(); await pause();
     check('本地需求发送不覆盖官网草稿也不重复点击', await web.executeJavaScript("window.sent.length===1 && document.querySelector('textarea').value==='官网用户草稿'"));
@@ -215,21 +215,54 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     check('删除只关闭受影响标签并切回剩余文件', deleted.ok && !fs.existsSync(path.join(a, 'renamed-notes/renamed.md')) && await waitFor("document.getElementById('file-name').textContent === 'root-file.txt' && document.querySelectorAll('#editor-tabs [role=tab]').length === 1"));
     // 所有工具修改从自有静态回复经过真实采集/权限/执行；右侧仅查看实际快照。
     await evaluate("window.editorBridge.setToolConfig({permission:'full',automatic:false,dirtyPolicy:'stop',autoCopyResults:false,sendIntervalSeconds:3})");
+    const dockBefore = await evaluate<string>('window.editorBridge.setWorkspaceLayout({}).then(state => JSON.stringify([state.layout.dockBounds, state.layout.webBounds]))');
+    const settingsEvaluate = <T = unknown>(script: string): Promise<T> => {
+      const contents = toolSettings(); if (!contents || contents.isDestroyed()) throw new Error('原生工具设置窗口尚未加载');
+      return contents.executeJavaScript(script, true);
+    };
+    async function waitForSettings(script: string) {
+      for (let i = 0; i < 100; i++) {
+        const contents = toolSettings();
+        if (contents && BrowserWindow.fromWebContents(contents)?.isVisible() && await settingsEvaluate(script)) return true;
+        await pause();
+      }
+      return false;
+    }
     await evaluate("document.getElementById('tool-settings-toggle').click()");
-    await waitFor("!document.getElementById('tool-settings-panel').hidden && document.getElementById('tool-send-interval').value === '3'");
-    await evaluate("document.getElementById('tool-interval-up').click()");
-    check('自绘增加按钮保存间隔，仍使用统一工具设置入口', await waitFor("document.getElementById('tool-send-interval').value === '4' && !document.getElementById('tool-interval-down').disabled && window.editorBridge.getToolState().then(state => state.config.sendIntervalSeconds === 4)"));
-    await evaluate("document.getElementById('tool-interval-down').click()");
-    check('自绘减少按钮按一秒调整', await waitFor("window.editorBridge.getToolState().then(state => state.config.sendIntervalSeconds === 3)"));
-    await evaluate("window.editorBridge.setToolConfig({sendIntervalSeconds:0})");
-    check('间隔下界禁用减少，不能降到负数', await waitFor("document.getElementById('tool-interval-down').disabled"));
-    await evaluate("window.editorBridge.setToolConfig({sendIntervalSeconds:300})");
-    check('间隔上界禁用增加', await waitFor("document.getElementById('tool-interval-up').disabled"));
-    await evaluate("window.editorBridge.setToolConfig({sendIntervalSeconds:3})");
-    await waitFor("document.getElementById('tool-send-interval').value === '3'");
-    await evaluate("document.getElementById('tool-send-interval').focus()");
-    await capture(view, 'interval-control.png');
-    await evaluate("document.getElementById('tool-settings-close').click()");
+    await waitForSettings("document.getElementById('tool-send-interval')?.value === '3' && !document.getElementById('tool-interval-up').disabled");
+    const settingsWindow = BrowserWindow.fromWebContents(toolSettings()!)!;
+    check('设置是关联主窗口的独立非模态原生窗口', Boolean(settingsWindow?.isVisible() && settingsWindow.getParentWindow() && settingsWindow.webContents !== view));
+    check('打开设置不改变官网和 dock 高度', dockBefore === await evaluate<string>('window.editorBridge.setWorkspaceLayout({}).then(state => JSON.stringify([state.layout.dockBounds, state.layout.webBounds]))'));
+    check('专用设置桥没有文件、工具执行和官网发送能力', await settingsEvaluate<boolean>("typeof window.editorBridge === 'undefined' && !('readFile' in window.toolSettingsBridge) && !('setToolConfig' in window.toolSettingsBridge) && !('sendPrompt' in window.toolSettingsBridge)"));
+    await settingsEvaluate("document.getElementById('tool-interval-up').click()");
+    check('原生浮层增加按钮保存间隔并同步主工具 owner', await waitForSettings("document.getElementById('tool-send-interval').value === '4'") && await evaluate<boolean>('window.editorBridge.getToolState().then(state => state.config.sendIntervalSeconds === 4)'));
+    await settingsEvaluate("document.getElementById('tool-interval-down').click()");
+    check('原生浮层减少按钮按一秒调整', await waitForSettings("document.getElementById('tool-send-interval').value === '3'"));
+    await evaluate('window.editorBridge.setToolConfig({sendIntervalSeconds:0})');
+    check('间隔下界禁用减少，不能降到负数', await waitForSettings("document.getElementById('tool-interval-down').disabled"));
+    await evaluate('window.editorBridge.setToolConfig({sendIntervalSeconds:300})');
+    check('间隔上界禁用增加', await waitForSettings("document.getElementById('tool-interval-up').disabled"));
+    await evaluate('window.editorBridge.setToolConfig({sendIntervalSeconds:3})');
+    await waitForSettings("document.getElementById('tool-send-interval').value === '3'");
+    await capture(toolSettings()!, 'tool-settings-window.png');
+    settingsWindow.getParentWindow()!.focus(); await pause();
+    check('设置失焦收起，不抢回网页焦点', !settingsWindow.isVisible());
+    await evaluate("document.getElementById('tool-settings-toggle').click()");
+    await waitForSettings("document.getElementById('tool-send-interval').value === '3'");
+    await settingsEvaluate("document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape',bubbles:true}))");
+    check('设置 Escape 收起并恢复齿轮焦点', await waitFor("document.activeElement?.id === 'tool-settings-toggle'") && !settingsWindow.isVisible());
+    check('关闭设置不改变官网和 dock 高度', dockBefore === await evaluate<string>('window.editorBridge.setWorkspaceLayout({}).then(state => JSON.stringify([state.layout.dockBounds, state.layout.webBounds]))'));
+    await evaluate("document.getElementById('tool-settings-toggle').click()");
+    await waitForSettings("document.getElementById('tool-send-interval').value === '3'");
+    await settingsEvaluate("document.getElementById('tool-settings-close').click()");
+    check('设置关闭按钮收起并恢复齿轮焦点', await waitFor("document.activeElement?.id === 'tool-settings-toggle'") && !settingsWindow.isVisible());
+    await evaluate("document.getElementById('tool-settings-toggle').click()");
+    await waitForSettings("document.getElementById('tool-send-interval').value === '3'");
+    await settingsEvaluate("document.getElementById('btn-settings').click()");
+    await pause();
+    const prompt = settingsWindow.getParentWindow()!.contentView.children.find(child => 'webContents' in child && (child.webContents as WebContents).getURL().endsWith('/prompt.html'));
+    check('原生设置提示词入口关闭浮层并打开现有编辑面板', !settingsWindow.isVisible() && Boolean(prompt?.getVisible()));
+    if (prompt && 'webContents' in prompt) await (prompt.webContents as WebContents).executeJavaScript('window.promptBridge.close()', true);
     let batchSeq = 0;
     const fixture = path.join(directory, 'tool-reply.html');
     const escapeHtml = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');

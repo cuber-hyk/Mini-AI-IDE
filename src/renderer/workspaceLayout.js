@@ -84,7 +84,7 @@
       }, 1);
       // 固定浮层不计入子元素高度，另预留原生官网视图不能遮挡的显示预算。
       const dockBottom = dock.getBoundingClientRect().bottom;
-      for (const [surfaceId, triggerId] of [['tool-settings-panel', 'tool-settings-toggle'], ['tool-more', 'tool-more-toggle']]) {
+      for (const [surfaceId, triggerId] of [['tool-more', 'tool-more-toggle']]) {
         const surface = document.getElementById(surfaceId);
         if (!surface.hidden) needed = Math.max(needed, surface.getBoundingClientRect().height + dockBottom - document.getElementById(triggerId).getBoundingClientRect().top + 16);
       }
@@ -96,7 +96,7 @@
     dock.addEventListener('toggle', measureDock, true);
     dock.addEventListener('click', function () { queueMicrotask(measureDock); });
     observer.observe(dock);
-    ['tool-panel', 'prompt-actions', 'requirement-panel', 'local-prompt-options', 'skill-menu', 'skill-chips', 'skill-preview', 'tool-settings-panel', 'tool-more'].forEach(function (id) { observer.observe(document.getElementById(id)); });
+    ['tool-panel', 'prompt-actions', 'requirement-panel', 'local-prompt-options', 'skill-menu', 'skill-chips', 'skill-preview', 'tool-more'].forEach(function (id) { observer.observe(document.getElementById(id)); });
     return { apply: apply };
   };
 })();

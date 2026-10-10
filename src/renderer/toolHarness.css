@@ -28,9 +28,8 @@
 .tool-settings-wrap { display: flex; align-items: center; }
 .tool-settings-wrap > .ui-icon { display: grid; place-items: center; background: transparent; border-color: transparent; color: var(--ui-muted); }
 .tool-settings-wrap svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; }
-.tool-settings-panel, .tool-more { position: fixed; z-index: 110; border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-surface); box-shadow: 0 12px 36px #0006; overflow: auto; }
-.tool-settings-panel { box-sizing: border-box; width: min(370px, calc(100vw - 16px)); padding: 16px; max-height: calc(100vh - 16px); }
-.tool-settings-panel[hidden], .tool-more[hidden], .tool-message[hidden], .tool-resizer[hidden], .tool-result-actions [hidden] { display: none; }
+.tool-more { position: fixed; z-index: 110; border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-surface); box-shadow: 0 12px 36px #0006; overflow: auto; }
+.tool-more[hidden], .tool-message[hidden], .tool-resizer[hidden], .tool-result-actions [hidden] { display: none; }
 .tool-settings-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 12px; }
 .tool-settings-head strong { font-size: 15px; }
 .tool-settings-head p { margin: 4px 0 0; font-size: 11px; color: var(--ui-muted); }
@@ -67,31 +66,38 @@
 .tool-resizer { position: absolute; top: -3px; left: 0; right: 0; height: 6px; cursor: ns-resize; touch-action: none; z-index: 1; }
 .tool-resizer:hover, .tool-resizer:focus-visible, .tool-resizer.dragging { background: var(--ui-accent); outline: none; }
 .tool-panel { min-width: 0; }
-.tool-panel-summary { min-height: 38px; padding: 9px 145px 8px 10px; cursor: pointer; color: var(--ui-text); line-height: 20px; }
+.tool-panel-summary { display: grid; grid-template-columns: 12px minmax(0, 1fr); grid-template-rows: 20px 20px; gap: 4px 2px; box-sizing: border-box; height: 61px; padding: 9px 10px 8px; cursor: pointer; color: var(--ui-text); line-height: 20px; list-style: none; }
+.tool-panel-summary::-webkit-details-marker { display: none; }
+.tool-panel-summary::before { content: '▸'; grid-column: 1; grid-row: 1; }
+.tool-panel[open] > .tool-panel-summary::before { content: '▾'; }
+.tool-panel-heading { grid-column: 2; grid-row: 1; min-width: 0; padding-right: 135px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tool-panel-status { grid-column: 2; grid-row: 2; display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; }
+.tool-panel-status > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tool-result-time { margin-left: 7px; color: var(--ui-muted); font-variant-numeric: tabular-nums; }
 .tool-completion-notice.is-error { color: var(--warn); }
 .tool-count { margin-left: 8px; color: var(--ui-muted); font-size: 12px; }
-.tool-activity { margin-left: 8px; color: var(--ui-muted); font-size: 12px; }
-.tool-completion-notice, .tool-sound-notice { display: block; font-size: 12px; overflow-wrap: anywhere; }
+.tool-activity { flex: 0 0 auto; max-width: 50%; color: var(--ui-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.tool-completion-notice, .tool-sound-notice { display: none; min-width: 0; flex: 1 1 auto; font-size: 12px; }
+.tool-completion-notice.is-visible, .tool-sound-notice.is-visible { display: block; }
 .tool-completion-notice:empty, .tool-sound-notice:empty { display: none; }
 .tool-completion-notice { color: var(--ui-success); }
 .tool-sound-notice, .completion-error .tool-completion-notice { color: var(--warn); }
-.tool-panel.has-completion > summary { box-shadow: inset 3px 0 var(--ui-success); animation: tool-completion-glow .55s ease-out; }
-.tool-panel.has-completion.completion-error > summary { box-shadow: inset 3px 0 var(--warn); }
-.has-completion .tool-completion-notice { animation: tool-completion-enter .22s ease-out; }
-@keyframes tool-completion-glow { from { background: var(--ui-surface); } to { background: transparent; } }
-@keyframes tool-completion-enter { from { opacity: .4; transform: translateY(2px); } to { opacity: 1; transform: translateY(0); } }
+.tool-panel.has-completion > summary { --completion-color: var(--ui-success); box-shadow: inset 3px 0 color-mix(in srgb, var(--completion-color) 38%, transparent); animation: tool-completion-glow .8s ease-out; }
+.tool-panel.has-completion.completion-error > summary { --completion-color: var(--warn); }
+.has-completion .tool-completion-notice { animation: tool-completion-enter .36s ease-out; }
+@keyframes tool-completion-glow { from { box-shadow: inset 3px 0 transparent; } to { box-shadow: inset 3px 0 color-mix(in srgb, var(--completion-color) 38%, transparent); } }
+@keyframes tool-completion-enter { from { opacity: .55; } to { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .tool-panel.has-completion > summary, .has-completion .tool-completion-notice { animation: none; } }
 .tool-result-actions { position: absolute; top: 5px; right: 8px; display: flex; align-items: center; gap: 6px; }
 .tool-result-actions .ui-button, .tool-result-actions .ui-icon { height: 28px; font-size: 12px; }
 .tool-result-actions .ui-icon { display: grid; place-items: center; width: 28px; background: transparent; border-color: transparent; font-size: 20px; }
 .tool-result-actions .ui-icon svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+#tool-copy .tool-send-icon, #tool-copy[data-action="send"] .tool-copy-icon { display: none; }
+#tool-copy[data-action="send"] .tool-send-icon { display: block; }
 .tool-actions-sep { width: 1px; height: 16px; background: var(--ui-border); margin: 0 3px; flex: none; }
 .tool-panel:not(.has-results) + .tool-result-actions > button, .tool-panel:not(.has-results) + .tool-result-actions > .tool-actions-sep { display: none; }
 .tool-panel:not(.has-results) + .tool-result-actions { position: absolute; top: 5px; right: 8px; padding: 0; }
-.tool-dock:has(.tool-panel:not(.has-results)) .tool-panel-summary { padding-right: 44px; }
-.tool-panel.has-attachments > .tool-panel-summary { padding-right: 10px; }
-.tool-panel.has-attachments + .tool-result-actions { position: static; justify-content: flex-end; flex-wrap: wrap; padding: 0 8px 6px; }
+.tool-panel:not(.has-results) .tool-panel-heading { padding-right: 0; }
 .tool-more { width: min(210px, calc(100vw - 16px)); padding: 5px; }
 .tool-more .tool-auto-label { padding: 9px 10px; color: var(--ui-text); }
 .tool-more button { display: block; width: 100%; border: 0; background: transparent; color: var(--ui-text); padding: 8px 10px; text-align: left; font: inherit; cursor: pointer; border-radius: var(--ui-radius); }

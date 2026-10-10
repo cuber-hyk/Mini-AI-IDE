@@ -39,6 +39,8 @@ import { configureWorkspaceProbe, runWorkspaceProbe } from './workspaceProbe';
 import { createApplicationUpdater, type ApplicationUpdater } from './appUpdater';
 import { registerApplicationUpdateIpc } from './applicationUpdateIpc';
 import { ApplicationUpdateWindow } from './applicationUpdateWindow';
+import { ToolSettingsWindow } from './toolSettingsWindow';
+import { registerToolSettingsIpc, toolSettingsState } from './toolSettingsIpc';
 import { createToolIntegration, readAutoReply, registerToolShutdown } from './tools/integration';
 
 /* ------------------------------------------------------------------ *
@@ -134,6 +136,7 @@ async function bootstrap(): Promise<void> {
   /* ---------------- 窗口与两个视图 ---------------- */
   const win = new BaseWindow({ width: 1600, height: 960, minWidth: 1080, minHeight: 600, show: !SELF_TEST, title: 'Mini-AI-IDE' });
   let updater: ApplicationUpdater | null = null;
+  let toolSettingsWindow: ToolSettingsWindow | null = null;
   let closeApproved = false;
   let closePending = false;
   const editorView = new WebContentsView({
@@ -554,6 +557,13 @@ async function loadLocalView(
     }),
     notifyFile: (relative, change, discard) => notifyFileChanged(relative, change, discard),
     copy: text => clipboard.writeText(text),
+    settingsChanged: () => toolSettingsWindow?.publish(),
+  });
+  const getToolSettings = () => toolSettingsState(tools.getState(), Boolean(fileService.getRoot()));
+  toolSettingsWindow = new ToolSettingsWindow(win, getToolSettings, () => fileService.getRoot(), state => {
+    if (editorView.webContents.isDestroyed()) return;
+    if (state.restoreFocus) editorView.webContents.focus();
+    editorView.webContents.send(CHANNELS.toolSettingsVisibility, state);
   });
   localPrompt = new LocalPromptController({ ipc: ipcMain, editor: editorView.webContents, settings, skills, attachments: new LocalPromptAttachments(),
     chooseFiles: async () => { const root = fileService.getRoot(); const result = await dialog.showOpenDialog(win, { title: '选择需求附件', ...(root ? { defaultPath: root } : {}),
@@ -594,6 +604,12 @@ async function loadLocalView(
   });
   const registeredChannels = [
     ...tools.channels, ...localPromptChannels,
+    ...registerToolSettingsIpc(ipcMain, { editor: editorView.webContents, panel: () => toolSettingsWindow!.contents,
+      current: () => toolSettingsWindow!.current, getState: getToolSettings,
+      viewport: () => { const bounds = editorView.getBounds(), zoom = editorView.webContents.getZoomFactor(); return { width: bounds.width / zoom, height: bounds.height / zoom }; },
+      open: anchor => { const parent = win.getContentBounds(), editor = editorView.getBounds(), zoom = editorView.webContents.getZoomFactor();
+        return toolSettingsWindow!.open({ x: parent.x + editor.x + anchor.x * zoom, y: parent.y + editor.y + anchor.y * zoom, width: anchor.width * zoom, height: anchor.height * zoom }); },
+      close: () => toolSettingsWindow!.hide(true), configure: tools.configure, clearRules: tools.clearRules, openPrompt: showPromptPanel }),
     ...registerApplicationUpdateIpc(ipcMain, { editor: editorView.webContents, dialog: () => updateWindow.contents,
       updater, open: openUpdateWindow, close: () => updateWindow.hide(true) }),
     ...registerFileIpc(fileService, {
@@ -950,7 +966,7 @@ async function loadLocalView(
   }
 
   if (workspaceProbeDirectory) {
-    const workspaceReport = await runWorkspaceProbe(editorView.webContents, webView.webContents, previewView.webContents, workspaceController, workspaceProbeDirectory, webBarView.webContents);
+    const workspaceReport = await runWorkspaceProbe(editorView.webContents, webView.webContents, previewView.webContents, workspaceController, workspaceProbeDirectory, webBarView.webContents, () => toolSettingsWindow!.contents);
     const columns = await runLayoutProbe({
       win, editor: editorView, webbar: webBarView, preview: previewView,
       getLayout: () => layoutController.layout,
@@ -1104,6 +1120,7 @@ async function loadLocalView(
     });
   });
   win.on('closed', () => {
+    toolSettingsWindow?.dispose();
     updateWindow.dispose();
     updater?.dispose();
     workspaceController.editor.reset();
