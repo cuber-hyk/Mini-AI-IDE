@@ -1,6 +1,6 @@
 {
   "name": "mini-ai-ide",
-  "version": "0.2.5",
+  "version": "0.2.6",
   "private": true,
   "description": "Windows 桌面工具：Monaco 本地编辑、DeepSeek 网页接入、规范工具执行与可控结果回传",
   "author": "Mini-AI-IDE contributors",
