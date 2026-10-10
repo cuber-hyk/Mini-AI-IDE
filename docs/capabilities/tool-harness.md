@@ -1,7 +1,7 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-09
+updated: 2026-10-10
 owner: 胡运宽
 source_of_truth: [docs/adr/2026-10-09-batch-error-auto-return.md, docs/adr/2026-10-09-tool-attachment-return.md, src/main/tools/attachments.ts, src/main/tools/resultReturn.ts, test/toolAttachmentIntegration.test.ts, test/toolAttachments.test.ts, test/toolResultReturn.test.ts, docs/capabilities/skills-and-local-prompt.md, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, src/renderer/workspaceLayout.js, src/main/workspaceLayoutController.ts, src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, tools/verify-web-result-sender.cjs, src/shared/toolJsonDiagnostic.ts, src/main/tools/resultClipboard.ts, src/renderer/toolExecutionClock.js, test/toolJsonDiagnostic.test.ts, test/toolResultClipboard.test.ts, test/toolExecutionClock.test.ts, test/toolExecutionIntegration.test.ts, src/shared/toolProtocol.ts, src/main/tools/harness.ts, src/main/tools/store.ts, src/main/tools/files.ts, src/main/tools/processes.ts, src/main/tools/changes.ts, src/main/tools/autoCollector.ts, src/main/tools/replyObservation.ts, src/main/tools/replyContinuation.ts, src/main/tools/replyChangeWatcher.ts, src/main/tools/integration.ts, src/renderer/toolHarness.js, src/renderer/toolHarness.css, src/renderer/toolPanelLayout.js, src/renderer/toolResultPresentation.js, test/toolProtocol.test.ts, test/toolHarness.test.ts, test/toolIntegration.test.ts, test/toolAutoCollector.test.ts, test/replyObservation.test.ts, test/replyChangeWatcher.test.ts, test/toolHarnessUi.test.ts, test/toolPanelLayout.test.ts, test/toolResultPresentation.test.ts, test/deepseekReplyState.test.ts, test/toolChanges.test.ts, test/toolProcesses.test.ts]
 ---
@@ -88,11 +88,11 @@ DeepSeek 主回复使用当前回复页脚的原生复制、可用重新生成�
 
 工具 JSON 错误整批不执行、不预约批次；多个请求中一项校验失败也不部分执行。工具结果列表显示一个展开的“批次校验”失败卡片，包含原生 SyntaxError；有位置时给 JSON 正文行列、UTF-16 偏移与短片段，没有位置时不推测。不能解析的批次不伪造工具名或请求 ID，复制本批结果返回 {protocol_version:1,tool_results:[],batch_error:{status:"failed",error:诊断正文}}。不另铺全局长诊断，正文只保留最近轮内存，切换项目/会话清除，不联网或自动修复 JSON。
 
-当前新批次全部工具真正结束且至少一个工具实际执行后自动复制完整 tool_results 一次，覆盖读取、搜索、修改、进程查询和命令，默认开启，在设置浮层的“完成反馈”可关闭并保存；工具执行失败输出也复制。后台启动、全部未执行、取消、未知、历史恢复及界面状态查询/设置不会写剪贴板；切换项目/会话作废旧轮。手动复制按钮保留，复制失败独立提示，automatic 开启时成功复制不误提示用户必须再粘贴。批次完成事件主进程单调编号，状态广播、界面初始化或重绘不重复复制，失败不暗中重试。
+当前新批次全部工具真正结束且至少一个工具实际执行后自动复制完整 tool_results 一次，覆盖读取、搜索、修改、进程查询和命令，默认开启，在设置浮层的“完成反馈”可关闭并保存；工具执行失败输出也复制。已结束、清理完成的超时或用户停止命令视为实际执行终态，真实部分输出可复制；权限拒绝但没有任何实际执行的批次不自动复制。后台启动、全部未执行、整批取消、未知、历史恢复及界面状态查询/设置不会写剪贴板；切换项目/会话作废旧轮。手动复制按钮保留，复制失败独立提示，automatic 开启时成功复制不误提示用户必须再粘贴。批次完成事件主进程单调编号，状态广播、界面初始化或重绘不重复复制，失败不暗中重试。
 
 ## 自动继续与结果发送
 
-`autoContinuation.ts` 独立拥有完成事件去重、等待、倒计时和一次发送状态。发送只消费当前项目/会话/批次的新完成事件，且至少一项 done/failed 结果具有真实 started_at；实际执行失败可回传用于修复。后台启动及 cleanup_pending 继续等待。执行前整批校验失败由 harness 在全部失败回执保存成功后标记当前 completion.validation_failed，整批均 failed 且没有执行时间或数据时可自动回传完整请求回执；不执行工具，不读取或上传附件。该标记不持久化，历史恢复没有发送资格。与解析层 batchError 共用连续 5 次额度，第 6 次暂停；校验错误回传成功不清零，正常执行结果成功发送或实际切项目/会话后清零。任何拒绝、取消/中断、unknown、无执行的普通请求失败或纯对话仍暂停/等待用户；历史恢复与重复状态不启动发送。
+`autoContinuation.ts` 独立拥有完成事件去重、等待、倒计时和一次发送状态。发送只消费当前项目/会话/批次的新完成事件；真实 started_at 的 done/failed 结果、以及真实开始和结束、`data.status: 'stopped'` 且清理已完成的单条命令结果均可回传，后者保留 cancelled/failed 事实与部分输出。完整批次仅含 permission_denied 与 skipped_dependency 且至少有一项权限拒绝时，可回传拒绝回执；不执行被拒绝工具、不上传附件。整批取消、普通 cancelled、unknown、后台启动与 cleanup_pending 继续阻断或等待；普通无执行失败仍等待用户。执行前整批校验失败由 harness 在全部失败回执保存成功后标记当前 completion.validation_failed，整批均 failed 且没有执行时间或数据时可自动回传完整请求回执；不执行工具，不读取或上传附件。该标记不持久化，历史恢复没有发送资格。与解析层 batchError 共用连续 5 次额度，第 6 次暂停；校验错误回传成功不清零，正常执行结果成功发送或实际切项目/会话后清零。历史恢复与重复广播不启动发送。
 
 限定发送与输出采集独立；后续只读 DOM 变化触发完整结束快照核验，合成 click 不冒充真实用户事件。
 
@@ -100,7 +100,7 @@ DeepSeek 主回复使用当前回复页脚的原生复制、可用重新生成�
 
 `attach_file({path})` 经工具权限暂存当前选择的真实文件，支持现有图片、PDF/Word、表格、幻灯片及文本附件，单文件最多 100 MiB、每批最多 50 个。ask 模式对项目内附件也审批，批准明确包含上传到官网；rules/full 继续使用现有规则。授权指纹包含真实路径和文件身份；暂存及运输复核文件变化。done 仅表示暂存，data 只有 id/name/size/mediaType，不包含路径能力或文件字节。`ToolAttachments` 拥有内存 ID 与当前选择，历史恢复不重建附件，切项目/会话/批次及取消使旧附件失效。
 
-当前完整真实批次由 `ToolResultReturn` 统一发送：automatic 开启时沿用完成事件与间隔；关闭时工具栏有附件才显示“发送本批附件”。手动 IPC 零参数，仅编辑器主 frame，可用资格仍须整批实际结束并核对官网最新正式批次。拒绝、取消、未知、历史及无执行不发送。唯一 sender 通过官方文件控件上传全部附件，等待预览和进度结束后提交整批正文一次；首次尝试后失败/未知暂停，不重复上传。工具摘要只显示已暂存，独立发送状态才显示官网回执。
+当前完整真实批次由 `ToolResultReturn` 统一发送：automatic 开启时沿用完成事件与间隔；关闭时工具栏有附件才显示“发送本批附件”。手动 IPC 零参数，仅编辑器主 frame，可用资格仍须整批实际结束并核对官网最新正式批次。整批取消、普通取消、未知、历史及普通未执行失败仍不发送；权限拒绝可回传真实拒绝信息，但被拒绝附件不上传。唯一 sender 通过官方文件控件上传全部附件，等待预览和进度结束后提交整批正文一次；首次尝试后失败/未知暂停，不重复上传。工具摘要只显示已暂存，独立发送状态才显示官网回执。
 
 `read_file` 继续只读文本；PDF/Word 可经 attach_file 上传原文件。技能需要 PDF 页或局部图时，通过已授权 run_command 使用真实可用的本地工具提取，再请求 attach_file。不会扫描命令日志猜测附件，也不把二进制编码进工具 JSON。新工具的完整提示词示例由 formatSpec 生成，补充格式上限 10,000 字以容纳完整内置模板。
 

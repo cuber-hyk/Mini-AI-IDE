@@ -49,13 +49,29 @@ it('配置关闭、取消、未知、未执行和空结果不会覆盖剪贴板�
     { config: { ...state().config, autoCopyResults: false } },
     { completion: { ...state().completion!, cancelled: true } },
     { results: [{ ...command, status: 'unknown' as const }] },
-    { results: [{ ...command, data: { status: 'stopped' } }] },
+    { results: [{ ...command, finished_at: undefined, data: { status: 'stopped' } }] },
     { results: [{ ...command, status: 'permission_denied' as const, started_at: undefined }] },
     { results: [] },
   ]) {
     let copies = 0; const clipboard = new ResultClipboard(() => copies++);
     clipboard.complete(state(patch as Partial<ToolState>)); clipboard.complete(state());
     assert.equal(copies, 0);
+  }
+});
+
+it('超时和已清理的单条停止命令自动复制真实部分输出，取消整批及清理中仍不复制', () => {
+  for (const status of ['failed', 'cancelled', 'done'] as const) {
+    const result = { ...command, status, data: { status: 'stopped', timed_out: status === 'failed', cleanup_pending: false, stdout: 'before-stop' } };
+    const copies: string[] = []; const clipboard = new ResultClipboard(text => copies.push(text));
+    const current = state({ results: [result] }); clipboard.complete(current); clipboard.complete(current);
+    assert.deepEqual(copies, [JSON.stringify({ protocol_version: 1, tool_results: [result] }, null, 2)]);
+    for (const blocked of [
+      state({ completion: { ...current.completion!, cancelled: true }, results: [result] }),
+      state({ results: [{ ...result, data: { ...result.data, cleanup_pending: true } }] }),
+    ]) {
+      const blockedCopies: string[] = []; new ResultClipboard(text => blockedCopies.push(text)).complete(blocked);
+      assert.equal(blockedCopies.length, 0);
+    }
   }
 });
 

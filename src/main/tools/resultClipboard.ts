@@ -1,4 +1,5 @@
 import type { ToolBatchError, ToolResult, ToolState } from '../../shared/toolProtocol';
+import { isCompletedStoppedCommand } from '../../shared/toolProtocol';
 
 /** 手动和自动复制使用同一回执；校验失败没有可信请求 ID，也没有执行结果。 */
 export function formatToolResults(results: ToolResult[], batchError?: ToolBatchError): string {
@@ -21,8 +22,9 @@ export class ResultClipboard {
     if (state.results.some(r => r.status === 'running' || r.status === 'pending_permission' ||
       r.tool === 'run_command' && (r.data as { status?: string } | undefined)?.status === 'running')) return;
     this.attempted = completion.id;
-    if (state.results.some(r => ['cancelled', 'unknown'].includes(r.status) || r.tool === 'run_command' && (r.data as { status?: string } | undefined)?.status === 'stopped') ||
-      !state.results.some(r => r.started_at !== undefined && ['done', 'failed'].includes(r.status))) return;
+    if (state.results.some(r => r.status === 'unknown' || r.status === 'cancelled' && !isCompletedStoppedCommand(r) ||
+      r.tool === 'run_command' && (r.data as { status?: string } | undefined)?.status === 'stopped' && !isCompletedStoppedCommand(r)) ||
+      !state.results.some(r => r.started_at !== undefined && ['done', 'failed'].includes(r.status) || isCompletedStoppedCommand(r))) return;
     try {
       this.copy(formatToolResults(state.results));
       this.notice = { id: completion.id, ok: true };

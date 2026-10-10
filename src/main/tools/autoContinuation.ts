@@ -1,6 +1,6 @@
 /** 自动继续消费当前完成批次或校验诊断；不执行工具、不读网页输入、不重试发送。 */
 import type { ToolContinuationState, ToolState } from '../../shared/toolProtocol';
-import { isBatchValidationFailure } from '../../shared/toolProtocol';
+import { isBatchValidationFailure, isCompletedStoppedCommand, isPermissionDenialReceipt } from '../../shared/toolProtocol';
 import type { ToolDiagnostic } from './harness';
 import { formatToolResults } from './resultClipboard';
 
@@ -41,7 +41,9 @@ export class AutoContinuation {
   }
   // 只拦执行层结果；解析层 batchError 由连续计数与上限单独处理。
   private blocked(state: ToolState): boolean {
-    return !!state.completion?.cancelled || state.results.some(result => ['permission_denied', 'cancelled', 'unknown'].includes(result.status) || result.tool === 'run_command' && (result.data as { status?: string } | undefined)?.status === 'stopped');
+    return !!state.completion?.cancelled || state.results.some(result => result.status === 'unknown' ||
+      result.status === 'cancelled' && !isCompletedStoppedCommand(result) ||
+      result.tool === 'run_command' && (result.data as { status?: string } | undefined)?.status === 'stopped' && !isCompletedStoppedCommand(result));
   }
   private bodyOf(state: ToolState): string {
     return formatToolResults(state.results, state.batchError);
@@ -94,8 +96,8 @@ export class AutoContinuation {
     }
     if (event.kind === 'diagnostic') this.observedDiagnostic = event.id; else this.observedCompletion = event.id;
     const corrective = event.kind === 'diagnostic' || isBatchValidationFailure(state);
-    const hasExecuted = state.results.some(result => result.started_at !== undefined && ['done', 'failed'].includes(result.status));
-    if (!hasExecuted && !corrective) {
+    const hasExecuted = state.results.some(result => result.started_at !== undefined && ['done', 'failed'].includes(result.status) || isCompletedStoppedCommand(result));
+    if (!hasExecuted && !corrective && !isPermissionDenialReceipt(state)) {
       this.change({ phase: 'waiting_user', message: '本批没有实际执行的工具，等待你处理' }); return;
     }
     if (corrective) {
