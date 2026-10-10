@@ -13,7 +13,7 @@ import type { LocalPromptOptions } from '../shared/localPrompt';
 import { app } from 'electron';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 export interface WorkspaceLayoutSettings {
   workspaceWidth: number;
@@ -188,9 +188,12 @@ export class SettingsStore {
       }
       if (migrating) {
         // 先保存旧文件全部字节，再替换生产设置；迁移失败时保留原设置并阻止静默降级。
-        const backup = `${this.file}.prompt-upgrade-backup.json`;
+        let backup = `${this.file}.prompt-upgrade-backup.json`;
+        if (fs.existsSync(backup) && fs.readFileSync(backup, 'utf8') !== raw) {
+          backup = `${this.file}.prompt-upgrade-backup.${createHash('sha256').update(raw).digest('hex')}.json`;
+        }
         if (fs.existsSync(backup)) {
-          if (fs.readFileSync(backup, 'utf8') !== raw) throw new Error('提示词升级备份已存在且内容不同，未覆盖原设置');
+          if (fs.readFileSync(backup, 'utf8') !== raw) throw new Error('提示词升级备份内容校验失败，未覆盖原设置');
         } else {
           fs.writeFileSync(backup, raw, { encoding: 'utf8', flag: 'wx' });
         }
