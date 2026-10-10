@@ -13,8 +13,8 @@ export interface ToolResult { batch_id: string; request_id: string; tool: ToolNa
 /** 批次不能通过校验时，尚无可信调用身份；不伪造工具名或请求 ID。 */
 export interface ToolBatchError { status: 'failed'; error: string }
 export interface ToolContinuationState { phase: 'off' | 'waiting_tools' | 'countdown' | 'sending' | 'waiting_reply' | 'waiting_user' | 'paused'; message: string; dueAt?: number }
-export interface ToolResultReturnState { canSend: boolean; attachmentCount: number; phase: 'ready' | 'sending' | 'sent' | 'paused'; message: string }
-export interface ToolState { config: ToolConfig; results: ToolResult[]; message: string; busy: boolean; storageError?: string; canUndo?: boolean; hasRunningProcesses?: boolean; batchError?: ToolBatchError; clipboard?: { id: number; ok: boolean; error?: string }; completion?: { id: number; batch_id: string; outcome: 'success' | 'error'; cancelled?: boolean; validation_failed?: true }; continuation?: ToolContinuationState; resultReturn?: ToolResultReturnState }
+export interface ToolResultReturnState { canSend: boolean; attachmentCount: number; phase: 'ready' | 'sending' | 'sent' | 'paused' | 'invalidated'; message: string }
+export interface ToolState { config: ToolConfig; results: ToolResult[]; message: string; busy: boolean; restored?: true; batchStart?: { id: number; batch_id: string }; storageError?: string; canUndo?: boolean; hasRunningProcesses?: boolean; batchError?: ToolBatchError; clipboard?: { id: number; ok: boolean; error?: string }; completion?: { id: number; batch_id: string; outcome: 'success' | 'error'; cancelled?: boolean; validation_failed?: true }; continuation?: ToolContinuationState; resultReturn?: ToolResultReturnState }
 /** run_command 已真实结束且进程清理完成时，stopped 回执才具备回传资格。 */
 export function isCompletedStoppedCommand(result: ToolResult): boolean {
   if (result.tool !== 'run_command' || result.started_at === undefined || result.finished_at === undefined) return false;

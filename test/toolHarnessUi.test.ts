@@ -36,6 +36,7 @@ function setup(overrides: Record<string, unknown> = {}, audioConstructor?: unkno
   let ready: () => void = () => {};
   let visibility: (state: any) => void = () => {};
   const calls: any[] = [];
+  const attentionEvents: any[] = [];
   const bridge = {
     async getToolState() { calls.push('get'); return current; },
     onToolState(fn: typeof publish) { publish = fn; },
@@ -50,22 +51,49 @@ function setup(overrides: Record<string, unknown> = {}, audioConstructor?: unkno
   };
   const window = { editorBridge: bridge, setupToolHarness: null as any, setupToolPanelLayout: () => ({ refresh() {} }), createToolExecutionClock: () => ({ replace() {} }), AudioContext: audioConstructor, addEventListener() {} };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/renderer/toolResultPresentation.js'), 'utf8'), { window });
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/renderer/toolAttention.js'), 'utf8'), { window });
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/renderer/toolCompletionSound.js'), 'utf8'), { window });
   const timers = new Map<number, () => void>();
   let timerId = 0;
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/renderer/toolHarness.js'), 'utf8'), {
-    window, setTimeout(callback: () => void) { timers.set(++timerId, callback); return timerId; },
+    window, CustomEvent: class { constructor(readonly type: string, readonly init: any) {} }, setTimeout(callback: () => void) { timers.set(++timerId, callback); return timerId; },
     clearTimeout(id: number) { timers.delete(id); }, document: {
       readyState: 'loading', getElementById(id: string) { return nodes[id]; }, createElement() { return element(); },
       addEventListener(name: string, handler: () => void) { if (name === 'DOMContentLoaded') ready = handler; },
+      dispatchEvent(event: any) { attentionEvents.push(event.init.detail); },
     },
   });
   ready();
-  return { nodes, calls, timers, visibility, expireFeedback() { for (const callback of [...timers.values()]) callback(); }, publish(value: any) { current = value; publish(value); } };
+  return { nodes, calls, attentionEvents, timers, visibility, expireFeedback() { for (const callback of [...timers.values()]) callback(); }, publish(value: any) { current = value; publish(value); } };
 }
 
 async function flush() { for (let i = 0; i < 8; i++) await Promise.resolve(); }
 const result = { batch_id: 'inspect', request_id: 'read', tool: 'read_file', status: 'done', data: { text: '真实文件内容' } };
+
+it('工具页只为新批准、失败或暂停发出一次打开事件，普通完成不抢占', async () => {
+  const ui = setup(); await flush();
+  ui.publish(state({ results: [result] })); assert.equal(ui.attentionEvents.length, 0);
+  const approval = state({ results: [{ ...result, status: 'pending_permission' }] });
+  ui.publish(approval); assert.equal(ui.attentionEvents.length, 1);
+  ui.nodes['tool-panel'].open = false;
+  ui.publish(approval); assert.equal(ui.attentionEvents.length, 1); assert.equal(ui.nodes['tool-panel'].open, false);
+  ui.publish(state({ results: [{ ...result, status: 'failed' }] }));
+  assert.equal(ui.attentionEvents.length, 2); assert.equal(ui.nodes['tool-panel'].open, true);
+  ui.publish(state({ continuation: { phase: 'paused', message: '官网已有草稿' } }));
+  ui.publish(state({ continuation: { phase: 'paused', message: '官网已有草稿' } }));
+  assert.equal(ui.attentionEvents.length, 3);
+});
+
+it('首次广播先于状态查询返回时仍作为历史基线，旧查询不能覆盖新状态', async () => {
+  let finish!: (value: any) => void;
+  const ui = setup({ getToolState: () => new Promise(resolve => { finish = resolve; }) });
+  ui.publish(state({ results: [{ ...result, status: 'failed' }] }));
+  assert.equal(ui.attentionEvents.length, 0);
+  finish(state()); await flush();
+  assert.equal(ui.nodes['tool-count'].textContent, '1 项');
+  ui.publish(state({ results: [{ ...result, batch_id: 'new', status: 'pending_permission' }] }));
+  assert.equal(ui.attentionEvents.length, 1);
+});
 
 function attachmentState(overrides: Record<string, unknown> = {}) {
   return state({

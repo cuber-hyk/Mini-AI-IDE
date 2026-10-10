@@ -16,12 +16,12 @@ function node() {
 const initial = () => ({ config: { permission: 'full', automatic: true, dirtyPolicy: 'ask', sendIntervalSeconds: 3, completionSound: false, autoCopyResults: true }, busy: false, hasProject: true });
 async function flush() { for (let i = 0; i < 15; i++) await Promise.resolve(); }
 function fixture(overrides: Record<string, unknown> = {}, AudioContext?: unknown) {
-  const ids = ['tool-send-interval', 'tool-interval-down', 'tool-interval-up', 'tool-dirty-policy', 'tool-completion-sound', 'tool-auto-copy', 'tool-clear-rules', 'tool-settings-notice', 'tool-permission-hint', 'tool-settings-close', 'btn-settings'];
+  const ids = ['tool-send-interval', 'tool-interval-down', 'tool-interval-up', 'tool-dirty-policy', 'tool-completion-sound', 'tool-auto-copy', 'tool-clear-rules', 'tool-settings-notice', 'tool-permission-hint', 'tool-settings-close'];
   const nodes = Object.fromEntries(ids.map(id => [id, node()])); let current = initial(), publish: (state: any) => void = () => {};
   const calls: unknown[] = [];
   const bridge = { getState: async () => current, onState(fn: typeof publish) { publish = fn; },
     async configure(patch: any) { calls.push(JSON.parse(JSON.stringify(patch))); current = { ...current, config: { ...current.config, ...patch } }; return current; },
-    async clearRules() { calls.push('clear'); return current; }, async openPrompt() { calls.push('prompt'); }, async close() { calls.push('close'); }, ...overrides };
+    async clearRules() { calls.push('clear'); return current; }, async close() { calls.push('close'); }, ...overrides };
   const document = { ...node(), activeElement: null as unknown, getElementById(id: string) { return nodes[id]; } };
   const window = { ...node(), toolSettingsBridge: bridge, AudioContext };
   const context = { window, document };
@@ -45,6 +45,7 @@ it('所有设置控件只在专用浮层模板存在，编辑器仅保留原生�
   const f = fixture();
   for (const id of Object.keys(f.nodes)) { assert.ok(native.includes('id="' + id + '"'), id); assert.ok(!editor.includes('id="' + id + '"'), id); }
   assert.match(editor, /id="tool-settings-toggle"/); assert.doesNotMatch(editor, /id="tool-settings-panel"/);
+  assert.doesNotMatch(native, /btn-settings|tool-settings-prompt|编辑提示词/);
 });
 
 it('浮层初始读取不写配置或预听，间隔加减按一秒保存且上下界禁用', async () => {
@@ -88,10 +89,10 @@ it('清除规则只由点击触发，无项目、忙碌及记录损坏时禁用'
   f.publish(initial()); await f.nodes['tool-clear-rules'].fire('click'); await flush(); assert.deepEqual(f.calls, ['clear']);
   assert.match(f.nodes['tool-settings-notice'].textContent, /已清除本项目/);
 });
-it('关闭与 Escape 调同一窄入口，编辑提示词通过独立入口打开', async () => {
+it('关闭与 Escape 调同一窄入口', async () => {
   const f = fixture(); await flush();
-  await f.nodes['tool-settings-close'].fire('click'); await f.document.fire('keydown', { key: 'Escape' }); await f.nodes['btn-settings'].fire('click');
-  assert.deepEqual(f.calls, ['close', 'close', 'prompt']);
+  await f.nodes['tool-settings-close'].fire('click'); await f.document.fire('keydown', { key: 'Escape' });
+  assert.deepEqual(f.calls, ['close', 'close']);
 });
 it('开启音效先保存，成功后只预听一次；重新读取及关闭不播放', async () => {
   const audio = audioMock(), f = fixture({}, audio.AudioContext); await flush();

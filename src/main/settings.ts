@@ -15,8 +15,6 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { randomUUID } from 'node:crypto';
 
-import { MAX_CUSTOM_FORMAT_SPEC_LENGTH, normalizeVariant, type FormatSpecVariant } from '../shared/formatSpec';
-
 export interface WorkspaceLayoutSettings {
   workspaceWidth: number;
   workspaceVisible: boolean;
@@ -43,24 +41,11 @@ export interface Settings {
   sidebarVisible: boolean;
   /** 左侧目录树宽度（像素） */
   sidebarWidth: number | null;
-  /**
-   * 当前使用的提示词版本（底部双段开关的状态）。'short' = 简洁版、'full' = 完整版。
-   *
-   * 为什么要持久化：否则每次重启都回到简洁版，想长期用完整版的人每次都得再拨一次。
-   */
-  formatSpecVariant: FormatSpecVariant;
-  /**
-   * 用户自定义的**简洁版**输出格式要求；null = 用内置简洁版。
-   *
-   * 为什么存整段文本而不是"在默认模板上打补丁"：默认模板会随版本演进
-   * （本项目已改过两轮围栏规则）。若存的是 diff/差异，模板一升级用户的补丁就会
-   * 错位、甚至拼出一个自相矛盾的规格。存整段文本的语义则永远清晰：
-   * 「这是用户此刻要用的那段」，升级默认模板**不会**悄悄改动用户已经写好的内容。
-   */
-  customFormatSpecShort: string | null;
-  /** 用户自定义的**完整版**输出格式要求；null = 用内置完整版。分版本各存一份，互不影响。 */
-  customFormatSpecFull: string | null;
-  /** 自定义格式要求的保存时间（ISO 字符串），仅用于面板回显"上次修改于…"。两版共用最后一次修改时间。 */
+  /** 唯一自定义输出格式原文；null 使用完整内置模板。 */
+  customFormatSpec: string | null;
+  /** 旧提示词配置已迁移；旧原文件独立备份，不参与运行。 */
+  formatSpecMigrationVersion: 1;
+  /** 自定义格式要求最后保存时间。 */
   customFormatSpecUpdatedAt: string | null;
 }
 
@@ -74,9 +59,8 @@ const DEFAULTS: Settings = {
   previewWidth: null,
   sidebarVisible: true,
   sidebarWidth: null,
-  formatSpecVariant: 'short',
-  customFormatSpecShort: null,
-  customFormatSpecFull: null,
+  customFormatSpec: null,
+  formatSpecMigrationVersion: 1,
   customFormatSpecUpdatedAt: null,
 };
 
@@ -166,10 +150,11 @@ export class SettingsStore {
   }
 
   private load(): Settings {
+    let migrating = false;
     try {
       if (!fs.existsSync(this.file)) return { ...DEFAULTS, recentRoots: [], workspaceRoots: [] };
       const raw = fs.readFileSync(this.file, 'utf8');
-      const parsed = JSON.parse(raw) as Partial<Settings>;
+      const parsed = JSON.parse(raw) as Partial<Settings> & Record<string, unknown>;
       const out: Settings = { ...DEFAULTS, recentRoots: [], workspaceRoots: [] };
       if (typeof parsed.lastRoot === 'string' && parsed.lastRoot.length > 0) out.lastRoot = parsed.lastRoot;
       out.recentRoots = normalizeRecentRoots(parsed.recentRoots);
@@ -188,44 +173,33 @@ export class SettingsStore {
       if (typeof parsed.sidebarWidth === 'number' && Number.isFinite(parsed.sidebarWidth) && parsed.sidebarWidth > 0) {
         out.sidebarWidth = Math.round(parsed.sidebarWidth);
       }
-      // 版本选择：只接受两个合法值，其余一律回落 'short'
-      out.formatSpecVariant = normalizeVariant(parsed.formatSpecVariant);
-      /*
-       * 自定义格式要求：**空字符串视同未设置**。
-       * 若允许空串，用户误清空内容就会得到"格式要求为空"的 prompt ——
-       * 提示词里缺了唯一让"一键同步"成立的那段约定，模型输出将无法被解析，
-       * 而这不会有任何报错（表现为"附带初始化的需求提交后 AI 的输出识别不出来"）。
-       * 因此空串一律回落默认值，与面板上的「恢复默认」语义保持一致。
-       */
-      const clampSpec = (v: unknown): string | null =>
-        typeof v === 'string' && v.trim().length > 0
-          ? v.slice(0, MAX_CUSTOM_FORMAT_SPEC_LENGTH)
-          : null;
-      out.customFormatSpecShort = clampSpec(parsed.customFormatSpecShort);
-      out.customFormatSpecFull = clampSpec(parsed.customFormatSpecFull);
-      /*
-       * 旧格式迁移：早期只有一个 `customFormatSpec`（覆盖一切版本）。
-       * 分版本后它没有归属，**只在两版都为空时**灌给「当前版本」那一格 ——
-       * 这样老用户升上来后他写的那段仍然生效，不会"升个级内容就没了"。
-       * 只读不写：不动 parsed，落盘会在用户下次保存时自然发生。
-       */
-      const legacy = clampSpec((parsed as Record<string, unknown>).customFormatSpec);
-      if (legacy) {
-        if (out.formatSpecVariant === 'full') {
-          if (!out.customFormatSpecFull) out.customFormatSpecFull = legacy;
-        } else if (!out.customFormatSpecShort) {
-          out.customFormatSpecShort = legacy;
-        }
+      const spec = (value: unknown): string | null =>
+        typeof value === 'string' && value.trim().length > 0 ? value : null;
+      migrating = parsed.formatSpecMigrationVersion !== 1 &&
+        ['formatSpecVariant', 'customFormatSpecShort', 'customFormatSpecFull', 'customFormatSpec'].some(key => key in parsed);
+      if (migrating) {
+        const selected = parsed.formatSpecVariant === 'full' ? parsed.customFormatSpecFull : parsed.customFormatSpecShort;
+        out.customFormatSpec = spec(selected) ?? spec(parsed.customFormatSpec);
+      } else {
+        out.customFormatSpec = spec(parsed.customFormatSpec);
       }
       if (typeof parsed.customFormatSpecUpdatedAt === 'string' && parsed.customFormatSpecUpdatedAt.length > 0) {
         out.customFormatSpecUpdatedAt = parsed.customFormatSpecUpdatedAt;
       }
+      if (migrating) {
+        // 先保存旧文件全部字节，再替换生产设置；迁移失败时保留原设置并阻止静默降级。
+        const backup = `${this.file}.prompt-upgrade-backup.json`;
+        if (fs.existsSync(backup)) {
+          if (fs.readFileSync(backup, 'utf8') !== raw) throw new Error('提示词升级备份已存在且内容不同，未覆盖原设置');
+        } else {
+          fs.writeFileSync(backup, raw, { encoding: 'utf8', flag: 'wx' });
+        }
+        this.save(out);
+      }
       return out;
     } catch (err) {
-      process.stderr.write(
-        `[settings] 读取失败，使用默认值：${err instanceof Error ? err.message : String(err)}\n`
-      );
-      return { ...DEFAULTS, recentRoots: [], workspaceRoots: [] };
+      if (migrating) throw new Error(`提示词设置升级失败（原配置保留）：${err instanceof Error ? err.message : String(err)}`);
+      throw new Error(`设置读取失败（原配置保留）：${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

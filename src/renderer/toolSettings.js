@@ -20,7 +20,7 @@
     if (!state) return;
     if (document.activeElement !== interval || saving) interval.value = String(state.config.sendIntervalSeconds);
     dirty.value = state.config.dirtyPolicy; sound.checked = state.config.completionSound; autoCopy.checked = state.config.autoCopyResults;
-    hint.textContent = state.storageError ? '工具记录未加载，设置不可用；仍可编辑提示词。' : {
+    hint.textContent = state.storageError ? '工具记录未加载，设置不可用。' : {
       ask: '项目内读取与搜索自动执行；修改与命令由 IDE 请求批准。',
       rules: '按本项目已记住的规则执行；未覆盖的调用由 IDE 请求批准。',
       full: '在当前 Windows 账户权限内执行，可访问项目外文件并运行联网命令。',
@@ -66,7 +66,6 @@
   });
   function close() { void bridge.close().catch(function (error) { message(String(error), true); }); }
   document.getElementById('tool-settings-close').addEventListener('click', close);
-  document.getElementById('btn-settings').addEventListener('click', function () { void bridge.openPrompt().catch(function (error) { message('打开提示词设置失败：' + String(error), true); }); });
   document.addEventListener('keydown', function (event) { if (event.key === 'Escape') { event.preventDefault(); close(); } });
   window.addEventListener('beforeunload', function () { audio.dispose(); });
   bridge.onState(receive); const initial = version;

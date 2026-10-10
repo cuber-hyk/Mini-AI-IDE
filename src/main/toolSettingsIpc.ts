@@ -23,7 +23,7 @@ export function registerToolSettingsIpc(ipc: Pick<IpcMain, 'handle'>, options: {
   editor: WebContents; panel: () => WebContents | null; current: () => boolean;
   viewport: () => { width: number; height: number }; getState: () => ToolSettingsState;
   open: (anchor: ToolSettingsAnchor) => Promise<void>; close: () => void;
-  configure: (patch: ToolSettingsPatch) => Promise<unknown>; clearRules: () => Promise<unknown>; openPrompt: () => void;
+  configure: (patch: ToolSettingsPatch) => Promise<unknown>; clearRules: () => Promise<unknown>;
 }): string[] {
   ipc.handle(CHANNELS.openToolSettings, async (event, ...args: unknown[]) => {
     if (event.sender !== options.editor || event.senderFrame !== options.editor.mainFrame) throw new Error('设置浮层仅供编辑器主 frame 打开');
@@ -34,7 +34,7 @@ export function registerToolSettingsIpc(ipc: Pick<IpcMain, 'handle'>, options: {
       anchor.x < 0 || anchor.y < 0 || anchor.width <= 0 || anchor.height <= 0 || anchor.width > 128 || anchor.height > 128 || anchor.x + anchor.width > viewport.width + 1 || anchor.y + anchor.height > viewport.height + 1) throw new Error('浮层定位必须位于当前编辑器视口内');
     await options.open(anchor);
   });
-  const actions = [CHANNELS.getToolSettingsState, CHANNELS.setToolSettings, CHANNELS.clearToolRules, CHANNELS.openToolPromptSettings, CHANNELS.closeToolSettings] as const;
+  const actions = [CHANNELS.getToolSettingsState, CHANNELS.setToolSettings, CHANNELS.clearToolRules, CHANNELS.closeToolSettings] as const;
   for (const channel of actions) ipc.handle(channel, async (event, ...args: unknown[]) => {
     const panel = options.panel();
     if (!panel || event.sender !== panel || event.senderFrame !== panel.mainFrame) throw new Error('设置操作仅供独立浮层主 frame 使用');
@@ -48,8 +48,7 @@ export function registerToolSettingsIpc(ipc: Pick<IpcMain, 'handle'>, options: {
       const state = options.getState();
       if (!state.hasProject || state.busy || state.storageError) throw new Error('当前不能清除项目规则');
       await options.clearRules();
-    } else if (channel === CHANNELS.openToolPromptSettings) { options.close(); options.openPrompt(); }
-    else if (channel === CHANNELS.closeToolSettings) options.close();
+    } else if (channel === CHANNELS.closeToolSettings) options.close();
     return options.getState();
   });
   return [CHANNELS.openToolSettings, ...actions];

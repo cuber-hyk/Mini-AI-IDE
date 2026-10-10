@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'none'; connect-src 'none'" />
-  <title>工具与提示词</title>
+  <title>工具设置</title>
   <link rel="stylesheet" href="./ui-tokens.css" />
   <link rel="stylesheet" href="./ui.css" />
   <link rel="stylesheet" href="./toolHarness.css" />
@@ -11,7 +11,7 @@
 </head>
 <body>
           <section id="tool-settings-panel" class="tool-settings-panel" role="dialog" aria-modal="false" aria-labelledby="tool-settings-heading" tabindex="-1">
-            <div class="tool-settings-head"><div><strong id="tool-settings-heading">工具与提示词</strong><p>更改自动保存</p></div><button id="tool-settings-close" type="button" class="ui-icon" aria-label="关闭设置">×</button></div>
+            <div class="tool-settings-head"><div><strong id="tool-settings-heading">工具设置</strong><p>更改自动保存</p></div><button id="tool-settings-close" type="button" class="ui-icon" aria-label="关闭设置">×</button></div>
             <p id="tool-settings-notice" class="tool-settings-notice" role="status" aria-live="polite"></p>
             <div class="tool-settings-body">
               <section class="tool-settings-group" aria-labelledby="tool-settings-execution"><h3 id="tool-settings-execution">执行与回传</h3>
@@ -30,9 +30,6 @@
               <section class="tool-settings-group" aria-labelledby="tool-settings-feedback"><h3 id="tool-settings-feedback">完成反馈</h3>
                 <label class="tool-setting-row tool-auto-label">工具完成音效<input id="tool-completion-sound" type="checkbox" disabled /></label>
                 <label class="tool-setting-row tool-auto-label" title="本批工具真正结束后复制整批结果一次">完成后自动复制结果<input id="tool-auto-copy" type="checkbox" disabled /></label>
-              </section>
-              <section class="tool-settings-group" aria-labelledby="tool-settings-prompt"><h3 id="tool-settings-prompt">提示词</h3>
-                <button id="btn-settings" type="button" class="ui-button tool-settings-link" title="编辑提示词与格式要求（Ctrl+Shift+P）"><span>编辑提示词与格式要求</span><span aria-hidden="true">›</span></button>
               </section>
               <section class="tool-settings-group" aria-labelledby="tool-settings-rules"><h3 id="tool-settings-rules">权限规则</h3>
                 <button id="tool-clear-rules" type="button" class="ui-button" disabled>清除本项目已记住规则</button>

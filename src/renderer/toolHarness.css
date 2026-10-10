@@ -1,7 +1,7 @@
 /* 紧凑工具面板与常用输入控件，仅作用于本地编辑器。 */
 .prompt-bar { flex: 0 0 auto; min-height: 0; max-height: 48vh; overflow-y: auto; padding: 8px; }
 .prompt-shell { background: var(--ui-surface); border-color: var(--ui-border); padding: 10px 12px; }
-.prompt-actions { flex-wrap: wrap; justify-content: flex-start; gap: 7px 10px; padding-top: 8px; border-top: 1px solid var(--ui-border); }
+.prompt-actions { flex-wrap: wrap; justify-content: flex-start; gap: 6px 8px; padding-top: 4px; border-top: 0; }
 .prompt-options { gap: 6px; }
 .tool-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
 .tool-permission-control { display: flex; align-items: center; gap: 5px; color: var(--ui-text); }
@@ -29,7 +29,7 @@
 .tool-settings-wrap > .ui-icon { display: grid; place-items: center; background: transparent; border-color: transparent; color: var(--ui-muted); }
 .tool-settings-wrap svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linejoin: round; }
 .tool-more { position: fixed; z-index: 110; border: 1px solid var(--ui-border); border-radius: 10px; background: var(--ui-surface); box-shadow: 0 12px 36px #0006; overflow: auto; }
-.tool-more[hidden], .tool-message[hidden], .tool-resizer[hidden], .tool-result-actions [hidden] { display: none; }
+.tool-more[hidden], .tool-message[hidden], .tool-result-actions [hidden] { display: none; }
 .tool-settings-head { display: flex; align-items: flex-start; justify-content: space-between; margin-bottom: 12px; }
 .tool-settings-head strong { font-size: 15px; }
 .tool-settings-head p { margin: 4px 0 0; font-size: 11px; color: var(--ui-muted); }
@@ -52,21 +52,20 @@
 .tool-interval .ui-button:focus-visible { outline: 1px solid var(--ui-accent); outline-offset: -2px; }
 .tool-settings-body .tool-auto-label { color: var(--ui-text); }
 .tool-settings-body .ui-button { text-align: left; }
-.tool-settings-link { display: flex; align-items: center; justify-content: space-between; width: 100%; }
 #tool-clear-rules { align-self: flex-start; color: var(--ui-warning); background: transparent; }
 .tool-permission-hint { border-top: 1px solid var(--ui-border); padding-top: 12px; }
-.prompt-actions .prompt-send { display: grid; place-items: center; width: 36px; height: 36px; flex: 0 0 36px; padding: 0; border-radius: 50%; margin-left: auto; }
+.prompt-actions .prompt-send { display: grid; place-items: center; width: 32px; height: 32px; flex: 0 0 32px; padding: 0; border-radius: 50%; margin-left: 0; }
 .prompt-send svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .prompt-send-spinner { display: none; width: 16px; height: 16px; border: 2px solid color-mix(in srgb, var(--ui-text) 35%, transparent); border-top-color: var(--ui-text); border-radius: 50%; }
 .prompt-send.is-sending .prompt-send-arrow { display: none; }
 .prompt-send.is-sending .prompt-send-spinner { display: block; animation: prompt-send-spin .8s linear infinite; }
 @keyframes prompt-send-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .prompt-send.is-sending .prompt-send-spinner { animation: none; } }
-.tool-dock { position: relative; flex: 0 0 auto; min-width: 0; background: var(--ui-bg); border-top: 1px solid var(--ui-border); }
-.tool-resizer { position: absolute; top: -3px; left: 0; right: 0; height: 6px; cursor: ns-resize; touch-action: none; z-index: 1; }
-.tool-resizer:hover, .tool-resizer:focus-visible, .tool-resizer.dragging { background: var(--ui-accent); outline: none; }
-.tool-panel { min-width: 0; }
-.tool-panel-summary { display: grid; grid-template-columns: 12px minmax(0, 1fr); grid-template-rows: 20px 20px; gap: 4px 2px; box-sizing: border-box; height: 61px; padding: 9px 10px 8px; cursor: pointer; color: var(--ui-text); line-height: 20px; list-style: none; }
+.tool-dock { position: relative; height: 100%; min-width: 0; background: var(--ui-bg); }
+.tool-panel { display: flex; flex-direction: column; height: 100%; min-width: 0; }
+.tool-panel::details-content { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.tool-panel:not([open])::details-content { display: none; }
+.tool-panel-summary { display: grid; flex: 0 0 61px; grid-template-columns: 12px minmax(0, 1fr); grid-template-rows: 20px 20px; gap: 4px 2px; box-sizing: border-box; height: 61px; padding: 9px 10px 8px; cursor: pointer; color: var(--ui-text); line-height: 20px; list-style: none; }
 .tool-panel-summary::-webkit-details-marker { display: none; }
 .tool-panel-summary::before { content: '▸'; grid-column: 1; grid-row: 1; }
 .tool-panel[open] > .tool-panel-summary::before { content: '▾'; }
@@ -103,7 +102,7 @@
 .tool-more button { display: block; width: 100%; border: 0; background: transparent; color: var(--ui-text); padding: 8px 10px; text-align: left; font: inherit; cursor: pointer; border-radius: var(--ui-radius); }
 .tool-more button:hover:not(:disabled) { background: var(--ui-bg); }
 .tool-more button:disabled { opacity: .45; cursor: default; }
-.tool-panel-body { overflow-y: auto; padding: 0 10px 8px; }
+.tool-panel-body { flex: 1; min-height: 0; overflow-y: auto; padding: 0 10px 8px; }
 .tool-message { margin: 0 0 8px; padding: 7px 0; color: var(--ui-muted); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .tool-message:empty { display: none; }
 .tool-message.is-error, .tool-activity.is-error { color: var(--warn); }

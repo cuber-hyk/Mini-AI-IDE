@@ -28,7 +28,7 @@ function editor() {
   const wrap = node(); const trigger = node(); const menu = node(); const root = node();
   const whole = node(); const snippet = node(); const doc = node();
   const nodes: Record<string, ReturnType<typeof node>> = {
-    'context-menu-wrap': wrap, 'btn-copy-context': trigger, 'context-menu': menu, 'root-label': root,
+    'context-menu-wrap': wrap, 'btn-copy-context': trigger, 'context-menu': menu, 'tree-root-path': root,
   };
   menu.querySelectorAll = () => [whole, snippet];
   wrap.contains = (value: unknown) => [wrap, trigger, menu, whole, snippet].includes(value as any);
@@ -42,18 +42,19 @@ function editor() {
   return { wrap, trigger, menu, root, whole, snippet, doc, toolbar, timers };
 }
 
-it('目录路径以末两级显示，完整路径保留在悬停提示', () => {
+it('项目路径只在目录区显示，完整路径保留在悬停提示', () => {
   const ui = editor(); ui.toolbar.renderRoot('C:\\Users\\胡运宽\\Desktop\\test');
-  assert.equal(ui.root.textContent, 'Desktop / test'); assert.equal(ui.root.title, 'C:\\Users\\胡运宽\\Desktop\\test');
-  ui.toolbar.renderRoot(null); assert.equal(ui.root.textContent, '未打开目录');
-  ui.toolbar.renderRoot('C:\\'); assert.equal(ui.root.textContent, 'C:');
+  assert.equal(ui.root.textContent, 'C:\\Users\\胡运宽\\Desktop\\test'); assert.equal(ui.root.title, 'C:\\Users\\胡运宽\\Desktop\\test');
+  ui.toolbar.renderRoot(null); assert.equal(ui.root.textContent, '未选择项目');
+  ui.toolbar.renderRoot('C:\\'); assert.equal(ui.root.textContent, 'C:\\');
 });
 
 function webbar(overrides: Record<string, unknown> = {}) {
-  const ids = ['bar', 'btn-collect', 'collect-status', 'btn-file-restore', 'btn-workspace-toggle'];
+  const ids = ['bar', 'btn-collect', 'collect-status', 'btn-file-restore', 'btn-workspace-toggle', 'tool-workspace-status', 'btn-tool-workspace'];
   const nodes = Object.fromEntries(ids.map(id => [id, node()]));
   nodes['btn-workspace-toggle'].hidden = false;
   let chrome: (value: unknown) => void = () => {};
+  let toolStatus: (value: unknown) => void = () => {};
   const widths: number[] = [];
   const bridge = {
     async restoreFileWorkspace() { return {}; },
@@ -61,13 +62,16 @@ function webbar(overrides: Record<string, unknown> = {}) {
     async setPreviewPanel(width: number) { widths.push(width); return { width, visible: width > 0 }; },
     async collectReply() { return { ok: true, blocks: [1, 2] }; },
     onChromeState(fn: typeof chrome) { chrome = fn; },
+    async getToolWorkspaceStatus() { return { phase: 'idle', message: '工具空闲', count: 0, automatic: false }; },
+    async openToolWorkspace() { return {}; },
+    onToolWorkspaceStatus(fn: typeof toolStatus) { toolStatus = fn; },
     ...overrides,
   };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/renderer/webbar.js'), 'utf8'), {
     window: { webbarBridge: bridge, setTimeout() {}, clearTimeout() {} },
     document: { getElementById(id: string) { return nodes[id]; } },
   });
-  return { nodes, widths, publish(value: unknown) { chrome(value); } };
+  return { nodes, widths, publish(value: unknown) { chrome(value); }, publishTools(value: unknown) { toolStatus(value); } };
 }
 
 it('官网顶栏在 DeepSeek 左侧固定提供工作区切换，不提供网页显隐或 Diff 布局接口', () => {
@@ -116,4 +120,26 @@ it('工作区切换按钮固定在 DeepSeek 左侧，文件区收起后提供单
   await ui.nodes['btn-file-restore'].fire('click'); assert.equal(restoredFiles, 1);
   ui.publish({ fileVisible: true, layout: { workspaceVisible: true } });
   assert.equal(ui.nodes['btn-file-restore'].hidden, true);
+});
+
+it('工具详情可从顶栏零参数恢复，状态广播只更新摘要不主动打开标签', async () => {
+  let opened = 0;
+  const ui = webbar({ openToolWorkspace: async (...args: unknown[]) => { assert.equal(args.length, 0); opened++; } });
+  ui.publishTools({ phase: 'approval', message: '工具需要批准', count: 2, automatic: true });
+  assert.equal(opened, 0); assert.equal(ui.nodes['tool-workspace-status'].textContent, '工具需要批准 · 2 项');
+  assert.equal(ui.nodes['tool-workspace-status'].classList.contains('warn'), true);
+  await ui.nodes['btn-tool-workspace'].fire('click'); assert.equal(opened, 1);
+  ui.publishTools({ phase: 'waiting_user', message: '等待需求或新的工具结果', count: 0, automatic: false });
+  assert.equal(ui.nodes['tool-workspace-status'].classList.contains('warn'), false);
+  assert.match(ui.nodes['tool-workspace-status'].title, /自动继续：关/);
+});
+
+it('首次状态查询迟到不能覆盖新广播，倒计时使用主进程 dueAt', async () => {
+  let resolve: (value: unknown) => void = () => {};
+  const ui = webbar({ getToolWorkspaceStatus: () => new Promise(yes => { resolve = yes; }) });
+  ui.publishTools({ phase: 'countdown', message: '工具结果等待回传', count: 1, automatic: true, dueAt: Date.now() + 3000 });
+  assert.match(ui.nodes['tool-workspace-status'].textContent, /3 秒后回传/);
+  resolve({ phase: 'idle', message: '工具空闲', count: 0, automatic: false });
+  await Promise.resolve();
+  assert.match(ui.nodes['tool-workspace-status'].textContent, /等待回传/);
 });

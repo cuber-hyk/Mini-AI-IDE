@@ -16,7 +16,7 @@
 
 通用工具协作先读 `docs/capabilities/tool-harness.md`、`docs/adr/2026-10-06-native-tool-harness-boundary.md`；入口为 `src/shared/toolProtocol.ts`、`src/main/tools/integration.ts`，执行及状态 owner 为同目录 files/processes/changes/harness/store/autoCollector，只读回复状态/快照为 replyObservation，隔离世界变化通知、历史DOM基线与用于取消旧回传的真实动作通知由 replyChangeWatcher 管理，UI 为 `src/renderer/toolHarness.js`。结束控件现场诊断可由用户在 IDE 内嵌 AI 网页 Console 手动执行 `tools/inspect-reply-state.js` 并返回结构文本。
 
-工具本地 UI 的尺寸、更多菜单、焦点和拖动由 `src/renderer/toolPanelLayout.js` 管理，纯结果摘要由 `src/renderer/toolResultPresentation.js` 管理；样式为 `src/renderer/toolHarness.css`，状态接线仍为 `toolHarness.js`。对应验收为 `test/toolPanelLayout.test.ts`、`test/toolResultPresentation.test.ts`、`test/toolHarnessUi.test.ts`。工具设置独立原生窗口的几何和生命周期由 `src/main/toolSettingsWindow.ts` 管理，窄 IPC 为 `toolSettingsIpc.ts`、`toolSettingsPreload.ts`，契约为 `src/shared/toolSettings.ts`，内容为 `src/renderer/toolSettings.html/js/css`，共用音效为 `toolCompletionSound.js`；配置 owner 仍为 tools/integration、harness、store。验证为 `test/toolSettingsWindow.test.ts`、`test/toolSettingsIpc.test.ts`、`test/toolSettingsUi.test.ts` 和 `src/main/workspaceProbe.ts`。
+右侧工具更多菜单的定位与焦点由 `src/renderer/toolPanelLayout.js` 管理，纯结果摘要由 `src/renderer/toolResultPresentation.js` 管理；样式为 `src/renderer/toolHarness.css`，状态接线仍为 `toolHarness.js`。工具关注事件判定与去重由 `src/renderer/toolAttention.js` 管理，文件／工具／改动标签由 `src/renderer/fileWorkspace.js` 和 `editorTabs.js` 管理；官网顶栏只读摘要与零参数打开工具入口由 `src/main/toolWorkspaceStatus.ts` 管理。对应验收为 `test/toolAttention.test.ts`、`test/toolWorkspaceStatus.test.ts`、`test/fileWorkspace.test.ts`、`test/toolPanelLayout.test.ts`、`test/toolResultPresentation.test.ts`、`test/toolHarnessUi.test.ts`。工具设置独立原生窗口的几何和生命周期由 `src/main/toolSettingsWindow.ts` 管理，窄 IPC 为 `toolSettingsIpc.ts`、`toolSettingsPreload.ts`，契约为 `src/shared/toolSettings.ts`，内容为 `src/renderer/toolSettings.html/js/css`，共用音效为 `toolCompletionSound.js`；配置 owner 仍为 tools/integration、harness、store。验证为 `test/toolSettingsWindow.test.ts`、`test/toolSettingsIpc.test.ts`、`test/toolSettingsUi.test.ts` 和 `src/main/workspaceProbe.ts`。
 
 工具实际文件变更由 `src/main/tools/changeReview.ts` 留存本批执行快照，`changes.ts` 提供实际修改与撤销事件，`integration.ts` 绑定项目／会话／批次；右侧文件正文的只读 Diff 界面为 `src/renderer/preview.*` 和 `src/main/previewPreload.ts`。回归入口为 `test/toolChangeReview.test.ts`、`test/toolReviewIntegration.test.ts`、`test/changeTree.test.ts`。文件树类型图标由 `src/renderer/fileIcons.js` 和 `fileExplorer.css` 管理。
 
@@ -61,7 +61,7 @@
 | 明确编辑协议与复制上下文 | `src/shared/returnPath.ts`、`snippet.ts`、`formatSpec.ts`；应用与基线 owner `src/main/returnPathService.ts`；默认面板资源由 `scripts/copy-static.mjs` 生成 |
 | 应用实现（P2 已落地） | `src/main/`、`src/renderer/`、`src/shared/`；脚本 `scripts/`；测试 `test/` |
 | 视图与入口对照（5 个 WebContentsView） | 官方网页、`src/renderer/index.html`（编辑器）、`preview.*`（变更查看）、`webbar.*`（中间官网常驻顶栏 / 只读采集）、独立提示词设置视图；preload 各自独立 |
-| 需求输入与版本切换 | `src/renderer/promptComposer.js`；结构/样式 `index.html`、`style.css`，状态与组装 owner `src/main/localPromptController.ts`、`preload.ts` |
+| 紧凑需求输入与单一提示词 | `src/renderer/promptComposer.js`；结构/样式 `index.html`、`style.css`，状态与组装 owner `src/main/localPromptController.ts`、`preload.ts`；单一模板 `src/shared/formatSpec.ts`，升级备份与设置 `src/main/settings.ts` |
 | 自动继续与限定结果回传 | `src/main/tools/autoContinuation.ts`、`webResultSender.ts`、`integration.ts`；本地验收 `tools/verify-web-result-sender.cjs` |
 | 目录和文件管理 | `src/main/workspaceService.ts`（当前根与工作区列表）、`src/renderer/workspaceNavigation.js`（左项目导航）、`workspaceController.ts`（统一入口）、`fileManagement.ts`（条目操作）、`editorSession.ts`（离开保护）；渲染 owner `src/renderer/fileExplorer.js`、`editorWorkspace.js`、`editorTabs.js` |
 | 自动化特征核验工具 | `tools/trace-verifier/` |

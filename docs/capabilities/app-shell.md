@@ -1,9 +1,9 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-08
+updated: 2026-10-10
 owner: 胡运宽
-source_of_truth: [docs/capabilities/skills-and-local-prompt.md, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, src/renderer/fileWorkspace.js, test/fileWorkspace.test.ts, docs/adr/2026-10-07-workspace-ui-shell-layout.md, src/main/workspaceLayoutController.ts, src/main/workspaceService.ts, src/renderer/workspaceLayout.js, src/renderer/workspaceNavigation.js, src/renderer/webbar.html, src/renderer/webbar.js, src/renderer/webbar.css, src/main/webbarPreload.ts, src/shared/contract.ts, test/workspaceLayoutController.test.ts, src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, tools/verify-web-result-sender.cjs, src/renderer/preview.css, src/main/previewPreload.ts, test/changeTree.test.ts, docs/adr/2026-10-02-honest-electron-identity.md, docs/adr/2026-10-02-filesystem-permission-model.md, DESIGN.md, design-tokens.json, src/main/windowLayout.ts, src/main/layoutProbe.ts, src/main/tools/changeReview.ts, src/renderer/preview.js, src/renderer/editorToolbar.js, src/renderer/ui.css, test/windowLayout.test.ts, test/toolChanges.test.ts, test/editorToolbar.test.ts, src/main/index.ts, src/renderer/index.html, src/renderer/style.css, src/renderer/promptComposer.js, test/promptComposer.test.ts, src/renderer/toolPanelLayout.js, test/toolPanelLayout.test.ts, src/main/workspaceController.ts, src/main/workspaceProbe.ts, src/renderer/fileExplorer.js, src/renderer/fileIcons.js, src/renderer/fileExplorer.css, src/renderer/editorTabs.js, src/renderer/editorWorkspace.js, test/editorWorkspace.test.ts, test/fileExplorer.test.ts, test/fileIcons.test.ts, test/workspaceController.test.ts]
+source_of_truth: [src/main/toolWorkspaceStatus.ts, src/renderer/toolAttention.js, test/toolWorkspaceStatus.test.ts, test/toolAttention.test.ts, src/main/settings.ts, test/promptSettingsMigration.test.ts, docs/capabilities/skills-and-local-prompt.md, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, src/renderer/fileWorkspace.js, test/fileWorkspace.test.ts, docs/adr/2026-10-07-workspace-ui-shell-layout.md, src/main/workspaceLayoutController.ts, src/main/workspaceService.ts, src/renderer/workspaceLayout.js, src/renderer/workspaceNavigation.js, src/renderer/webbar.html, src/renderer/webbar.js, src/renderer/webbar.css, src/main/webbarPreload.ts, src/shared/contract.ts, test/workspaceLayoutController.test.ts, src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, tools/verify-web-result-sender.cjs, src/renderer/preview.css, src/main/previewPreload.ts, test/changeTree.test.ts, docs/adr/2026-10-02-honest-electron-identity.md, docs/adr/2026-10-02-filesystem-permission-model.md, DESIGN.md, design-tokens.json, src/main/windowLayout.ts, src/main/layoutProbe.ts, src/main/tools/changeReview.ts, src/renderer/preview.js, src/renderer/editorToolbar.js, src/renderer/ui.css, test/windowLayout.test.ts, test/toolChanges.test.ts, test/editorToolbar.test.ts, src/main/index.ts, src/renderer/index.html, src/renderer/style.css, src/renderer/promptComposer.js, test/promptComposer.test.ts, src/renderer/toolPanelLayout.js, test/toolPanelLayout.test.ts, src/main/workspaceController.ts, src/main/workspaceProbe.ts, src/renderer/fileExplorer.js, src/renderer/fileIcons.js, src/renderer/fileExplorer.css, src/renderer/editorTabs.js, src/renderer/editorWorkspace.js, test/editorWorkspace.test.ts, test/fileExplorer.test.ts, test/fileIcons.test.ts, test/workspaceController.test.ts]
 ---
 
 # 能力：应用外壳与进程架构
@@ -43,27 +43,27 @@ source_of_truth: [docs/capabilities/skills-and-local-prompt.md, src/main/localPr
 | **main** | 窗口与分栏布局、IPC 路由、本地文件读取、会话分区配置、提示词设置的持久化、启动自检、安装版软件更新 | 绝不发起或代理大模型相关网络请求；限定需求/结果写入共用 WebComposerSender，见技能/本地需求及结果回传 ADR；更新模块专用网络例外见 `application-update.md` 与 ADR-0005 |
 | **editor renderer**（`persist:editor-ui`） | 铺满窗口的本地工作区外壳，含项目导航、Monaco、文件树、工具结果与需求编写 | `nodeIntegration:false`、`contextIsolation:true`、`sandbox:true`；无文件系统能力；CSP `connect-src 'none'` |
 | **webview renderer**（`persist:postcheck`） | 加载目标平台网页 | 顶级独立视图；无本地桥。隔离世界 1004 只读采集，1005 仅回传当前真实工具结果，不开放任意网页操作 |
-| **webbar renderer**（`persist:editor-ui`） | 中间网页区顶部工具条：只读采集、切换左侧工作区、恢复收起的文件区 | 只能请求只读采集、单一工作区切换和文件区恢复；不能读写文件或向网页写入内容。不提供通用布局入口 |
+| **webbar renderer**（`persist:editor-ui`） | 中间网页区顶部工具条：只读采集、紧凑工具状态与查看工具、切换左侧工作区、恢复收起的文件区 | 只能请求只读采集、单一工作区切换、文件区恢复、零参数工具摘要查询与工具标签打开；不能读写文件或向网页写入内容。不提供通用布局入口 |
 | **preview renderer**（`persist:editor-ui`） | 右文件区正文的只读变更查看：文件筛选、实际修改前后差异和执行状态；最右目录树不被覆盖 | 无文件读取／应用入口；撤销请求复用原工具 owner，不能扩大写盘能力 |
-| **prompt renderer**（`persist:editor-ui`） | 提示词设置面板（覆盖式浮层，默认隐藏）：**分页查看/编辑两套版本的「输出格式要求」** | 只能读/写**这一份设置**（5 个通道）；不能读写文件、不能碰网页。**为什么单独开一个视图**：编辑器渲染进程持有文件写权限，而"编辑一段纯文本"不需要任何文件能力——不把提权面顺手扩大 |
+| **prompt renderer**（`persist:editor-ui`） | 提示词设置面板（覆盖式浮层，默认隐藏）：**查看/编辑一份自定义「输出格式要求」** | 只能读/写**这一份设置**（4 个通道）；不能读写文件、不能碰网页。**为什么单独开一个视图**：编辑器渲染进程持有文件写权限，而"编辑一段纯文本"不需要任何文件能力——不把提权面顺手扩大 |
 
 ## 布局规则（项目导航、AI 协作与文件工作区）
 
 ```text
-多项目工作区 │ AI 官网顶栏                 │ 文件头 / 文件与改动标签
-添加 / 搜索  │ 官网对话与官网输入框          │ 编辑／Diff 正文          │ 项目目录树
-项目列表     │ 本地工具摘要、详情与需求编写    │                         │ （最右）
+多项目工作区 │ AI 官网顶栏 / 工具状态与入口  │ 文件／工具／改动标签
+添加 / 搜索  │ 官网对话与官网输入框          │ 编辑／工具／Diff 正文    │ 项目目录树
+项目列表     │ 按需展开的本地需求编写         │                        │ （最右）
 ```
 
 - `windowLayout.ts` 的 `computeLayout(width, height, options)` 是几何唯一入口，`WorkspaceLayoutController` 应用原生矩形、处理显隐与持久化并广播 `ui:chrome-state`；本地 `workspaceLayout.js` 消费矩形、处理分隔条和 dock 高度测量。
 - 本地 `editorView` 覆盖全窗口作为底层外壳，独立 `webbarView`、`webView` 和 `previewView` 只覆盖各自的精确矩形；网页与本地编辑器仍处于不同渲染进程，不能用 iframe 替代。
-- 布局状态包含 `workspaceWidth/workspaceVisible`、`fileWidth/fileVisible`、`treeWidth/treeVisible`、`dockHeight` 和 `previewVisible`。项目栏、文件区和目录树展开宽度与显隐保存于 `settings.workspaceLayout`；工具区高度和当前改动标签显示状态不进入该持久设置。
+- 布局状态包含 `workspaceWidth/workspaceVisible`、`fileWidth/fileVisible`、`treeWidth/treeVisible`、`dockHeight`、`previewVisible` 和 `toolsVisible`。项目栏、文件区和目录树展开宽度与显隐保存于 `settings.workspaceLayout`；需求 dock 高度、工具与改动标签显示状态不进入该持久设置。
 - 默认项目栏 240px、文件区 700px、最右树 190px；实际值由窗口预算钳制。项目栏隐藏后宽度归零，网页顶栏左侧保留恢复入口，网页与底部 dock 延伸到窗口左边缘；文件区隐藏后在网页顶栏右侧保留恢复入口。目录树随文件区隐藏但不丢自身显隐偏好；窄窗口先让辅助区域缩小，所有矩形均不得越界或为负。
-- 常规布局中间官网显示，文件区全屏时临时隐藏官网与本地协作 dock，退出后恢复；网页顶栏在 DeepSeek 文案左侧固定显示工作区切换按钮，并提供文件区收起后的恢复入口。工作区收起时宽度归零，网页与 dock 铺到窗口左边缘；不提供网页显隐按钮、菜单、快捷键或通用布局 IPC。文件区全屏时网页顶栏隐藏，左侧工作区保留折叠/展开入口。dock 展示本批工具摘要、可展开详情、权限、自动继续和按需展开的本地需求编写；官网输入框由官网自身管理，本地需求经 Enter 或发送按钮提交。
-- 右侧文件与只读“本批改动”使用同一个标签栏和正文区域，项目目录树始终在其右侧。左侧当前工作区决定目录树根；右侧不提供打开目录、开始编辑或最近目录欢迎页。通过本地工具区“查看改动”按需打开改动标签，标签可关闭并重新打开；工具执行完成不自动抢走文件编辑区域；切换文件不重建 Monaco 模型，关闭改动标签不撤销工具操作或丢弃批次结果。原生预览矩形只覆盖正文，不覆盖文件头、工具栏、标签或目录树；切换文件或关闭改动标签回到可编辑文件。主动“展开查看”临时拓宽文件区，关闭或恢复时还原，临时宽度不持久化。
+- 常规布局中间官网显示，文件区全屏时临时隐藏官网与本地协作 dock，退出后恢复；网页顶栏在 DeepSeek 文案左侧固定显示工作区切换按钮，并提供文件区收起后的恢复入口。工作区收起时宽度归零，网页与 dock 铺到窗口左边缘；不提供网页显隐按钮、菜单、快捷键或通用布局 IPC。文件区全屏时网页顶栏隐藏，左侧工作区保留折叠/展开入口。dock 仅保留按需展开的本地需求编写及其附件、初始化、权限、自动继续、设置和发送操作，顶栏展示真实工具摘要及“查看工具”入口；官网输入框由官网自身管理，本地需求经 Enter 或发送按钮提交。
+- 右侧文件、可关闭的“工具”与只读“本批改动”使用同一个标签栏和正文区域，项目目录树始终在其右侧。左侧当前工作区决定目录树根；右侧不提供打开目录、开始编辑或最近目录欢迎页。通过工具标签“查看改动”按需打开改动标签，标签可关闭并重新打开；真实新批次开始时工具页未显示则自动打开，已显示时保留阅读位置；同批普通进度和成功完成不切换标签；新批准请求、执行失败或回传暂停自动恢复文件区、切换工具并展开相关内容，同一事件只触发一次，初始化、历史恢复与重复广播不触发；切换文件不重建 Monaco 模型，关闭工具或改动标签仅隐藏对应展示，不停止执行、撤销工具操作或丢弃结果及阅读位置；关闭非活动标签不切离当前正文。原生预览矩形只覆盖正文，不覆盖文件头、工具栏、标签或目录树；切换文件或关闭改动标签回到可编辑文件。主动“展开查看”临时拓宽文件区，关闭或恢复时还原，临时宽度不持久化。
 - Diff 连续展示当前批次真实 before/after、增删统计及逐项执行状态，支持筛选、未改上下文展开与换行；快照不随后续编辑变化，不提供重复应用或第二条写盘路径，撤销复用工具 owner。
 - 项目切换保留当前官网页面，沿用未保存确认和当前工具作用域失效保护；列表注册不增加文件权限。本次不实现会话绑定、每项目独立网页或后台 AI 并行。
-- `ui:set-workspace-layout` 仅接受编辑器主 frame 的白名单字段；webbar 只允许切换工作区或恢复文件区，preview 保留原窄接口，官网及所有子 frame 不能更改通用布局或文件。实际权限以控制器和 preload 为准。
+- `ui:set-workspace-layout` 仅接受编辑器主 frame 的白名单字段；webbar 只允许切换工作区、恢复文件区、查询精简工具状态与打开工具标签，preview 保留原窄接口，官网及所有子 frame 不能更改通用布局或文件。实际权限以控制器和 preload 为准。
 - 本地主题参考 deepseek-harness 的中性深灰层级，背景、侧栏、控件、悬停、选中及边界由 `design-tokens.json` 统一定义；Monaco 与提示词面板同源取色，官网 CSS 与主题保持官网自身行为。基础样式参见 `DESIGN.md`、`design-tokens.json` 与 `ui.css`。纯几何、控制器测试及原生布局探针分别覆盖边界、权限/持久化和 Electron 遮挡；验收结果以当次报告为准，不以示意图代替。
 
 ### 提示词设置面板（覆盖式浮层）
@@ -74,7 +74,7 @@ source_of_truth: [docs/capabilities/skills-and-local-prompt.md, src/main/localPr
   窗口 resize 时只重算它自己 —— **不调 `relayout()`**，否则打开面板就会把用户拖好的分栏宽度悄悄改掉。
 - 显示/隐藏靠 `setVisible` + `bounds` 移到屏幕外的零尺寸位置（`PROMPT_HIDDEN_BOUNDS`）；关闭后把键盘焦点交还编辑器。
 - **在 `addChildView` 顺序里最后添加**（最上层），否则会被编辑器/网页盖住。
-- **三个入口汇聚到 `showPromptPanel()`**：① 设置菜单的「修改提示词…」；② 文件菜单的同名行；③ 输入区设置浮层的「编辑提示词与格式要求」。快捷键 `CmdOrCtrl+Shift+P`。
+- **两个菜单入口汇聚到 `showPromptPanel()`**：① 设置菜单的「修改提示词…」；② 文件菜单的同名行。快捷键 `CmdOrCtrl+Shift+P`。
   显示后主进程广播 `ui:open-prompt-panel` 给编辑器，由它点亮提示词编辑入口的激活态（面板是独立进程，编辑器看不到它）。
 - 面板文案明确写清"改的是**输出格式要求那一段**"，因为 `## 用户需求 / ## 工作环境 / ## 目录结构` 是由程序生成、不应由用户改的骨架。
 
@@ -161,22 +161,22 @@ source_of_truth: [docs/capabilities/skills-and-local-prompt.md, src/main/localPr
 | 项 | 取值 |
 |---|---|
 | 可编辑性 | **默认可编辑**（不设 `readOnly`）；Ctrl+S 保存 |
-| 未保存标记 | 文件头右侧**白点**（有改动才显示）+ 工具栏 `● 未保存` |
+| 未保存标记 | 文件标签中的未保存点（有改动才显示） |
 | 自动换行 | `wordWrap: 'on'`（长行不再横向滚动） |
 | 字体 / 行高 | Cascadia Code → Consolas → 等宽回退；字号 14 / 行高 22 |
 | 可读性辅助 | 缩进参考线、括号配色、当前行高亮、行号宽度自适应、统一深色滚动条 |
 | 目录树交互 | 点击文件夹原地展开／收起；手动刷新保留有效展开状态，切换根目录清空；点击文件打开或激活已有标签并高亮，切换保留草稿 |
-| 目录树显隐 | 编辑器顶部条左侧**图标按钮**（高亮=当前可见）+ `Ctrl+B` |
-| 编辑／Diff 切换 | 共用文件正文区域；最右目录树保持独立，Diff 为当前批次只读快照 |
+| 目录树显隐 | 目录标题栏收起，隐藏后标签栏恢复按钮 + `Ctrl+B` |
+| 编辑／工具／Diff 切换 | 共用文件正文区域；最右目录树保持独立，Diff 为当前批次只读快照 |
 
-> 操作按区域归属：项目导航在左侧，采集在中间网页顶栏，工具结果与需求编写在中间 dock，目录树、编辑／Diff 和选区浮动复制在右侧；文件修改由工具统一执行。
+> 操作按区域归属：项目导航在左侧，采集在中间网页顶栏，工具状态与入口在中间顶栏、需求编写在中间 dock，工具详情在右侧工具标签，目录树、编辑／Diff 和选区浮动复制在右侧；文件修改由工具统一执行。
 
 | **跨容器自己算 Monaco 坐标必然错位 —— 一律用 `IContentWidget`** | 浮层曾挂在编辑器**外部**的 `.editor-wrap` 上，用 `getTopForLineNumber()` / `getOffsetForColumn()` 自己算 `style.left/top`。这两个 API 返回的是**编辑器视口内**坐标，而编辑器自己是独立滚动容器 —— 一滚动两套坐标系就脱节。叠加 `wordWrap`：`end.lineNumber` 是**逻辑行**，但该行可能折成多个**视觉行**，取到的是**第一视觉行**的 top。结果是代码文件"歪着出现"、**markdown 长段落干脆不出现**（用户两次反馈"文本文件没有复制按钮"）。前两轮分别归因于`getPositionAt` 参数类型、原生 `title`，都只修到表象 | 定位**整个交给 Monaco**：用 `editor.addContentWidget()` 注册浮层，`getPosition()` 只返回 `{ position, preference }`（锚在选区末端的行尾 = 用户要的"右端行右上角"），滚动时只调 `editor.layoutContentWidget()`。配套三条：`preference: [ABOVE, BELOW]` 让 Monaco 自己选不遮挡的一侧；`suppressMouseDown: true` 防止点按钮时编辑器抢焦点导致选区丢失（否则复制到的是整篇文件）；显隐走 class，**一个 `style` 都不写** |
 | **`title` 闪烁的根因不是「写多了次」，是「在高频事件里重排 DOM」** | 原生 tooltip 在元素位置/样式**发生任何变化**时失效并重新计时。此前 `place()` 已加了"位置未变就return"，闪烁依旧——因为查找过程中 `onDidChangeCursorSelection` 本来就频繁触发，位置**一直在变**。此时任何一次 `style` 写入都会让旁边查找框的 `Close (Escape)` 面板反复重建（用户两次反馈"仍然有闪烁"）。**只优化写入次数治不了这个** | 断掉因果链，而不是减少次数：改用 `IContentWidget` 后**完全不写 style**，重排不再发生。同时浮层自身也不用 `title`（改 `aria-label`），避免它自己成为下一个闪烁源 |
 | **删按钮时别把能力一起删掉** | 「保存 (Ctrl+S)」按钮按用户意见移除时，若连 `el.btnSave` 的引用与监听一并清掉，容易顺手把 `Ctrl+S` 的快捷键注册也弄丢 | 按钮移除与快捷键注册是**两件事**：后者注册在 Monaco 上（`KeyMod.CtrlCmd \| KeyCode.KeyS`），必须保留。自检 U5 断言「按钮没了 **且** 快捷键还在」 |
 | **自检的"通道清单"是手工维护的，漏一条就误报"未注册"** | `ipc.ts` 里 `registerFileIpc()` 返回一个通道数组供自检 E1 核对（Electron **没有**公开的"已注册通道"查询接口，只能这样声明）。后加 `ui:step-diff` 时只改了 `contract.ts`、没同步这个数组 → E1 报"未注册"，而 `index.ts` 早注册了。**断言失败要先分清是"实现缺了"还是"清单漂了"**，否则会去改本来正确的业务代码 | 三处清单必须同步：`contract.ts`（常量）、`ipc.ts` 返回数组（双向通道）、`selfTest.ts` 的 `oneWayChannels`（主进程 → 渲染进程的单向通道，只有 `webContents.send` 没有 `handle`）。另：多渲染进程后 E2 不能只扫 `preload.js` —— `preview:active-diff` 属于**预览面板**的桥，编辑器 preload 里没有它是正确的。**每个 preload 一起扫**（`preloadFiles`），通道名前缀也要覆盖 `preview:` / `ui:` |
 | **`const` 没有提升：自检里的"源码读取"必须放在 try 块最前** | Y 组（提示词面板）要用 `mainTs`/`preloadTs`，而这两行原本写在 Q 组附近（Y 组之后）。运行到 Y 组时 `const` 还在 TDZ，直接抛 `ReferenceError` → **整份自检报告退化成一条 FAIL**，看起来像"面板全错" | 所有 `fs.readFileSync(...src...)` 的**源码读取集中到 try 块开头**，后续分组只消费变量。这类"变量声明顺序"错误在 `tsc` 里看不出来（类型都对，只是运行时顺序不对） |
-| **用户可改的配置，必须保证"空值 = 回落默认"** | 提示词里的「输出格式要求」是**让一键同步成立的那份约定**。若允许用户保存成空串，提示词里就少了这一段，模型输出无法被解析 —— 而这**不会有任何报错**，表现为"附带初始化的需求提交后 AI 的输出识别不出来"，排查成本极高 | 双层兜底：① `SettingsStore.load()` 里空串**视同未设置**；② `savePromptSpec` 里空内容**视同恢复默认**（面板文案同步说明）。核心是 `resolveFormatSpec(customs, variant)`（`customs` 是**按版本**的 `{ short, full }`）：空白一律回落内置默认。另：`getFormatSpec()` 保持**纯粹**（不读设置），自定义只经 `resolveFormatSpec` 注入，测试因此不需要准备设置文件 |
+| **用户可改的配置，必须保证"空值 = 回落默认"** | 提示词里的「输出格式要求」是**让一键同步成立的那份约定**。若允许用户保存成空串，提示词里就少了这一段，模型输出无法被解析 —— 而这**不会有任何报错**，表现为"附带初始化的需求提交后 AI 的输出识别不出来"，排查成本极高 | 双层兜底：① `SettingsStore.load()` 里空串**视同未设置**；② `savePromptSpec` 里空内容**视同恢复默认**（面板文案同步说明）。核心是 `resolveFormatSpec(custom)`（单一自定义字符串）：空白一律回落内置默认。另：`getFormatSpec()` 保持**纯粹**（不读设置），自定义只经 `resolveFormatSpec` 注入，测试因此不需要准备设置文件 |
 | **"恢复默认"不能一键直接落库** | 用户辛苦写的格式约定若被一次误点瞬间清空，且不可撤销 | 「恢复默认」只把默认全文**载入编辑框**，仍需再点「保存」才生效；取消/关闭即什么都没变。自检 Y4 直接读 `resetToDefault()` 的函数体，断言它是"写编辑框"而不是"调 `bridge.reset()`" |
 
 > 目录树早期实现是"每次列一层、整表替换"，没有返回上级的途径，已被判定为交互缺陷
@@ -186,20 +186,19 @@ source_of_truth: [docs/capabilities/skills-and-local-prompt.md, src/main/localPr
 
 | 项 | 取值 |
 |---|---|
-| 布局 | 中间 dock 的“编写需求”默认收起，展开显示文本框与发送按钮；紧凑操作栏保留版本、权限、自动继续与设置，窄列换行 |
+| 布局 | 中间 dock 的“编写需求”默认收起，仅显示标题；展开显示文本框及单行操作栏，合并附件加号、初始化选项、权限、自动继续、设置与发送，窄列换行；收起保留草稿、技能及附件 |
 | 外壳 | 单层低对比边框，聚焦时高亮，不叠加外圈描边 |
 | 高度 | 文本框最小 44px、最大 220px；上限随视口与操作栏实际高度收缩。输入、粘贴、拖入、缩放和操作栏换行后重算，超出上限滚动 |
-| 高度预算 | 输入区最多占视口高度 48%，为操作栏及内边距预留空间；工具面板随输入高度收缩并保留官网阅读空间，长输入不裁切底部控件 |
-| 版本切换 | 「简洁 / 完整」分段控件，点击按钮或聚焦容器后按 Space / Enter 切换；主进程持久化 `formatSpecVariant`，重启后恢复 |
-| 开关改什么 | 附带初始化提示词时使用的输出格式要求；简洁为 6 个示例，完整为 14 个示例；两版自定义互不影响 |
-| 自定义标记 | 当前版本有非空自定义提示词时显示小圆点，悬停说明；主进程保存、清空、恢复默认与切换后广播布尔状态 |
-| 提示词设置 | 操作栏齿轮打开工具设置浮层，其中提示词编辑按钮打开原有独立视图；菜单入口与 Ctrl+Shift+P 保留 |
+| 高度预算 | 输入区最多占视口高度 48%，为操作栏及内边距预留空间；仅需求区参与 dock 高度测量，右侧工具列表与菜单不压缩官网阅读空间，长输入不裁切底部控件 |
+| 有效提示词 | 单一完整内置模板与一份自定义内容；自定义原文作为补充，强制工具协议始终附带 |
+| 自定义标记 | 有非空自定义提示词时显示小圆点，悬停说明；主进程保存、清空或恢复默认后广播 `isCustom` |
+| 提示词设置 | 应用设置或文件菜单的「修改提示词…」打开原有独立视图，Ctrl+Shift+P 保留；操作栏齿轮只打开工具设置 |
 | 复制反馈 | 固定宽度的紧凑按钮，成功暂显「已复制」；失败提示原因并恢复可操作，需求为空时聚焦输入框 |
-| 状态一致性 | 启动读取真实状态；切换或复制期间阻止重复操作；切换失败保留实际版本，状态未知时禁止复制 |
+| 状态一致性 | 启动读取真实提示词状态；读取失败保留错误反馈并禁止提交，不猜测自定义状态 |
 
 输入区行为由 `src/renderer/promptComposer.js` 唯一负责，`renderer.js` 初始化并接入信息栏。
-工具面板与浮层内部高度预算由 `src/renderer/toolPanelLayout.js` 管理，中间 dock 实测高度由 `src/renderer/workspaceLayout.js` 上报主进程，纯摘要由 `src/renderer/toolResultPresentation.js` 管理；权限、执行状态与结果复制接线见 `docs/capabilities/tool-harness.md`。目录树宽度在窄列时钳制，为编辑器保留空间。
-`ui:get-prompt-status` 查询版本及两版自定义布尔值，`ui:prompt-status` 推送相同结构；编辑器不读取提示词全文。
+工具更多菜单在右侧正文中的定位由 `src/renderer/toolPanelLayout.js` 管理，中间 dock 实测高度由 `src/renderer/workspaceLayout.js` 上报主进程，纯摘要由 `src/renderer/toolResultPresentation.js` 管理；权限、执行状态与结果复制接线见 `docs/capabilities/tool-harness.md`。目录树宽度在窄列时钳制，为编辑器保留空间。
+`ui:get-prompt-status` 查询单一 `isCustom`，`ui:prompt-status` 推送相同结构；编辑器不读取提示词全文。首次升级保留当前生效的自定义内容，旧设置原始字节先写入 `settings.json.prompt-upgrade-backup.json`（包括另一份自定义），再原子保存新设置；没有自定义时采用完整内置模板。备份或读取失败明确阻止升级，不覆盖原文件或截断用户内容。
 需求提示词由 `LocalPromptController` 统一组装，用户可通过本地 Enter 或发送按钮主动提交到官网空输入框；初始化是否附带由用户手动选择并持久保存。本地 `/` 技能选择由 `localPrompt.js` 管理，详见 `skills-and-local-prompt.md`；本批工具结果仍由独立 automatic 设置控制回传。
 
 ## 代码入口
@@ -234,9 +233,9 @@ node scripts/install-electron.mjs   # 走镜像；或从 tools/ 复制已有二�
 
 ### 文件与目录顶栏
 
-文件标签与面板操作位于编辑区首行，项目路径位于第二行；最右目录面板从顶部起显示文件标题、收起按钮、项目路径与创建/刷新操作，目录正文与编辑正文顶边对齐。项目路径由左侧当前工作区同步，超长截断并提供完整悬停路径，不增加目录选择入口。
+文件、工具与本批改动共用顶部标签栏，正文直接接在标签栏下方，不保留第二行项目路径栏。最大化与收起文件区按钮位于标签栏右端；目录树显示时在自身标题栏收起，隐藏时标签栏显示恢复目录树按钮，Ctrl+B 同步切换。项目路径仅保留在最右目录面板，随当前工作区同步，超长截断并提供完整悬停路径；其下保留创建/刷新操作，不增加目录选择入口。
 
-折叠/恢复使用指向实际侧栏的分栏 SVG；文件区最大化/恢复使用四角 SVG 并同步可读名称与 pressed 状态。文件区全屏临时隐藏官网、网页顶栏与本地工具区，保留左侧项目栏，不改变窗口全屏状态，不持久化临时宽度；恢复与收起回到原宽度。
+折叠/恢复使用指向实际侧栏的分栏 SVG；文件区最大化/恢复使用四角 SVG 并同步可读名称与 pressed 状态。文件区全屏临时隐藏官网、网页顶栏与本地需求区，保留左侧项目栏，不改变窗口全屏状态，不持久化临时宽度；恢复与收起回到原宽度。
 
 
-文件区收起不保留独立窄条，恢复入口并入中间网页顶栏最右侧，透明背景、悬停底色。工作区收起后列宽归零，网页顶栏在 DeepSeek 文案左侧固定显示圆角切换按钮，官网与底部工具区都从窗口左边缘开始；文件区全屏隐藏网页顶栏时由编辑器层侧栏按钮维持工作区入口。`ui:restore-file-workspace` 与 `ui:toggle-workspace` 只允许本地网页顶栏主 frame 执行各自的单一动作，不开放通用布局或网页操作。文件区全屏仅更改显示矩形，不导航/销毁官网，不中断工具；退出恢复原宽度、目录与预览显隐。移除复制上下文菜单与全文复制 bridge，选区浮动按钮仅复制真实选中内容，无全文回退；需要全文时用户在官网描述文件路径，由模型请求本地读取。
+文件区收起不保留独立窄条，恢复入口并入中间网页顶栏最右侧，透明背景、悬停底色。工作区收起后列宽归零，网页顶栏在 DeepSeek 文案左侧固定显示圆角切换按钮，官网与底部需求区都从窗口左边缘开始；文件区全屏隐藏网页顶栏时由编辑器层侧栏按钮维持工作区入口。`ui:restore-file-workspace` 与 `ui:toggle-workspace` 只允许本地网页顶栏主 frame 执行各自的单一动作，不开放通用布局或网页操作。文件区全屏仅更改显示矩形，不导航/销毁官网，不中断工具；退出恢复原宽度、目录及文件／工具／改动显示状态。移除复制上下文菜单与全文复制 bridge，选区浮动按钮仅复制真实选中内容，无全文回退；需要全文时用户在官网描述文件路径，由模型请求本地读取。

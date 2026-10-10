@@ -5,64 +5,62 @@ import * as vm from 'node:vm';
 import { it } from 'node:test';
 
 function fixture() {
-  function node() {
-    const listeners = new Map<string, (event: any) => void>(); const captures = new Set<number>(); const classes = new Set<string>();
-    return { style: {} as Record<string, string>, attrs: {} as Record<string, string>, hidden: false, open: false, focused: false,
-      height: 30, width: 200, children: [] as any[],
-      getBoundingClientRect() { return { height: parseFloat(this.style.height) || this.height, width: this.width, left: 0, right: this.width, top: 400, bottom: 430 }; },
+  function node(rect = { left: 0, top: 0, width: 200, height: 100 }) {
+    const listeners = new Map<string, (event: any) => void>();
+    return { style: {} as Record<string, string>, attrs: {} as Record<string, string>, hidden: false, focused: false,
+      rect, children: [] as any[],
+      getBoundingClientRect() { return { ...this.rect, right: this.rect.left + this.rect.width, bottom: this.rect.top + this.rect.height }; },
       addEventListener(type: string, fn: (event: any) => void) { listeners.set(type, fn); },
-      dispatchEvent(event: {type: string}) { this.fire(event.type); },
-      fire(type: string, extra = {}) { const event = { preventDefault() {}, ...extra }; listeners.get(type)?.(event); },
+      fire(type: string, extra = {}) { listeners.get(type)?.({ preventDefault() {}, ...extra }); },
       setAttribute(key: string, value: string) { this.attrs[key] = value; },
-      classList: { contains(key: string) { return classes.has(key); }, add(key: string) { classes.add(key); }, remove(key: string) { classes.delete(key); } },
-      setPointerCapture(id: number) { captures.add(id); }, hasPointerCapture(id: number) { return captures.has(id); }, releasePointerCapture(id: number) { captures.delete(id); },
-      contains(other: any) { return this === other || this.children.includes(other); },
+      contains(other: any): boolean { return this === other || this.children.some(child => child.contains(other)); },
       querySelector() { return this.children[0]; }, focus() { this.focused = true; },
     };
   }
-  const ids = ['collaboration-dock','tool-panel','tool-panel-body','tool-resizer','tool-settings-wrap','tool-settings-toggle','tool-settings-panel','tool-settings-close','tool-more-wrap','tool-more-toggle','tool-more','btn-settings'];
-  const nodes = Object.fromEntries(ids.map(id => [id, node()]));
-  const prompt = node(); prompt.height = 130;
-  const toolbar = node(); toolbar.height = 36;
-  const heading = node(); heading.height = 38;
-  nodes['tool-panel'].children = [heading]; nodes['tool-panel'].classList.add('has-results');
-  nodes['tool-settings-wrap'].children = [nodes['tool-settings-toggle'], nodes['tool-settings-panel']];
+  const nodes = {
+    'tool-workspace': node({ left: 600, top: 36, width: 300, height: 500 }),
+    'tool-more-wrap': node(),
+    'tool-more-toggle': node({ left: 850, top: 41, width: 28, height: 28 }),
+    'tool-more': node({ left: 0, top: 0, width: 180, height: 70 }),
+    'tool-undo': node(),
+  };
   nodes['tool-more-wrap'].children = [nodes['tool-more-toggle'], nodes['tool-more']];
-  nodes['tool-settings-panel'].hidden = true; nodes['tool-more'].hidden = true;
-  nodes['tool-settings-panel'].children = [nodes['tool-settings-close']];
-  const document = { ...node(), getElementById: (id: string) => nodes[id], querySelector: (selector: string) => selector === '.prompt-bar' ? prompt : toolbar };
-  const window = { ...node(), innerHeight: 600, innerWidth: 420, setupToolPanelLayout: null as any };
-  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/renderer/toolPanelLayout.js'), 'utf8'), {
-    window, document, Event: class { constructor(readonly type: string) {} }, ResizeObserver: class { observe() {} },
-  });
+  nodes['tool-more'].children = [nodes['tool-undo']]; nodes['tool-more'].hidden = true;
+  const document = { ...node(), getElementById: (id: keyof typeof nodes) => nodes[id] };
+  const window = { ...node(), setupToolPanelLayout: null as any };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/renderer/toolPanelLayout.js'), 'utf8'), { window, document });
   const layout = window.setupToolPanelLayout();
-  return { nodes, document, window, prompt, layout };
+  return { nodes, document, window, layout };
 }
 
-it('拖动只消费捕获的指针，取消或失焦清理，面板高度始终保留编辑预算', () => {
-  const f = fixture(); const { nodes } = f; const handle = nodes['tool-resizer'];
-  nodes['tool-panel'].open = true; nodes['tool-panel'].fire('toggle');
-  assert.equal(handle.hidden, false); assert.equal(nodes['tool-panel-body'].style.height, '160px');
-  handle.fire('pointerdown', { button: 0, pointerId: 1, clientY: 400 });
-  handle.fire('pointermove', { pointerId: 2, clientY: 100 }); assert.equal(nodes['tool-panel-body'].style.height, '160px');
-  handle.fire('pointermove', { pointerId: 1, clientY: 100 }); assert.equal(nodes['tool-panel-body'].style.height, '252px');
-  handle.fire('pointercancel'); assert.equal(handle.hasPointerCapture(1), false);
-  f.prompt.height = 286; f.document.fire('prompt-size-changed'); assert.equal(nodes['tool-panel-body'].style.height, '120px');
-  handle.fire('pointerdown', { button: 0, pointerId: 3, clientY: 400 }); f.window.fire('blur'); assert.equal(handle.hasPointerCapture(3), false);
-  handle.fire('pointermove', { pointerId: 3, clientY: 600 }); assert.equal(nodes['tool-panel-body'].style.height, '120px');
+it('工具操作浮层被限制在右侧工具页内部，不改变中间需求 dock 的尺寸', () => {
+  const { nodes, layout } = fixture();
+  nodes['tool-more-toggle'].fire('click');
+  assert.equal(nodes['tool-more'].hidden, false);
+  assert.equal(nodes['tool-more-toggle'].attrs['aria-expanded'], 'true');
+  assert.equal(nodes['tool-undo'].focused, true);
+  assert.deepEqual(nodes['tool-more'].style, { maxHeight: '484px', maxWidth: '284px', left: '698px', top: '44px' });
+  nodes['tool-workspace'].rect = { left: 500, top: 36, width: 240, height: 100 };
+  layout.refresh();
+  assert.deepEqual(nodes['tool-more'].style, { maxHeight: '84px', maxWidth: '224px', left: '552px', top: '44px' });
 });
 
-it('键盘调整有上下限、关闭面板清理拖动，浮层Esc恢复焦点而外部点击不抢焦点', () => {
-  const f = fixture(); const { nodes } = f; const handle = nodes['tool-resizer'];
-  nodes['tool-panel'].open = true; nodes['tool-panel'].fire('toggle');
-  handle.fire('keydown', { key: 'Home' }); assert.equal(nodes['tool-panel-body'].style.height, '80px');
-  handle.fire('keydown', { key: 'ArrowDown' }); assert.equal(handle.attrs['aria-valuenow'], '80');
-  handle.fire('keydown', { key: 'End' }); assert.equal(handle.attrs['aria-valuenow'], handle.attrs['aria-valuemax']);
-  handle.fire('pointerdown', { button: 0, pointerId: 1, clientY: 400 }); nodes['tool-panel'].open = false; nodes['tool-panel'].fire('toggle');
-  assert.equal(handle.hasPointerCapture(1), false); assert.equal(handle.hidden, true);
-  nodes['tool-more-toggle'].fire('click'); assert.equal(nodes['tool-more'].hidden, false);
-  f.document.fire('keydown', { key: 'Escape' }); assert.equal(nodes['tool-more'].hidden, true); assert.equal(nodes['tool-more-toggle'].focused, true);
-  nodes['tool-more-toggle'].focused = false; nodes['tool-more-toggle'].fire('click');
-  f.document.fire('pointerdown', { target: {} }); assert.equal(nodes['tool-more-toggle'].focused, false);
-  nodes['tool-settings-toggle'].fire('click'); assert.equal(nodes['tool-settings-panel'].hidden, true, '布局 owner 不再打开或计量设置 DOM');
+it('Esc 收起浮层并恢复触发按钮焦点，内部点击保留，外部点击和失焦不抢焦点', () => {
+  const { nodes, document, window } = fixture();
+  const trigger = nodes['tool-more-toggle'];
+  trigger.fire('click'); document.fire('keydown', { key: 'Escape' });
+  assert.equal(nodes['tool-more'].hidden, true); assert.equal(trigger.attrs['aria-expanded'], 'false'); assert.equal(trigger.focused, true);
+  trigger.focused = false; trigger.fire('click'); document.fire('pointerdown', { target: nodes['tool-undo'] });
+  assert.equal(nodes['tool-more'].hidden, false);
+  document.fire('pointerdown', { target: {} }); assert.equal(nodes['tool-more'].hidden, true); assert.equal(trigger.focused, false);
+  trigger.fire('click'); window.fire('blur'); assert.equal(nodes['tool-more'].hidden, true); assert.equal(trigger.focused, false);
+});
+
+it('切换工具标签或隐藏操作按钮立即关闭浮层，避免浮层遗留在文件标签上', () => {
+  const { nodes, document, layout } = fixture();
+  const trigger = nodes['tool-more-toggle'];
+  trigger.fire('click'); nodes['tool-workspace'].hidden = true; document.fire('workspace-layout-changed');
+  assert.equal(nodes['tool-more'].hidden, true);
+  nodes['tool-workspace'].hidden = false; trigger.fire('click'); trigger.hidden = true; layout.refresh();
+  assert.equal(nodes['tool-more'].hidden, true); assert.equal(trigger.focused, false);
 });

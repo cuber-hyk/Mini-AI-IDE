@@ -1,7 +1,7 @@
 /* 左工作区、中协作、右文件内容与最右目录：所有矩形来自主进程。 */
 body { display: block; }
 [hidden] { display: none !important; }
-.workspace-navigation, .toolbar, .editor-wrap, .sidebar, .collaboration-dock { position: absolute; margin: 0; min-width: 0; max-width: none; }
+.workspace-navigation, .toolbar, .editor-wrap, .sidebar, .collaboration-dock, .tool-workspace { position: absolute; margin: 0; min-width: 0; max-width: none; }
 .layout { position: absolute; inset: 0; display: block; pointer-events: none; }
 .layout > * { pointer-events: auto; }
 .workspace-navigation { display: flex; flex-direction: column; background: var(--ui-surface); border-right: 1px solid var(--ui-border); overflow: hidden; padding: 20px 12px 12px; }
@@ -43,23 +43,18 @@ body { display: block; }
 .workspace-divider:focus-visible, .resizer:focus-visible, .sidebar-resizer:focus-visible { outline: 1px solid var(--ui-accent); outline-offset: -1px; }
 .toolbar { height: 36px; padding: 0 10px; border-left: 1px solid var(--ui-border); }
 .toolbar .dirty { min-width: 0; }
-.editor-wrap { overflow: hidden; border-left: 1px solid var(--ui-border); }
-.editor-head { height: calc(40px * var(--layout-scale, 1)); min-height: calc(40px * var(--layout-scale, 1)); flex-shrink: 0; flex-wrap: nowrap; gap: 6px; padding: 2px 8px; }
-.editor-head .file-name { display: none; }
+.editor-wrap, .tool-workspace { overflow: hidden; border-left: 1px solid var(--ui-border); }
 .editor-tabs, .editor-tabs[hidden] { display: flex !important; flex: 0 0 calc(32px * var(--layout-scale, 1)); height: calc(32px * var(--layout-scale, 1)); }
 .editor-tabs[hidden] { visibility: hidden; }
-.editor-head #btn-sidebar { margin-left: auto; }
 .sidebar { min-width: 0; border-left: 1px solid var(--ui-border); border-right: 0; background: var(--ui-surface); }
 .sidebar-head { height: 40px; min-height: 40px; padding: 4px 8px; }
-.workspace-welcome { top: calc(72px * var(--layout-scale, 1)); padding: 20px; }
+.workspace-welcome { top: 0; padding: 20px; }
 .collaboration-dock { display: flex; flex-direction: column; justify-content: safe flex-end; height: auto !important; max-height: 70vh; overflow: auto; background: var(--ui-bg); border-top: 1px solid var(--ui-border); }
-.collaboration-dock .tool-dock { border-top: 0; }
 .collaboration-dock .prompt-bar { border-top: 0; padding: 6px 10px 10px; max-height: none; overflow: visible; }
 .collaboration-dock .prompt-shell { gap: 6px; padding: 8px 10px; }
 .requirement-panel > summary { cursor: pointer; font-size: 12px; color: var(--ui-text); padding: 2px 0 5px; }
 .requirement-panel > summary > span { margin-left: 8px; color: var(--ui-muted); font-size: 11px; }
 .requirement-panel .requirement { display: block; margin-top: 6px; }
-.requirement-panel:not([open]) ~ .prompt-actions .prompt-options { display: none; }
 
 /* 文件和目录都有连续顶栏，正文起点统一由主进程预算决定。 */
 .toolbar .editor-tabs { flex: 1 1 auto; height: 100%; border: 0; background: transparent; }
@@ -67,14 +62,14 @@ body { display: block; }
 .toolbar > .spacer { display: none; }
 .toolbar { gap: 4px; padding: 0 6px; }
 .toolbar .ui-icon { flex: 0 0 26px; width: 26px; background: transparent; border-color: transparent; }
+.toolbar .ui-icon, .sidebar-title .ui-icon, .sidebar-head .ui-icon { height: min(var(--ui-control-height), calc(30px * var(--layout-scale, 1))); }
+.toolbar .editor-tab-label { height: 100%; padding: 0 9px; }
 .app-version { flex: 0 0 auto; color: var(--ui-muted); font: 11px/1.4 "Cascadia Code", Consolas, monospace; white-space: nowrap; }
 .workspace-brand .ui-icon svg, .workspace-restore svg, .toolbar svg, .sidebar-title svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.2; stroke-linecap: round; stroke-linejoin: round; }
 .workspace-restore svg { width: 18px; height: 18px; }
-.toolbar > .ui-icon svg, .editor-head #btn-sidebar svg, .sidebar-title .ui-icon svg { width: 18px; height: 18px; }
+.toolbar > .ui-icon svg, .sidebar-title .ui-icon svg { width: min(18px, calc(24px * var(--layout-scale, 1))); height: min(18px, calc(24px * var(--layout-scale, 1))); }
 #file-maximize .restore-mark, #file-maximize.maximized .maximize-mark { display: none; }
 #file-maximize.maximized .restore-mark { display: inline; }
-.editor-head { height: calc(72px * var(--layout-scale, 1)); min-height: calc(72px * var(--layout-scale, 1)); }
-.editor-head .root-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-title { display: flex; align-items: center; gap: 3px; height: calc(36px * var(--layout-scale, 1)); min-height: calc(36px * var(--layout-scale, 1)); padding: 0 6px; border-bottom: 1px solid var(--ui-border); }
 .sidebar-title > span:first-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sidebar-title .spacer { flex: 1; }

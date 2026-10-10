@@ -1,9 +1,9 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-09
+updated: 2026-10-10
 owner: 胡运宽
-source_of_truth: [docs/adr/2026-10-09-default-local-prompt-send.md, docs/adr/2026-10-08-skills-and-local-demand-send.md, docs/adr/2026-10-08-local-prompt-attachments.md, src/main/localPromptAttachments.ts, src/main/skills.ts, src/main/localPromptController.ts, src/main/webComposerSender.ts, src/main/firstPromptSession.ts, src/main/tools/replyChangeWatcher.ts, src/main/settings.ts, src/main/tools/integration.ts, src/shared/skills.ts, src/shared/localPrompt.ts, src/renderer/localPrompt.js, test/skills.test.ts, test/localPromptController.test.ts, test/localPrompt.test.ts, test/localPromptAttachments.test.ts]
+source_of_truth: [src/shared/formatSpec.ts, src/renderer/promptComposer.js, src/renderer/prompt.js, test/promptSettingsMigration.test.ts, test/promptComposer.test.ts, docs/adr/2026-10-09-default-local-prompt-send.md, docs/adr/2026-10-08-skills-and-local-demand-send.md, docs/adr/2026-10-08-local-prompt-attachments.md, src/main/localPromptAttachments.ts, src/main/skills.ts, src/main/localPromptController.ts, src/main/webComposerSender.ts, src/main/firstPromptSession.ts, src/main/tools/replyChangeWatcher.ts, src/main/settings.ts, src/main/tools/integration.ts, src/shared/skills.ts, src/shared/localPrompt.ts, src/renderer/localPrompt.js, test/skills.test.ts, test/localPromptController.test.ts, test/localPrompt.test.ts, test/localPromptAttachments.test.ts]
 ---
 
 # 能力：技能与本地需求发送
@@ -14,7 +14,9 @@ source_of_truth: [docs/adr/2026-10-09-default-local-prompt-send.md, docs/adr/202
 
 本地需求输入框输入 `/` 显示名称、描述与来源，方向键/Enter 选择，Escape 关闭。选中的技能可查看完整正文；删除引用后不再附带。项目切换清理旧目录与预览，迟到读取不能更新当前项目。显式选择的技能完整说明进入提示词；初始化提示词附带可用技能摘要，模型可用只读 `load_skill({name})` 按需获取完整说明。
 
-“附带初始化提示词”默认勾选，用户选择持久保存；不根据会话猜测，也不在发送后复位。勾选包含统一协议、项目环境/目录、技能摘要与需求；关闭仅包含需求与显式技能正文。复制与发送共用同一组装入口。
+本地需求区默认收起，展开后将附件加号、初始化选项、权限、自动继续、设置和发送合成一行操作，窄列换行；收起保留草稿、技能与附件。
+
+“附带初始化提示词”默认勾选，用户选择持久保存；不根据会话猜测，也不在发送后复位。勾选包含统一协议、项目环境/目录、技能摘要与需求；关闭仅包含需求与显式技能正文。复制与发送共用同一组装入口。有效格式只有一份完整内置模板和一份自定义补充，不区分简洁/完整；强制工具协议由程序附带。首次升级保留当前生效自定义，并将旧设置原始字节备份至 `settings.json.prompt-upgrade-backup.json`，其中保留未选中的另一份；没有自定义时采用完整内置模板。备份或迁移保存失败明确报错并保留原配置。
 
 本地需求默认 Enter 提交、Shift+Enter 换行，与工具 `automatic` 独立，无发送开关和常驻键盘说明。输入法组合、重复按键和技能菜单确认不发送；右下角圆形向上箭头按钮与 Enter 共用提交入口，空正文或忙时禁用，发送中显示加载状态。用户本地正文经可信编辑器主 frame 的窄 IPC 提交；普通文本粘贴仍由输入框处理，粘贴图片则作为附件暂存。图片异步暂存期间按回车会等待完成后再发送；暂存失败则取消整次提交，避免仅发送文本。回车或按钮提交经官网确认发送成功后，清空本次本地需求、技能选择、预览和附件，并通过现有 input 事件恢复输入高度；发送失败或状态未知时保留内容，等待期间新写的下一条需求不被旧成功回执清空。用户初始化选择不复位；需求通过输入框直接提交，不提供复制提示词或需求更多菜单。用户可从本地选择文件，或从资源管理器及右侧工作区文件树拖入文件，发送前可移除待发附件；本地需求附件只随本次需求提交，字节不进入组装文本；工具附件由独立 attach_file 请求及工具权限控制，见 tool-harness.md。
 

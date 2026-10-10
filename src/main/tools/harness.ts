@@ -32,6 +32,7 @@ export interface ToolDiagnostic {
 }
 interface BatchSelection extends ToolSelection {
   executed?: boolean;
+  startId?: number;
   notified?: boolean;
   cancelled?: boolean;
   validationFailed?: true;
@@ -58,6 +59,7 @@ export class ToolHarness {
   private selection: BatchSelection | null = null;
   private completion: ToolState['completion'];
   private completionId = 0;
+  private batchStartId = 0;
   private diagnostic: ToolDiagnostic | null = null;
   private diagnosticId = 0;
 
@@ -70,7 +72,7 @@ export class ToolHarness {
     const message = storageError
       ? `工具记录加载失败，工具执行和自动继续已停用；原始记录与权限未重置。${storageError}。请使用匹配版本或恢复有效记录后重启。`
       : this.message;
-    return { config: storageError ? { ...config, automatic: false } : config, results, message, busy: this.waiting > 0, ...(storageError ? { storageError } : {}), ...(this.diagnostic ? { batchError: { ...this.diagnostic.error } } : {}), ...(this.completion ? { completion: { ...this.completion } } : {}) };
+    return { config: storageError ? { ...config, automatic: false } : config, results, message, busy: this.waiting > 0, ...(this.selection && !this.selection.executed ? { restored: true as const } : {}), ...(this.selection?.startId ? { batchStart: { id: this.selection.startId, batch_id: this.selection.batch.batch_id } } : {}), ...(storageError ? { storageError } : {}), ...(this.diagnostic ? { batchError: { ...this.diagnostic.error } } : {}), ...(this.completion ? { completion: { ...this.completion } } : {}) };
   }
   get state(): ToolState { return this.getState(); }
   getDiagnostic(): ToolDiagnostic | null {
@@ -179,6 +181,8 @@ export class ToolHarness {
       return;
     }
     selection.executed = true;
+    selection.startId = ++this.batchStartId;
+    this.publish();
     if (this.options.prepare) {
       try { await this.options.prepare(root, batch); }
       catch (error) {

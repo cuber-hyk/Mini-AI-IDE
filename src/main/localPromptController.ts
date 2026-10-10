@@ -58,7 +58,7 @@ export class LocalPromptController {
       prompt = buildPrompt({ requirement: input.requirement, context: {
         root: context.root, environment: context.environment,
         tree: context.tree ? context.tree + (context.treeTruncated ? '\n…（目录较多，已截断）' : '') : null,
-      }, formatSpec: resolveFormatSpec({ short: settings.customFormatSpecShort, full: settings.customFormatSpecFull }, settings.formatSpecVariant) });
+      }, formatSpec: resolveFormatSpec(settings.customFormatSpec) });
       const catalog = await this.options.skills.list(input.root);
       if (catalog.skills.length) prompt += '\n\n## 可用技能（摘要）\n需要技能时先用 load_skill({name}) 加载完整说明，再按说明操作；技能脚本仍遵守IDE工具权限。\n' +
         catalog.skills.map(skill => '- /' + skill.name + ' [' + skill.source + ']：' + skill.description).join('\n');

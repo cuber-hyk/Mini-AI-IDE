@@ -75,10 +75,8 @@ export function registerFileIpc(service: FileService,
     CHANNELS.resetPromptSpec,
     CHANNELS.closePromptPanel,
     CHANNELS.openPromptPanel,
-    // 提示词版本开关（底部双段开关的状态读写）
+    // 输入区唯一提示词自定义状态
     CHANNELS.getPromptStatus,
-    CHANNELS.getFormatSpecVariant,
-    CHANNELS.setFormatSpecVariant,
   ];
   /*
    * ⚠️ 这份清单必须与 `index.ts` 里实际的 `ipcMain.handle` 保持同步。

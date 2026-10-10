@@ -73,8 +73,6 @@ const CH = {
   openPromptPanel: 'ui:open-prompt-panel',
   getPromptStatus: 'ui:get-prompt-status',
   promptStatus: 'ui:prompt-status',
-  getFormatSpecVariant: 'ui:get-format-spec-variant',
-  setFormatSpecVariant: 'ui:set-format-spec-variant',
 } as const;
 const bridge = {
   getToolState: () => ipcRenderer.invoke(CH.getToolState),
@@ -117,15 +115,11 @@ const bridge = {
   writeFile: (relPath: string, text: string, root: string) => ipcRenderer.invoke(CH.writeFile, relPath, text, root),
   setSplit: (editorWidth: number) => ipcRenderer.invoke(CH.setSplit, editorWidth),
   setWorkspaceLayout: (patch: unknown) => ipcRenderer.invoke(CH.setWorkspaceLayout, patch),
-  // 不传版本 ⇒ 主进程用**当前开关状态**（不再硬编码 'short'；早期硬编码会让
-  // 底部开关拨到"完整版"后，这条链路的实际行为与显示不一致）
   copyFormatSpec: () => ipcRenderer.invoke(CH.copyFormatSpec),
   getPromptStatus: () => ipcRenderer.invoke(CH.getPromptStatus),
   onPromptStatus: (listener: (status: unknown) => void) => {
     ipcRenderer.on(CH.promptStatus, (_e, status) => listener(status));
   },
-  getFormatSpecVariant: () => ipcRenderer.invoke(CH.getFormatSpecVariant),
-  setFormatSpecVariant: (variant: string) => ipcRenderer.invoke(CH.setFormatSpecVariant, variant),
   getContext: () => ipcRenderer.invoke(CH.getContext),
   getLocalPromptOptions: () => ipcRenderer.invoke(CH.getLocalPromptOptions),
   setLocalPromptOptions: (patch: unknown) => ipcRenderer.invoke(CH.setLocalPromptOptions, patch),

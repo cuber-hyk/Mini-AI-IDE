@@ -18,11 +18,8 @@
   const el = {
     tree: document.getElementById('tree'),
     treeNote: document.getElementById('tree-note'),
-    rootLabel: document.getElementById('root-label'),
     info: document.getElementById('info'),
     dirty: document.getElementById('dirty-flag'),
-    fileName: document.getElementById('file-name'),
-    fileDot: document.getElementById('file-dot'),
     editorTabs: document.getElementById('editor-tabs'),
     // 注意：这里**不要**用键名 `monaco`，否则会遮蔽全局的 `window.monaco`（AMD 模块对象），
     // 导致 `window.monaco.editor.createModel` / `createDecorationsCollection` 之类的调用难以排查。
@@ -30,8 +27,6 @@
     resizer: document.getElementById('resizer'),
     requirement: document.getElementById('requirement'),
     btnSendPrompt: document.getElementById('btn-send-prompt'),
-    // 提示词版本双段开关（开=完整版 / 关=简洁版），状态持久化在主进程设置里
-    variantSwitch: document.getElementById('variant-switch'),
     // 采集入口在 AI 网页顶部，变更列表在右侧独立视图。
     // 面板显示控制
     sidebar: document.getElementById('sidebar'),
@@ -582,9 +577,6 @@
     const dirty = state.currentText !== state.savedText;
     el.dirty.textContent = dirty ? '● 未保存' : '';
     el.dirty.classList.toggle('is-dirty', dirty);
-    el.fileDot.hidden = !dirty;
-    el.fileName.textContent = state.currentPath ?? '未打开文件';
-    el.fileName.title = state.currentPath ?? '';
     if (typeof editorWorkspace !== 'undefined') editorWorkspace.report();
   }
 
@@ -619,6 +611,7 @@
     open: function (path) { return openFile(path); },
     close: function (path) { return editorWorkspace.close(path); },
     openReview: fileWorkspace.openReview, closeReview: fileWorkspace.closeReview,
+    openTools: fileWorkspace.openTools, closeTools: fileWorkspace.closeTools,
   });
   fileWorkspace.attachTabs(tabs);
   const explorer = window.createFileExplorer({

@@ -9,6 +9,7 @@
     const restore = document.getElementById('workspace-restore');
     const tree = document.getElementById('sidebar');
     const treeButton = document.getElementById('btn-sidebar');
+    const tools = document.getElementById('tool-workspace');
     function rectangle(element, bounds) {
       if (!bounds) return;
       Object.assign(element.style, { left: bounds.x * scale + 'px', top: bounds.y * scale + 'px', width: bounds.width * scale + 'px', height: bounds.height * scale + 'px' });
@@ -28,18 +29,19 @@
       workspaceCollapse.hidden = !state.fileMaximized || !layout.workspaceVisible;
       restore.hidden = !navigation.hidden || !state.fileMaximized;
       rectangle(tree, layout.treePaneBounds); tree.hidden = !layout.treeBounds.width;
-      treeButton.classList.toggle('active', !tree.hidden);
-      treeButton.setAttribute('aria-pressed', String(!tree.hidden));
-      treeButton.setAttribute('aria-label', tree.hidden ? '展开目录树' : '收起目录树');
+      treeButton.hidden = !tree.hidden;
+      treeButton.title = '展开目录树（Ctrl+B）';
+      treeButton.setAttribute('aria-label', '展开目录树');
       const maximize = document.getElementById('file-maximize');
       maximize.classList.toggle('maximized', Boolean(state.fileMaximized));
       maximize.setAttribute('aria-pressed', String(Boolean(state.fileMaximized)));
       maximize.title = state.fileMaximized ? '退出文件区全屏' : '文件区全屏';
       maximize.setAttribute('aria-label', maximize.title);
-      rectangle(document.querySelector('.toolbar'), { x: file.x, y: file.y, width: content.width, height: 36 });
-      rectangle(document.querySelector('.editor-wrap'), { x: file.x, y: file.y + 36, width: content.width, height: Math.max(0, file.height - 36) });
+      rectangle(document.querySelector('.toolbar'), { x: file.x, y: file.y, width: content.width, height: content.y });
+      rectangle(document.querySelector('.editor-wrap'), content);
       document.querySelector('.toolbar').hidden = !layout.fileVisible;
       document.querySelector('.editor-wrap').hidden = !layout.fileVisible;
+      rectangle(tools, content); tools.hidden = !state.toolsVisible;
       rectangle(dock, layout.dockBounds);
       dock.style.minHeight = layout.dockBounds.height * scale + 'px';
       dock.style.maxHeight = layout.dockBounds.height * scale + 'px';
@@ -79,15 +81,9 @@
     let measured = -1;
     function measureDock() {
       if (dock.hidden || !dock.clientWidth) return;
-      let needed = Array.from(dock.children).reduce(function (total, child) {
+      const needed = Array.from(dock.children).reduce(function (total, child) {
         return total + child.getBoundingClientRect().height;
       }, 1);
-      // 固定浮层不计入子元素高度，另预留原生官网视图不能遮挡的显示预算。
-      const dockBottom = dock.getBoundingClientRect().bottom;
-      for (const [surfaceId, triggerId] of [['tool-more', 'tool-more-toggle']]) {
-        const surface = document.getElementById(surfaceId);
-        if (!surface.hidden) needed = Math.max(needed, surface.getBoundingClientRect().height + dockBottom - document.getElementById(triggerId).getBoundingClientRect().top + 16);
-      }
       const height = Math.ceil(needed / scale);
       if (height === measured) return; measured = height; void patch({ dockHeight: height });
     }
@@ -96,7 +92,9 @@
     dock.addEventListener('toggle', measureDock, true);
     dock.addEventListener('click', function () { queueMicrotask(measureDock); });
     observer.observe(dock);
-    ['tool-panel', 'prompt-actions', 'requirement-panel', 'local-prompt-options', 'skill-menu', 'skill-chips', 'skill-preview', 'tool-more'].forEach(function (id) { observer.observe(document.getElementById(id)); });
+    ['prompt-actions', 'requirement-panel', 'local-prompt-options', 'skill-menu', 'skill-chips', 'skill-preview'].forEach(function (id) {
+      const node = document.getElementById(id); if (node) observer.observe(node);
+    });
     return { apply: apply };
   };
 })();
