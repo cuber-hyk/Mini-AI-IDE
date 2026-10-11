@@ -65,12 +65,12 @@ export class ToolResultReturn {
   async send(mode: 'automatic' | 'manual', authorized: () => boolean = () => true): Promise<WebSendResult> {
     const context = this.options.current(); const generation = this.generation; const source = this.source;
     const automatic = mode === 'automatic';
-    if (!source || this.attempted || !authorized() || !this.eligible(context) || context.state.config.automatic !== automatic ||
+    if (!source || this.attempted || !authorized() || !this.eligible(context) || automatic && context.state.userInterrupted || context.state.config.automatic !== automatic ||
       (!automatic && (source.kind === 'diagnostic' || !this.getState(context).attachmentCount))) return { ok: false, error: '当前回执不可发送或已经尝试发送，请查看状态' };
     const text = formatToolResults(context.state.results, context.state.batchError); const completionId = context.state.completion?.id;
     const current = () => {
       const latest = this.options.current();
-      return generation === this.generation && authorized() && this.eligible(latest) && latest.state.config.automatic === automatic &&
+      return generation === this.generation && authorized() && this.eligible(latest) && !(automatic && latest.state.userInterrupted) && latest.state.config.automatic === automatic &&
         latest.state.completion?.id === completionId && latest.root === context.root && latest.session === context.session && formatToolResults(latest.state.results, latest.state.batchError) === text;
     };
     this.attempted = true; this.phase = 'sending'; this.message = '正在发送本批结果与附件'; this.options.changed();

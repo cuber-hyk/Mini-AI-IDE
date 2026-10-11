@@ -47,7 +47,7 @@ it('用户主动新一轮仅使旧回执失效，不表示回传失败，空来�
   }
 });
 
-it('超时和单条命令停止的部分输出可回传，整批取消和清理中仍不能发送', async () => {
+it('超时及工具停止的部分输出可回传，整批取消和清理中仍不能发送', async () => {
   for (const status of ['failed', 'cancelled', 'done'] as const) {
     for (const block of ['none', 'batch-cancel', 'cleanup'] as const) {
       const f = fixture(true);
@@ -59,6 +59,18 @@ it('超时和单条命令停止的部分输出可回传，整批取消和清理�
       assert.equal(f.sent.length, block === 'none' ? 1 : 0);
       if (block === 'none') assert.equal(f.sent[0]![0], formatToolResults(f.context.state.results));
     }
+  }
+});
+it('用户中断在发送前或异步复核期间都阻止自动正文与附件运输', async () => {
+  for (const timing of ['before', 'verify'] as const) {
+    const f = fixture(true);
+    if (timing === 'before') f.context.state.userInterrupted = true;
+    else f.setVerify(async () => { f.context.state.userInterrupted = true; return { ok: true }; });
+    assert.equal((await f.owner.send('automatic')).ok, false);
+    assert.equal(f.resolved, 0); assert.equal(f.sent.length, 0);
+    f.context.state.config.automatic = false;
+    f.context.state.config.automatic = true;
+    assert.equal((await f.owner.send('automatic')).ok, false);
   }
 });
 

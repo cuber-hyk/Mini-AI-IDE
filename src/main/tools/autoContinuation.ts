@@ -41,7 +41,7 @@ export class AutoContinuation {
   }
   // 只拦执行层结果；解析层 batchError 由连续计数与上限单独处理。
   private blocked(state: ToolState): boolean {
-    return !!state.completion?.cancelled || state.results.some(result => result.status === 'unknown' ||
+    return !!state.userInterrupted || !!state.completion?.cancelled || state.results.some(result => result.status === 'unknown' ||
       result.status === 'cancelled' && !isCompletedStoppedCommand(result) ||
       result.tool === 'run_command' && (result.data as { status?: string } | undefined)?.status === 'stopped' && !isCompletedStoppedCommand(result));
   }
@@ -75,7 +75,7 @@ export class AutoContinuation {
       if (this.pending) this.cancel();
       this.observedCompletion = Math.max(this.observedCompletion, state.completion?.id ?? 0);
       this.observedDiagnostic = Math.max(this.observedDiagnostic, diagnostic?.id ?? 0);
-      this.change({ phase: 'paused', message: '工具被拒绝、中断或状态未知，等待你处理' }); return;
+      this.change({ phase: 'paused', message: state.userInterrupted ? '用户已中断，本批不再自动回传；工具结果仍可复制' : '工具被拒绝、中断或状态未知，等待你处理' }); return;
     }
     const event = this.eventOf(context);
     if (this.pending && (event?.kind !== this.pending.event.kind || event.id !== this.pending.event.id || this.bodyOf(state) !== this.pending.body)) this.cancel();

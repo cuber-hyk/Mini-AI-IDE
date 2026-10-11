@@ -318,6 +318,7 @@ export async function createToolIntegration(options: Options) {
     if (Object.keys(fields).length !== 3 || typeof fields.batch_id !== 'string' || typeof fields.request_id !== 'string' || typeof fields.process_id !== 'string') throw new Error('命令目标无效');
     const processId = harness.getRunningCommand(fields.batch_id, fields.request_id);
     if (!processId || processId !== fields.process_id) throw new Error('该命令已结束或不属于当前项目、会话和批次');
+    harness.markUserInterrupted();
     await processes.execute(options.files.getRoot()!, 'stop_process', { process_id: processId });
     harness.refreshProcesses();
     return getState();

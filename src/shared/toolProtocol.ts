@@ -14,8 +14,8 @@ export interface ToolResult { batch_id: string; request_id: string; tool: ToolNa
 export interface ToolBatchError { status: 'failed'; error: string }
 export interface ToolContinuationState { phase: 'off' | 'waiting_tools' | 'countdown' | 'sending' | 'waiting_reply' | 'waiting_user' | 'paused'; message: string; dueAt?: number }
 export interface ToolResultReturnState { canSend: boolean; attachmentCount: number; phase: 'ready' | 'sending' | 'sent' | 'paused' | 'invalidated'; message: string }
-export interface ToolState { config: ToolConfig; results: ToolResult[]; message: string; busy: boolean; restored?: true; batchStart?: { id: number; batch_id: string }; storageError?: string; canUndo?: boolean; hasRunningProcesses?: boolean; batchError?: ToolBatchError; clipboard?: { id: number; ok: boolean; error?: string }; completion?: { id: number; batch_id: string; outcome: 'success' | 'error'; cancelled?: boolean; validation_failed?: true }; continuation?: ToolContinuationState; resultReturn?: ToolResultReturnState }
-/** run_command 已真实结束且进程清理完成时，stopped 回执才具备回传资格。 */
+export interface ToolState { config: ToolConfig; results: ToolResult[]; message: string; busy: boolean; userInterrupted?: true; restored?: true; batchStart?: { id: number; batch_id: string }; storageError?: string; canUndo?: boolean; hasRunningProcesses?: boolean; batchError?: ToolBatchError; clipboard?: { id: number; ok: boolean; error?: string }; completion?: { id: number; batch_id: string; outcome: 'success' | 'error'; cancelled?: boolean; validation_failed?: true }; continuation?: ToolContinuationState; resultReturn?: ToolResultReturnState }
+/** run_command 已真实结束且进程清理完成；用户中断的自动回传由批次标记独立阻断。 */
 export function isCompletedStoppedCommand(result: ToolResult): boolean {
   if (result.tool !== 'run_command' || result.started_at === undefined || result.finished_at === undefined) return false;
   const data = result.data as { status?: string; timed_out?: boolean; cleanup_pending?: boolean } | undefined;

@@ -69,7 +69,7 @@ it('纯对话、无实际执行、普通取消、未知和未确认结束的停�
   const noExecution = completed(5); delete noExecution.results[0]!.started_at; f.update(noExecution); assert.equal(f.owner.getState().phase, 'waiting_user');
   t.mock.timers.tick(3000); await flush(); assert.equal(f.sent.length, 0);
 });
-it('超时和单条命令停止回传真实部分输出一次，整批取消仍阻断', async t => {
+it('超时及工具停止可回传真实部分输出一次，整批取消仍阻断', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
   for (const status of ['failed', 'cancelled', 'done'] as const) {
     const f = fixture(); t.after(() => f.owner.dispose());
@@ -83,6 +83,22 @@ it('超时和单条命令停止回传真实部分输出一次，整批取消仍�
     cancelled.completion!.cancelled = true; f.update(cancelled);
     t.mock.timers.tick(3000); await flush(); assert.equal(f.sent.length, 1); assert.equal(f.owner.getState().phase, 'paused');
   }
+});
+it('用户中断立即取消倒计时，清理与结束或重新开启都不补发，下一批继续', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] }); const f = fixture(); t.after(() => f.owner.dispose());
+  const state = completed(); f.update(state);
+  assert.equal(f.owner.getState().phase, 'countdown');
+  const cancellations = f.cancellations;
+  state.userInterrupted = true; state.busy = true;
+  f.update(state);
+  assert.equal(f.owner.getState().phase, 'paused');
+  assert.match(f.owner.getState().message, /用户已中断.*仍可复制/);
+  assert.ok(f.cancellations > cancellations);
+  t.mock.timers.tick(3000); await flush(); assert.equal(f.sent.length, 0);
+  state.busy = false; f.update(state);
+  f.update({ ...state, config: { ...config, automatic: false } });
+  f.update(state); t.mock.timers.tick(3000); await flush(); assert.equal(f.sent.length, 0);
+  f.update(completed(2)); t.mock.timers.tick(3000); await flush(); assert.equal(f.sent.length, 1);
 });
 it('全批权限拒绝及依赖跳过回传未执行事实，普通依赖跳过不产生发送资格', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'] }); const f = fixture(); t.after(() => f.owner.dispose());

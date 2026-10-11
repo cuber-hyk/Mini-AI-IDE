@@ -6,6 +6,7 @@ import * as path from 'node:path';
 import * as os from 'node:os';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createToolIntegration } from '../src/main/tools/integration';
+import { ToolProcesses } from '../src/main/tools/processes';
 import { FileService } from '../src/main/fileService';
 import { ReturnPathService } from '../src/main/returnPathService';
 import { CHANNELS } from '../src/shared/contract';
@@ -42,7 +43,7 @@ async function until(predicate: () => boolean) {
 }
 const batch = (id: string, windowsCommand: string, unixCommand: string, background = false) => '```mini-ai-tools\n' + JSON.stringify({ protocol_version: 1, batch_id: id, requests: [{ id: 'cmd', tool: 'run_command', args: { command: process.platform === 'win32' ? windowsCommand : unixCommand, shell: process.platform === 'win32' ? 'powershell' : 'bash', background, timeout_ms: 60_000 } }] }) + '\n```';
 
-it('真实超时、逐条中断及权限拒绝通过完整执行与回传链路一次发送，取消整批仍停止', async t => {
+it('真实超时与权限拒绝回传，用户逐条中断保留复制但阻止本批自动发送', async t => {
   for (const scenario of ['timeout', 'stop', 'denied', 'cancel-batch'] as const) {
     const f = await fixture(t, true);
     await f.call(CHANNELS.setToolConfig, { automatic: true, permission: scenario === 'denied' ? 'ask' : 'full', sendIntervalSeconds: 0 });
@@ -59,6 +60,25 @@ it('真实超时、逐条中断及权限拒绝通过完整执行与回传链路�
     await until(() => !!f.system.getState().completion && !f.system.getState().busy);
     if (scenario === 'cancel-batch') {
       await delay(50); assert.equal(f.sent.length, 0); assert.equal(f.copies.length, 0); assert.equal(f.system.getState().completion!.cancelled, true);
+      continue;
+    }
+    if (scenario === 'stop') {
+      await delay(50);
+      assert.equal(f.system.getState().continuation?.phase, 'paused');
+      assert.equal(f.sent.length, 0);
+      assert.equal(f.copies.length, 1);
+      const result = JSON.parse(f.copies[0]!).tool_results[0];
+      assert.equal(result.status, 'cancelled');
+      assert.match(result.data.stdout, /before-stop/);
+      assert.equal(f.call(CHANNELS.copyToolResults).ok, true);
+      assert.equal(f.copies[1], f.copies[0]);
+      await f.call(CHANNELS.setToolConfig, { automatic: false });
+      await f.call(CHANNELS.setToolConfig, { automatic: true });
+      await delay(50); assert.equal(f.sent.length, 0, '重新开启不能补发用户中断的旧批次');
+      const next = batch('after-interrupt', 'Write-Output next', 'printf next');
+      f.setReply(next); await f.system.accept(next, 'complete');
+      await until(() => f.sent.length === 1);
+      assert.equal(JSON.parse(f.sent[0]!).tool_results[0].batch_id, 'after-interrupt');
       continue;
     }
     await until(() => {
@@ -133,14 +153,17 @@ it('后台命令启动不复制，真实结束事件刷新本批输出并复制�
 });
 
 it('逐条中断前后台命令不取消同批其他进程或后续无依赖请求，IPC拒绝不属于当前批次的目标', async t => {
-  const f = await fixture(t);
+  const f = await fixture(t, true);
+  await f.call(CHANNELS.setToolConfig, { automatic: true, sendIntervalSeconds: 0 });
   const shell = process.platform === 'win32' ? 'powershell' : 'bash';
   const command = process.platform === 'win32' ? 'Start-Sleep -Seconds 30' : 'sleep 30';
   const text = '```mini-ai-tools\n' + JSON.stringify({ protocol_version: 1, batch_id: 'separate', requests: [
+    { id: 'before', tool: 'get_project_info', args: {} },
     { id: 'background', tool: 'run_command', args: { command, shell, background: true, timeout_ms: 60000 } },
     { id: 'foreground', tool: 'run_command', args: { command, shell, timeout_ms: 60000 } },
     { id: 'after', tool: 'get_project_info', args: {} },
   ] }) + '\n```';
+  f.setReply(text);
   await f.system.accept(text, 'complete');
   await until(() => f.system.getState().results.some(r => r.request_id === 'foreground' && (r.data as any)?.process_id));
   const foreground = (f.system.getState().results.find(r => r.request_id === 'foreground')?.data as any).process_id;
@@ -149,7 +172,11 @@ it('逐条中断前后台命令不取消同批其他进程或后续无依赖请�
   await assert.rejects(f.call(CHANNELS.stopToolCommand, { batch_id: 'separate', request_id: 'missing', process_id: foreground }), /不属于/);
   await assert.rejects(f.call(CHANNELS.stopToolCommand, { batch_id: 'separate', request_id: 'foreground', process_id: background }), /不属于/);
   await assert.rejects(f.call(CHANNELS.stopToolCommand, { batch_id: 'separate', request_id: 'foreground', process_id: foreground, extra: true }), /目标无效/);
-  await f.call(CHANNELS.stopToolCommand, { batch_id: 'separate', request_id: 'foreground', process_id: foreground });
+  assert.equal(f.system.getState().userInterrupted, undefined, '失效或伪造目标不能撤回当前批次授权');
+  const stopping = f.call(CHANNELS.stopToolCommand, { batch_id: 'separate', request_id: 'foreground', process_id: foreground });
+  assert.equal(f.system.getState().userInterrupted, true, '开始清理前立即撤回自动回传');
+  assert.equal(f.system.getState().continuation?.phase, 'paused');
+  await stopping;
   await until(() => !f.system.getState().busy);
   const current = f.system.getState();
   assert.equal(current.results.find(r => r.request_id === 'foreground')?.status, 'cancelled');
@@ -161,6 +188,32 @@ it('逐条中断前后台命令不取消同批其他进程或后续无依赖请�
   assert.equal(f.system.getState().hasRunningProcesses, false);
   assert.equal((f.system.getState().results.find(r => r.request_id === 'background')?.data as any).status, 'stopped');
   assert.equal(f.copies.length, 1, '本批全部进程清理结束后复制停止事实与部分输出');
+  assert.equal(JSON.parse(f.copies[0]!).tool_results.find((r: any) => r.request_id === 'before').status, 'done');
+  assert.equal(f.call(CHANNELS.copyToolResults).ok, true);
+  assert.equal(f.copies[1], f.copies[0]);
+  await delay(50); assert.equal(f.sent.length, 0, '后台结束后不发送同批其他已完成结果');
+});
+
+it('用户中断即使停止进程失败，本批自然完成后也不恢复自动回传', async t => {
+  const f = await fixture(t, true);
+  await f.call(CHANNELS.setToolConfig, { automatic: true, sendIntervalSeconds: 0 });
+  const text = batch('stop-failed', 'Write-Output before; Start-Sleep -Seconds 2; Write-Output after', 'printf before; sleep 2; printf after');
+  f.setReply(text); await f.system.accept(text, 'complete');
+  await until(() => !!(f.system.getState().results[0]?.data as any)?.process_id);
+  const execute = ToolProcesses.prototype.execute;
+  const mock = t.mock.method(ToolProcesses.prototype, 'execute', async function(this: ToolProcesses, ...args: Parameters<typeof execute>) {
+    if (args[1] === 'stop_process') throw new Error('停止进程失败');
+    return execute.apply(this, args);
+  });
+  const processId = (f.system.getState().results[0]!.data as any).process_id;
+  await assert.rejects(f.call(CHANNELS.stopToolCommand, { batch_id: 'stop-failed', request_id: 'cmd', process_id: processId }), /停止进程失败/);
+  mock.mock.restore();
+  assert.equal(f.system.getState().continuation?.phase, 'paused');
+  await until(() => !!f.system.getState().completion && !f.system.getState().busy);
+  await delay(50); assert.equal(f.sent.length, 0);
+  assert.equal(f.system.getState().results[0]?.status, 'done', '停止失败保留自然完成事实');
+  assert.equal(f.copies.length, 1);
+  assert.match(f.copies[0]!, /after/);
 });
 
 it('含多个请求但校验不通过时统一返回批次错误，不执行合法的前一条也不伪造失败工具身份', async t => {

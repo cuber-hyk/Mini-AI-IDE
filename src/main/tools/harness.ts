@@ -31,6 +31,7 @@ export interface ToolDiagnostic {
   cancelled?: boolean;
 }
 interface BatchSelection extends ToolSelection {
+  userInterrupted?: true;
   executed?: boolean;
   startId?: number;
   notified?: boolean;
@@ -72,7 +73,7 @@ export class ToolHarness {
     const message = storageError
       ? `工具记录加载失败，工具执行和自动继续已停用；原始记录与权限未重置。${storageError}。请使用匹配版本或恢复有效记录后重启。`
       : this.message;
-    return { config: storageError ? { ...config, automatic: false } : config, results, message, busy: this.waiting > 0, ...(this.selection && !this.selection.executed ? { restored: true as const } : {}), ...(this.selection?.startId ? { batchStart: { id: this.selection.startId, batch_id: this.selection.batch.batch_id } } : {}), ...(storageError ? { storageError } : {}), ...(this.diagnostic ? { batchError: { ...this.diagnostic.error } } : {}), ...(this.completion ? { completion: { ...this.completion } } : {}) };
+    return { config: storageError ? { ...config, automatic: false } : config, results, message, busy: this.waiting > 0, ...(this.selection?.userInterrupted ? { userInterrupted: true as const } : {}), ...(this.selection && !this.selection.executed ? { restored: true as const } : {}), ...(this.selection?.startId ? { batchStart: { id: this.selection.startId, batch_id: this.selection.batch.batch_id } } : {}), ...(storageError ? { storageError } : {}), ...(this.diagnostic ? { batchError: { ...this.diagnostic.error } } : {}), ...(this.completion ? { completion: { ...this.completion } } : {}) };
   }
   get state(): ToolState { return this.getState(); }
   getDiagnostic(): ToolDiagnostic | null {
@@ -113,6 +114,13 @@ export class ToolHarness {
   }
 
   report(message: string): void { this.message = message; this.publish(); }
+
+  /** 身份已核验的用户中断撤回本批自动回传，不取消其他工具或复制。 */
+  markUserInterrupted(): void {
+    if (!this.selection) return;
+    this.selection.userInterrupted = true;
+    this.report('用户已中断，本批不再自动回传；真实工具结果仍可复制');
+  }
 
   cancel(): void {
     this.generation++;

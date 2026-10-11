@@ -1,7 +1,7 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-10
+updated: 2026-10-11
 owner: 胡运宽
 source_of_truth: [src/main/toolWorkspaceStatus.ts, src/renderer/toolAttention.js, src/renderer/fileWorkspace.js, src/renderer/editorTabs.js, test/toolWorkspaceStatus.test.ts, test/toolAttention.test.ts, test/fileWorkspace.test.ts, src/main/toolSettingsWindow.ts, src/main/toolSettingsIpc.ts, src/main/toolSettingsPreload.ts, src/shared/toolSettings.ts, src/renderer/toolSettings.html, src/renderer/toolSettings.js, src/renderer/toolSettings.css, src/renderer/toolCompletionSound.js, test/toolSettingsWindow.test.ts, test/toolSettingsIpc.test.ts, test/toolSettingsUi.test.ts, src/main/workspaceProbe.ts, docs/adr/2026-10-09-batch-error-auto-return.md, docs/adr/2026-10-09-tool-attachment-return.md, src/main/tools/attachments.ts, src/main/tools/resultReturn.ts, test/toolAttachmentIntegration.test.ts, test/toolAttachments.test.ts, test/toolResultReturn.test.ts, docs/capabilities/skills-and-local-prompt.md, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, src/renderer/workspaceLayout.js, src/main/workspaceLayoutController.ts, src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, tools/verify-web-result-sender.cjs, src/shared/toolJsonDiagnostic.ts, src/main/tools/resultClipboard.ts, src/renderer/toolExecutionClock.js, test/toolJsonDiagnostic.test.ts, test/toolResultClipboard.test.ts, test/toolExecutionClock.test.ts, test/toolExecutionIntegration.test.ts, src/shared/toolProtocol.ts, src/main/tools/harness.ts, src/main/tools/store.ts, src/main/tools/files.ts, src/main/tools/processes.ts, src/main/tools/changes.ts, src/main/tools/autoCollector.ts, src/main/tools/replyObservation.ts, src/main/tools/replyContinuation.ts, src/main/tools/replyChangeWatcher.ts, src/main/tools/integration.ts, src/renderer/toolHarness.js, src/renderer/toolHarness.css, src/renderer/toolPanelLayout.js, src/renderer/toolResultPresentation.js, test/toolProtocol.test.ts, test/toolHarness.test.ts, test/toolIntegration.test.ts, test/toolAutoCollector.test.ts, test/replyObservation.test.ts, test/replyChangeWatcher.test.ts, test/toolHarnessUi.test.ts, test/toolPanelLayout.test.ts, test/toolResultPresentation.test.ts, test/deepseekReplyState.test.ts, test/toolChanges.test.ts, test/toolProcesses.test.ts]
 ---
@@ -40,7 +40,7 @@ AI 输出规范请求，IDE 只读采集、校验、按权限执行并显示真�
 
 批准可仅一次或记住本项目精确请求；工作目录到项目根的配置与直接引用脚本变化使规则失效。字面路径支持引号、空格和中文；展开、拼接、嵌套 shell 或无法确定的引用仅支持当次批准。外部脚本不读取正文建立授权指纹，只支持当次批准。设置可清除本项目规则。规则不是命令沙箱，不保证约束间接脚本和联网。
 
-批次顺序执行，前置失败返回 skipped_dependency。结果含 batch_id/request_id/tool/status/data/error；非零退出和超时如实返回。成功查询或停止进程时，进程的失败状态作为 data 保留，工具本身完成，只有调用异常才失败。等待批准、运行、完成、失败、拒绝、取消与重启未知可见。每条运行命令旁的中断只停止对应进程树，不影响其他命令或后续无依赖请求；显式依赖被中断前台命令的请求跳过，保留已执行事实。
+批次顺序执行，前置失败返回 skipped_dependency。结果含 batch_id/request_id/tool/status/data/error；非零退出和超时如实返回。成功查询或停止进程时，进程的失败状态作为 data 保留，工具本身完成，只有调用异常才失败。等待批准、运行、完成、失败、拒绝、取消与重启未知可见。每条运行命令旁的中断停止对应进程树，并立即撤回本批自动回传；不影响其他命令或后续无依赖请求，真实结果与复制保留；显式依赖被中断前台命令的请求跳过，保留已执行事实。
 
 去重仅存配置、散列、请求状态，先落盘再执行。最多 10,000 批，达到上限明确停止，不淘汰引入重放。输出正文仅保留最近采集的一轮，界面和复制使用同一结果；新轮开始或解析失败清空旧正文，旧轮迟到输出不混入。重启不自动展示历史；重新采集该批只恢复状态元数据，不恢复原输出或运行 unknown 请求。
 
@@ -94,7 +94,7 @@ DeepSeek 主回复使用当前回复页脚的原生复制、可用重新生成�
 
 ## 自动继续与结果发送
 
-`autoContinuation.ts` 独立拥有完成事件去重、等待、倒计时和一次发送状态。发送只消费当前项目/会话/批次的新完成事件；真实 started_at 的 done/failed 结果、以及真实开始和结束、`data.status: 'stopped'` 且清理已完成的单条命令结果均可回传，后者保留 cancelled/failed 事实与部分输出。完整批次仅含 permission_denied 与 skipped_dependency 且至少有一项权限拒绝时，可回传拒绝回执；不执行被拒绝工具、不上传附件。整批取消、普通 cancelled、unknown、后台启动与 cleanup_pending 继续阻断或等待；普通无执行失败仍等待用户。执行前整批校验失败由 harness 在全部失败回执保存成功后标记当前 completion.validation_failed，整批均 failed 且没有执行时间或数据时可自动回传完整请求回执；不执行工具，不读取或上传附件。该标记不持久化，历史恢复没有发送资格。与解析层 batchError 共用连续 5 次额度，第 6 次暂停；校验错误回传成功不清零，正常执行结果成功发送或实际切项目/会话后清零。历史恢复与重复广播不启动发送。
+`autoContinuation.ts` 独立拥有完成事件去重、等待、倒计时和一次发送状态。发送只消费当前项目/会话/批次的新完成事件；真实 started_at 的 done/failed 结果、以及真实开始和结束、`data.status: 'stopped'` 且清理已完成的单条命令结果均可回传，后者保留 cancelled/failed 事实与部分输出。用户手动中断在停止进程前为当前批次设置独立 `userInterrupted` 标记，立即暂停本批自动回传正文及附件；停止失败、清理完成、自然退出或重开 automatic 均不恢复，下一新批次不继承，复制仍按真实执行结果处理。完整批次仅含 permission_denied 与 skipped_dependency 且至少有一项权限拒绝时，可回传拒绝回执；不执行被拒绝工具、不上传附件。整批取消、普通 cancelled、unknown、后台启动与 cleanup_pending 继续阻断或等待；普通无执行失败仍等待用户。执行前整批校验失败由 harness 在全部失败回执保存成功后标记当前 completion.validation_failed，整批均 failed 且没有执行时间或数据时可自动回传完整请求回执；不执行工具，不读取或上传附件。该标记不持久化，历史恢复没有发送资格。与解析层 batchError 共用连续 5 次额度，第 6 次暂停；校验错误回传成功不清零，正常执行结果成功发送或实际切项目/会话后清零。历史恢复与重复广播不启动发送。
 
 限定发送与输出采集独立；后续只读 DOM 变化触发完整结束快照核验，合成 click 不冒充真实用户事件。
 
