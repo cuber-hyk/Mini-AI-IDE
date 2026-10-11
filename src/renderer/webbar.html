@@ -15,7 +15,10 @@
     <div id="bar" class="webbar">
       <div class="bar-wide">
         <button id="btn-workspace-toggle" type="button" class="ui-icon" aria-label="收起工作区" title="收起工作区" aria-pressed="true"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1"/><path d="M5 2.5v11"/></svg></button>
-        <span class="webbar-title">DeepSeek</span>
+        <select id="web-platform" class="webbar-platform ui-button" aria-label="AI 官网平台" title="切换 AI 官网平台" disabled>
+          <option value="deepseek" selected>DeepSeek</option>
+          <option value="chatgpt">ChatGPT</option>
+        </select>
         <span id="tool-workspace-status" class="tool-workspace-status" role="status" aria-live="polite">正在读取工具状态</span>
         <span class="spacer"></span>
         <span id="collect-status" class="collect-status" role="status" aria-live="polite"></span>

@@ -78,6 +78,8 @@ token_source: design-tokens.json
 
 文件树、树内输入、右键菜单及空白编辑区域由 `src/renderer/fileExplorer.js` 管理，静态图标由 `src/renderer/fileIcons.js` 管理，局部样式为 `src/renderer/fileExplorer.css`；编辑缓冲及独立模型由 `src/renderer/editorWorkspace.js` 管理，标签呈现由 `src/renderer/editorTabs.js` 管理，原生确认由 `src/main/editorSession.ts` 与 `src/main/workspaceController.ts` 管理。测试入口为 `test/fileExplorer.test.ts`、`test/fileIcons.test.ts`、`test/fileManagement.test.ts`、`test/workspaceController.test.ts`；原生交互验收入口为 `src/main/workspaceProbe.ts`（`pnpm run verify:workspace`）。
 
+官网顶栏以具名平台选择框直接切换 DeepSeek / ChatGPT，每次启动默认 DeepSeek；窄栏仍保留选择入口，摘要可省略。切换中禁用选择，失败恢复权威平台并显示原因。DeepSeek 与 ChatGPT 普通对话共用采集、本地需求和自动继续入口；ChatGPT 本轮仅纯文本，附件需求明确拒绝并保留暂存文件，工具附件操作仍只复制。平台未就绪或切换中禁用相关入口，保留草稿、结果复制和文件编辑。平台 IPC 仅传固定 ID，布局与原生视图仍由主进程 owner 管理。
+
 ## Provisional Rules
 
 工作区各区域默认宽度、窗口最小宽度、控件尺寸与色值沿用当前实现，待用户实际使用后确认；不据此扩展未出现的页面。

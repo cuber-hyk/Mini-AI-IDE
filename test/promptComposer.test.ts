@@ -40,6 +40,8 @@ function setup(overrides: Record<string, unknown> = {}) {
     requirement: input, 'requirement-panel': requirementPanel, 'prompt-custom': custom, 'prompt-actions': actions,
   };
   const bridge = {
+    async getWebPlatform() { return { platform: 'deepseek', switching: false }; },
+    onWebPlatformState() {},
     async getPromptStatus() { return current; },
     onPromptStatus(fn: typeof listener) { listener = fn; },
     ...overrides,

@@ -129,3 +129,45 @@ it('唯一自定义初始化与复制共用协议，关闭初始化不会携带�
   await f.controller.send(f.input);
   assert.ok(!f.sent[1]!.text.includes(custom));
 });
+
+it('非活动网页拒绝需求发送；发送忙判据覆盖组装与运输，取消保留附件', async () => {
+  const f = fixture(); let available = false; let clears = 0;
+  f.options.webAvailable = () => available; f.options.attachments.clear = () => { clears++; };
+  assert.equal(f.controller.isSending, false); assert.equal((await f.controller.send(f.input)).ok, false); assert.equal(f.sent.length, 0);
+  available = true; let release!: (value: unknown) => void;
+  const originalLoad = f.options.skills.load;
+  f.options.skills.load = () => new Promise(resolve => { release = resolve; });
+  const pending = f.controller.send(f.input); assert.equal(f.controller.isSending, true);
+  available = false; f.controller.cancel(false); assert.equal(clears, 0);
+  release(await originalLoad(null, 'review')); assert.equal((await pending).ok, false); assert.equal(f.sent.length, 0); assert.equal(f.controller.isSending, false);
+});
+
+it('附件解析跨 await 后复核网页活动状态且保留尚未发送的附件', async () => {
+  const f = fixture(); let available = true; f.options.webAvailable = () => available;
+  f.controller.setOptions({ includeInitialization: false }); let release!: (value: unknown) => void; let removed = 0;
+  f.options.attachments.resolve = () => new Promise(resolve => { release = resolve; }); f.options.attachments.remove = () => { removed++; };
+  const pending = f.controller.send({ ...f.input, skills: [] });
+  while (!release) await Promise.resolve();
+  available = false; release([{ id: 'pending-file' }]);
+  assert.equal((await pending).ok, false); assert.equal(f.sent.length, 0); assert.equal(removed, 0); assert.equal(f.controller.isSending, false);
+});
+
+it('运输期间网页活动守卫实时撤销，isSending 直到运输返回才结束', async () => {
+  const f = fixture(); let available = true; f.options.webAvailable = () => available;
+  f.controller.setOptions({ includeInitialization: false }); let current!: () => boolean; let release!: (value: unknown) => void;
+  f.options.sender.send = (_text: string, _session: string, _kind: string, guard: () => boolean) => { current = guard; return new Promise(resolve => { release = resolve; }); };
+  const pending = f.controller.send({ ...f.input, skills: [] }); while (!release) await Promise.resolve();
+  assert.equal(f.controller.isSending, true); assert.equal(current(), true); available = false; assert.equal(current(), false);
+  release({ ok: false, error: 'inactive' }); assert.equal((await pending).ok, false); assert.equal(f.controller.isSending, false);
+});
+
+it('ChatGPT 纯文本阶段拒绝附件需求，不解析或删除用户暂存文件', async () => {
+  const f = fixture(); let resolves = 0; let removes = 0;
+  f.options.attachmentsAvailable = () => false;
+  f.options.attachments.resolve = async () => { resolves++; return []; };
+  f.options.attachments.remove = () => { removes++; };
+  const result = await f.controller.send({ ...f.input, attachments: ['staged-file'] });
+  assert.equal(result.ok, false); assert.match(result.error!, /纯文本/);
+  assert.equal(resolves, 0); assert.equal(removes, 0); assert.equal(f.sent.length, 0);
+  assert.equal((await f.controller.send({ ...f.input, attachments: [] })).ok, true);
+});

@@ -252,3 +252,23 @@ it('文件区全屏中的 Diff 拓宽不覆盖退出全屏时的正常宽度', a
   assert.equal(f.controller.layout.fileBounds.width, width);
   assert.equal(f.settings.get().workspaceLayout.fileWidth, width);
 });
+
+it('平台切换仅替换活动官网，缩放和文件区全屏继续使用统一布局', async () => {
+  const f = await fixture(); const deepseek = f.views.web; const saved = f.settings.get();
+  const chatgpt = { bounds: null as any, visible: false,
+    setBounds(bounds: any) { this.bounds = bounds; }, setVisible(visible: boolean) { this.visible = visible; } };
+  f.controller.setWebView(chatgpt);
+  assert.equal(deepseek.visible, false);
+  assert.deepEqual(chatgpt.bounds, f.controller.layout.webBounds);
+  assert.equal(chatgpt.visible, true);
+  f.resize(1400, 850);
+  assert.deepEqual(chatgpt.bounds, f.controller.layout.webBounds);
+  f.invoke(CHANNELS.setWorkspaceLayout, { fileMaximized: true });
+  assert.equal(chatgpt.visible, false);
+  f.controller.setWebView(deepseek);
+  assert.equal(chatgpt.visible, false);
+  assert.equal(deepseek.visible, false);
+  f.invoke(CHANNELS.setWorkspaceLayout, { fileMaximized: false });
+  assert.equal(deepseek.visible, true);
+  assert.deepEqual(f.settings.get(), saved, '切换平台和临时全屏不改用户布局偏好');
+});

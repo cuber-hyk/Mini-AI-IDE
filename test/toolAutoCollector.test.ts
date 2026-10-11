@@ -123,3 +123,19 @@ it('已确认首页交接结束遗留历史等待，但不伪造生成态或丢�
   auto.continueAt('another-address'); reply.url = 'another-address'; await auto.tick();
   assert.deepEqual(output, ['first tools'], '交接保留已消费正文，不重复执行'); auto.dispose();
 });
+
+it('旧错误经过普通回复后重现不产生第二次采集，首次也不执行无来源的新历史', async () => {
+  let reply: AutoReply = { url: 'same', text: 'finished', completion: 'complete', source: 'history' };
+  const collected: string[] = [];
+  const auto = new AutoCollector(async () => reply, async text => { collected.push(text); }, () => {});
+  auto.setEnabled(true); await auto.tick();
+  reply = { ...reply, text: 'broken JSON', source: 'new' }; await auto.tick();
+  reply = { ...reply, text: 'plain reply', source: 'new' }; await auto.tick();
+  reply = { ...reply, text: 'broken JSON', source: 'new' }; await auto.tick();
+  reply = { ...reply, text: 'unreserved historical tools', source: 'history' }; await auto.tick();
+  reply = { ...reply, text: 'unknown replaced tools', source: 'unknown' }; await auto.tick();
+  assert.deepEqual(collected, ['broken JSON', 'plain reply']);
+  reply = { url: 'another', text: 'another baseline', completion: 'complete', source: 'history' }; await auto.tick();
+  reply = { ...reply, text: 'broken JSON', source: 'new' }; await auto.tick();
+  assert.equal(collected.at(-1), 'broken JSON', '新的会话不继承旧会话内容去重'); auto.dispose();
+});

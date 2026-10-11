@@ -10,6 +10,9 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
 const CH = {
+  getWebPlatform: 'ui:get-web-platform',
+  setWebPlatform: 'ui:set-web-platform',
+  webPlatformState: 'ui:web-platform-state',
   restoreFileWorkspace: 'ui:restore-file-workspace',
   toggleWorkspace: 'ui:toggle-workspace',
   chromeState: 'ui:chrome-state',
@@ -20,6 +23,9 @@ const CH = {
 } as const;
 
 const bridge = {
+  getWebPlatform: () => ipcRenderer.invoke(CH.getWebPlatform),
+  setWebPlatform: (platform: unknown) => ipcRenderer.invoke(CH.setWebPlatform, platform),
+  onWebPlatformState: (listener: (state: unknown) => void) => ipcRenderer.on(CH.webPlatformState, (_event, state) => listener(state)),
   restoreFileWorkspace: () => ipcRenderer.invoke(CH.restoreFileWorkspace),
   toggleWorkspace: () => ipcRenderer.invoke(CH.toggleWorkspace),
   onChromeState: (listener: (state: unknown) => void) => ipcRenderer.on(CH.chromeState, (_event, state) => listener(state)),

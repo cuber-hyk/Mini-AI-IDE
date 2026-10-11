@@ -1,7 +1,7 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-07
+updated: 2026-10-11
 owner: 胡运宽
 source_of_truth: ["docs/adr/2026-10-02-honest-electron-identity.md","docs/adr/2026-10-02-zero-injection-and-automation-trace-baseline.md","tools/reachability-probe/main.js","src/main/index.ts","src/main/diagnose.ts","src/main/selfTest.ts","test/limits-and-ua.test.ts"]
 ---
@@ -18,10 +18,11 @@ source_of_truth: ["docs/adr/2026-10-02-honest-electron-identity.md","docs/adr/20
 
 | 项 | 值 |
 |---|---|
-| **分区常量** | **`persist:postcheck`** |
-| 磁盘目录 | `%APPDATA%\mini-ai-ide\Partitions\postcheck` |
+| **DeepSeek 分区** | **`persist:postcheck`** |
+| **ChatGPT 分区** | **`persist:postcheck-02`** |
+| 磁盘目录 | `%APPDATA%\mini-ai-ide\Partitions\postcheck` 与 `postcheck-02` |
 | 命名理由 | 中性，不含应用名/项目名，长期留痕在磁盘上也不暴露工具身份 |
-| 多平台 | 每个目标平台一个独立分区（当前仅 DeepSeek） |
+| 多平台 | 每个平台固定独立分区，切换复用已有视图，启动默认 DeepSeek；ChatGPT 普通对话接入纯文本协作，登录保持须单独人工验收，见 `web-platforms.md` |
 | 实验隔离 | 需要隔离实验时用后缀（如 `persist:postcheck-experiment`），**不得**用后缀替代正式分区 |
 
 ## ⚠️ 跨应用迁移禁忌（实测教训）
@@ -43,7 +44,9 @@ P2 期间把 P0b 工具（`reachability-probe`）的 profile 目录整体迁移�
 
 因此：**每个需要登录态的应用各自登录一次**；P0b 工具的登录不会帮助本应用。
 
-## 登录态的载体（实测：**不在 cookie 里**）
+## DeepSeek 登录态载体（实测：**不在 cookie 里**）
+
+本节存储实测仅描述 DeepSeek，不能据此推断 ChatGPT 的认证载体。ChatGPT 不执行凭据/页面存储诊断，其登录可用性和保持状态由用户实际确认。
 
 实测发现：DeepSeek 的登录态存放在 **`localStorage`**，cookie 里只有设备指纹与缓存标记。
 

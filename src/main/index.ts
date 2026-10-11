@@ -3,6 +3,10 @@ import { LocalPromptController } from './localPromptController';
 import { LocalPromptAttachments } from './localPromptAttachments';
 import { SkillService } from './skills';
 import { WebComposerSender } from './webComposerSender';
+import { WEB_PLATFORMS } from '../shared/webPlatform';
+import { webPlatformOf } from '../shared/webConversation';
+import { WebPlatformController } from './webPlatformController';
+import { createChatGPTView } from './webPlatformView';
 /**
  * Mini-AI-IDE 主进程
  *
@@ -56,9 +60,9 @@ import { createToolIntegration, readAutoReply, registerToolShutdown } from './to
  * P0b 实测登录产生的会话就保存在此分区；改名等于换一个新浏览器，用户需重新登录
  * （而重复登录本身有风控风险）。参见 docs/capabilities/session-persistence.md。
  */
-const SESSION_PARTITION = 'persist:postcheck';
+const SESSION_PARTITION = WEB_PLATFORMS.deepseek.partition;
 
-const TARGET_URL = process.env['MINI_AI_IDE_TARGET_URL'] ?? 'https://chat.deepseek.com/';
+const TARGET_URL = process.env['MINI_AI_IDE_TARGET_URL'] ?? WEB_PLATFORMS.deepseek.url;
 /**
  * 提示词编辑面板（覆盖式浮层）的尺寸区间。
  *
@@ -168,14 +172,15 @@ async function bootstrap(): Promise<void> {
     return { ...editor, x: parent.x + editor.x, y: parent.y + editor.y };
   }, () => screen.getCursorScreenPoint());
 
-  const webView = new WebContentsView({
-    webPreferences: {
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      partition: SESSION_PARTITION,
-    },
-  });
+  const webPagePreferences = {
+    contextIsolation: true,
+    nodeIntegration: false,
+    sandbox: true,
+    backgroundThrottling: false,
+    partition: SESSION_PARTITION,
+    userAgent: uaPlan.effective,
+  };
+  const webView = new WebContentsView({ webPreferences: webPagePreferences });
   // UA 处理：会话级 setUserAgent 对 WebContentsView **不生效**（P0b 实测教训，见 P0B-7），
   // 因此对视图的 webContents 再显式设置一次，并在自检中验证生效。
   webView.webContents.setUserAgent(uaPlan.effective);
@@ -240,7 +245,8 @@ async function bootstrap(): Promise<void> {
    */
   win.contentView.addChildView(promptView);
   const skills = new SkillService(probeDirectory ? path.join(probeDirectory, 'global-skills') : undefined);
-  const composerSender = new WebComposerSender(webView.webContents, { allowLocalFixture: WORKSPACE_PROBE });
+  let activeWeb = webView.webContents;
+  let composerSender = new WebComposerSender(activeWeb, { allowLocalFixture: WORKSPACE_PROBE });
   let localPrompt: LocalPromptController | undefined;
   const layoutController = new WorkspaceLayoutController(win,
     { editor: editorView, web: webView, webbar: webBarView, preview: previewView }, settings,
@@ -438,7 +444,6 @@ async function loadLocalView(
  */
   const toolWorkspaceStatus = registerToolWorkspaceStatus({ ipc: ipcMain, webbar: webBarView.webContents,
     open: () => layoutController.update({ toolsVisible: true, previewVisible: false, fileVisible: true }) });
-  await loadLocalView(webBarView, 'webbar.html');
   // 提示词面板：同样是本地页面。它的 handler 已在上方注册完毕（见那段注释）。
   await loadLocalView(promptView, 'prompt.html');
 
@@ -497,6 +502,7 @@ async function loadLocalView(
     review: previewView.webContents, skills,
     // Keep the full sender contract: local prompts pass their current-scope guard and staged attachments.
     sender: composerSender,
+    allowLocalFixture: WORKSPACE_PROBE,
     notifyReview: state => {
       if (previewView.webContents.isDestroyed()) return;
       previewView.webContents.send(CHANNELS.reviewState, state);
@@ -519,15 +525,49 @@ async function loadLocalView(
     if (state.restoreFocus) editorView.webContents.focus();
     editorView.webContents.send(CHANNELS.toolSettingsVisibility, state);
   });
+  let platformRevision = 0;
+  const platforms = new WebPlatformController({
+    ipc: ipcMain, editor: editorView.webContents, webbar: webBarView.webContents, deepseek: webView,
+    createChatGPT: () => {
+      const view = createChatGPTView();
+      view.setVisible(false);
+      win.contentView.addChildView(view, 2);
+      return view;
+    },
+    prepareSwitch: async () => {
+      const state = tools.getState();
+      if (state.busy || state.hasRunningProcesses || state.resultReturn?.phase === 'sending' ||
+          state.continuation?.phase === 'sending' || localPrompt?.isSending)
+        throw new Error('工具或需求正在执行或发送，请完成后再切换平台');
+      localPrompt?.cancel(false);
+      toolSettingsWindow?.hide(false);
+      await tools.setWebActive(false);
+    },
+    applyView: view => layoutController.setWebView(view),
+    changed: async state => {
+      platformRevision++;
+      const next = platforms.getView(state.platform).webContents;
+      if (next !== activeWeb) {
+        const nextSender = new WebComposerSender(next);
+        await tools.bindWeb(next, nextSender);
+        activeWeb = next; composerSender = nextSender;
+      }
+      await tools.setWebActive(!state.switching);
+    },
+  });
+  const platformChannels = platforms.register();
   localPrompt = new LocalPromptController({ ipc: ipcMain, editor: editorView.webContents, settings, skills, attachments: new LocalPromptAttachments(),
     chooseFiles: async () => { const root = fileService.getRoot(); const result = await dialog.showOpenDialog(win, { title: '选择需求附件', ...(root ? { defaultPath: root } : {}),
       properties: ['openFile', 'multiSelections'], filters: [{ name: '文档与图片', extensions: ['txt', 'md', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'png', 'jpg', 'jpeg', 'webp', 'gif'] }] }); return result.canceled ? [] : result.filePaths; },
     sender: { send: (text, session, _kind, current, attachments) => tools.sendLocalPrompt(text, session, current, attachments), cancel: kind => composerSender.cancel(kind) },
     resolveWorkspacePath: relative => fileService.resolveSafePath(relative).then(result => result.ok ? { ok: true, absolute: result.absolute } : { ok: false, error: result.error }),
-    root: () => fileService.getRoot(), session: () => sessionKeyOf(webView.webContents.getURL()),
+    root: () => fileService.getRoot(), session: () => sessionKeyOf(activeWeb.getURL()),
+    webAvailable: () => !platforms.state.switching && (WORKSPACE_PROBE || webPlatformOf(activeWeb.getURL()) !== null),
+    attachmentsAvailable: () => platforms.state.platform === 'deepseek',
     busy: () => { const state = tools.getState(); return state.busy || state.resultReturn?.phase === 'sending' || ['countdown', 'sending', 'waiting_tools'].includes(state.continuation?.phase ?? ''); },
     disabled: SELF_TEST || (UI_PROBE && !WORKSPACE_PROBE) || DIAGNOSE });
   const localPromptChannels = localPrompt.register();
+  await loadLocalView(webBarView, 'webbar.html');
   // 先注册只读变更桥，再加载会立即请求初始状态的面板。
   await loadLocalView(previewView, 'preview.html');
   const updateWindow = new ApplicationUpdateWindow(win, () => updater!.getState(), () => {
@@ -559,7 +599,7 @@ async function loadLocalView(
   const registeredChannels = [
     ...registerWorkspaceFileDrag(ipcMain, editorView.webContents, fileService, file => app.getFileIcon(file, { size: 'small' })),
     ...registerFilePreviewIpc(ipcMain, editorView.webContents, fileService),
-    ...tools.channels, ...localPromptChannels,
+    ...tools.channels, ...localPromptChannels, ...platformChannels,
     ...registerToolSettingsIpc(ipcMain, { editor: editorView.webContents, panel: () => toolSettingsWindow!.contents,
       current: () => toolSettingsWindow!.current, getState: getToolSettings,
       viewport: () => { const bounds = editorView.getBounds(), zoom = editorView.webContents.getZoomFactor(); return { width: bounds.width / zoom, height: bounds.height / zoom }; },
@@ -582,13 +622,19 @@ async function loadLocalView(
   ipcMain.handle(CHANNELS.collectReply, (event): Promise<ReturnPreview> => {
     if (![editorView.webContents, webBarView.webContents].some(view => event.sender === view && event.senderFrame === view.mainFrame)) throw new Error('采集仅供本地视图使用');
     const requestedRevision = workspace.getState().revision;
+    const requestedPlatformRevision = platformRevision;
     return workspaceController.run(async () => {
     const emptyId = `c${(collectionSeq += 1)}`;
+    if (platforms.state.switching) return {
+      ok: false, collectionId: emptyId, strategyId: null, strategyDescription: null, attempts: [], replyText: '',
+      notes: [], blocks: [], error: '正在切换官网平台，请稍后重新采集',
+    };
     if (workspace.getState().revision !== requestedRevision) return {
       ok: false, collectionId: emptyId, strategyId: null, strategyDescription: null, attempts: [], replyText: '',
       notes: [], blocks: [], error: '目录已切换，请在新目录重新采集',
     };
-    if (webView.webContents.isDestroyed()) {
+    const requestedWeb = activeWeb;
+    if (requestedWeb.isDestroyed()) {
       return {
         ok: false,
         collectionId: emptyId,
@@ -602,7 +648,11 @@ async function loadLocalView(
       };
     }
 
-    const snapshot = await readAutoReply(webView.webContents);
+    const snapshot = await readAutoReply(requestedWeb, { allowLocalFixture: WORKSPACE_PROBE });
+    if (requestedPlatformRevision !== platformRevision) return {
+      ok: false, collectionId: emptyId, strategyId: null, strategyDescription: null, attempts: [], replyText: '',
+      notes: [], blocks: [], error: '采集期间平台已切换，请重新采集',
+    };
     const collected = snapshot.collected;
 
     if (collected.strategyId === null || collected.replyText.length === 0) {
@@ -1048,6 +1098,7 @@ async function loadLocalView(
     });
   });
   win.on('closed', () => {
+    platforms.dispose();
     toolSettingsWindow?.dispose();
     updateWindow.dispose();
     updater?.dispose();

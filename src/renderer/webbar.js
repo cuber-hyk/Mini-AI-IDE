@@ -7,6 +7,7 @@
     workspaceToggle: document.getElementById('btn-workspace-toggle'),
     toolStatus: document.getElementById('tool-workspace-status'),
     toolOpen: document.getElementById('btn-tool-workspace'),
+    platform: document.getElementById('web-platform'),
   };
   if (!bridge || Object.values(el).some(function (node) { return !node; })) return;
   const restore = document.getElementById('btn-file-restore');
@@ -15,8 +16,39 @@
   let summary;
   let countdownTimer;
   let statusReceived = false;
+  let platform = null;
+  let platformVersion = 0;
+  let switching = false;
+  let collecting = false;
+  let switchError = '';
+  let platformReadError = '';
+  function supported() { return platform && ['deepseek', 'chatgpt'].includes(platform.platform) && !platform.switching && !switching; }
+  function platformReason() {
+    return !platform ? '平台状态读取失败，采集暂不可用' : platform.switching || switching ? '正在切换官网平台…'
+      : '';
+  }
+  function renderPlatform() {
+    el.platform.disabled = !platform || platform.switching || switching;
+    el.platform.value = platform ? platform.platform : 'deepseek';
+    const error = switchError || platformReadError || platform && platform.error;
+    el.platform.title = error || platformReason() || '切换 AI 官网平台';
+    el.collect.disabled = collecting || !supported();
+    if (!collecting) el.collect.title = error || platformReason() || '只读采集最新回复，结果显示在工具区';
+    if (error) feedback(error, true);
+    else if (platformReason()) feedback(platformReason(), !platform);
+    else if (!collecting) feedback('');
+    renderToolStatus();
+  }
+  function receivePlatform(next) { platform = next; platformReadError = ''; renderPlatform(); }
   function renderToolStatus() {
-    if (!summary) return;
+    if (countdownTimer !== undefined) window.clearTimeout(countdownTimer);
+    countdownTimer = undefined;
+    if (!supported()) {
+      const text = platformReason(); el.toolStatus.textContent = text; el.toolStatus.title = text;
+      el.toolStatus.classList.toggle('warn', !platform); el.toolStatus.classList.toggle('running', Boolean(platform && platform.switching || switching));
+      return;
+    }
+    if (!summary) { el.toolStatus.textContent = '正在读取工具状态'; el.toolStatus.title = el.toolStatus.textContent; return; }
     const countdown = summary.phase === 'countdown' && Number.isFinite(summary.dueAt)
       ? ' · ' + Math.max(0, Math.ceil((summary.dueAt - Date.now()) / 1000)) + ' 秒后回传' : '';
     const count = summary.count > 0 ? ' · ' + summary.count + ' 项' : '';
@@ -26,16 +58,32 @@
     el.toolStatus.classList.toggle('warn', ['approval', 'failed', 'paused'].includes(summary.phase));
     el.toolStatus.classList.toggle('running', ['running', 'countdown', 'sending'].includes(summary.phase));
     el.toolOpen.title = '查看工具：' + message;
-    if (countdownTimer !== undefined) window.clearTimeout(countdownTimer);
-    countdownTimer = undefined;
     if (summary.phase === 'countdown' && Number.isFinite(summary.dueAt) && summary.dueAt > Date.now())
       countdownTimer = window.setTimeout(renderToolStatus, 250);
   }
   bridge.onToolWorkspaceStatus(function (state) { statusReceived = true; summary = state; renderToolStatus(); });
+  bridge.onWebPlatformState(function (next) { platformVersion += 1; receivePlatform(next); });
+  const initialPlatformVersion = platformVersion;
+  renderPlatform();
+  void bridge.getWebPlatform().then(function (next) { if (initialPlatformVersion === platformVersion) receivePlatform(next); })
+    .catch(function (error) { if (initialPlatformVersion === platformVersion) { platformReadError = '读取平台状态失败：' + (error instanceof Error ? error.message : String(error)); renderPlatform(); } });
+  el.platform.addEventListener('change', async function () {
+    if (el.platform.disabled || !platform || switching) return;
+    const requested = el.platform.value;
+    if (!['deepseek', 'chatgpt'].includes(requested) || requested === platform.platform) { renderPlatform(); return; }
+    const version = platformVersion; switching = true; switchError = ''; renderPlatform();
+    try { const next = await bridge.setWebPlatform(requested); if (version === platformVersion) receivePlatform(next); }
+    catch (error) {
+      switchError = '切换平台失败：' + (error instanceof Error ? error.message : String(error));
+      const refreshVersion = platformVersion;
+      try { const next = await bridge.getWebPlatform(); if (refreshVersion === platformVersion) receivePlatform(next); }
+      catch (_error) { if (refreshVersion === platformVersion) platform = null; }
+    } finally { switching = false; renderPlatform(); }
+  });
   void bridge.getToolWorkspaceStatus().then(function (state) {
     if (!statusReceived) { summary = state; renderToolStatus(); }
   }).catch(function () {
-    if (!statusReceived) { el.toolStatus.textContent = '工具状态读取失败'; el.toolStatus.classList.add('warn'); }
+    if (!statusReceived && supported()) { el.toolStatus.textContent = '工具状态读取失败'; el.toolStatus.classList.add('warn'); }
   });
   el.toolOpen.addEventListener('click', async function () {
     try { await bridge.openToolWorkspace(); }
@@ -48,7 +96,6 @@
     el.workspaceToggle.setAttribute('aria-label', el.workspaceToggle.title);
     el.workspaceToggle.setAttribute('aria-pressed', String(workspaceVisible));
   });
-  let collecting = false;
 
   function feedback(message, warn) {
     el.status.textContent = message;
@@ -58,22 +105,25 @@
     el.collect.title = message;
   }
   el.collect.addEventListener('click', async function () {
-    if (collecting) return;
+    if (collecting || !supported()) return;
+    const version = platformVersion;
     collecting = true;
     el.collect.disabled = true;
     el.collect.textContent = '采集中…';
     feedback('正在只读采集最新回复');
     try {
       const result = await bridge.collectReply();
+      if (version !== platformVersion || !supported()) return;
       if (result && result.ok && result.noNewContent) feedback('最新回复已采集，无新内容');
       else if (result && result.ok) feedback('已采集 ' + (result.blocks || []).length + ' 个变更');
       else feedback('采集失败：' + ((result && result.error) || '未采集到回复'), true);
     } catch (err) {
-      feedback('采集失败：' + (err instanceof Error ? err.message : String(err)), true);
+      if (version === platformVersion && supported()) feedback('采集失败：' + (err instanceof Error ? err.message : String(err)), true);
     } finally {
       collecting = false;
-      el.collect.disabled = false;
+      el.collect.disabled = !supported();
       el.collect.textContent = '采集回复';
+      if (!supported()) renderPlatform();
     }
   });
 })();

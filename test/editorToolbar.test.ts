@@ -50,13 +50,15 @@ it('项目路径只在目录区显示，完整路径保留在悬停提示', () =
 });
 
 function webbar(overrides: Record<string, unknown> = {}) {
-  const ids = ['bar', 'btn-collect', 'collect-status', 'btn-file-restore', 'btn-workspace-toggle', 'tool-workspace-status', 'btn-tool-workspace'];
+  const ids = ['bar', 'web-platform', 'btn-collect', 'collect-status', 'btn-file-restore', 'btn-workspace-toggle', 'tool-workspace-status', 'btn-tool-workspace'];
   const nodes = Object.fromEntries(ids.map(id => [id, node()]));
   nodes['btn-workspace-toggle'].hidden = false;
   let chrome: (value: unknown) => void = () => {};
   let toolStatus: (value: unknown) => void = () => {};
   const widths: number[] = [];
   const bridge = {
+    async getWebPlatform() { return { platform: 'deepseek', switching: false }; },
+    onWebPlatformState() {},
     async restoreFileWorkspace() { return {}; },
     async toggleWorkspace() { return {}; },
     async setPreviewPanel(width: number) { widths.push(width); return { width, visible: width > 0 }; },
@@ -80,7 +82,7 @@ it('官网顶栏在 DeepSeek 左侧固定提供工作区切换，不提供网页
   assert.doesNotMatch(html, /id="btn-(web|preview-toggle|restore)"/);
   assert.doesNotMatch(preload, /setWebVisible|setPreviewPanel/);
   assert.match(html, /id="btn-workspace-toggle"[^>]*aria-pressed="true"/);
-  assert.ok(html.indexOf('id="btn-workspace-toggle"') < html.indexOf('class="webbar-title"'));
+  assert.ok(html.indexOf('id="btn-workspace-toggle"') < html.indexOf('id="web-platform"'));
   assert.match(preload, /collectReply/);
   assert.match(preload, /toggleWorkspace/);
 });
@@ -88,6 +90,7 @@ it('官网顶栏在 DeepSeek 左侧固定提供工作区切换，不提供网页
 it('采集过程中拒绝重复请求，失败恢复按钮并提供可重试的诊断', async () => {
   let reject: (reason: unknown) => void = () => {}; let requests = 0;
   const ui = webbar({ collectReply: () => { requests++; return new Promise((_yes, no) => { reject = no; }); } });
+  await Promise.resolve();
   const button = ui.nodes['btn-collect'];
   const pending = button.fire('click'); await button.fire('click');
   assert.equal(requests, 1); assert.equal(button.disabled, true);
@@ -98,9 +101,10 @@ it('采集过程中拒绝重复请求，失败恢复按钮并提供可重试的�
 });
 
 it('成功采集在网页栏显示变更数量，重复回复提供无新内容反馈', async () => {
-  const ui = webbar(); await ui.nodes['btn-collect'].fire('click');
+  const ui = webbar(); await Promise.resolve(); await ui.nodes['btn-collect'].fire('click');
   assert.equal(ui.nodes['collect-status'].textContent, '已采集 2 个变更');
   const duplicate = webbar({ collectReply: async () => ({ ok: true, noNewContent: true }) });
+  await Promise.resolve();
   await duplicate.nodes['btn-collect'].fire('click');
   assert.match(duplicate.nodes['collect-status'].textContent, /无新内容/);
 });
@@ -125,6 +129,7 @@ it('工作区切换按钮固定在 DeepSeek 左侧，文件区收起后提供单
 it('工具详情可从顶栏零参数恢复，状态广播只更新摘要不主动打开标签', async () => {
   let opened = 0;
   const ui = webbar({ openToolWorkspace: async (...args: unknown[]) => { assert.equal(args.length, 0); opened++; } });
+  await Promise.resolve();
   ui.publishTools({ phase: 'approval', message: '工具需要批准', count: 2, automatic: true });
   assert.equal(opened, 0); assert.equal(ui.nodes['tool-workspace-status'].textContent, '工具需要批准 · 2 项');
   assert.equal(ui.nodes['tool-workspace-status'].classList.contains('warn'), true);
@@ -137,6 +142,7 @@ it('工具详情可从顶栏零参数恢复，状态广播只更新摘要不主�
 it('首次状态查询迟到不能覆盖新广播，倒计时使用主进程 dueAt', async () => {
   let resolve: (value: unknown) => void = () => {};
   const ui = webbar({ getToolWorkspaceStatus: () => new Promise(yes => { resolve = yes; }) });
+  await Promise.resolve();
   ui.publishTools({ phase: 'countdown', message: '工具结果等待回传', count: 1, automatic: true, dueAt: Date.now() + 3000 });
   assert.match(ui.nodes['tool-workspace-status'].textContent, /3 秒后回传/);
   resolve({ phase: 'idle', message: '工具空闲', count: 0, automatic: false });

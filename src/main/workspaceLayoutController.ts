@@ -31,6 +31,12 @@ export class WorkspaceLayoutController {
     };
   }
 
+  setWebView(view: WebContentsView): void {
+    if (this.views.web !== view) this.views.web.setVisible(false);
+    this.views.web = view;
+    this.apply();
+  }
+
   apply(): void {
     if (this.win.isDestroyed()) return;
     const [width, height] = this.win.getContentSize();

@@ -30,6 +30,9 @@
  * （与提示词组装侧 src/shared/snippet.ts 的 fenceFor 同一规则）。
  */
 
+import { webPlatformOf } from '../shared/webConversation';
+import { CHATGPT_COLLECT_SCRIPT } from './chatgptPage';
+
 export interface CollectStrategy {
   /** 策略标识（写进结果，便于诊断） */
   id: string;
@@ -318,6 +321,8 @@ export interface CollectRunner {
   evaluate(script: string): Promise<unknown>;
   /** 取当前页面 URL */
   currentUrl(): string;
+  /** 原生离线探针显式授权；生产入口不得开启。 */
+  allowLocalFixture?: boolean;
 }
 
 /**
@@ -327,11 +332,15 @@ export interface CollectRunner {
 export async function collectReply(runner: CollectRunner): Promise<CollectResult> {
   const attempts: CollectAttempt[] = [];
   const collectedAt = new Date().toISOString();
+  const platformOfCurrent = () => webPlatformOf(runner.currentUrl()) ?? (runner.allowLocalFixture === true && runner.currentUrl().startsWith('file://') ? 'deepseek' : null);
   const url = sanitize(runner.currentUrl());
+  const platform = platformOfCurrent();
+  const strategies: CollectStrategy[] = platform === 'chatgpt' ? [{ id: 'chatgpt-latest-assistant', description: 'ChatGPT 最新正式 assistant 回复与完整代码块', script: CHATGPT_COLLECT_SCRIPT }] : platform === 'deepseek' ? COLLECT_STRATEGIES : [];
 
-  for (const strategy of COLLECT_STRATEGIES) {
+  for (const strategy of strategies) {
     try {
       const raw = await runner.evaluate(strategy.script);
+      if (sanitize(runner.currentUrl()) !== url || platformOfCurrent() !== platform) break;
       const texts = normalizeStrategyOutput(raw);
       const text = texts.length > 0 ? (texts[texts.length - 1] as string) : '';
       attempts.push({
@@ -364,6 +373,7 @@ export async function collectReply(runner: CollectRunner): Promise<CollectResult
   // 全部失败：抓一份页面结构诊断，便于判断"选择器过期"还是"页面没输出"
   let diagnostic: PageDiagnostic | undefined;
   try {
+    if (!platform || sanitize(runner.currentUrl()) !== url) throw new Error('当前网页不支持采集');
     const raw = (await runner.evaluate(DIAGNOSTIC_SCRIPT)) as Partial<PageDiagnostic> | null;
     if (raw && typeof raw === 'object') {
       diagnostic = {

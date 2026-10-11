@@ -5,6 +5,9 @@ import { sessionKeyOf } from '../consumptionStore';
 import type { AutoReply } from './autoCollector';
 import { CONTINUATION_BUTTON } from './replyContinuation';
 import { traceCollection, traceScope, traceText } from './collectionTrace';
+import { webPlatformOf } from '../../shared/webConversation';
+import { CHATGPT_OBSERVATION_SCRIPT } from '../chatgptPage';
+import type { ReplySource } from './replySource';
 
 export const DEEPSEEK_SEND_ICON = 'M8.3125 0.980206C8.66767 1.05312 8.97902 1.2042';
 export const DEEPSEEK_REGENERATE_ICON = 'M7.92136 0.349152C10.3744 0.349234 12.5564 1.5052';
@@ -62,29 +65,48 @@ export const OBSERVATION_SCRIPT = `(() => {
   ${REPLY_NODES}
   const pres = reply ? reply.querySelectorAll('pre') : document.querySelectorAll('pre');
   const source = reply || pres[pres.length - 1];
+  globalThis.__miniAIReplyChanges?.updateSources?.();
+  const replySource = globalThis.__miniAIReplyChanges?.sources?.source(reply);
+  const sourceKey = globalThis.__miniAIReplyChanges?.sources?.key(reply);
+  if (completion === 'complete') globalThis.__miniAIReplyChanges?.sources?.seal(reply);
   const content = source ? String(source.innerHTML || source.textContent || '') : '';
   let first = 2166136261, second = 5381;
   for (let i = 0; i < content.length; i++) {
     first = Math.imul(first ^ content.charCodeAt(i), 16777619);
     second = Math.imul(second, 33) ^ content.charCodeAt(i);
   }
-  return { completion, signature: [nodes.length, pres.length, content.length, first >>> 0, second >>> 0, completion].join(':') };
+  return { completion, source: replySource, sourceKey, signature: [nodes.length, pres.length, content.length, first >>> 0, second >>> 0, completion, replySource || '', sourceKey || ''].join(':') };
 })()`;
 
-type WebReader = Pick<WebContents, 'getURL' | 'executeJavaScript'>;
+type WebReader = Pick<WebContents, 'getURL' | 'executeJavaScript'> & Partial<Pick<WebContents, 'executeJavaScriptInIsolatedWorld'>>;
+export interface ReplyReadOptions { allowLocalFixture?: boolean }
+const platformFor = (url: string, options: ReplyReadOptions) => webPlatformOf(url) ?? (options.allowLocalFixture === true && url.startsWith('file://') ? 'deepseek' : null);
+/** ChatGPT 停止生成见证与回复快照共享只读隔离世界，不向官网主世界暴露状态。 */
+function evaluateReply(web: WebReader, platform: 'deepseek' | 'chatgpt', script: string): Promise<unknown> {
+  if (platform === 'deepseek' && !web.executeJavaScriptInIsolatedWorld) return web.executeJavaScript(script);
+  if (!web.executeJavaScriptInIsolatedWorld) return Promise.resolve(null);
+  return web.executeJavaScriptInIsolatedWorld(1004, [{ code: platform === 'deepseek' ? script : `(() => { const platformOf = ${webPlatformOf.toString()}; if (platformOf(location.href) !== 'chatgpt') return null; return ${script}; })()` }]);
+}
 export type ReplySnapshot = AutoReply & { collected: CollectResult; signature?: string };
 const completionOf = (value: unknown): AutoReply['completion'] => ['generating', 'interrupted', 'complete', 'idle'].includes(String(value)) ? value as AutoReply['completion'] : 'unknown';
 
 /** 全文和结束状态在同一同步脚本读取；轻量探测不能替代此次完整快照。 */
-export async function readAutoReply(web: WebReader): Promise<ReplySnapshot> {
+export async function readAutoReply(web: WebReader, options: ReplyReadOptions = {}): Promise<ReplySnapshot> {
   const url = web.getURL(); let completion: AutoReply['completion'] = 'unknown'; let signature: string | undefined;
+  let source: ReplySource | undefined;
+  let sourceKey: string | undefined;
+  const platform = platformFor(url, options);
+  const observationScript = platform === 'chatgpt' ? CHATGPT_OBSERVATION_SCRIPT : OBSERVATION_SCRIPT;
   traceCollection('observation.full-start', { scope: traceScope(url) });
-  const collected = await collectReply({ currentUrl: () => web.getURL(), evaluate: async script => {
-    const snapshot: unknown = await web.executeJavaScript(`(() => { const replies = ${script}; const observation = ${OBSERVATION_SCRIPT}; const completion = observation.completion; return {replies,completion,signature:observation.signature}; })()`);
+  const collected = await collectReply({ ...options, currentUrl: () => web.getURL(), evaluate: async script => {
+    if (!platform) return [];
+    const snapshot: unknown = await evaluateReply(web, platform, `(() => { const replies = ${script}; const observation = ${observationScript}; const completion = observation.completion; return {replies,completion,source:observation.source,sourceKey:observation.sourceKey,signature:observation.signature}; })()`);
     if (!snapshot || typeof snapshot !== 'object') return [];
-    const value = snapshot as { replies?: unknown; completion?: unknown; signature?: unknown };
+    const value = snapshot as { replies?: unknown; completion?: unknown; signature?: unknown; source?: ReplySource; sourceKey?: string };
     completion = completionOf(value.completion);
     signature = typeof value.signature === 'string' ? value.signature : undefined;
+    source = value.source;
+    sourceKey = value.sourceKey;
     return value.replies;
   } });
   if (web.getURL() !== url) {
@@ -94,25 +116,27 @@ export async function readAutoReply(web: WebReader): Promise<ReplySnapshot> {
   const text = collected.replyText ?? '';
   traceCollection('observation.full-result', { scope: traceScope(url), completion, text: traceText(text), signature: signature ?? null,
     attempts: collected.attempts?.map(attempt => ({ strategyId: attempt.strategyId, ok: attempt.ok, length: attempt.length, error: attempt.error ?? null })) ?? [] });
-  return { url: sessionKeyOf(url), text, completion, collected, ...(signature !== undefined ? { signature } : {}) };
+  return { url: sessionKeyOf(url), text, completion, collected, ...(source ? { source } : {}), ...(sourceKey ? { sourceKey } : {}), ...(signature !== undefined ? { signature } : {}) };
 }
 
 /** 主进程缓存上一快照；空闲无变化和生成阶段不重复运行完整采集器。 */
 export class ReplyMonitor {
   private cached: ReplySnapshot | undefined;
-  constructor(private readonly web: WebReader) {}
+  constructor(private readonly web: WebReader, private readonly options: ReplyReadOptions = {}) {}
   async read(): Promise<AutoReply> {
     const url = this.web.getURL(); const scope = sessionKeyOf(url);
+    const platform = platformFor(url, this.options);
+    if (!platform) { this.cached = undefined; return { url: scope, text: '', completion: 'unknown' }; }
     traceCollection('observation.monitor-start', { scope: traceScope(url), cache: this.cached ? { ...traceScope(this.cached.url), ...traceText(this.cached.text), completion: this.cached.completion, signature: this.cached.signature ?? null } : null });
     if (this.cached?.url !== scope) this.cached = undefined;
-    const raw: unknown = await this.web.executeJavaScript(OBSERVATION_SCRIPT);
+    const raw: unknown = await evaluateReply(this.web, platform, platform === 'chatgpt' ? CHATGPT_OBSERVATION_SCRIPT : OBSERVATION_SCRIPT);
     if (this.web.getURL() !== url) { this.cached = undefined; traceCollection('observation.monitor-address-changed', { from: traceScope(url), to: traceScope(this.web.getURL()) }); return { url: sessionKeyOf(this.web.getURL()), text: '', completion: 'unknown' }; }
-    const observation = raw && typeof raw === 'object' ? raw as { completion?: unknown; signature?: unknown } : {};
+    const observation = raw && typeof raw === 'object' ? raw as { completion?: unknown; signature?: unknown; source?: ReplySource } : {};
     const completion = completionOf(observation.completion);
     traceCollection('observation.light-result', { scope: traceScope(scope), completion, signature: typeof observation.signature === 'string' ? observation.signature : null });
     if (completion === 'generating' || completion === 'interrupted' || completion === 'unknown') { traceCollection('observation.monitor-return', { reason: 'uncertain', completion, text: traceText(this.cached?.text ?? '') }); return { url: scope, text: this.cached?.text ?? '', completion }; }
     if (typeof observation.signature === 'string' && this.cached?.signature === observation.signature && this.cached.completion === completion) { traceCollection('observation.monitor-return', { reason: 'cache-hit', completion, text: traceText(this.cached.text) }); return this.cached; }
-    const latest = await readAutoReply(this.web);
+    const latest = await readAutoReply(this.web, this.options);
     this.cached = latest.signature ? latest : undefined;
     traceCollection('observation.monitor-return', { reason: 'full-read', completion: latest.completion, text: traceText(latest.text), signature: latest.signature ?? null });
     return latest;

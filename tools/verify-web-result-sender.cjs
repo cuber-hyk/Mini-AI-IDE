@@ -103,17 +103,17 @@ async function autoFixture() {
   `);
   const collected = [], reports = [], trustedTurns = [];
   let changes = 0;
-  const monitor = new ReplyMonitor(window.webContents);
+  const monitor = new ReplyMonitor(window.webContents, { allowLocalFixture: true });
   const auto = new AutoCollector(() => monitor.read(), async (text, current) => {
     assert.equal(current(), true);
     const parsed = parseToolBatch(text); assert.equal(parsed.kind, 'batch', text);
     collected.push(parsed.batch.batch_id);
-  }, message => reports.push(message));
+  }, message => reports.push(message), undefined, { allowLocalFixture: true });
   auto.setEnabled(true);
   const watcher = new ReplyChangeWatcher(window.webContents, async userTurn => {
     trustedTurns.push(userTurn);
     await auto.tick(); changes++;
-  }, (preserve, awaitHistory) => preserve ? auto.continueAt(sessionKeyOf(window.webContents.getURL())) : auto.reset(awaitHistory), message => reports.push(message));
+  }, (preserve, awaitHistory) => preserve ? auto.continueAt(sessionKeyOf(window.webContents.getURL())) : auto.reset(awaitHistory), message => reports.push(message), undefined, { allowLocalFixture: true });
   watcher.setEnabled(true);
   await until(() => changes > 0, '生产 watcher 未建立历史基线');
   await pause(700);
@@ -328,7 +328,7 @@ app.whenReady().then(async () => {
   await test('原生 watcher：同一首页回复节点分配地址保留基线，打开其他会话重建历史基线', async () => {
     await firstSetup('');
     let reset; let calls = 0;
-    const watcher = new ReplyChangeWatcher(window.webContents, async () => { calls++; }, (preserve, awaitHistory) => {reset={preserve,awaitHistory};}, message => assert.fail(message));
+    const watcher = new ReplyChangeWatcher(window.webContents, async () => { calls++; }, (preserve, awaitHistory) => {reset={preserve,awaitHistory};}, message => assert.fail(message), undefined, { allowLocalFixture: true });
     watcher.setEnabled(true); await until(()=>calls===1,'未建立初始基线');
     await window.webContents.executeJavaScript(`const reply=document.createElement('article');reply.className='ds-assistant-message-main-content ds-markdown';reply.textContent='正在生成';document.body.append(reply);`);
     await until(()=>calls>1,'未观察到首页新回复');
@@ -397,7 +397,7 @@ app.whenReady().then(async () => {
     let executions=0;
     ToolFiles.prototype.execute=async function(...args){ executions++; return executeFile.apply(this,args); };
     const handlers=new Map();const editor={mainFrame:{},send(){},isDestroyed:()=>false};
-    const system=await createToolIntegration({ipc:{handle:(c,f)=>handlers.set(c,f)},editor,web:window.webContents,files,
+    const system=await createToolIntegration({ipc:{handle:(c,f)=>handlers.set(c,f)},editor,web:window.webContents,files,allowLocalFixture:true,
       returnPath:new ReturnPathService(files),workspace:{editor:{isDirty:()=>false},run:f=>f()},sender,
       storePath:path.join(temporary,'tools-'+mode+'.json'),disabled:false,ask:async()=>({response:0,checkboxChecked:false}),notifyFile(){},copy(){}});
     const waitForScope=scope=>until(async()=>await window.webContents.executeJavaScriptInIsolatedWorld(REPLY_WATCH_WORLD,[{code:'globalThis.__miniAIReplyChanges?.scope'}])===scope,'原生 watcher 未处理导航 '+scope);
@@ -430,10 +430,10 @@ app.whenReady().then(async () => {
       if(mode==='history-unknown'){
         await pause(700);
         assert.equal(executions,0);
-        assert.equal((await new ReplyMonitor(window.webContents).read()).completion,'unknown');
+        assert.equal((await new ReplyMonitor(window.webContents, { allowLocalFixture: true }).read()).completion,'unknown');
         await window.webContents.executeJavaScript(`window.mountFooter(document.querySelector('.ds-message').parentElement);`);
         await pause(700);
-        assert.equal((await new ReplyMonitor(window.webContents).read()).completion,'complete','真实控件组合必须明确表示完成');
+        assert.equal((await new ReplyMonitor(window.webContents, { allowLocalFixture: true }).read()).completion,'complete','真实控件组合必须明确表示完成');
         assert.equal(executions,0,'启用时已有 unknown 历史回复后补真实 footer 不得执行');
       }else{
         if(mode==='warm-marked-url-first'){
@@ -474,7 +474,7 @@ app.whenReady().then(async () => {
       const measured = await window.webContents.executeJavaScript(`(() => {
         const dock = document.getElementById('tool-dock'), panel = document.getElementById('tool-panel');
         dock.style.width = '${width}px'; panel.classList.add('has-attachments');
-        const send = document.getElementById('tool-send-results'); send.hidden = false; send.disabled = false;
+        const send = document.getElementById('tool-copy'); send.hidden = false; send.disabled = false; send.textContent = '发送结果与附件'; send.dataset.action = 'send';
         document.getElementById('tool-return-notice').textContent = '附件已暂存，等待本批结果发送';
         const area = dock.getBoundingClientRect(), summary = panel.querySelector('summary').getBoundingClientRect();
         const buttons = Array.from(dock.querySelector('.tool-result-actions').querySelectorAll('button')).filter(item => !item.hidden && item.offsetWidth);

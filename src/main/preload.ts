@@ -19,6 +19,8 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 /** 与 src/shared/contract.ts 的 CHANNELS 必须逐字一致（自检会校验） */
 const CH = {
+  getWebPlatform: 'ui:get-web-platform',
+  webPlatformState: 'ui:web-platform-state',
   readFilePreview: 'fs:read-file-preview',
   filePreviewZoom: 'ui:file-preview-zoom',
   startWorkspaceFileDrag: 'fs:start-workspace-file-drag',
@@ -78,6 +80,8 @@ const CH = {
   promptStatus: 'ui:prompt-status',
 } as const;
 const bridge = {
+  getWebPlatform: () => ipcRenderer.invoke(CH.getWebPlatform),
+  onWebPlatformState: (listener: (state: unknown) => void) => ipcRenderer.on(CH.webPlatformState, (_event, state) => listener(state)),
   startWorkspaceFileDrag: (relPath: string, root: string) => ipcRenderer.invoke(CH.startWorkspaceFileDrag, relPath, root),
   onFilePreviewZoom: (listener: (input: unknown) => void) => ipcRenderer.on(CH.filePreviewZoom, (_event, input) => listener(input)),
   getToolState: () => ipcRenderer.invoke(CH.getToolState),

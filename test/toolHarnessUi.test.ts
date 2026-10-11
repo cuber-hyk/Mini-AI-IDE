@@ -38,6 +38,8 @@ function setup(overrides: Record<string, unknown> = {}, audioConstructor?: unkno
   const calls: any[] = [];
   const attentionEvents: any[] = [];
   const bridge = {
+    async getWebPlatform() { return { platform: 'deepseek', switching: false }; },
+    onWebPlatformState() {},
     async getToolState() { calls.push('get'); return current; },
     onToolState(fn: typeof publish) { publish = fn; },
     async setToolConfig(patch: any) { calls.push(JSON.parse(JSON.stringify(patch))); current = state({ ...current, config: { ...current.config, ...patch } }); return current; },
@@ -116,6 +118,25 @@ it('结果操作根据附件资格切换发送与复制，自动继续关闭时�
   ui.publish(attachmentState({ config: { automatic: true }, continuation: { phase: 'sending', message: '自动上传中' }, resultReturn: { canSend: true, attachmentCount: 1, phase: 'sending', message: '正在上传1个附件' } }));
   assert.equal(ui.nodes['tool-copy'].dataset.action, 'copy'); assert.equal(ui.nodes['tool-activity'].textContent, '正在发送结果');
   assert.equal(ui.nodes['tool-return-notice'].textContent, '正在上传1个附件');
+});
+
+it('ChatGPT 启用纯文本自动继续但不回传附件，已有结果仍可复制', async () => {
+  let platform!: (value: any) => void;
+  const ui = setup({ onWebPlatformState: (fn: any) => { platform = fn; } }); await flush();
+  ui.publish(attachmentState({ config: { automatic: true } })); platform({ platform: 'chatgpt', switching: false });
+  assert.equal(ui.nodes['tool-automatic'].disabled, false); assert.equal(ui.nodes['tool-automatic'].checked, true);
+  assert.equal(ui.nodes['tool-copy'].dataset.action, 'copy');
+  await ui.nodes['tool-copy'].fire('click'); assert.ok(ui.calls.includes('copy')); assert.equal(ui.calls.some(call => Array.isArray(call) && call[0] === 'send'), false);
+  await ui.nodes['tool-automatic'].fire('change'); assert.equal(ui.calls.some(call => call && call.automatic !== undefined), true);
+  platform({ platform: 'deepseek', switching: false }); assert.equal(ui.nodes['tool-automatic'].disabled, false);
+});
+it('复制附件结果等待期间切 ChatGPT 后不继续发送，平台未知时同样只复制', async () => {
+  let platform!: (value: any) => void; let finish!: (value: any) => void;
+  const ui = setup({ onWebPlatformState: (fn: any) => { platform = fn; }, copyToolResults: () => new Promise(yes => { finish = yes; }) }); await flush(); ui.publish(attachmentState());
+  const copying = ui.nodes['tool-copy'].fire('click'); platform({ platform: 'chatgpt', switching: false }); finish({ ok: true }); await copying;
+  assert.equal(ui.calls.some(call => Array.isArray(call) && call[0] === 'send'), false);
+  const unavailable = setup({ getWebPlatform: async () => { throw new Error('不可用'); } }); await flush(); unavailable.publish(attachmentState());
+  assert.equal(unavailable.nodes['tool-copy'].dataset.action, 'copy'); assert.equal(unavailable.nodes['tool-automatic'].disabled, true);
 });
 
 it('发送当前批附件的IPC不携带正文路径ID，等待期间防双击，成功回执不重复发送', async () => {

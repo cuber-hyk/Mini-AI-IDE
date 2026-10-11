@@ -343,10 +343,11 @@ describe('采集策略脚本（只读 DOM）', () => {
     const page = pageOf([{ node: container }]);
     const result = await collectReply({
       evaluate: async (script) => vm.runInNewContext(script, { document: page.document, location: { href: 'https://example.com' } }, { timeout: 3000 }),
-      currentUrl: () => 'https://example.com',
+      currentUrl: () => 'https://chat.deepseek.com/',
     });
     assert.equal(result.replyText, '');
     assert.equal(result.strategyId, null);
+    assert.equal(result.attempts.length, 3);
     assert.ok(result.attempts.every((attempt) => !attempt.ok && /无法读取代码框正文/.test(attempt.error || '')));
   });
 
@@ -356,11 +357,11 @@ describe('采集策略脚本（只读 DOM）', () => {
     for (const id of ALL_STRATEGIES) assert.deepEqual(runScript(id, { document: empty }), []);
     const result = await collectReply({
       evaluate: async (script) => vm.runInNewContext(script, { document: empty, location: { href: 'https://x/y' } }, { timeout: 3000 }),
-      currentUrl: () => 'https://example.com/chat?q=1',
+      currentUrl: () => 'https://chat.deepseek.com/chat?q=1',
     });
     assert.equal(result.strategyId, null);
     assert.equal(result.replyText, '');
     assert.ok(result.diagnostic);
-    assert.equal(result.url, 'https://example.com/chat');
+    assert.equal(result.url, 'https://chat.deepseek.com/chat');
   });
 });

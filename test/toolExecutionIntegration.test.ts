@@ -23,6 +23,7 @@ async function fixture(t: { after(fn: () => Promise<void>): void }, enableAutoma
   const web: any = Object.assign(new EventEmitter(), { getURL: () => url, isDestroyed: () => false,
     executeJavaScript: async () => ({ replies: [reply], completion: 'complete' }),
     executeJavaScriptInIsolatedWorld: async (_world: number, entries: { code: string }[]) => {
+      if (entries[0]!.code.includes('const completion =')) return { replies: [reply], completion: 'complete' };
       if (entries[0]!.code.includes('previous.waiter = resolve')) return new Promise(resolve => { waiter = resolve; });
       if (entries[0]!.code.includes('previous.dispose();')) { waiter?.(false); waiter = undefined; }
       return true;

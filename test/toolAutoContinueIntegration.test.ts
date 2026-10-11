@@ -22,6 +22,7 @@ async function fixture(t: { after(fn: () => Promise<void>): void }) {
     executeJavaScript: () => read(),
     executeJavaScriptInIsolatedWorld: async (_world: number, scripts: { code: string }[]) => {
       const script = scripts[0]!.code;
+      if (script.includes('const completion =')) return read();
       if (script.includes('new Promise(resolve')) return new Promise(resolve => { wait = resolve; });
       if (script.includes('preserve')) return { preserve: false, turn: 0 };
       if (script.includes('return { turn:')) return { turn: 0 };

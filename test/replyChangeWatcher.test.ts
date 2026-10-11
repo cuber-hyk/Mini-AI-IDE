@@ -60,12 +60,87 @@ function fixture(change?: (userTurn: boolean) => Promise<void>, reset?: (preserv
     latestFooter(button: unknown) { currentFooter.push(button); },
     counts: () => ({ checks, resets, executions }),
     mutation(relevant = true) { if (observer.active) observer.callback([{ type: 'characterData', target: node(relevant) }]); },
+    bodyMutation() { if (observer.active) observer.callback([{ type: 'characterData', target: { nodeType: 3, parentElement: currentReply } }]); },
+    source() { return (context as any).__miniAIReplyChanges.sources.source(currentReply); },
+    sourceKey() { return (context as any).__miniAIReplyChanges.sources.key(currentReply); },
     burst() { for (let i = 0; i < 100; i++) this.mutation(); },
     deliver(delay?: number) { for (const [id, fn] of [...timers]) { if (delay !== undefined && delays.get(id) !== delay) continue; timers.delete(id); fn(); } },
     navigate(next: string) { url = next; web.emit('did-navigate-in-page', {}, next, true); },
     active: () => observer?.active ?? false,
   };
 }
+
+it('迟到的初始化不得替换 dom-ready 后已经接收变化的监听', async () => {
+  const f = fixture(); const execute = f.web.executeJavaScriptInIsolatedWorld;
+  let release: (() => void) | undefined; let held = false;
+  f.web.executeJavaScriptInIsolatedWorld = (world: number, scripts: { code: string }[]) => {
+    if (!held && scripts[0]!.code.includes('state.observer.observe(')) {
+      held = true;
+      return new Promise(resolve => { release = () => { void execute(world, scripts).then(resolve); }; });
+    }
+    return execute(world, scripts);
+  };
+  try {
+    f.watcher.setEnabled(true); await flush();
+    f.web.emit('dom-ready'); await flush();
+    const before = f.counts().checks;
+    assert.equal(before, 1, '新监听先建立一次基线');
+    release!(); await flush();
+    f.mutation(); f.deliver(150); await flush();
+    assert.equal(f.counts().checks, before + 1, '旧初始化不能使新通知失去接收者');
+  } finally { await f.watcher.dispose(); }
+});
+
+it('关闭自动采集后才执行的旧初始化不得留下监听', async () => {
+  const f = fixture(); const execute = f.web.executeJavaScriptInIsolatedWorld;
+  let release: (() => void) | undefined;
+  f.web.executeJavaScriptInIsolatedWorld = (world: number, scripts: { code: string }[]) => scripts[0]!.code.includes('state.observer.observe(')
+    ? new Promise(resolve => { release = () => { void execute(world, scripts).then(resolve); }; }) : execute(world, scripts);
+  try {
+    f.watcher.setEnabled(true); await flush();
+    f.watcher.setEnabled(false); await flush();
+    release!(); await flush();
+    assert.equal(f.active(), false, '关闭后的旧注入不应复活网页监听');
+    assert.equal(f.counts().checks, 0);
+  } finally { await f.watcher.dispose(); }
+});
+
+it('仍开启时变化等待失效须明确报告并清理观察者，不能静默丢失后续通知', async () => {
+  const f = fixture(); const execute = f.web.executeJavaScriptInIsolatedWorld;
+  f.web.executeJavaScriptInIsolatedWorld = (world: number, scripts: { code: string }[]) => scripts[0]!.code.includes('previous.waiter = resolve')
+    ? Promise.resolve(false) : execute(world, scripts);
+  try {
+    f.watcher.setEnabled(true); await flush();
+    assert.equal(f.active(), false);
+    assert.equal(f.messages.length, 1);
+    assert.match(f.messages[0]!, /监听已失效/);
+    assert.equal(f.counts().checks, 1);
+  } finally { await f.watcher.dispose(); }
+});
+
+it('不支持的页面返回正式会话时重新建立历史基线，后续新变化无需重开开关', async () => {
+  const baselines: unknown[]=[];const f=fixture(undefined,(preserve,history)=>baselines.push([preserve,history]));
+  try {
+    f.watcher.setEnabled(true);await flush();
+    f.navigate('https://example.com/');f.mutation();f.deliver();await flush();
+    assert.equal(f.active(),false);
+    f.navigate('https://chat.deepseek.com/a/chat/s/returned');await flush();
+    assert.equal(f.active(),true);assert.deepEqual(baselines.at(-1),[false,true]);
+    const before=f.counts().checks;f.generating(true);f.replaceReply('new output');f.bodyMutation();f.deliver(150);await flush();
+    assert.equal(f.counts().checks,before+1);
+  } finally {await f.watcher.dispose();}
+});
+
+it('在不支持地址启用后进入正式会话，不得留下未安装 token 阻止监听启动', async () => {
+  const f=fixture();
+  try {
+    f.navigate('https://example.com/');f.watcher.setEnabled(true);await flush();
+    assert.equal(f.active(),false);
+    f.navigate('https://chat.deepseek.com/a/chat/s/returned');await flush();
+    assert.equal(f.active(),true);assert.equal(f.counts().checks,1);
+    assert.notEqual(f.source(),'new','进入时已有消息必须保留为历史');
+  } finally {await f.watcher.dispose();}
+});
 
 it('监听先建立基线，空闲没有计时器或重复网页检查；无关区域变化不检查回复', async () => {
   const f = fixture(); f.watcher.setEnabled(true); await flush();
@@ -75,6 +150,49 @@ it('监听先建立基线，空闲没有计时器或重复网页检查；无关�
   f.burst(); assert.equal(f.timers.size, 1); f.deliver(); await flush();
   assert.equal(f.counts().checks, 2); assert.equal(f.timers.size, 0);
   await f.watcher.dispose(); assert.equal(f.active(), false);
+});
+
+it('合并通知期间更换历史节点，生成正文见证不能串用到另一个节点', async () => {
+  const f = fixture(); f.watcher.setEnabled(true); await flush();
+  f.generating(true); f.text('new partial body'); f.bodyMutation();
+  f.generating(false); f.replaceReply('never mounted old command'); f.mutation();
+  f.deliver(150); await flush();
+  assert.notEqual(f.source(), 'new');
+  await f.watcher.dispose();
+});
+
+it('自动接纳 idle 后的 acknowledge 同样封存正文，节点复用不能补挂 complete 执行旧命令', async () => {
+  const f = fixture(); f.watcher.setEnabled(true); await flush();
+  f.generating(true); f.text('new generated body'); f.bodyMutation(); f.deliver(150); await flush();
+  f.generating(false); f.text('completed idle body'); f.bodyMutation(); f.deliver(150); await flush();
+  assert.equal(f.source(), 'new');
+  await f.watcher.acknowledge();
+  f.text('never mounted historical command'); f.bodyMutation(); f.deliver(150); await flush();
+  assert.notEqual(f.source(), 'new');
+  await f.watcher.dispose();
+});
+
+it('idle 快照读取与 acknowledge 之间同节点被换成旧正文，必须按原快照身份封存', async () => {
+  const f = fixture(); f.watcher.setEnabled(true); await flush();
+  f.generating(true); f.text('accepted new idle body'); f.bodyMutation(); f.deliver(150); await flush();
+  const key = f.sourceKey();
+  f.generating(false); f.text('unmounted old tools after read'); f.bodyMutation();
+  await f.watcher.acknowledge(false, key);
+  assert.notEqual(f.source(), 'new');
+  f.deliver(150); await flush(); assert.notEqual(f.source(), 'new');
+  await f.watcher.dispose();
+});
+
+it('已有会话在空加载帧启用时等待迟到历史，不能执行第一个历史命令', async () => {
+  let reply: AutoReply = { url: 'https://chat.deepseek.com/a/chat/s/one', text: '', completion: 'unknown' };
+  const collected: string[] = [];
+  const auto = new AutoCollector(async () => reply, async text => { collected.push(text); }, () => {});
+  const f = fixture(async () => auto.tick(), (_preserve, history) => auto.reset(history));
+  f.hasRoot(false); auto.setEnabled(true); f.watcher.setEnabled(true); await flush();
+  reply = { ...reply, text: 'loaded historical command', completion: 'complete' };
+  f.replaceReply(reply.text); f.mutation(); f.deliver(150); await flush();
+  assert.deepEqual(collected, []); assert.equal(f.source(), 'history');
+  await f.watcher.dispose(); auto.dispose();
 });
 it('处理工具期间的多次页面变化只保留一次，完成后不会丢失新回复通知', async () => {
   let finish: (() => void) | undefined; let calls = 0;
@@ -149,7 +267,7 @@ it('完整导航dom-ready保留异步历史基线，重新打开自动采集仍�
   f.hasRoot(false); f.web.emit('dom-ready'); await flush();
   assert.deepEqual(resets.at(-1), [false, true]);
   f.watcher.setEnabled(false); f.watcher.setEnabled(true); await flush();
-  assert.deepEqual(resets.at(-1), [false, false]); await f.watcher.dispose();
+  assert.deepEqual(resets.at(-1), [false, true], '已有会话的空加载帧重新启用后仍等待历史'); await f.watcher.dispose();
 });
 
 it('历史回复分批挂载期间持续更新基线，500ms历史安静后新输出才可执行', async () => {

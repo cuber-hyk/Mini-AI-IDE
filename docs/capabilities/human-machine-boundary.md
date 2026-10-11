@@ -3,7 +3,7 @@ artifact_type: capability
 status: current
 updated: 2026-10-11
 owner: 胡运宽
-source_of_truth: [docs/adr/2026-10-09-batch-error-auto-return.md, docs/adr/2026-10-09-tool-attachment-return.md, src/main/tools/attachments.ts, src/main/tools/resultReturn.ts, test/toolAttachmentIntegration.test.ts, test/toolAttachments.test.ts, test/toolResultReturn.test.ts, docs/capabilities/skills-and-local-prompt.md, docs/adr/2026-10-08-local-prompt-attachments.md, src/main/localPromptAttachments.ts, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, docs/adr/2026-10-07-automatic-result-return-boundary.md, src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, src/main/tools/integration.ts, src/main/tools/autoCollector.ts, src/main/tools/replyChangeWatcher.ts, src/main/preload.ts, src/shared/toolProtocol.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, tools/verify-web-result-sender.cjs]
+source_of_truth: [src/main/tools/replySource.ts, test/replySource.test.ts, docs/adr/2026-10-09-batch-error-auto-return.md, docs/adr/2026-10-09-tool-attachment-return.md, src/main/tools/attachments.ts, src/main/tools/resultReturn.ts, test/toolAttachmentIntegration.test.ts, test/toolAttachments.test.ts, test/toolResultReturn.test.ts, docs/capabilities/skills-and-local-prompt.md, docs/adr/2026-10-08-local-prompt-attachments.md, src/main/localPromptAttachments.ts, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, docs/adr/2026-10-07-automatic-result-return-boundary.md, src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, src/main/tools/integration.ts, src/main/tools/autoCollector.ts, src/main/tools/replyChangeWatcher.ts, src/main/preload.ts, src/shared/toolProtocol.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, tools/verify-web-result-sender.cjs]
 ---
 
 # 能力：人机边界与限定结果回传
@@ -11,6 +11,8 @@ source_of_truth: [docs/adr/2026-10-09-batch-error-auto-return.md, docs/adr/2026-
 用户发送需求，AI 输出正式工具请求，IDE 只读采集、校验和按权限执行。需求可在官网手动输入，也可从本地输入框 Enter 或点击发送按钮主动提交。开启自动继续后，IDE 可向当前官网会话回传本批真实结果一次；纯对话或暂停状态等待用户处理。技能与本地需求边界见 `skills-and-local-prompt.md` 及 `../adr/2026-10-08-skills-and-local-demand-send.md`。
 
 ## 职责
+
+下述采集、工具与限定发送能力仅适用于活动平台。ChatGPT 本轮限定普通对话纯文本，程序附件明确拒绝，切换平台撤回待回传并保留结果复制，执行/发送期间不能切换；详见 `web-platforms.md`。
 
 | 环节 | 执行者 | 约束 |
 |---|---|---|
@@ -25,6 +27,8 @@ source_of_truth: [docs/adr/2026-10-09-batch-error-auto-return.md, docs/adr/2026-
 
 ## 自动继续与取消
 
+自动采集先核对回复来源，历史回看、重挂载、已完成节点复用及已见旧错误不能触发新工具或新诊断回传；来源不明时使用具名手动采集入口。来源见证与边界见 `tool-harness.md` 的“回复来源与历史隔离”。官网视图后台调度见 `app-shell.md` 的“官网后台运行”。
+
 `automatic` 是同一个持久开关，默认关闭，包含变化触发采集、权限执行及结果发送，无轮数或最大轮数设置。`sendIntervalSeconds` 为 0–300 的整数秒，默认 3；倒计时在本批真正结束后开始，等待工具或权限时不计时。
 
 真实工具结果须来自当前项目/会话/批次的新完成事件。至少一个 done/failed 结果有真实 `started_at` 可回传；超时或工具停止的单条 `run_command` 也可回传，但须有真实开始和结束时间、`data.status: 'stopped'` 且进程树清理完成。用户手动中断任一命令后，当前批次不自动回传正文或附件，已执行及中断命令的真实结果仍可复制；超时仍按 failed 回传。纯权限拒绝及其依赖跳过构成的完整批次可发送拒绝回执，不执行被拒绝工具且不上传附件；普通依赖跳过不单独产生发送资格。整批取消、普通取消、unknown、清理中的命令、未执行的普通失败、纯对话及历史/重复状态仍不回传。后台启动不表示完成，等待本批进程退出与树清理。解析层 `batchError` 由 Harness 保存独立诊断 ID 和采集原文，经 `ToolResultReturn` 核验当前来源、空执行结果及官网原文匹配后自动回传，不读取附件；正文与「复制本批结果」字节一致。执行前整批校验错误由 Harness 在全部失败回执保存后标记当前 completion.validation_failed，全部 failed 且无执行时间和数据时，经当前正式批次复核可回传完整请求回执，不读取或上传附件。解析和整批校验错误共享最多连续回传 5 次，第 6 次暂停等待人工的额度；仅正常执行结果成功发送或实际切项目/会话后计数归零，批次变化、取消倒计时和关闭再开启不清零。见 `../adr/2026-10-09-batch-error-auto-return.md`。
@@ -36,7 +40,7 @@ source_of_truth: [docs/adr/2026-10-09-batch-error-auto-return.md, docs/adr/2026-
 ## 网页接触面
 
 - 回程采集同步只读读取正文与结束标志；只读 MutationObserver 和真实用户动作识别在隔离世界 1004，不读用户输入内容，不向网页主世界提供 IPC 或文件桥。
-- `WebComposerSender` 是唯一 DOM 写入运输 owner，`WebResultSender` 是工具结果门面，使用隔离世界 1005。仅接纳 `https://chat.deepseek.com` 的当前会话、唯一可见 textarea，以及具有已知 SVG 路径的发送按钮；局部共同容器不能包含回复正文。证据缺失、生成中或等待继续生成时暂停。
+- `WebComposerSender` 是唯一 DOM 写入运输 owner，`WebResultSender` 是工具结果门面，使用隔离世界 1005。仅接纳官方平台普通会话；DeepSeek 验证唯一可见 textarea 与已知 SVG 发送按钮，ChatGPT 验证唯一 ProseMirror 文本区与有界 FORM 内明确发送按钮。局部共同容器不能包含回复正文，ChatGPT 本轮仅纯文本。证据缺失、生成中或等待继续生成时暂停。
 - 用户可从目录树主动原生拖出当前项目单个普通文件，由官网处理真实 drop 和附件上传，正文仍由用户发送。此操作不写 DOM、不代上传、不新增官网路径查询/文件桥；本地需求框用相同 Files 接收入口暂存。见 `../adr/2026-10-11-native-workspace-file-drag.md`。
 - 工具结果正文与手动复制同源，通过 textarea 原生 value setter、input 事件和原生 click 完成，不读取剪贴板。当前批可携带经工具权限批准的 attach_file 附件；ToolAttachments 持有当前选择，ToolResultReturn 统一校验真实批次、一次运输及状态，自动与手动共用。
 - 用户主动本地需求可携带用户明确选择的附件；工具附件须明确请求并按工具权限执行。主进程校验类型、数量、大小、真实路径与文件身份后读取字节；唯一 sender 只通过官方文件输入控件提交，不向网页提供路径、磁盘读取或通用 IPC。sender 等待全部本次附件预览和上传进度结束后才发送正文。历史、拒绝、取消、无执行及失效附件不上传；开始运输后失败或未知都不重试同批。见 ../adr/2026-10-09-tool-attachment-return.md。

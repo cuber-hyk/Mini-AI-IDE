@@ -1,12 +1,15 @@
-/** 受控网页 composer 运输：仅官方 DeepSeek、隔离世界、一次发送；调用方负责用户需求或真实工具结果授权。 */
+/** 受控网页 composer 运输：限定官方平台、隔离世界、一次发送；调用方负责用户需求或真实工具结果授权。 */
 import { randomUUID } from 'node:crypto';
 import type { WebContents } from 'electron';
 import { sessionKeyOf } from './consumptionStore';
 import { DEEPSEEK_SEND_ICON } from './tools/replyObservation';
 import { CONTINUATION_BUTTON } from './tools/replyContinuation';
-import { isFirstPromptSession } from './firstPromptSession';
+import { isFirstPromptSession, isPendingFirstPromptSession } from './firstPromptSession';
 import type { PromptAttachmentData } from '../shared/localPrompt';
 import { traceCollection } from './tools/collectionTrace';
+import { webPlatformOf } from '../shared/webConversation';
+import type { WebPlatform } from '../shared/webPlatform';
+import { CHATGPT_SEND_SELECTOR } from './chatgptPage';
 
 export const COMPOSER_SEND_WORLD = 1005;
 const KEY = '__miniAIComposerSend';
@@ -88,60 +91,102 @@ function attachmentCleanupScript(token: string): string {
   return `(() => { const key = ${JSON.stringify(ATTACHMENT_KEY)}, s = globalThis[key]; if (!s || s.token !== ${JSON.stringify(token)}) return true; try { if (s.committed && s.input.isConnected) { const actual = Array.from(s.input.files || []); if (actual.length !== s.committed.length || actual.some((f, i) => f.name !== s.committed[i].name || f.size !== s.committed[i].size)) return false; s.input.files = new DataTransfer().files; s.input.dispatchEvent(new Event('input', { bubbles: true })); s.input.dispatchEvent(new Event('change', { bubbles: true })); } delete globalThis[key]; return true; } catch { return false; } })()`;
 }
 
-function sendScript(token: string, text: string, scope: string, fixture: boolean, prompt: boolean, expectedFiles: readonly PromptAttachmentData[]): string {
+function sendScript(token: string, text: string, scope: string, fixture: boolean, prompt: boolean, expectedFiles: readonly PromptAttachmentData[], platform: WebPlatform): string {
   return `(() => {
     const key = ${JSON.stringify(KEY)}, token = ${JSON.stringify(token)}, payload = ${JSON.stringify(text.replace(/\r\n?/g, '\n'))}, scope = ${JSON.stringify(scope)};
     const previous = globalThis[key];
     if (previous) return { ok: false, error: '页面仍有等待发送的结果' };
     let boundScope = scope;
     const firstSession = ${isFirstPromptSession.toString()};
-    const inScope = () => { const current = new URL(location.href); return ((current.origin === 'https://chat.deepseek.com' && current.protocol === 'https:') || (${fixture} && current.protocol === 'file:')) && (current.protocol === 'file:' ? 'null' : current.origin) + current.pathname === boundScope; };
+    const pendingFirstSession = ${isPendingFirstPromptSession.toString()};
+    let pendingScope = null;
+    const chatgpt = ${platform === 'chatgpt'};
+    const inScope = () => { const current = new URL(location.href); return !current.username && !current.password && ((current.protocol === 'https:' && (chatgpt ? current.origin === 'https://chatgpt.com' && (current.pathname === '/' || /^\\/c\\/[a-zA-Z0-9_-]+$/.test(current.pathname)) : current.origin === 'https://chat.deepseek.com')) || (${fixture} && !chatgpt && current.protocol === 'file:')) && (current.protocol === 'file:' ? 'null' : current.origin) + current.pathname === boundScope; };
     if (!inScope()) return { ok: false, error: '网页或会话已变化' };
     const visible = e => !!e && e.isConnected && e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden';
-    const outside = e => !e.closest('pre,code,[class*="code-block"],[class*="markdown"],.ds-message');
+    const outside = e => !e.closest('pre,code,[class*="code-block"],[class*="markdown"],.ds-message,[data-message-author-role],[data-talvt-turn-state],[data-markdown-text-style],[data-dil-message-id]');
     const selector = 'button,[role="button"],.ds-button,.ds-icon-button';
     const labels = e => [e.getAttribute('aria-label'), e.getAttribute('title'), e.getAttribute('data-tooltip'), e.getAttribute('data-tooltip-content'), e.textContent].filter(Boolean).join(' ').trim();
     const interrupted = ${CONTINUATION_BUTTON};
     const stateOfPage = () => {
       const buttons = Array.from(document.querySelectorAll(selector)).filter(visible);
-      if (buttons.some(e => /停止生成|停止回答|停止响应|stop generating|stop response|^stop$/i.test(labels(e))) || Array.from(document.querySelectorAll('[aria-busy="true"],[data-is-streaming="true"]')).some(visible)) return 'generating';
+      if (buttons.some(e => e.getAttribute('data-testid') === 'stop-button' || /停止生成|停止回答|停止响应|stop generating|stop streaming|stop response|^stop$|^停止$/i.test(labels(e))) || Array.from(document.querySelectorAll('[aria-busy="true"],[data-is-streaming="true"]')).some(visible)) return 'generating';
       if (buttons.some(interrupted)) return 'interrupted';
       return 'idle';
     };
     const enabled = e => !e.disabled && e.getAttribute('aria-disabled') !== 'true' && !e.classList.contains('ds-button--disabled');
-    const controls = () => {
-      const inputs = Array.from(document.querySelectorAll('textarea')).filter(visible);
-      const sends = Array.from(document.querySelectorAll('.ds-button.ds-button--primary.ds-button--filled.ds-button--circle')).filter(e => visible(e) && outside(e) && Array.from(e.querySelectorAll('svg path')).some(p => String(p.getAttribute('d') || '').replace(/\\s+/g, ' ').startsWith(${JSON.stringify(DEEPSEEK_SEND_ICON)})));
-      if (inputs.length !== 1 || sends.length !== 1 || !outside(inputs[0])) return null;
+    const controls = (waiting = false) => {
+      const inputs = Array.from(document.querySelectorAll(chatgpt ? 'div.ProseMirror[contenteditable="true"][role="textbox"]' : 'textarea')).filter(visible);
+      const sends = chatgpt ? Array.from(document.querySelectorAll(${JSON.stringify(CHATGPT_SEND_SELECTOR)})).filter(e => visible(e) && outside(e)) : Array.from(document.querySelectorAll('.ds-button.ds-button--primary.ds-button--filled.ds-button--circle')).filter(e => visible(e) && outside(e) && Array.from(e.querySelectorAll('svg path')).some(p => String(p.getAttribute('d') || '').replace(/\\s+/g, ' ').startsWith(${JSON.stringify(DEEPSEEK_SEND_ICON)})));
+      if (inputs.length !== 1 || sends.length > 1 || (!sends.length && !(chatgpt && waiting)) || !outside(inputs[0])) return null;
       const input = inputs[0], send = sends[0];
+      if (chatgpt && Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).filter(e => visible(e) && outside(e)).some(e => e !== input)) return null;
+      if (chatgpt) {
+        const composer = input.closest('form');
+        if (!composer || composer === document.body || composer === document.documentElement
+          || composer.querySelector('.ds-message,[class*="markdown"],[data-message-author-role],[data-talvt-turn-state],[data-markdown-text-style],[data-dil-message-id]') || (send && send.closest('form') !== composer)) return null;
+        return { input, send: send || null, composer };
+      }
       // 只接纳不含回复正文的局部共同容器；全页面共同祖先不能证明 composer 关联。
       for (let box = input.parentElement, depth = 0; box && depth < 6; box = box.parentElement, depth++) {
-        if (box === document.body || box === document.documentElement || box.querySelector('.ds-message,[class*="markdown"]')) return null;
-        if (box.contains(send)) return { input, send };
+        if (box === document.body || box === document.documentElement || box.querySelector('.ds-message,[class*="markdown"],[data-message-author-role]')) return null;
+        if (box.contains(send)) return { input, send, composer: box };
       }
       return null;
     };
-    const found = controls();
+    const found = controls(true);
     if (!found) return { ok: false, error: '无法唯一识别网页输入框与发送控件，请手动发送' };
-    const { input, send } = found;
+    const { input, composer } = found;
+    let send = found.send;
+    // 现场空 composer 显示开始语音，发送按钮需填入后才挂载；从不点击语音控件。
+    // submit/发送控件的结构已现场核验；InputEvent 接收仍需官网人工验收。
+    if (!send && !Array.from(composer.querySelectorAll('button')).filter(visible).some(e => /^(开始语音|Start voice|Start voice mode)$/i.test(e.getAttribute('aria-label') || ''))) return { ok: false, error: '无法确认空网页输入区域，请手动发送' };
+    const editable = () => chatgpt ? input.isContentEditable && input.getAttribute('aria-disabled') !== 'true' && input.getAttribute('aria-readonly') !== 'true' : !input.disabled && !input.readOnly;
+    const empty = () => {
+      if (!chatgpt) return input.value === '';
+      if (input.textContent !== '') return false;
+      if (!input.childNodes.length) return true;
+      const block = input.firstChild;
+      return input.childNodes.length === 1 && block.nodeType === Node.ELEMENT_NODE && block.tagName === 'P' && (!block.childNodes.length || (block.childNodes.length === 1 && block.firstChild.nodeType === Node.ELEMENT_NODE && block.firstChild.tagName === 'BR'));
+    };
+    const hasAttachments = () => {
+      if (Array.from(document.querySelectorAll('input[type="file"]')).some(e => e.files?.length)) return true;
+      if (!chatgpt) return false;
+      // 检查有界 composer 及相邻附件区；不读取文件名、草稿或回复正文。
+      const area = composer.closest('form');
+      if (!area || area === document.body || area.querySelector('[data-message-author-role],.markdown,[data-talvt-turn-state],[data-markdown-text-style],[data-dil-message-id]')) return true;
+      return Array.from(area.querySelectorAll('img,video,audio,canvas,[data-testid*="attachment"],[data-testid*="file"],[data-testid*="upload"],[data-testid*="image"],button,[role="button"]')).filter(visible).some(e => /^(IMG|VIDEO|AUDIO|CANVAS)$/.test(e.tagName) || (!e.matches('button,[role="button"]') && /attachment|file|upload|image/i.test(e.getAttribute('data-testid') || '')) || /remove.*(file|attachment|image)|删除.*(文件|附件|图片)|移除.*(文件|附件|图片)/i.test([e.getAttribute('aria-label'), e.getAttribute('title')].filter(Boolean).join(' ')));
+    };
     if (stateOfPage() !== 'idle') return { ok: false, error: '网页仍在生成或等待继续生成' };
-    if (input.disabled || input.readOnly || input.value !== '') return { ok: false, error: '网页输入框已有内容或不可编辑，未覆盖草稿' };
+    if (!editable() || !empty()) return { ok: false, error: '网页输入框已有内容或不可编辑，未覆盖草稿' };
     const attachmentState = globalThis[${JSON.stringify(ATTACHMENT_KEY)}];
     if (${expectedFiles.length > 0}) {
       const expected = ${JSON.stringify(expectedFiles.map(file => ({ name: file.name, size: file.size })))};
       if (attachmentState?.token !== token || attachmentState.accepted !== true || JSON.stringify(attachmentState.committed) !== JSON.stringify(expected)) return { ok: false, error: '官网附件尚未确认接收，已停止发送' };
     } else {
-      const fileInputs = Array.from(document.querySelectorAll('input[type="file"]'));
-      if (fileInputs.some(e => e.files?.length)) return { ok: false, error: '官网附件区已有文件，未发送本地内容' };
+      if (hasAttachments()) return { ok: false, error: '官网附件区已有文件或无法确认纯文本输入，未发送本地内容' };
     }
     if (input.maxLength >= 0 && payload.length > input.maxLength) return { ok: false, error: '发送内容超过网页输入框长度限制' };
     const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
-    if (!setter) return { ok: false, error: '网页输入控件不可识别' };
+    if (!chatgpt && !setter) return { ok: false, error: '网页输入控件不可识别' };
+    const ownedText = () => {
+      if (!chatgpt) return input.value;
+      const blocks = Array.from(input.childNodes);
+      if (blocks.some(e => e.nodeType !== Node.ELEMENT_NODE || e.tagName !== 'P' || Array.from(e.childNodes).some(child => child.nodeType !== Node.TEXT_NODE && !(child.nodeType === Node.ELEMENT_NODE && child.tagName === 'BR' && e.childNodes.length === 1)))) return null;
+      return blocks.map(e => e.textContent).join('\\n');
+    };
+    const write = value => {
+      if (chatgpt) {
+        const blocks = value.split('\\n').map(line => { const p = document.createElement('p'); if (line) p.textContent = line; else p.append(document.createElement('br')); return p; });
+        input.replaceChildren(...blocks);
+        input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: value ? 'insertText' : 'deleteContentBackward', data: value || null }));
+      } else { setter.call(input, value); input.dispatchEvent(new Event('input', { bubbles: true })); }
+    };
     return new Promise(resolve => {
       const state = { token, clicked: false, done: false, timer: null, cancel: null };
-      const owns = () => input.isConnected && input.value === payload;
+      const owns = () => input.isConnected && ownedText() === payload;
       const clearOwned = () => {
-        if (!state.clicked && owns()) { setter.call(input, ''); input.dispatchEvent(new Event('input', { bubbles: true })); }
+        if (!state.clicked && owns()) write('');
       };
       const finish = result => {
         if (state.done) return;
@@ -152,7 +197,7 @@ function sendScript(token: string, text: string, scope: string, fixture: boolean
       };
       state.cancel = () => finish({ ok: false, error: '自动发送已取消', ...(state.clicked ? { uncertain: true } : {}) });
       globalThis[key] = state;
-      try { setter.call(input, payload); input.dispatchEvent(new Event('input', { bubbles: true })); }
+      try { write(payload); }
       catch { return finish({ ok: false, error: '网页输入失败，已停止发送' }); }
       const started = Date.now(); let clickedAt = 0;
       const poll = () => {
@@ -160,23 +205,31 @@ function sendScript(token: string, text: string, scope: string, fixture: boolean
         if (state.done) return;
         if (!inScope()) {
           const target = new URL(location.href); const next = target.origin + target.pathname;
-          if (${prompt} && state.clicked && boundScope === scope && firstSession(scope, next)) boundScope = next;
+          if (${prompt} && state.clicked && boundScope === scope && pendingFirstSession(scope, target.href)
+            && (!pendingScope || pendingScope === next)) {
+            pendingScope = next;
+            if (Date.now() - clickedAt >= 3000) return finish({ ok: false, error: '首发会话分配未确认，已停止且不会重试', uncertain: true });
+            state.timer = setTimeout(poll, 25); return;
+          }
+          if (${prompt} && state.clicked && boundScope === scope && firstSession(scope, target.href)) boundScope = next;
           else return finish({ ok: false, error: '网页会话已变化', ...(state.clicked ? { uncertain: true } : {}) });
         }
         if (state.clicked) {
-          // 首轮点击后官网会同文档切到新会话并重挂载 composer，旧输入框断开本身即证明消息已被受理；生成态标签在真实站不可读，不能作为唯一判据。
-          if ((input.isConnected && input.value === '') || !input.isConnected || stateOfPage() === 'generating') {
+          // DeepSeek 允许已验证的首轮 composer 重挂载；ChatGPT 断开本身不证明接收。
+          if ((input.isConnected && empty()) || (!chatgpt && !input.isConnected) || stateOfPage() === 'generating') {
             const attachment = globalThis[${JSON.stringify(ATTACHMENT_KEY)}]; if (attachment?.token === token) delete globalThis[${JSON.stringify(ATTACHMENT_KEY)}];
             return finish({ ok: true, session: boundScope });
           }
           if (Date.now() - clickedAt >= 3000) return finish({ ok: false, error: '发送后未确认网页接收，已停止且不会重试', uncertain: true });
         } else {
-          const current = controls();
-          if (!current || current.input !== input || current.send !== send) return finish({ ok: false, error: '网页发送控件已变化' });
+          const current = controls(true);
+          if (!current || current.input !== input || (send && current.send !== send) || (chatgpt && current.composer.closest('form') !== composer.closest('form'))) return finish({ ok: false, error: '网页发送控件已变化' });
+          if (!send && current.send) send = current.send;
           if (!owns()) return finish({ ok: false, error: '网页输入已被修改，自动发送暂停' });
-          if (input.disabled || input.readOnly || stateOfPage() !== 'idle') return finish({ ok: false, error: '网页输入不可编辑或仍在生成' });
+          if (!editable() || stateOfPage() !== 'idle') return finish({ ok: false, error: '网页输入不可编辑或仍在生成' });
+          if (chatgpt && hasAttachments()) return finish({ ok: false, error: '官网附件区已变化，已停止纯文本发送' });
           if (input.maxLength >= 0 && payload.length > input.maxLength) return finish({ ok: false, error: '发送内容超过网页输入框长度限制' });
-          if (enabled(send)) {
+          if (send && enabled(send)) {
             state.clicked = true; clickedAt = Date.now();
             // 点击前所有检查在同一同步任务完成；点击之后绝不重试或清理可能已提交内容。
             HTMLElement.prototype.click.call(send);
@@ -214,7 +267,7 @@ export class WebComposerSender {
     if (event.isMainFrame && !event.isSameDocument) void this.cancel();
   };
   private readonly inPage = (_event: unknown, url: string, main: boolean) => {
-    if (main && sessionKeyOf(url) !== this.scope && !(this.kind === 'prompt' && isFirstPromptSession(this.scope, url))) void this.cancel();
+    if (main && sessionKeyOf(url) !== this.scope && !(this.kind === 'prompt' && (isFirstPromptSession(this.scope, url) || isPendingFirstPromptSession(this.scope, url)))) void this.cancel();
   };
   private readonly destroyed = () => { void this.dispose(); };
 
@@ -293,8 +346,9 @@ export class WebComposerSender {
     if (this.cancellationFailed) return { ok: false, error: '网页取消状态未确认，自动发送已停止，请重新打开网页', uncertain: true };
     const raw = this.web.getURL(); let url: URL;
     try { url = new URL(raw); } catch { return { ok: false, error: '网页地址不可识别' }; }
-    if (url.origin !== 'https://chat.deepseek.com' && !(this.options.allowLocalFixture && url.protocol === 'file:'))
-      return { ok: false, error: '自动发送仅支持官方 DeepSeek 网页' };
+    const platform = webPlatformOf(raw) ?? (this.options.allowLocalFixture && url.protocol === 'file:' ? 'deepseek' : undefined);
+    if (!platform) return { ok: false, error: '自动发送仅支持官方平台普通对话网页' };
+    if (platform === 'chatgpt' && attachments.length) return { ok: false, error: 'ChatGPT 当前仅支持纯文本发送，附件未读取或上传' };
     if (sessionKeyOf(raw) !== expectedSession) return { ok: false, error: '网页会话已变化' };
     // 等待清理期间其他调用可能已开始，必须再核验唯一正在发送的批次。
     if (this.token) return { ok: false, error: '已有内容正在发送' };
@@ -317,7 +371,7 @@ export class WebComposerSender {
         }
         return { ok: false, error: '需求、项目或会话已变化，未发送' };
       }
-      const result: unknown = await Promise.race([this.web.executeJavaScriptInIsolatedWorld(COMPOSER_SEND_WORLD, [{ code: sendScript(token, text, expectedSession, this.options.allowLocalFixture === true, this.kind === 'prompt', attachments) }]), cancelled, bounded]);
+      const result: unknown = await Promise.race([this.web.executeJavaScriptInIsolatedWorld(COMPOSER_SEND_WORLD, [{ code: sendScript(token, text, expectedSession, this.options.allowLocalFixture === true, this.kind === 'prompt', attachments, platform) }]), cancelled, bounded]);
       traceCollection('composer.send-result', { kind: this.kind, attachmentCount: attachments.length,
         ok: Boolean(result && typeof result === 'object' && 'ok' in result && result.ok === true),
         error: result && typeof result === 'object' && 'error' in result ? String(result.error) : null });

@@ -288,6 +288,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     CHANNELS.sidebarChanged,
     // 以下三个是后加的，漏在这里会让 E1/E2 误报（用户实测脚本报 missing 却查不到实现）：
     CHANNELS.chromeState,   // → webbar
+    CHANNELS.webPlatformState,
     CHANNELS.fileChanged,   // → 编辑器（落盘广播）
     CHANNELS.openPromptPanel, // → 编辑器（请求打开提示词面板；面板本体是独立视图）
   ];

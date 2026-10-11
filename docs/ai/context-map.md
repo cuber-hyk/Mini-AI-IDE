@@ -12,6 +12,8 @@
 
 ## 按任务类型路由
 
+后台运行读 `docs/capabilities/app-shell.md` 的“官网后台运行”，owner 为 `index.ts` / `webPlatformView.ts` 原生视图配置，验收为 `test/webBackgroundPolicy.test.ts`、`tools/verify-web-background.cjs`。历史回看/重挂载读 `docs/capabilities/tool-harness.md` 的“回复来源与历史隔离”；只读来源 owner 为 `src/main/tools/replySource.ts`，由 replyChangeWatcher 持有、replyObservation 与 chatgptPage 同步读取，AutoCollector 保存已接纳正文指纹，integration 按快照身份封存。回归为 `test/replySource.test.ts`、`test/replyChangeWatcher.test.ts`、`test/toolAutoCollector.test.ts`、`tools/audit-background-history.cjs`。
+
 目录树原生文件拖拽先读 `docs/adr/2026-10-11-native-workspace-file-drag.md`、`docs/capabilities/local-file-access.md`。运输 owner 为 `src/main/workspaceFileDrag.ts`，只允许编辑器主 frame 交付当前项目普通文件给系统；UI 为 `src/renderer/fileExplorer.js`，本地接收复用 `localPrompt.js` 的 Files 入口。验证为 `test/workspaceFileDrag.test.ts`、`test/fileExplorer.test.ts`、`test/localPrompt.test.ts`、`tools/verify-workspace-file-drag.cjs`，物理跨进程拖放/官网接收另需手动验收。
 技能与本地需求先读 `docs/capabilities/skills-and-local-prompt.md`、`docs/adr/2026-10-08-skills-and-local-demand-send.md`、`docs/adr/2026-10-09-default-local-prompt-send.md` 和 `docs/adr/2026-10-08-local-prompt-attachments.md`。固定目录 owner 为 `src/main/skills.ts`，附件暂存 owner 为 `src/main/localPromptAttachments.ts`，组装与窄 IPC 为 `localPromptController.ts`，本地 UI 为 `src/renderer/localPrompt.js/css`；唯一官网写入运输为 `src/main/webComposerSender.ts`，`tools/webResultSender.ts` 保留工具门面。技能工具与独立采集/发送入口由 `tools/integration.ts` 接线。附件已上传而正文未发送时，可由用户在内嵌官网 Console 手动执行只读 `tools/inspect-composer-attachments.js`，返回附件区祖先、预览和上传标记的结构与数量；开启 collection trace 后，`composer.attachment-status` 仅在等待状态变化时记录确认依据，不记录正文或文件内容。
 
@@ -43,6 +45,7 @@
 | 回程解析 / 工具修改与查看 / 输出格式 | `docs/capabilities/return-path-and-format-contract.md`、`src/main/replyCollector.ts`、`src/main/tools/changes.ts`、`src/main/tools/changeReview.ts`、`src/main/returnPathService.ts`、`src/renderer/preview.js`、`docs/adr/2026-10-06-native-tool-harness-boundary.md` | 指纹与网络层细节 |
 | 指纹与环境特征 | `docs/adr/2026-10-02-honest-electron-identity.md`（ADR-0001）、`docs/adr/2026-10-02-zero-injection-and-automation-trace-baseline.md`（ADR-0003） | 实现细节代码（`src/shared/userAgent.ts` 为落地实现） |
 | 会话 / 登录持久化 | `docs/capabilities/session-persistence.md`（会话分区命名 ADR 为**候选未建项**，暂由该能力文档承载） | 计划文档 |
+| DeepSeek / ChatGPT 平台切换及活动门禁 | `docs/capabilities/web-platforms.md`、`docs/adr/2026-10-11-web-platform-switching.md`、`src/main/webPlatformController.ts`、`src/main/webPlatformView.ts`、`src/shared/webPlatform.ts`、`test/webPlatformController.test.ts`、`test/toolPlatformActivity.test.ts`、`tools/verify-web-platform.cjs` | 登录凭据与官网正文 |
 | 工作区布局 / 原生视图遮挡 / 显隐与宽度持久化 | `docs/adr/2026-10-07-workspace-ui-shell-layout.md`、`src/main/windowLayout.ts`、`src/main/workspaceLayoutController.ts`、`src/renderer/workspaceLayout.js`、`src/renderer/fileWorkspace.js`、`test/fileWorkspace.test.ts`、`test/windowLayout.test.ts`、`test/workspaceLayoutController.test.ts` | 历史布局计划、并行开发议题 |
 | UI / 设计规则 | `DESIGN.md`、`design-tokens.json`、`src/renderer/ui.css`、`docs/capabilities/app-shell.md` 的「布局规则」「右侧编辑器与目录树的当前行为」「中间本地需求编写区的当前行为」 | — |
 
@@ -98,3 +101,7 @@
 - 脚手架阶段的例外：能力文档的 `source_of_truth` 曾同时列出活跃计划（因当时尚无实现代码）。**P2 落地后已改为以代码为主**；后续实现完成时，能力文档的 `source_of_truth` 应指向代码与测试，计划仅作为过程证据（清理由 `/dev-distill` 执行）。
 
 JSON 解析定位由 `src/shared/toolJsonDiagnostic.ts` 负责；本地执行秒数由 `src/renderer/toolExecutionClock.js` 负责；主进程完成事件的自动复制与提示由 `src/main/tools/resultClipboard.ts` 负责。回归入口为 `test/toolJsonDiagnostic.test.ts`、`test/toolExecutionClock.test.ts`、`test/toolResultClipboard.test.ts`、`test/toolExecutionIntegration.test.ts`。
+
+ChatGPT 普通对话纯文本适配：平台 URL 规则为 `src/shared/webConversation.ts`，只读 DOM 规则为 `src/main/chatgptPage.ts`，正文/完成快照为 `tools/replyObservation.ts`，监听生命周期为 `tools/replyChangeWatcher.ts`，唯一 DOM 写入仍为 `src/main/webComposerSender.ts`；活动绑定由 `tools/integration.ts` 管理。验证为 `test/chatgptToolIntegration.test.ts` 与 `tools/verify-chatgpt-composer.cjs`，源站真实连续对话另需人工验收。
+
+ChatGPT 原生只读结构诊断为 `tools/chatgpt-page-structure.cjs`，由 `tools/chatgpt-ide-preview.cjs` 在显式诊断开关开启时运行，不记录正文、输入或凭据；离线两轮真实工具验证为 `tools/verify-chatgpt-tools.cjs`。

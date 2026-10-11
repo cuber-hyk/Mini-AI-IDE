@@ -86,12 +86,27 @@ window.setupPromptComposer = function (bridge, setInfo, localPrompt) {
 
   let status = null;
   let revision = 0;
+  let platform = null;
+  let platformRevision = 0;
+  function composerAvailability() {
+    const unavailable = !platform || platform.switching || !['deepseek', 'chatgpt'].includes(platform.platform);
+    localPrompt.setComposerBusy(!status || unavailable);
+    el.requirement.title = !platform ? '平台状态未就绪，本地需求暂不可发送' : platform.switching ? '正在切换官网平台，本地需求暂不可发送'
+      : platform.platform === 'chatgpt' ? 'ChatGPT 本轮支持纯文本需求；附件请在官网手动上传。' : '';
+    if (unavailable) {
+      const send = document.getElementById('btn-send-prompt'); if (send) send.title = el.requirement.title;
+    }
+  }
+  function paintPlatform(next) {
+    platform = next; composerAvailability();
+    if (next.platform === 'chatgpt' && !next.switching) setInfo('ChatGPT：支持普通对话的纯文本工具协作，附件请在官网手动上传。');
+  }
   function paint(next) {
     status = next;
     el.custom.hidden = !next.isCustom;
     el.custom.title = '当前使用自定义原文；强制工具协议由程序统一附带，可在提示词设置中修改';
     el.custom.setAttribute('aria-label', '使用自定义提示词');
-    localPrompt.setComposerBusy(false);
+    composerAvailability();
   }
   async function refresh() {
     const version = ++revision;
@@ -102,7 +117,13 @@ window.setupPromptComposer = function (bridge, setInfo, localPrompt) {
     revision += 1;
     paint(next);
   });
-  localPrompt.setComposerBusy(!status);
+  bridge.onWebPlatformState(function (next) { platformRevision += 1; paintPlatform(next); });
+  const initialPlatformRevision = platformRevision;
+  void bridge.getWebPlatform().then(function (next) { if (platformRevision === initialPlatformRevision) paintPlatform(next); }).catch(function (err) {
+    if (platformRevision !== initialPlatformRevision) return;
+    composerAvailability(); setInfo('读取平台状态失败，本地需求暂不可发送：' + (err && err.message ? err.message : String(err)), true);
+  });
+  composerAvailability();
   void refresh().catch(function (err) {
     setInfo('读取提示词设置失败：' + (err && err.message ? err.message : String(err)), true);
   });

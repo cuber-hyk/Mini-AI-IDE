@@ -17,6 +17,8 @@ interface Options {
   sender: { send: (text: string, session: string, kind: 'prompt', current: () => boolean, attachments?: readonly PromptAttachmentData[]) => ReturnType<WebComposerSender['send']>; cancel: WebComposerSender['cancel'] };
   attachments: LocalPromptAttachments; chooseFiles: () => Promise<string[]>; resolveWorkspacePath: (path: string) => Promise<{ ok: boolean; absolute?: string; error?: string }>;
   root: () => string | null; session: () => string; busy: () => boolean;
+  webAvailable?: () => boolean;
+  attachmentsAvailable?: () => boolean;
   disabled?: boolean;
 }
 export class LocalPromptController {
@@ -24,6 +26,7 @@ export class LocalPromptController {
   private rootGeneration = 0;
   private sending = false;
   constructor(private readonly options: Options) {}
+  get isSending(): boolean { return this.sending; }
   getOptions(): LocalPromptOptions { return { ...this.options.settings.get().localPrompt }; }
   cancel(rootChanged = true): void { this.generation++; if (rootChanged) { this.rootGeneration++; this.options.attachments.clear(); } void this.options.sender.cancel('prompt'); }
   setOptions(raw: unknown): LocalPromptOptions {
@@ -71,15 +74,18 @@ export class LocalPromptController {
   }
   async send(raw: unknown): Promise<LocalPromptResult> {
     if (this.options.disabled) return { ok: false, error: '当前运行模式不支持发送需求' };
+    if (this.options.webAvailable?.() === false) return { ok: false, error: '当前网页平台不支持发送本地需求' };
     if (this.sending || this.options.busy()) return { ok: false, error: '需求或工具结果正在处理，请等待当前操作结束' };
     const session = this.options.session(); const generation = this.generation; this.sending = true;
     try {
       const prompt = await this.compose(raw);
-      if (generation !== this.generation || session !== this.options.session() || this.options.busy()) return { ok: false, error: '选项、会话或工具状态已变化，需求未发送' };
+      if (this.options.attachmentsAvailable?.() === false && (raw as LocalPromptInput).attachments?.length)
+        return { ok: false, error: 'ChatGPT 本轮仅支持纯文本需求，请移除本地附件或在官网手动上传' };
+      if (this.options.webAvailable?.() === false || generation !== this.generation || session !== this.options.session() || this.options.busy()) return { ok: false, error: '平台、选项、会话或工具状态已变化，需求未发送' };
       // 会话作用域由 integration/sender 核验，允许它们证明首页首发的地址分配。
-      const current = () => generation === this.generation && !this.options.busy();
+      const current = () => this.options.webAvailable?.() !== false && generation === this.generation && !this.options.busy();
       const attachments = await this.options.attachments.resolve((raw as LocalPromptInput).attachments ?? []);
-      if (generation !== this.generation || session !== this.options.session()) return { ok: false, error: '项目或会话已变化，需求未发送' };
+      if (!current() || session !== this.options.session()) return { ok: false, error: '项目、平台或会话已变化，需求未发送' };
       traceCollection('local-prompt.attachments-resolved', { count: attachments.length, totalBytes: attachments.reduce((sum, item) => sum + item.size, 0) });
       const result = await this.options.sender.send(prompt, session, 'prompt', current, attachments);
       if (result.ok) for (const attachment of attachments) this.options.attachments.remove(attachment.id);

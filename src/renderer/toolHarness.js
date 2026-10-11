@@ -27,6 +27,14 @@
     const completionNotice = document.getElementById('tool-completion-notice');
     const soundNotice = document.getElementById('tool-sound-notice');
     let state = null;
+    let platform = null;
+    let platformVersion = 0;
+    function supported() { return platform && ['deepseek', 'chatgpt'].includes(platform.platform) && !platform.switching; }
+    function attachmentsSupported() { return supported() && platform.platform === 'deepseek'; }
+    function platformReason() {
+      return !platform ? '平台状态未就绪，自动继续和附件回传暂不可用' : platform.switching ? '正在切换官网平台…'
+        : '当前官网平台不支持工具协作。';
+    }
     let eventVersion = 0;
     let configuring = false;
     let copying = false;
@@ -187,11 +195,12 @@
       const unavailable = Boolean(state && state.storageError);
       panel.classList.toggle('has-results', Boolean(state && (state.results.length || state.batchError)));
       permission.disabled = configuring || !state || unavailable;
-      automatic.disabled = configuring || !state || unavailable;
+      automatic.disabled = configuring || !state || unavailable || !supported();
+      automatic.title = supported() ? '自动继续：执行工具并回传真实结果' : platformReason();
       const returned = state && state.resultReturn;
       const hasAttachments = Boolean(returned && returned.attachmentCount > 0);
-      const sendAttachments = Boolean(hasAttachments && !configuring && !state.busy && !state.config.automatic && returned.canSend && returnedIdentity !== returnIdentity());
-      const showSendAction = sendAttachments || sending && hasAttachments;
+      const sendAttachments = Boolean(attachmentsSupported() && hasAttachments && !configuring && !state.busy && !state.config.automatic && returned.canSend && returnedIdentity !== returnIdentity());
+      const showSendAction = attachmentsSupported() && (sendAttachments || sending && hasAttachments);
       copy.dataset.action = showSendAction ? 'send' : 'copy';
       copy.title = copying ? (sending ? '正在复制并发送本批结果与附件…' : '正在复制本批结果…') : showSendAction ? '发送本批结果与附件，并复制结果到剪贴板' : '复制本批结果到剪贴板';
       copy.setAttribute('aria-label', copy.title);
@@ -223,7 +232,7 @@
       // 主进程先停止回传再保存配置；显示实际停止状态，避免保存期间开关反跳。
       automatic.checked = state.config.automatic && (!state.continuation || state.continuation.phase !== 'off');
       const continuing = state.continuation;
-      if (continuing && !localMessage && !unavailable) {
+      if (supported() && continuing && !localMessage && !unavailable) {
         const labels = { sending: '正在发送结果', waiting_reply: '等待 AI 回复', waiting_user: '等待你回答', paused: '自动已暂停' };
         if (state.config.automatic && labels[continuing.phase]) activity.textContent = labels[continuing.phase];
         if (continuing.phase === 'countdown') {
@@ -246,6 +255,11 @@
       }[state.config.permission];
       const finished = state.results.filter(function (item) { return !['running', 'pending_permission'].includes(item.status); }).length;
       count.textContent = state.batchError ? '1 项校验失败' : state.results.length + ' 项' + (state.busy ? ' · 已返回 ' + finished : '');
+      if (!supported()) {
+        activity.textContent = platform && platform.platform === 'chatgpt' && !platform.switching ? 'ChatGPT：请在官网手动对话' : platformReason();
+        activity.title = platformReason(); automatic.checked = Boolean(state.config.automatic);
+        continueNotice.textContent = platformReason(); continueNotice.title = continueNotice.textContent; continueNotice.classList.remove('is-error');
+      }
       renderStatusFeedback();
       renderResults();
       layout.refresh();
@@ -282,7 +296,7 @@
     }
 
     permission.addEventListener('change', function () { return configure({ permission: permission.value }); });
-    automatic.addEventListener('change', function () { return configure({ automatic: automatic.checked }); });
+    automatic.addEventListener('change', function () { if (!supported()) { render(); return; } return configure({ automatic: automatic.checked }); });
     undo.addEventListener('click', async function () {
       if (undo.disabled || undoing) return;
       undoing = true; localMessage = ''; localError = false; render();
@@ -310,7 +324,7 @@
         render();
       }
       try {
-        const stillCanSendAttachments = identity === returnIdentity() && state && !configuring && !state.busy && !state.config.automatic &&
+        const stillCanSendAttachments = attachmentsSupported() && identity === returnIdentity() && state && !configuring && !state.busy && !state.config.automatic &&
           state.resultReturn && state.resultReturn.canSend && returnedIdentity !== identity;
         if (sendAttachments && stillCanSendAttachments) {
           returnMessage = '正在提交本批结果与附件…'; render();
@@ -370,6 +384,11 @@
     });
     window.addEventListener('beforeunload', function () { audio.dispose(); });
     bridge.onToolState(function (next) { eventVersion += 1; receive(next, !state); });
+    bridge.onWebPlatformState(function (next) { platformVersion += 1; platform = next; render(); });
+    const initialPlatformVersion = platformVersion;
+    bridge.getWebPlatform().then(function (next) {
+      if (initialPlatformVersion === platformVersion) { platform = next; render(); }
+    }).catch(function () { if (initialPlatformVersion === platformVersion) { platform = null; render(); } });
     render();
     const initialVersion = eventVersion;
     bridge.getToolState().then(function (next) {

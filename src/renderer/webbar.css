@@ -24,7 +24,8 @@ html, body {
   padding: 0 6px 0 12px;
   border-bottom: 1px solid var(--border);
 }
-.webbar-title { flex: 0 0 auto; color: var(--text-dim); }
+.webbar-platform { flex: 0 0 auto; width: 102px; min-width: 0; padding: 0 6px; color: var(--ui-text); }
+.webbar-platform option { background: var(--ui-surface); color: var(--ui-text); }
 .tool-workspace-status {
   min-width: 0;
   color: var(--text-dim);
@@ -55,7 +56,7 @@ html, body {
 }
 .ui-icon.active { background: #5b8def29; border-color: #5b8def6b; color: var(--accent); }
 @media (max-width: 440px) { .collect-status { display: none; } }
-@media (max-width: 380px) { .webbar-title { display: none; } .bar-wide { gap: 2px; padding-left: 4px; } }
+@media (max-width: 380px) { .bar-wide { gap: 2px; padding-left: 4px; } .tool-workspace-status { display: none; } .webbar-platform { width: 91px; } #btn-tool-workspace { padding: 0 5px; } }
 .bar-wide .ui-button { background: transparent; border-color: transparent; }
 
 #btn-file-restore { background: transparent; border-color: transparent; }

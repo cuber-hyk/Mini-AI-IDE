@@ -11,8 +11,12 @@ import type { ApplicationUpdateState } from './applicationUpdate';
 import type { ToolConfig, ToolState } from './toolProtocol';
 import type { ToolSettingsAnchor, ToolSettingsVisibility } from './toolSettings';
 import type { FilePreviewResult, FilePreviewZoom } from './filePreview';
+import type { WebPlatformState } from './webPlatform';
 
 export const CHANNELS = {
+  getWebPlatform: 'ui:get-web-platform',
+  setWebPlatform: 'ui:set-web-platform',
+  webPlatformState: 'ui:web-platform-state',
   readFilePreview: 'fs:read-file-preview',
   filePreviewZoom: 'ui:file-preview-zoom',
   startWorkspaceFileDrag: 'fs:start-workspace-file-drag',
@@ -518,6 +522,8 @@ export interface EditorDiffSibling {
 
 /** preload 通过 contextBridge 暴露给渲染进程的唯一接口面 */
 export interface EditorBridge {
+  getWebPlatform(): Promise<WebPlatformState>;
+  onWebPlatformState(listener: (state: WebPlatformState) => void): void;
   startWorkspaceFileDrag(relPath: string, root: string): Promise<{ ok: boolean; error?: string }>;
   onFilePreviewZoom(listener: (input: FilePreviewZoom) => void): void;
   getToolState(): Promise<ToolState>;

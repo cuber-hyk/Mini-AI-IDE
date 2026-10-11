@@ -3,10 +3,16 @@ artifact_type: capability
 status: current
 updated: 2026-10-10
 owner: 胡运宽
-source_of_truth: [src/main/toolWorkspaceStatus.ts, src/renderer/toolAttention.js, test/toolWorkspaceStatus.test.ts, test/toolAttention.test.ts, src/main/settings.ts, test/promptSettingsMigration.test.ts, docs/capabilities/skills-and-local-prompt.md, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, src/renderer/fileWorkspace.js, test/fileWorkspace.test.ts, docs/adr/2026-10-07-workspace-ui-shell-layout.md, src/main/workspaceLayoutController.ts, src/main/workspaceService.ts, src/renderer/workspaceLayout.js, src/renderer/workspaceNavigation.js, src/renderer/webbar.html, src/renderer/webbar.js, src/renderer/webbar.css, src/main/webbarPreload.ts, src/shared/contract.ts, test/workspaceLayoutController.test.ts, src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, tools/verify-web-result-sender.cjs, src/renderer/preview.css, src/main/previewPreload.ts, test/changeTree.test.ts, docs/adr/2026-10-02-honest-electron-identity.md, docs/adr/2026-10-02-filesystem-permission-model.md, DESIGN.md, design-tokens.json, src/main/windowLayout.ts, src/main/layoutProbe.ts, src/main/tools/changeReview.ts, src/renderer/preview.js, src/renderer/editorToolbar.js, src/renderer/ui.css, test/windowLayout.test.ts, test/toolChanges.test.ts, test/editorToolbar.test.ts, src/main/index.ts, src/renderer/index.html, src/renderer/style.css, src/renderer/promptComposer.js, test/promptComposer.test.ts, src/renderer/toolPanelLayout.js, test/toolPanelLayout.test.ts, src/main/workspaceController.ts, src/main/workspaceProbe.ts, src/renderer/fileExplorer.js, src/renderer/fileIcons.js, src/renderer/fileExplorer.css, src/renderer/editorTabs.js, src/renderer/editorWorkspace.js, test/editorWorkspace.test.ts, test/fileExplorer.test.ts, test/fileIcons.test.ts, test/workspaceController.test.ts]
+source_of_truth: [test/webBackgroundPolicy.test.ts, tools/verify-web-background.cjs, src/main/toolWorkspaceStatus.ts, src/renderer/toolAttention.js, test/toolWorkspaceStatus.test.ts, test/toolAttention.test.ts, src/main/settings.ts, test/promptSettingsMigration.test.ts, docs/capabilities/skills-and-local-prompt.md, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, src/renderer/fileWorkspace.js, test/fileWorkspace.test.ts, docs/adr/2026-10-07-workspace-ui-shell-layout.md, src/main/workspaceLayoutController.ts, src/main/workspaceService.ts, src/renderer/workspaceLayout.js, src/renderer/workspaceNavigation.js, src/renderer/webbar.html, src/renderer/webbar.js, src/renderer/webbar.css, src/main/webbarPreload.ts, src/shared/contract.ts, test/workspaceLayoutController.test.ts, src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, tools/verify-web-result-sender.cjs, src/renderer/preview.css, src/main/previewPreload.ts, test/changeTree.test.ts, docs/adr/2026-10-02-honest-electron-identity.md, docs/adr/2026-10-02-filesystem-permission-model.md, DESIGN.md, design-tokens.json, src/main/windowLayout.ts, src/main/layoutProbe.ts, src/main/tools/changeReview.ts, src/renderer/preview.js, src/renderer/editorToolbar.js, src/renderer/ui.css, test/windowLayout.test.ts, test/toolChanges.test.ts, test/editorToolbar.test.ts, src/main/index.ts, src/renderer/index.html, src/renderer/style.css, src/renderer/promptComposer.js, test/promptComposer.test.ts, src/renderer/toolPanelLayout.js, test/toolPanelLayout.test.ts, src/main/workspaceController.ts, src/main/workspaceProbe.ts, src/renderer/fileExplorer.js, src/renderer/fileIcons.js, src/renderer/fileExplorer.css, src/renderer/editorTabs.js, src/renderer/editorWorkspace.js, test/editorWorkspace.test.ts, test/fileExplorer.test.ts, test/fileIcons.test.ts, test/workspaceController.test.ts]
 ---
 
 # 能力：应用外壳与进程架构
+
+## 官网后台运行
+
+DeepSeek 的 `webPagePreferences` 与 ChatGPT 的 `webPreferences` 显式设置 Electron 原生 `backgroundThrottling: false`。窗口被其他窗口完全遮挡、隐藏、最小化及中间视图暂时不显示时，官网计时器和画面帧保持调度，以支持只读采集与已授权发送；本地命令仍由主进程执行。这是原生渲染调度策略，会影响 Page Visibility，可能增加后台 CPU/GPU 和耗电，同一窗口其他视图也可能保持绘制；不改写任何网页可见性 getter、UA 或指纹。平台切换仍由 `setWebActive` 关闭非活动平台的工具采集与运输，后台调度不授予执行或发送权限。系统休眠、网络失败和未知官网结构仍不能保证自动继续。
+
+原生离线验收：`node tools/verify-web-background.cjs`。使用产品配置建立隔离 BaseWindow/WebContentsView，检查前台、被遮挡、隐藏和最小化的定时器/画面帧、发送与真实命令；不连接官网或使用用户资料。
 
 > 状态说明：P2 已实现；本节记录当前事实。检查数量以运行结果为准。
 > 自检命令：`npm run self-test`（构建 + `electron . --self-test`，不联网）。
@@ -36,14 +42,15 @@ source_of_truth: [src/main/toolWorkspaceStatus.ts, src/renderer/toolAttention.js
 
 ## 进程契约
 
-现在共 **5 个 `WebContentsView`**（下表另列主进程）：
+默认创建 **5 个 `WebContentsView`**，首次切换 ChatGPT 后增至 6 个（下表另列主进程）：
 
 | 进程 | 职责 | 硬性约束 |
 |---|---|---|
 | **main** | 窗口与分栏布局、IPC 路由、本地文件读取、会话分区配置、提示词设置的持久化、启动自检、安装版软件更新 | 绝不发起或代理大模型相关网络请求；限定需求/结果写入共用 WebComposerSender，见技能/本地需求及结果回传 ADR；更新模块专用网络例外见 `application-update.md` 与 ADR-0005 |
 | **editor renderer**（`persist:editor-ui`） | 铺满窗口的本地工作区外壳，含项目导航、Monaco、文件树、工具结果与需求编写 | `nodeIntegration:false`、`contextIsolation:true`、`sandbox:true`；无文件系统能力；CSP `connect-src 'none'` |
 | **webview renderer**（`persist:postcheck`） | 加载目标平台网页 | 顶级独立视图；无本地桥。隔离世界 1004 只读采集，1005 仅回传当前真实工具结果，不开放任意网页操作 |
-| **webbar renderer**（`persist:editor-ui`） | 中间网页区顶部工具条：只读采集、紧凑工具状态与查看工具、切换左侧工作区、恢复收起的文件区 | 只能请求只读采集、单一工作区切换、文件区恢复、零参数工具摘要查询与工具标签打开；不能读写文件或向网页写入内容。不提供通用布局入口 |
+| **ChatGPT renderer**（`persist:postcheck-02`） | 首次切换创建，官网普通对话纯文本协作 | 顶级独立沙箱，无 preload/本地桥；隔离世界只读采集与限定纯文本发送，复用工具执行流程，登录弹窗同分区，见 `web-platforms.md` |
+| **webbar renderer**（`persist:editor-ui`） | 中间网页区顶部工具条：平台选择、活动平台只读采集、紧凑工具状态与查看工具、切换左侧工作区、恢复收起的文件区 | 平台只接固定 ID，其余为原有窄入口；不能读写文件或向网页写入内容。不提供任意 URL 或通用布局入口 |
 | **preview renderer**（`persist:editor-ui`） | 右文件区正文的只读变更查看：文件筛选、实际修改前后差异和执行状态；最右目录树不被覆盖 | 无文件读取／应用入口；撤销请求复用原工具 owner，不能扩大写盘能力 |
 | **prompt renderer**（`persist:editor-ui`） | 提示词设置面板（覆盖式浮层，默认隐藏）：**查看/编辑一份自定义「输出格式要求」** | 只能读/写**这一份设置**（4 个通道）；不能读写文件、不能碰网页。**为什么单独开一个视图**：编辑器渲染进程持有文件写权限，而"编辑一段纯文本"不需要任何文件能力——不把提权面顺手扩大 |
 

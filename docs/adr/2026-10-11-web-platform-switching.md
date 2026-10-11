@@ -1,0 +1,34 @@
+---
+artifact_type: adr
+status: accepted
+created: 2026-10-11
+updated: 2026-10-12
+owner: 胡运宽
+source_of_truth: [src/shared/webPlatform.ts, src/main/webPlatformController.ts, src/main/webPlatformView.ts, src/main/tools/integration.ts, test/webPlatformController.test.ts, test/toolPlatformActivity.test.ts]
+---
+
+# 官网平台切换与活动能力边界
+
+用户确认顶栏直接切换 DeepSeek / ChatGPT、默认 DeepSeek，并确认执行/发送期间阻止切换；并确认先完成 ChatGPT 普通对话纯文本自动执行与自动继续，程序附件留待后续。
+
+## 决策
+
+每次启动默认 DeepSeek；两个原生 WebContentsView 分别使用固定中性分区：DeepSeek 为 persist:postcheck，ChatGPT 为 persist:postcheck-02。ChatGPT 首次选择才创建；切换隐藏原视图并复用已有视图与登录数据，不跨 userData 迁移试验登录 profile。布局仍由 WorkspaceLayoutController 单一计算，提示词浮层保持在官网上方。
+
+WebPlatformController 是平台选择唯一 owner。仅本地顶栏主 frame 可传固定平台 ID，编辑器只可查询/订阅；不接任意 URL、分区或网页动作。网页无 preload、Node 与本地桥；使用真实 Chromium UA，仅移除 Electron/应用名自报标记，创建参数和 webContents 均设置实际 UA。
+
+本地工具忙、后台进程存活、本地需求或工具结果运输期间拒绝切换。仅回传倒计时可撤回后切换：取消待发送与当前附件资格、递增活动修订并建立历史基线，保留完成结果与用户本地草稿。切回任何平台不补发旧批次，automatic 持久配置不变，仅对活动平台生效。重新绑定前释放旧网页监听与运输，历史基线与异步守卫独立核验；上一批结果只保留展示和复制资格。手动采集与所有跨异步执行/发送守卫核验活动状态。
+
+ChatGPT 普通对话通过专属只读 DOM 规则与唯一 WebComposerSender 接入共用工具流程，复用执行和权限 owner，不复制自动执行引擎。纯文本范围不包含程序附件上传，携带附件时明确拒绝；未知页面/控件/完成状态暂停。官网真实文件拖放仍由用户和官网处理。登录弹窗只开放 HTTPS 的 OpenAI 官方站点及明确列出的常见身份提供商，使用同一分区与沙箱，随主窗口关闭释放。
+
+首页首发分配正式会话前的 `/c/local-chatgpt%3A<UUID>` 占位地址只作为过渡等待：白名单保持普通首页和正式 `/c/<id>`，不在占位地址采集、执行或写入输入。已存在的只读监听保留未取消的短期提交标记和首页来源，正式地址出现后才交接；发送运输仅在实际点击后的同一占位地址等待，3 秒未确认分配即不确定暂停、不重试。其他导航仍隔离历史；返回支持的会话时重新建立监听和历史基线。
+
+网络加载不占用平台切换锁；失败保留当前平台并显示固定脱敏错误，允许立即切回。创建或应用失败恢复原视图与活动能力；加载恢复后清理过期错误。平台状态不作为登录或对话成功的判据。
+
+## 验证
+
+行为测试覆盖 IPC 权限、并发/忙拒绝、失败恢复、网络慢切回、跨平台取消与复制、异步旧守卫失效；离线原生视图夹具验证布局、真实顶栏、分区隔离、沙箱/桥与实际 UA。官网登录/对话和重启登录保持只能由用户在应用中实际确认。
+
+## 取舍与后果
+
+选择平台专属 DOM 规则和共用工具执行流程，而不复制整个协作引擎。这样保持用户中断、权限、去重、复制和回传语义一致；代价是平台切换必须显式释放并重新绑定监听、运输及历史基线。DOM 可变，因此源站结构与完成标记必须独立验证，不能用通用按钮文本或静默时间兜底。ChatGPT 附件未适配时明确失败，不能静默丢弃后发送正文。
