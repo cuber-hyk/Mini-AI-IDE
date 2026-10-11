@@ -197,10 +197,13 @@
     });
     tree.addEventListener('click', function (event) { if (event.target === tree) selected = null; });
     tree.addEventListener('dragstart', function (event) {
+      event.preventDefault();
       const row = event.target.closest('.tree-row');
-      if (!row || !row.draggable || !options.getRoot() || !event.dataTransfer) { event.preventDefault(); return; }
-      event.dataTransfer.effectAllowed = 'copy';
-      event.dataTransfer.setData('application/x-mini-ai-ide-workspace-files', JSON.stringify({ root: options.getRoot(), paths: [row.dataset.relPath] }));
+      const root = options.getRoot();
+      if (!event.isTrusted || !row || !tree.contains(row) || !row.draggable || !root) return;
+      void options.bridge.startWorkspaceFileDrag(row.dataset.relPath, root).then(function (result) {
+        if (!result.ok) options.setInfo(result.error || '无法拖拽文件', true);
+      }).catch(function (error) { options.setInfo('无法拖拽文件：' + String(error), true); });
     });
     options.newFile.addEventListener('click', function () { void create(false); });
     options.newFolder.addEventListener('click', function () { void create(true); });

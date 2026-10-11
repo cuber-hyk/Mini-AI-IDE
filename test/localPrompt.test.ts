@@ -246,16 +246,18 @@ it('外部拖放文件交由主进程窄通道校验，不把路径写进需求�
   assert.equal(ui.nodes.requirement.value, '');
 });
 
-it('右侧工作区文件以相对路径和来源根目录拖入附件区', async () => {
+it('工作区原生文本文件与外部文件共用 Files 接收入口，添加附件不发送需求', async () => {
   let staged: unknown[] = [];
-  const ui = setup({ async stageWorkspacePromptAttachments(paths: unknown[], root: string) { staged = paths; assert.equal(root, 'C:\\project'); return [{ id: 'workspace-1', name: 'notes.md', size: 20, mediaType: 'text/markdown' }]; } }); await flush();
+  let sent = 0;
+  const ui = setup({ async stagePromptAttachments(files: unknown[]) { staged = files; return [{ id: 'workspace-1', name: 'notes.txt', size: 20, mediaType: 'text/plain' }]; }, async sendPrompt() { sent++; return { ok: true }; } }); await flush();
   let prevented = false;
+  const file = { name: 'notes.txt', type: 'text/plain' };
   ui.nodes['prompt-shell'].fire('drop', { dataTransfer: {
-    types: ['application/x-mini-ai-ide-workspace-files'],
-    getData() { return JSON.stringify({ root: 'C:\\project', paths: ['docs/notes.md'] }); },
+    types: ['Files'], files: [file],
   }, preventDefault() { prevented = true; } }); await flush();
-  assert.equal(prevented, true); assert.deepEqual(Array.from(staged), ['docs/notes.md']);
+  assert.equal(prevented, true); assert.equal(staged[0], file); assert.equal(sent, 0);
   assert.deepEqual(Array.from(ui.owner.getSubmission().attachments), ['workspace-1']);
+  assert.equal(ui.nodes.requirement.value, '');
 });
 
 it('粘贴图片时作为附件暂存，普通文本粘贴保持浏览器默认行为', async () => {

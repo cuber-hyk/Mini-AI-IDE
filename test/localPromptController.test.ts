@@ -88,7 +88,7 @@ it('附件 IPC 只允许编辑器主 frame，选择取消不创建附件', async
   assert.throws(() => f.handlers.get(CHANNELS.removePromptAttachment)!(f.event, 'id', 'extra'), /数量/);
 });
 
-it('工作区树拖入只接纳当前根下的相对路径并在根切换后失效', async () => {
+it('右键添加工作区附件只接纳当前根下的相对路径并在根切换后失效', async () => {
   const f = fixture(); f.setRoot('C:\\project');
   let staged: string[] = [];
   f.options.attachments.stage = async (paths: string[]) => { staged = paths; return []; };

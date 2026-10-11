@@ -239,26 +239,16 @@ window.setupLocalPrompt = function (bridge, setInfo) {
   });
   const dropTarget = document.querySelector('.prompt-shell');
   function containsFiles(event) { return Array.from(event.dataTransfer?.types || []).includes('Files'); }
-  function containsWorkspaceFiles(event) { return Array.from(event.dataTransfer?.types || []).includes('application/x-mini-ai-ide-workspace-files'); }
   ['dragenter', 'dragover'].forEach(function (name) { dropTarget.addEventListener(name, function (event) {
-    if (!containsFiles(event) && !containsWorkspaceFiles(event)) return; event.preventDefault(); dropTarget.classList.add('has-file-drag');
+    if (!containsFiles(event)) return; event.preventDefault(); dropTarget.classList.add('has-file-drag');
   }); });
   ['dragleave', 'dragend'].forEach(function (name) { dropTarget.addEventListener(name, function (event) {
-    if (!containsFiles(event) && !containsWorkspaceFiles(event)) return; dropTarget.classList.remove('has-file-drag');
+    if (!containsFiles(event)) return; dropTarget.classList.remove('has-file-drag');
   }); });
   dropTarget.addEventListener('drop', function (event) {
-    if (!containsFiles(event) && !containsWorkspaceFiles(event)) return;
+    if (!containsFiles(event)) return;
     event.preventDefault(); dropTarget.classList.remove('has-file-drag');
-    if (containsFiles(event)) {
-      const files = Array.from(event.dataTransfer.files || []); if (files.length) void addFiles(function () { return bridge.stagePromptAttachments(files); });
-      return;
-    }
-    try {
-      const payload = JSON.parse(event.dataTransfer.getData('application/x-mini-ai-ide-workspace-files'));
-      if (payload && payload.root === root && Array.isArray(payload.paths) && payload.paths.length)
-        void addFiles(function () { return bridge.stageWorkspacePromptAttachments(payload.paths, payload.root); });
-      else setInfo('工作区已切换或拖入的文件无效，请重新拖入', true);
-    } catch (_) { setInfo('无法读取工作区拖入的文件', true); }
+    const files = Array.from(event.dataTransfer.files || []); if (files.length) void addFiles(function () { return bridge.stagePromptAttachments(files); });
   });
   document.getElementById('skill-preview-close').addEventListener('click', function () { previewRevision += 1; preview.hidden = true; resized(); });
   input.addEventListener('input', function () { updateMenu(); paint(); });

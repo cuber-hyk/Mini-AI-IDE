@@ -19,6 +19,9 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 /** 与 src/shared/contract.ts 的 CHANNELS 必须逐字一致（自检会校验） */
 const CH = {
+  readFilePreview: 'fs:read-file-preview',
+  filePreviewZoom: 'ui:file-preview-zoom',
+  startWorkspaceFileDrag: 'fs:start-workspace-file-drag',
   getLocalPromptOptions: 'ui:get-local-prompt-options', setLocalPromptOptions: 'ui:set-local-prompt-options',
   choosePromptAttachments: 'ui:choose-prompt-attachments', stagePromptAttachments: 'ui:stage-prompt-attachments',
   stageWorkspacePromptAttachments: 'ui:stage-workspace-prompt-attachments',
@@ -75,6 +78,8 @@ const CH = {
   promptStatus: 'ui:prompt-status',
 } as const;
 const bridge = {
+  startWorkspaceFileDrag: (relPath: string, root: string) => ipcRenderer.invoke(CH.startWorkspaceFileDrag, relPath, root),
+  onFilePreviewZoom: (listener: (input: unknown) => void) => ipcRenderer.on(CH.filePreviewZoom, (_event, input) => listener(input)),
   getToolState: () => ipcRenderer.invoke(CH.getToolState),
   setToolConfig: (config: unknown) => ipcRenderer.invoke(CH.setToolConfig, config),
   onToolState: (listener: (state: unknown) => void) => ipcRenderer.on(CH.toolState, (_e, state) => listener(state)),
@@ -110,6 +115,7 @@ const bridge = {
   getRoot: () => ipcRenderer.invoke(CH.getRoot),
   listDir: (relPath: string) => ipcRenderer.invoke(CH.listDir, relPath),
   readFile: (relPath: string) => ipcRenderer.invoke(CH.readFile, relPath),
+  readFilePreview: (relPath: string, root: string) => ipcRenderer.invoke(CH.readFilePreview, relPath, root),
   sliceFile: (relPath: string, startLine: number, endLine: number) =>
     ipcRenderer.invoke(CH.sliceFile, relPath, startLine, endLine),
   writeFile: (relPath: string, text: string, root: string) => ipcRenderer.invoke(CH.writeFile, relPath, text, root),

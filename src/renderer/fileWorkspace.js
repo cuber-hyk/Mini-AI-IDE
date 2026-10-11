@@ -84,6 +84,8 @@
       renderReview();
       document.body.classList.toggle('file-diff-visible', visible);
       document.getElementById('monaco').inert = visible || toolsVisible;
+      const filePreview = document.getElementById('file-preview');
+      if (filePreview) filePreview.inert = visible || toolsVisible;
       document.getElementById('workspace-welcome').inert = visible || toolsVisible;
 
     });

@@ -10,8 +10,12 @@ import type { TextMeta } from './limits';
 import type { ApplicationUpdateState } from './applicationUpdate';
 import type { ToolConfig, ToolState } from './toolProtocol';
 import type { ToolSettingsAnchor, ToolSettingsVisibility } from './toolSettings';
+import type { FilePreviewResult, FilePreviewZoom } from './filePreview';
 
 export const CHANNELS = {
+  readFilePreview: 'fs:read-file-preview',
+  filePreviewZoom: 'ui:file-preview-zoom',
+  startWorkspaceFileDrag: 'fs:start-workspace-file-drag',
   getLocalPromptOptions: 'ui:get-local-prompt-options',
   setLocalPromptOptions: 'ui:set-local-prompt-options',
   choosePromptAttachments: 'ui:choose-prompt-attachments', stagePromptAttachments: 'ui:stage-prompt-attachments',
@@ -514,6 +518,8 @@ export interface EditorDiffSibling {
 
 /** preload 通过 contextBridge 暴露给渲染进程的唯一接口面 */
 export interface EditorBridge {
+  startWorkspaceFileDrag(relPath: string, root: string): Promise<{ ok: boolean; error?: string }>;
+  onFilePreviewZoom(listener: (input: FilePreviewZoom) => void): void;
   getToolState(): Promise<ToolState>;
   setToolConfig(config: Partial<ToolConfig>): Promise<ToolState>;
   onToolState(listener: (state: ToolState) => void): void;
@@ -549,6 +555,7 @@ export interface EditorBridge {
   getRoot(): Promise<RootInfo>;
   listDir(relPath: string): Promise<ListDirResult>;
   readFile(relPath: string): Promise<ReadFileResult>;
+  readFilePreview(relPath: string, root: string): Promise<FilePreviewResult>;
   sliceFile(relPath: string, startLine: number, endLine: number): Promise<SliceFileResult>;
   writeFile(relPath: string, text: string, root: string): Promise<WriteFileResult>;
   /** 读取/订阅输入区当前设置（自定义布尔状态）。 */

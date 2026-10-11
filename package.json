@@ -1,6 +1,6 @@
 {
   "name": "mini-ai-ide",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "private": true,
   "description": "Windows 桌面工具：Monaco 本地编辑、DeepSeek 网页接入、规范工具执行与可控结果回传",
   "author": "Mini-AI-IDE contributors",
@@ -14,6 +14,8 @@
     "diagnose": "npm run build && electron . --diagnose",
     "ui-probe": "npm run build && electron . --ui-probe",
     "verify:workspace": "npm run build && electron . --workspace-probe",
+    "verify:files": "npm run build && electron tools/verify-file-preview.cjs",
+    "verify:drag": "npm run build && electron tools/verify-workspace-file-drag.cjs",
     "ui-probe:bubble": "npm run build && electron . --ui-probe --test-bubble",
     "ui-probe:findhover": "npm run build && electron . --ui-probe --test-findhover",
     "verify:range": "npm run build && node tools/verify-range-normalize.mjs && node tools/verify-bubble-selfrules-offline.mjs",
@@ -28,10 +30,13 @@
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",
     "@types/node": "22.10.2",
+    "docx-preview": "0.4.1",
+    "dompurify": "3.4.16",
     "electron": "44.5.1",
     "electron-builder": "^26.15.3",
     "monaco-editor": "0.57.0",
     "patch-package": "8.0.0",
+    "pdfjs-dist": "6.4.299",
     "tsx": "4.23.15",
     "typescript": "5.9.3"
   },

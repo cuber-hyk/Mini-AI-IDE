@@ -43,7 +43,7 @@
         const label = doc.review ? '本批改动' : doc.tools ? '工具' : doc.path;
         tab.textContent = doc.review || doc.tools ? label : doc.path.split('/').pop(); tab.title = label + (doc.dirty ? '（未保存）' : '');
         tab.setAttribute('role', 'tab'); tab.setAttribute('aria-selected', String(selected));
-        if (!doc.review) tab.setAttribute('aria-controls', doc.tools ? 'tool-workspace' : 'monaco');
+        if (!doc.review) tab.setAttribute('aria-controls', doc.tools ? 'tool-workspace' : doc.kind ? 'file-preview' : 'monaco');
         tab.setAttribute('aria-label', label + (doc.dirty ? '，未保存' : ''));
         tab.tabIndex = selected || (!activePath && !reviewActive && !toolsActive && index === 0) ? 0 : -1;
         tab.addEventListener('click', function () { void open(doc); });

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as vm from 'node:vm';
 import { it } from 'node:test';
+import { filePreviewKind } from '../src/shared/filePreview';
 
 it('批准丢弃 B 后读取 C，磁盘 C 同步为编辑器 C 并清除 dirty；停止保留 B', async () => {
   const f = await fixture(); f.state.currentText = 'B'; f.workspace.report();
@@ -14,20 +15,70 @@ it('批准丢弃 B 后读取 C，磁盘 C 同步为编辑器 C 并清除 dirty�
 });
 
 async function fixture(path = 'a.txt') {
-  const state = { root: 'A', currentPath: null as string | null, currentText: '', savedText: '' };
+  const state = { root: 'A', currentPath: null as string | null, currentKind: null as string | null, currentText: '', savedText: '' };
   let leave = true; let write = true; let writeLater: any; let read: any = async () => ({ ok: true, text: 'saved', encoding: 'utf8' });
   let report: any; let shown: any; let tabs: any; const writes: any[] = []; const disposed: any[] = [];
+  let previewRead: any = async () => ({ ok: true, kind: 'image', bytes: new Uint8Array([1]), mimeType: 'image/png' });
   const bridge = { reportEditorState(value: any) { report = value; }, confirmLeave: async () => ({ ok: leave }), readFile: (...args: any[]) => read(...args),
+    readFilePreview: (...args: any[]) => previewRead(...args),
     writeFile: async (...args: any[]) => { writes.push(args); return writeLater ? writeLater(...args) : { ok: write }; }, onEditorRequest() {}, editorReply: async () => ({ ok: true }) };
   const context: any = { window: {} }; vm.runInNewContext(fs.readFileSync('src/renderer/editorWorkspace.js', 'utf8'), context);
-  const workspace = context.window.createEditorWorkspace({ state, bridge, ready: async () => {},
+  const workspace = context.window.createEditorWorkspace({ state, bridge, ready: async () => {}, kindForPath: filePreviewKind,
     changed() { workspace.report(); }, highlight() {}, setInfo() {}, renderTabs(value: any) { tabs = value; }, captureViewState() { return { cursor: 8 }; },
     createModel(path: string, text: string) { return { path, text }; }, showDocument(doc: any) { shown = doc; },
-    disposeModel(model: any) { disposed.push(model); }, renameModel() {}, replaceContent(doc: any, text: string) { doc.model.text = text; } });
+    disposeModel(model: any) { disposed.push(model); }, renameModel() {}, replaceContent(doc: any, text: string) { if (doc.model) doc.model.text = text; } });
   await workspace.open(path); state.currentText = 'draft'; workspace.report();
   return { state, workspace, writes, disposed, shown: () => shown, report: () => report, tabs: () => tabs,
-    cancel() { leave = false; }, allow() { leave = true; }, failSave() { write = false; }, writeLater(fn: any) { writeLater = fn; }, readLater(fn: any) { read = fn; } };
+    cancel() { leave = false; }, allow() { leave = true; }, failSave() { write = false; }, writeLater(fn: any) { writeLater = fn; }, readLater(fn: any) { read = fn; }, previewLater(fn: any) { previewRead = fn; } };
 }
+
+it('附件与文本共用标签，预览不产生脏状态或保存写入，返回时保留文本草稿', async () => {
+  const f = await fixture(); const draft = f.shown();
+  await f.workspace.open('photo.PNG');
+  assert.equal(f.shown().kind, 'image'); assert.equal(f.shown().model, null);
+  assert.equal(f.state.currentKind, 'image');
+  f.state.currentText = 'unexpected editor event'; f.workspace.report();
+  assert.equal(f.report().documents[1].dirty, false);
+  assert.equal(await f.workspace.save(), true); assert.equal(f.writes.length, 0);
+  await f.workspace.open('a.txt'); assert.equal(f.state.currentText, 'draft'); assert.equal(f.shown(), draft);
+  assert.equal(f.state.currentKind, null);
+  assert.equal(f.report().documents[0].dirty, true);
+});
+it('延迟二进制读取不能覆盖后选文本或切换后的项目', async () => {
+  const f = await fixture(); let finish: any;
+  f.previewLater(() => new Promise(resolve => { finish = resolve; }));
+  const first = f.workspace.open('old.pdf'); await new Promise(resolve => setImmediate(resolve));
+  await f.workspace.open('a.txt'); finish({ ok: true, bytes: new Uint8Array([1]) });
+  assert.equal(await first, false); assert.equal(f.state.currentPath, 'a.txt');
+  const second = f.workspace.open('old.pdf'); await new Promise(resolve => setImmediate(resolve));
+  f.state.root = 'B'; f.workspace.clear(); finish({ ok: true, bytes: new Uint8Array([2]) });
+  assert.equal(await second, false); assert.equal(f.tabs().length, 0);
+});
+it('预览改名与删除更新同一标签并释放二进制引用，不触碰其他草稿', async () => {
+  const f = await fixture(); await f.workspace.open('photo.png'); const doc = f.shown();
+  f.workspace.entryChanged({ kind: 'renamed', oldRelPath: 'photo.png', relPath: 'new.png', isDirectory: false });
+  assert.equal(f.state.currentPath, 'new.png'); await f.workspace.open('new.png'); assert.equal(f.shown(), doc);
+  await f.workspace.reload('new.png', false, false); assert.equal(f.shown().kind, 'image');
+  f.workspace.entryChanged({ kind: 'deleted', oldRelPath: 'new.png', isDirectory: false });
+  assert.equal(doc.preview, null); assert.equal(f.state.currentText, 'draft'); assert.equal(f.disposed.length, 0);
+});
+it('损坏或不支持的附件保留只读错误标签，允许系统打开且不读写文本', async () => {
+  const f = await fixture(); f.readLater(() => { throw new Error('不应走文本读取'); });
+  f.previewLater(async () => ({ ok: false, error: '文件损坏' }));
+  assert.equal(await f.workspace.open('broken.docx'), true); assert.equal(f.shown().preview.error, '文件损坏');
+  assert.equal(await f.workspace.open('old.doc'), true); assert.equal(f.shown().kind, 'unsupported');
+  assert.equal(await f.workspace.save(), true); assert.equal(f.writes.length, 0);
+});
+
+it('附件改名跨类型关闭旧只读呈现，再打开按新类型读取，文本草稿保持可编辑', async () => {
+  const f = await fixture(); await f.workspace.open('wrong.doc'); const old = f.shown();
+  f.workspace.entryChanged({ kind: 'renamed', oldRelPath: 'wrong.doc', relPath: 'correct.docx', isDirectory: false });
+  assert.equal(f.state.currentPath, 'a.txt'); assert.equal(f.state.currentText, 'draft');
+  assert.equal(f.tabs().length, 1); assert.equal(old.preview, null);
+  await f.workspace.open('correct.docx'); assert.equal(f.shown().kind, 'docx');
+  f.workspace.entryChanged({ kind: 'renamed', oldRelPath: 'a.txt', relPath: 'draft.pdf', isDirectory: false });
+  await f.workspace.open('draft.pdf'); assert.equal(f.shown().kind, null); assert.equal(f.state.currentText, 'draft');
+});
 it('切换已打开标签保留草稿、独立模型和视图状态，重复打开不新增标签', async () => {
   const f = await fixture(); const first = f.shown(); f.cancel();
   assert.equal(await f.workspace.open('b.txt'), true); const second = f.shown();

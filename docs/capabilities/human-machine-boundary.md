@@ -36,7 +36,8 @@ source_of_truth: [docs/adr/2026-10-09-batch-error-auto-return.md, docs/adr/2026-
 ## 网页接触面
 
 - 回程采集同步只读读取正文与结束标志；只读 MutationObserver 和真实用户动作识别在隔离世界 1004，不读用户输入内容，不向网页主世界提供 IPC 或文件桥。
-- `WebComposerSender` 是唯一网页写运输 owner，`WebResultSender` 是工具结果门面，使用隔离世界 1005。仅接纳 `https://chat.deepseek.com` 的当前会话、唯一可见 textarea，以及具有已知 SVG 路径的发送按钮；局部共同容器不能包含回复正文。证据缺失、生成中或等待继续生成时暂停。
+- `WebComposerSender` 是唯一 DOM 写入运输 owner，`WebResultSender` 是工具结果门面，使用隔离世界 1005。仅接纳 `https://chat.deepseek.com` 的当前会话、唯一可见 textarea，以及具有已知 SVG 路径的发送按钮；局部共同容器不能包含回复正文。证据缺失、生成中或等待继续生成时暂停。
+- 用户可从目录树主动原生拖出当前项目单个普通文件，由官网处理真实 drop 和附件上传，正文仍由用户发送。此操作不写 DOM、不代上传、不新增官网路径查询/文件桥；本地需求框用相同 Files 接收入口暂存。见 `../adr/2026-10-11-native-workspace-file-drag.md`。
 - 工具结果正文与手动复制同源，通过 textarea 原生 value setter、input 事件和原生 click 完成，不读取剪贴板。当前批可携带经工具权限批准的 attach_file 附件；ToolAttachments 持有当前选择，ToolResultReturn 统一校验真实批次、一次运输及状态，自动与手动共用。
 - 用户主动本地需求可携带用户明确选择的附件；工具附件须明确请求并按工具权限执行。主进程校验类型、数量、大小、真实路径与文件身份后读取字节；唯一 sender 只通过官方文件输入控件提交，不向网页提供路径、磁盘读取或通用 IPC。sender 等待全部本次附件预览和上传进度结束后才发送正文。历史、拒绝、取消、无执行及失效附件不上传；开始运输后失败或未知都不重试同批。见 ../adr/2026-10-09-tool-attachment-return.md。
 - 两种发送都不保存或读取用户草稿、不使用 HTML；已有草稿或附件、未知控件及会话变化时停止。

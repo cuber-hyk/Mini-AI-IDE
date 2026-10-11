@@ -19,6 +19,17 @@ class Element {
   focus() { this.focused = true; } scrollIntoView() {}
 }
 
+it('附件标签指向只读预览面板，仍通过统一文件入口打开和关闭', async () => {
+  const host = new Element(); const calls: string[] = [];
+  const context: any = { window: {}, document: { activeElement: null, createElement: () => new Element() } };
+  vm.runInNewContext(fs.readFileSync('src/renderer/editorTabs.js', 'utf8'), context);
+  const owner = context.window.createEditorTabs(host, { open: async (path: string) => { calls.push(path); }, close: (path: string) => { calls.push('close:' + path); } });
+  owner.render([{ path: 'report.pdf', kind: 'pdf', dirty: false }], 'report.pdf');
+  const tab = host.querySelectorAll()[0]; assert.equal(tab.attrs['aria-controls'], 'file-preview');
+  assert.equal(tab.attrs['aria-selected'], 'true'); await tab.events.click({});
+  host.children[0].children[1].events.click({}); assert.deepEqual(calls, ['report.pdf', 'close:report.pdf']);
+});
+
 it('改动按需与文件共用标签栏，切回文件保留改动标签，关闭改动不关闭草稿文件', async () => {
   const host = new Element(); const calls: string[] = [];
   const context: any = { window: {}, document: { activeElement: null, createElement() { return new Element(); } } };
