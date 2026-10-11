@@ -16,7 +16,7 @@ import { WebComposerSender } from './webComposerSender';
  *  - UA：移除 `Electron/<ver>` 与应用名标记，保留真实内核版本（ADR-0001）；
  *  - 会话分区：固定 `persist:postcheck`，复用 P0b 已登录会话（见 session-persistence 能力文档）。
  */
-import { app, BaseWindow, clipboard, dialog, ipcMain, Menu, session, WebContentsView } from 'electron';
+import { app, BaseWindow, clipboard, dialog, ipcMain, Menu, screen, session, WebContentsView } from 'electron';
 import * as path from 'node:path';
 
 import { CHANNELS, type PromptPanelState, type PromptComposerStatus, type SavePromptSpecResult, type ReturnPreview, type RootInfo } from '../shared/contract';
@@ -25,6 +25,9 @@ import { buildSnippetText } from '../shared/snippet';
 import { checkUaConsistency, stripSelfDeclarations } from '../shared/userAgent';
 import { FileService } from './fileService';
 import { registerFileIpc } from './ipc';
+import { registerFilePreviewIpc } from './filePreviewIpc';
+import { registerFilePreviewZoom } from './filePreviewZoom';
+import { registerWorkspaceFileDrag } from './workspaceFileDrag';
 import { createFixtures } from './fixtures';
 import { runSelfTest } from './selfTest';
 import { runDiagnose } from './diagnose';
@@ -159,6 +162,11 @@ async function bootstrap(): Promise<void> {
       partition: 'persist:editor-ui',
     },
   });
+
+  registerFilePreviewZoom(editorView.webContents, () => {
+    const parent = win.getContentBounds(); const editor = editorView.getBounds();
+    return { ...editor, x: parent.x + editor.x, y: parent.y + editor.y };
+  }, () => screen.getCursorScreenPoint());
 
   const webView = new WebContentsView({
     webPreferences: {
@@ -549,6 +557,8 @@ async function loadLocalView(
     },
   });
   const registeredChannels = [
+    ...registerWorkspaceFileDrag(ipcMain, editorView.webContents, fileService, file => app.getFileIcon(file, { size: 'small' })),
+    ...registerFilePreviewIpc(ipcMain, editorView.webContents, fileService),
     ...tools.channels, ...localPromptChannels,
     ...registerToolSettingsIpc(ipcMain, { editor: editorView.webContents, panel: () => toolSettingsWindow!.contents,
       current: () => toolSettingsWindow!.current, getState: getToolSettings,

@@ -574,7 +574,7 @@
 
   /** 未保存状态：与主流编辑器一致——有改动才显示标记（工具栏文字 + 文件头右侧白点） */
   function renderDirty() {
-    const dirty = state.currentText !== state.savedText;
+    const dirty = !state.currentKind && state.currentText !== state.savedText;
     el.dirty.textContent = dirty ? '● 未保存' : '';
     el.dirty.classList.toggle('is-dirty', dirty);
     if (typeof editorWorkspace !== 'undefined') editorWorkspace.report();
@@ -588,20 +588,39 @@
   /* 当前缓冲与文件树由独立 owner 管理，入口只适配 Monaco。 */
   let recentRoots = [];
   let workspaceRevision = null;
+  const filePreview = window.createFilePreview({
+    host: document.getElementById('file-preview'),
+    openExternal: async function () {
+      if (!state.root || !state.currentPath) return;
+      const result = await bridge.openEntry(state.currentPath, state.root);
+      if (!result.ok) setInfo('打开失败：' + result.error, true);
+    },
+  });
+  bridge.onFilePreviewZoom(function (input) { filePreview.zoomFromWheel(input); });
   const editorWorkspace = window.createEditorWorkspace({
     state, bridge, setInfo,
+    kindForPath: window.filePreviewKind,
     ready: function () { return monacoReady; },
     createModel: function (path, text) { return window.monaco.editor.createModel(text, languageFor(path)); },
-    captureViewState: function () { return state.editor && state.editor.saveViewState(); },
+    captureViewState: function (doc) { return doc.kind ? filePreview.captureViewState() : state.editor && state.editor.saveViewState(); },
     showDocument: function (doc, focus) {
+      const preview = Boolean(doc && doc.kind);
+      el.monacoHost.hidden = preview;
+      if (preview) void filePreview.show(doc, focus); else filePreview.clear();
       if (state.editor) {
-        state.editor.setModel(doc ? doc.model : emptyModel);
-        if (doc && doc.viewState) state.editor.restoreViewState(doc.viewState);
-        if (focus) state.editor.focus();
+        state.editor.setModel(doc && !preview ? doc.model : emptyModel);
+        if (doc && !preview && doc.viewState) state.editor.restoreViewState(doc.viewState);
+        if (focus && !preview) state.editor.focus();
       }
     },
-    replaceContent: function (doc, text) { doc.model.setValue(text); },
-    renameModel: function (doc) { window.monaco.editor.setModelLanguage(doc.model, languageFor(doc.path)); },
+    replaceContent: function (doc, text) {
+      if (!doc.kind) doc.model.setValue(text);
+      else if (state.currentPath === doc.path) { doc.viewState = filePreview.captureViewState(); void filePreview.show(doc, false); }
+    },
+    renameModel: function (doc) {
+      if (doc.model) window.monaco.editor.setModelLanguage(doc.model, languageFor(doc.path));
+      else filePreview.rename(doc);
+    },
     disposeModel: function (model) { model.dispose(); },
     renderTabs: function (documents, activePath) { tabs.render(documents, activePath); },
     changed: function () { renderDirty(); explorer.welcome(recentRoots); },

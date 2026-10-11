@@ -78,6 +78,7 @@ function menuFixture() {
     revealEntry: async (...args: unknown[]) => { operations.push(['reveal', ...args]); return { ok: true }; },
     openEntry: async (...args: unknown[]) => { operations.push(['open', ...args]); return { ok: true }; },
     copyEntryPath: async (...args: unknown[]) => { operations.push(['copy', ...args]); return { ok: true }; },
+    startWorkspaceFileDrag: async (...args: unknown[]) => { operations.push(['drag', ...args]); return { ok: true }; },
     trashEntry: async (...args: unknown[]) => { operations.push(['trash', ...args]); return { ok: true }; },
     deleteEntry: async (...args: unknown[]) => { operations.push(['delete', ...args]); return { ok: true }; },
   };
@@ -90,17 +91,21 @@ function menuFixture() {
 const menuItems = (menu: Element) => menu.children.filter(item => item.tagName === 'BUTTON');
 const flush = () => new Promise(done => setImmediate(done));
 
-it('只有文件行可拖动到需求区，载荷包含相对路径和原工作区', async () => {
+it('用户拖拽文本文件交给原生文件入口，文件夹和程序伪造事件不能发起拖拽', async () => {
   const f = menuFixture(); await f.explorer.refresh(true);
   const folder = f.tree.querySelectorAll('.tree-row')[0]!;
   assert.equal(folder.draggable, false);
   await folder.listeners.click!();
   const file = f.tree.querySelectorAll('.tree-row').find(row => row.dataset.relPath === 'sub/file.txt')!;
   assert.equal(file.draggable, true);
-  let payload = ''; let prevented = false;
-  f.tree.listeners.dragstart!(f.event(file, { dataTransfer: { effectAllowed: '', setData(type: string, value: string) { assert.equal(type, 'application/x-mini-ai-ide-workspace-files'); payload = value; } }, preventDefault() { prevented = true; } }));
-  assert.equal(prevented, false);
-  assert.deepEqual(JSON.parse(payload), { root: 'A', paths: ['sub/file.txt'] });
+  let prevented = false;
+  f.tree.listeners.dragstart!(f.event(file, { isTrusted: true, preventDefault() { prevented = true; } }));
+  await flush(); assert.equal(prevented, true);
+  assert.deepEqual(f.operations, [['drag', 'sub/file.txt', 'A']]);
+  f.tree.listeners.dragstart!(f.event(folder, { isTrusted: true }));
+  f.tree.listeners.dragstart!(f.event(file, { isTrusted: false }));
+  f.setRoot(null); f.tree.listeners.dragstart!(f.event(file, { isTrusted: true }));
+  await flush(); assert.equal(f.operations.length, 1);
 });
 
 it('树和侧栏空白右键在根目录创建，不继承此前选中的子目录', async () => {

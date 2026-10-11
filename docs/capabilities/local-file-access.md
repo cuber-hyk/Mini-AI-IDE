@@ -1,12 +1,25 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-08
+updated: 2026-10-11
 owner: 胡运宽
-source_of_truth: [src/renderer/workspaceNavigation.js, docs/adr/2026-10-07-workspace-ui-shell-layout.md, docs/adr/2026-10-02-filesystem-permission-model.md, src/main/fileService.ts, src/main/fileManagement.ts, src/main/workspaceService.ts, src/main/workspaceController.ts, src/main/editorSession.ts, src/main/settings.ts, src/shared/contract.ts, src/main/preload.ts, src/renderer/editorWorkspace.js, src/renderer/editorTabs.js, src/renderer/fileExplorer.js, src/renderer/fileIcons.js, src/renderer/fileExplorer.css, test/workspaceService.test.ts, test/fileManagement.test.ts, test/workspaceController.test.ts, test/fileExplorer.test.ts, test/fileIcons.test.ts, test/editorSession.test.ts, test/editorWorkspace.test.ts, test/fileService.test.ts]
+source_of_truth: [src/renderer/workspaceNavigation.js, docs/adr/2026-10-07-workspace-ui-shell-layout.md, docs/adr/2026-10-02-filesystem-permission-model.md, src/main/fileService.ts, src/main/fileManagement.ts, src/main/workspaceService.ts, src/main/workspaceController.ts, src/main/editorSession.ts, src/main/settings.ts, src/shared/contract.ts, src/main/preload.ts, src/renderer/editorWorkspace.js, src/renderer/editorTabs.js, src/renderer/fileExplorer.js, src/renderer/fileIcons.js, src/renderer/fileExplorer.css, test/workspaceService.test.ts, test/fileManagement.test.ts, test/workspaceController.test.ts, test/fileExplorer.test.ts, test/fileIcons.test.ts, test/editorSession.test.ts, test/editorWorkspace.test.ts, test/fileService.test.ts, src/main/filePreview.ts, src/main/filePreviewZoom.ts, src/main/workspaceFileDrag.ts, docs/adr/2026-10-11-native-workspace-file-drag.md, test/workspaceFileDrag.test.ts, tools/verify-workspace-file-drag.cjs, src/main/filePreviewIpc.ts, src/main/docxArchive.ts, src/shared/filePreview.ts, src/shared/imageDimensions.ts, src/renderer/filePreview.js, src/renderer/filePreview.css, test/filePreview.test.ts, test/filePreviewZoom.test.ts, test/filePreviewIpc.test.ts, test/filePreviewRenderer.test.ts, test/imageDimensions.test.ts, tools/verify-file-preview.cjs]
 ---
 
 # 能力：本地文件访问
+
+目录树单个文件行通过系统原生拖拽可交给官网附件输入区、本地需求框或其他系统接收方，包含 TXT/Markdown/代码等普通文本以及图片、PDF、Word；不转换扩展名或字节，拖出磁盘版本，目录不可拖出。`workspaceFileDrag.ts` 只允许编辑器主 frame 请求当前项目相对路径，校验根代次、真实路径、普通文件与非文件链接，取得非空系统图标后复核身份再 `startDrag`。用户直接拖入官网仅添加附件，实际格式/大小/接收由官网处理，不自动发送；网页无新增桥或 DOM 写入。原生操作返回不表示上传成功，错误显示本地。规则见原生文件拖拽 ADR；本地需求框统一 Files 入口仍受原有附件限制。
+右侧文件标签支持本地只读附件预览：PNG/JPEG/WebP/GIF 可缩放和适应窗口；PDF 可翻页、缩放；新版 Word `.docx` 展示文字、表格和图片，复杂排版可能与 Word 不同。旧版 `.doc` 显示系统应用打开入口。文本继续由 Monaco 编辑，附件不产生脏状态或保存写入，切换文件保留文本草稿；关闭、删除或切项目释放预览资源。
+
+附件控制栏固定到底部，不随正文滚动：左侧只读标识和 PDF 翻页/页码，右下角缩小、比例下拉、放大及更多。比例下拉包含适应宽度、适应窗口和常用百分比；图片默认适应窗口，PDF/Word 默认适应宽度，固定百分比不随面板尺寸改变。Word 的适应窗口按首个渲染页尺寸计算，不表示精确分页；近似排版说明通过可聚焦图标提示。更多菜单提供系统应用打开，可用键盘操作、Escape/外部点击关闭，切文档也关闭；错误状态另保留直接打开入口。最窄 240px 文件正文内底栏仍为单行。
+
+改名保留同类型附件标签；扩展名改为另一预览类型或文本时关闭旧的只读标签并提示重新打开，新打开按新类型读取。文本标签及草稿不因扩展名变化自动转换或丢弃。
+
+图片/PDF/Word 正文支持 Ctrl＋滚轮缩放，向上放大、向下缩小，按 1.25 倍步幅切换为 10%–400% 手动比例并同步底栏。`src/main/filePreviewZoom.ts` 仅监听 editor 的原生 `zoom-changed`，将当前鼠标的屏幕 DIP 坐标按窗口/view 位置和 UI 缩放换算，经 `ui:file-preview-zoom` 单向通知编辑器主 frame。预览 owner 命中可见已加载正文才缩放，工具栏、菜单覆盖区、错误/未加载文件不响应；普通滚动不经过该入口。Word iframe 仍无脚本、同源或文件桥；不修改外壳或官网缩放。坐标取原生通知时的当前鼠标位置。
+
+预览字节仅由 `src/main/filePreview.ts` 经 `FileService.resolveSafePath` 读取，单文件上限 32 MiB，读取前后核对目录版本、真实路径和文件身份。图片尺寸上限 4000 万像素；DOCX 容器上限 5000 条目、实际展开 100 MiB，不支持加密或 ZIP64。损坏、超限、格式不匹配显示具体原因并可用系统应用打开，不截断后伪装成功。
+
+`src/renderer/filePreview.js` 管理渲染、异步代次及释放。PDF.js、docx-preview 与字体/CMap/解码资源在构建时随包分发，`connect-src 'none'` 保持不变。PDF 仅绘制页面，不运行文档脚本；单页 canvas 限 1600 万像素及 8192 单边。Word 禁用 altChunk，净化 HTML 后放进无脚本、无同源权限的 sandbox iframe，禁止导航、外部图片及资源，无 IPC/文件桥。预览不提交官网或上传附件。
 
 通用工具有独立授权路径，详见 `tool-harness.md`；完全访问或明确批准可访问项目外目标，工具不能扩大本能力的编辑器文件 IPC 根目录。
 
@@ -58,6 +71,9 @@ source_of_truth: [src/renderer/workspaceNavigation.js, docs/adr/2026-10-07-works
 | `fs:remove-workspace` | `index: number` | 移除注册；不删除磁盘文件 |
 | `fs:list-dir` | `relPath: string` | `{ ok, entries[], truncated, error? }` |
 | `fs:read-file` | `relPath: string` | `{ ok, text?, encoding?, fellBack?, meta?, tooLarge?, limit?, error? }` |
+| `fs:read-file-preview` | `relPath, root` | `{ ok: true, kind, mimeType, bytes, relPath }` 或 `{ ok: false, error }`；仅编辑器主 frame，必须是当前项目 |
+| `fs:start-workspace-file-drag` | `relPath, root` | `{ ok, error? }`；仅编辑器主 frame，当前项目单个普通文件交给原生拖放，不返回绝对路径或内容 |
+| `ui:file-preview-zoom` | 主进程 → 编辑器主 frame | `{ direction: 'in'/'out', x, y }`；原生滚轮缩放通知，无页面调用入口 |
 | `fs:slice-file` | `relPath, startLine, endLine` | `{ ok, text?, startLine?, endLine?, totalLines?, error? }` |
 | `fs:write-file` | `relPath, text, root` | `{ ok, relPath?, byteLength?, error? }` |
 | `fs:create-entry` | `parent, name, isDirectory, root` | `{ ok, relPath?, isDirectory?, error? }` |
@@ -116,12 +132,16 @@ source_of_truth: [src/renderer/workspaceNavigation.js, docs/adr/2026-10-07-works
 | `test/fileManagement.test.ts` | 新建、改名、重名不覆盖、回收站独立、永久删除、身份过期、链接／junction 与根目录切换 |
 | `test/workspaceController.test.ts` | 编辑器主 frame、当前根、主进程路径复制／定位、草稿与原生确认取消、两种删除隔离 |
 | `test/editorSession.test.ts`、`test/editorWorkspace.test.ts` | 多文件切换、后台保存及确认、失败保留缓冲、延迟读取、输入变化及所有标签改名删除 |
+| `test/filePreview.test.ts`、`test/filePreviewIpc.test.ts`、`test/imageDimensions.test.ts`、`test/filePreviewRenderer.test.ts` | 二进制原样读取、真实路径与主 frame 权限、格式/尺寸/ZIP 限额、过时渲染、翻页和释放 |
+| `tools/verify-file-preview.cjs` | `pnpm run verify:files`：隔离临时文件、真实 Electron 离线图片/PDF/DOCX 渲染与截图，不操作官网 |
 | `test/fileExplorer.test.ts`、`test/fileIcons.test.ts` | 菜单目标、分组键盘导航、旧目录隔离、类型映射和静态 SVG 安全 |
 | `src/main/workspaceProbe.ts` | `pnpm run verify:workspace`：隔离设置和临时文件，验证真实 Electron 本地交互、AI 跨目录失效及系统回收站，不操作官方网页 |
 
 ## 代码入口
 
 - `src/main/fileService.ts`、`src/main/fileManagement.ts` — 主进程内文件读写、条目管理与权限检查
+- `src/main/filePreview.ts`、`filePreviewIpc.ts`、`docxArchive.ts` — 附件受限读取、专用主 frame IPC、Word 容器校验
+- `src/shared/filePreview.ts`、`imageDimensions.ts`、`src/renderer/filePreview.js`、`filePreview.css` — 类型路由、图片尺寸、只读呈现与资源生命周期
 - `src/main/workspaceService.ts`、`src/main/workspaceController.ts`、`src/main/settings.ts` — 目录状态、交互入口与持久化
 - `src/main/editorSession.ts`、`src/renderer/editorWorkspace.js` — 离开确认、保存回执与编辑缓冲
 - `src/renderer/editorTabs.js` — 标签呈现、关闭入口与键盘导航

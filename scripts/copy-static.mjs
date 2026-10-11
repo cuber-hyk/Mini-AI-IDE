@@ -46,4 +46,32 @@ const tokenCss = Object.entries(tokens).map(([name, token]) => `  --${name}: ${t
 fs.writeFileSync(path.join(dist, 'renderer', 'ui-tokens.css'), `/* Generated from design-tokens.json */\n:root {\n${tokenCss}\n}\n`);
 copyTree(path.join(repoRoot, 'node_modules', 'monaco-editor', 'min'), path.join(dist, 'renderer', 'vendor', 'monaco'));
 
+const localRequire = createRequire(import.meta.url);
+const vendor = path.join(dist, 'renderer', 'vendor');
+const docxEntry = localRequire.resolve('docx-preview');
+copyTree(path.join(path.dirname(docxEntry), 'docx-preview.min.js'), path.join(vendor, 'docx-preview.min.js'));
+const zipPackage = createRequire(docxEntry).resolve('jszip/package.json');
+copyTree(path.join(path.dirname(zipPackage), 'dist', 'jszip.min.js'), path.join(vendor, 'jszip.min.js'));
+copyTree(path.join(path.dirname(localRequire.resolve('dompurify')), 'purify.min.js'), path.join(vendor, 'purify.min.js'));
+const pdfRoot = path.dirname(localRequire.resolve('pdfjs-dist/package.json'));
+for (const file of ['pdf.mjs', 'pdf.worker.mjs']) copyTree(path.join(pdfRoot, 'build', file), path.join(vendor, 'pdfjs', file));
+for (const [name, source] of [['pdfjs', pdfRoot], ['docx-preview', path.dirname(path.dirname(docxEntry))], ['jszip', path.dirname(zipPackage)], ['dompurify', path.dirname(path.dirname(localRequire.resolve('dompurify')))]]) {
+  for (const file of ['LICENSE', 'LICENSE.txt', 'LICENSE.markdown', 'LICENSE-APACHE', 'LICENSE-MIT']) {
+    if (fs.existsSync(path.join(source, file))) copyTree(path.join(source, file), path.join(vendor, 'licenses', name + '-' + file));
+  }
+}
+// PDF 字体、CMap 和解码资源由本地字节表提供，保持 connect-src 'none'。
+const pdfResources = {};
+for (const [kind, folder] of [['cMapUrl', 'cmaps'], ['standardFontDataUrl', 'standard_fonts'], ['wasmUrl', 'wasm']]) {
+  pdfResources[kind] = {};
+  for (const file of fs.readdirSync(path.join(pdfRoot, folder))) {
+    if (/^(LICENSE|README)/.test(file)) { copyTree(path.join(pdfRoot, folder, file), path.join(vendor, 'licenses', folder + '-' + file)); continue; }
+    if (file.endsWith('.js')) continue;
+    pdfResources[kind][file] = fs.readFileSync(path.join(pdfRoot, folder, file)).toString('base64');
+  }
+}
+fs.writeFileSync(path.join(dist, 'renderer', 'filePreviewPdfResources.js'), `window.filePreviewPdfResources = ${JSON.stringify(pdfResources)};\n`);
+const { filePreviewKind } = localRequire(path.join(dist, 'shared', 'filePreview.js'));
+fs.writeFileSync(path.join(dist, 'renderer', 'filePreviewTypes.js'), `window.filePreviewKind = ${filePreviewKind.toString()};\n`);
+
 console.log(`[copy-static] 完成，共复制 ${fileCount} 个文件`);
