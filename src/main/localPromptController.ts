@@ -19,6 +19,7 @@ interface Options {
   root: () => string | null; session: () => string; busy: () => boolean;
   webAvailable?: () => boolean;
   attachmentsAvailable?: () => boolean;
+  sendingChanged?: () => void;
   disabled?: boolean;
 }
 export class LocalPromptController {
@@ -78,6 +79,7 @@ export class LocalPromptController {
     if (this.sending || this.options.busy()) return { ok: false, error: '需求或工具结果正在处理，请等待当前操作结束' };
     const session = this.options.session(); const generation = this.generation; this.sending = true;
     try {
+      this.options.sendingChanged?.();
       const prompt = await this.compose(raw);
       if (this.options.attachmentsAvailable?.() === false && (raw as LocalPromptInput).attachments?.length)
         return { ok: false, error: 'ChatGPT 本轮仅支持纯文本需求，请移除本地附件或在官网手动上传' };
@@ -91,7 +93,7 @@ export class LocalPromptController {
       if (result.ok) for (const attachment of attachments) this.options.attachments.remove(attachment.id);
       return { ...result, length: prompt.length };
     } catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }
-    finally { this.sending = false; }
+    finally { this.sending = false; this.options.sendingChanged?.(); }
   }
   register(): string[] {
     const trusted = (event: IpcMainInvokeEvent) => {

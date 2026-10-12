@@ -25,12 +25,14 @@ function fixture() {
   const handlers = new Map<string, Function>(); const applied: WebContentsView[] = []; const changed: WebPlatformState[] = [];
   let prepare: () => Promise<void> = async () => {}; let create: () => WebContentsView = () => ({ webContents: chatgpt.value }) as unknown as WebContentsView;
   let gate: (state: WebPlatformState) => Promise<void> = async () => {}; let creations = 0;
+  let blocked: WebPlatformState['switchBlockedReason'];
   const original = { webContents: deepseek.value } as unknown as WebContentsView;
   const controller = new WebPlatformController({
     ipc: { handle(channel, handler) { handlers.set(channel, handler); }, removeHandler(channel) { handlers.delete(channel); } },
     webbar: webbar.value as unknown as WebContents, editor: editor.value as unknown as WebContents, deepseek: original,
     createChatGPT() { creations++; return create(); }, prepareSwitch: () => prepare(), applyView(view) { applied.push(view); },
     async changed(state) { changed.push(state); await gate(state); },
+    switchBlock: () => blocked,
   });
   const channels = controller.register();
   const event = (sender = webbar.value) => ({ sender, senderFrame: sender.mainFrame }) as unknown as IpcMainInvokeEvent;
@@ -38,8 +40,25 @@ function fixture() {
   return { controller, webbar, editor, chatgpt, deepseek, original, changed, applied, channels, handlers, event, invoke,
     set: (platform: unknown) => invoke(CHANNELS.setWebPlatform, undefined, platform),
     prepare(fn: () => Promise<void>) { prepare = fn; }, create(fn: () => WebContentsView) { create = fn; },
-    gate(fn: (state: WebPlatformState) => Promise<void>) { gate = fn; }, creations: () => creations };
+    gate(fn: (state: WebPlatformState) => Promise<void>) { gate = fn; }, creations: () => creations,
+    block(reason: WebPlatformState['switchBlockedReason']) { blocked = reason; controller.refreshSwitchAvailability(); } };
 }
+
+it('权威忙原因即时广播并在入口拒绝切换，忙结束后恢复且不重新加载官网', async () => {
+  const f=fixture();
+  try {
+    for(const reason of ['工具正在执行，完成后可切换','后台命令正在运行，结束后可切换','正在发送，请稍候'] as const){
+      const editorCount=f.editor.sent.length;
+      f.block(reason);assert.equal(f.controller.state.switchBlockedReason,reason);assert.equal(f.webbar.sent.at(-1)?.state.switchBlockedReason,reason);
+      assert.equal(f.editor.sent.length,editorCount,'仅忙原因变化不能让本地需求区重复显示平台切换提示');
+      const count=f.webbar.sent.length;f.block(reason);assert.equal(f.webbar.sent.length,count,'重复状态不广播');
+      await assert.rejects(f.set('chatgpt'),error=>error instanceof Error&&error.message===reason);
+      assert.equal(f.creations(),0);assert.equal(f.controller.state.platform,'deepseek');
+      f.block(undefined);assert.equal(f.webbar.sent.at(-1)?.state.switchBlockedReason,undefined);
+    }
+    await f.set('chatgpt');assert.equal(f.creations(),1);
+  }finally{f.controller.dispose();}
+});
 
 it('默认 DeepSeek、固定隔离分区，仅顶栏主 frame 可切换且不接受任意 URL', async () => {
   const f = fixture();

@@ -1,7 +1,7 @@
 ---
 artifact_type: design_system
 status: current
-updated: 2026-10-11
+updated: 2026-10-12
 token_source: design-tokens.json
 ---
 
@@ -78,7 +78,7 @@ token_source: design-tokens.json
 
 文件树、树内输入、右键菜单及空白编辑区域由 `src/renderer/fileExplorer.js` 管理，静态图标由 `src/renderer/fileIcons.js` 管理，局部样式为 `src/renderer/fileExplorer.css`；编辑缓冲及独立模型由 `src/renderer/editorWorkspace.js` 管理，标签呈现由 `src/renderer/editorTabs.js` 管理，原生确认由 `src/main/editorSession.ts` 与 `src/main/workspaceController.ts` 管理。测试入口为 `test/fileExplorer.test.ts`、`test/fileIcons.test.ts`、`test/fileManagement.test.ts`、`test/workspaceController.test.ts`；原生交互验收入口为 `src/main/workspaceProbe.ts`（`pnpm run verify:workspace`）。
 
-官网顶栏以具名平台选择框直接切换 DeepSeek / ChatGPT，每次启动默认 DeepSeek；窄栏仍保留选择入口，摘要可省略。切换中禁用选择，失败恢复权威平台并显示原因。DeepSeek 与 ChatGPT 普通对话共用采集、本地需求和自动继续入口；ChatGPT 本轮仅纯文本，附件需求明确拒绝并保留暂存文件，工具附件操作仍只复制。平台未就绪或切换中禁用相关入口，保留草稿、结果复制和文件编辑。平台 IPC 仅传固定 ID，布局与原生视图仍由主进程 owner 管理。
+官网顶栏以具名平台选择框直接切换 DeepSeek / ChatGPT，每次启动默认 DeepSeek；窄栏仍保留选择入口，摘要可省略。切换中、工具执行、后台命令存活及需求/结果发送时禁用选择，复用共用禁用样式；禁用外层支持悬停和键盘读取主进程给出的简短原因，不抢焦点。倒计时和 AI 生成/等待时可切换。竞态拒绝恢复权威平台，原顶栏状态区域显示约 3 秒短提示；技术异常留在日志，轻提示到期不覆盖后续反馈，窄栏保留该轻提示并可省略文字。DeepSeek 与 ChatGPT 普通对话共用采集、本地需求和自动继续入口；ChatGPT 本轮仅纯文本，附件需求明确拒绝并保留暂存文件，工具附件操作仍只复制。平台未就绪或切换中禁用相关入口，保留草稿、结果复制和文件编辑；工具或发送忙仅新增禁用切换框。平台 IPC 仅传固定 ID，布局与原生视图仍由主进程 owner 管理。
 
 ## Provisional Rules
 

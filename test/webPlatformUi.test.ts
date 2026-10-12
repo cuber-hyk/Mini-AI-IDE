@@ -16,16 +16,47 @@ function node() {
     fire(name: string) { return Promise.all((listeners[name] || []).map(fn => fn({}))); } };
 }
 function webbar(overrides: any = {}) {
-  const ids = ['web-platform', 'btn-collect', 'collect-status', 'btn-file-restore', 'btn-workspace-toggle', 'tool-workspace-status', 'btn-tool-workspace'];
+  const ids = ['web-platform', 'web-platform-control', 'web-platform-hint', 'btn-collect', 'collect-status', 'btn-file-restore', 'btn-workspace-toggle', 'tool-workspace-status', 'btn-tool-workspace'];
   const nodes = Object.fromEntries(ids.map(id => [id, node()])); let listener!: (state: any) => void; let collectCount = 0; const switches: string[] = [];
   const bridge = { getWebPlatform: async () => deepseek, onWebPlatformState(fn: any) { listener = fn; },
     setWebPlatform: async (id: string) => { switches.push(id); return { platform: id, switching: false }; },
     collectReply: async () => { collectCount += 1; return { ok: true, noNewContent: true }; },
     onToolWorkspaceStatus() {}, getToolWorkspaceStatus: async () => ({ phase: 'idle', message: '工具空闲', count: 0, automatic: false }),
     onChromeState() {}, toggleWorkspace: async () => {}, restoreFileWorkspace: async () => {}, openToolWorkspace: async () => {}, ...overrides };
-  vm.runInNewContext(fs.readFileSync('src/renderer/webbar.js', 'utf8'), { window: { webbarBridge: bridge, setTimeout() {}, clearTimeout() {} }, document: { getElementById: (id: string) => nodes[id] } });
-  return { nodes, switches, publish: (state: any) => listener(state), collected: () => collectCount };
+  const timers=new Map<number,{fn:()=>void;delay:number}>();let timerId=0;
+  vm.runInNewContext(fs.readFileSync('src/renderer/webbar.js', 'utf8'), { console:{error(){}}, window: { webbarBridge: bridge, setTimeout(fn:()=>void,delay:number) {timers.set(++timerId,{fn,delay});return timerId;}, clearTimeout(id:number) {timers.delete(id);} }, document: { getElementById: (id: string) => nodes[id] } });
+  return { nodes, switches, publish: (state: any) => listener(state), collected: () => collectCount,
+    expire(delay:number){for(const [id,timer]of [...timers])if(timer.delay===delay){timers.delete(id);timer.fn();}} };
 }
+
+it('执行与发送禁用切换但不禁用采集，忙结束和 AI 等待时恢复', async () => {
+  const ui=webbar();await flush();
+  for(const reason of ['工具正在执行，完成后可切换','后台命令正在运行，结束后可切换','正在发送，请稍候']){
+    ui.publish({...deepseek,switchBlockedReason:reason});assert.equal(ui.nodes['web-platform'].disabled,true);
+    assert.equal(ui.nodes['web-platform-control'].title,reason);assert.equal(ui.nodes['web-platform-hint'].textContent,reason);
+    assert.equal(ui.nodes['btn-collect'].disabled,false);ui.nodes['web-platform'].value='chatgpt';await ui.nodes['web-platform'].fire('change');assert.equal(ui.switches.length,0);
+  }
+  ui.publish(deepseek);assert.equal(ui.nodes['web-platform'].disabled,false);
+});
+
+it('竞态拒绝只显示权威简短原因，三秒清理且不显示 IPC 技术错误', async () => {
+  let state:any=deepseek;
+  const ui=webbar({getWebPlatform:async()=>state,setWebPlatform:async()=>{state={...deepseek,switchBlockedReason:'正在发送，请稍候'};throw new Error("Error invoking remote method 'ui:set-web-platform': full internal error");}});
+  await flush();ui.nodes['web-platform'].value='chatgpt';await ui.nodes['web-platform'].fire('change');
+  assert.equal(ui.nodes['web-platform'].value,'deepseek');assert.equal(ui.nodes['web-platform'].disabled,true);
+  assert.equal(ui.nodes['collect-status'].textContent,'正在发送，请稍候');ui.expire(3000);assert.equal(ui.nodes['collect-status'].textContent,'');
+  assert.equal(ui.nodes['web-platform-control'].title,'正在发送，请稍候');
+});
+
+it('切换拒绝后的迟到 busy 查询不能覆盖先到的忙结束广播，选择框必须恢复', async () => {
+  const refreshed=deferred();let queries=0;
+  const ui=webbar({getWebPlatform:()=>++queries===1?Promise.resolve(deepseek):refreshed.promise,setWebPlatform:async()=>{throw new Error('busy race');}});
+  await flush();ui.nodes['web-platform'].value='chatgpt';const pending=ui.nodes['web-platform'].fire('change');await flush();
+  ui.publish({...deepseek,switchBlockedReason:'正在发送，请稍候'});ui.publish(deepseek);
+  refreshed.resolve({...deepseek,switchBlockedReason:'正在发送，请稍候'});await pending;
+  assert.equal(ui.nodes['web-platform'].disabled,false,'当前权威状态已不忙，迟到快照不能锁住界面');
+  assert.equal(ui.nodes['web-platform-hint'].textContent,'');
+});
 it('平台未就绪时关闭采集，DeepSeek 和 ChatGPT 均可采集并保留工具入口', async () => {
   const ui = webbar(); assert.equal(ui.nodes['btn-collect'].disabled, true); await flush();
   assert.equal(ui.nodes['web-platform'].value, 'deepseek'); assert.equal(ui.nodes['btn-collect'].disabled, false);
@@ -43,12 +74,22 @@ it('平台广播先到时迟来的初始查询不能覆盖选择，切换期间�
   ui.publish(deepseek); change.resolve(chatgpt); await switching;
   assert.equal(ui.nodes['web-platform'].value, 'deepseek'); assert.equal(ui.nodes['web-platform'].disabled, false);
 });
-it('切换忙拒绝后恢复权威选择并可见解释，加载错误广播不抹除拒绝原因', async () => {
+it('未知切换失败显示固定短提示，期间加载错误保留并在三秒后恢复展示', async () => {
   const ui = webbar({ setWebPlatform: async () => { throw new Error('后台命令仍在运行'); } }); await flush();
   ui.nodes['web-platform'].value = 'chatgpt'; await ui.nodes['web-platform'].fire('change');
   assert.equal(ui.nodes['web-platform'].value, 'deepseek'); assert.equal(ui.nodes['web-platform'].disabled, false);
-  assert.match(ui.nodes['collect-status'].textContent, /后台命令仍在运行/);
-  ui.publish({ ...deepseek, error: '官网加载失败' }); assert.match(ui.nodes['collect-status'].textContent, /后台命令仍在运行/);
+  assert.equal(ui.nodes['collect-status'].textContent, '暂时无法切换，请稍后重试');
+  ui.publish({ ...deepseek, error: '官网加载失败' }); assert.equal(ui.nodes['collect-status'].textContent, '暂时无法切换，请稍后重试');
+  ui.expire(3000);assert.equal(ui.nodes['collect-status'].textContent,'官网加载失败');
+});
+
+it('轻提示到期不得抹除后续采集反馈，忙原因更新也不作废同平台采集回执', async () => {
+  const collected=deferred();const ui=webbar({setWebPlatform:async()=>{throw new Error('technical detail');},collectReply:()=>collected.promise});await flush();
+  ui.nodes['web-platform'].value='chatgpt';await ui.nodes['web-platform'].fire('change');
+  const pending=ui.nodes['btn-collect'].fire('click');ui.publish({...deepseek,switchBlockedReason:'工具正在执行，完成后可切换'});
+  collected.resolve({ok:true,noNewContent:true});await pending;
+  ui.expire(3000);assert.equal(ui.nodes['collect-status'].textContent,'最新回复已采集，无新内容');
+  ui.publish(deepseek);assert.equal(ui.nodes['collect-status'].textContent,'最新回复已采集，无新内容');
 });
 it('平台读取失败保持采集不可用，后续权威广播能够恢复选择器', async () => {
   const ui = webbar({ getWebPlatform: async () => { throw new Error('服务断开'); } }); await flush();

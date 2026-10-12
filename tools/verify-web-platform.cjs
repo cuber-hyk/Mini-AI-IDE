@@ -24,7 +24,7 @@ async function waitFor(read) {
 app.whenReady().then(async () => {
   const win = new BaseWindow({ width: 1280, height: 850, show: false });
   const local = preload => new WebContentsView({ webPreferences: { ...(preload ? { preload: path.resolve('dist/main', preload) } : {}),
-    partition: 'persist:editor-ui', sandbox: true, contextIsolation: true, nodeIntegration: false } });
+    partition: 'persist:editor-ui', sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } });
   const editor = local('preload.js'); const bar = local('webbarPreload.js'); const preview = local();
   const deepseek = new WebContentsView({ webPreferences: { partition: WEB_PLATFORMS.deepseek.partition, sandbox: true, nodeIntegration: false, contextIsolation: true } });
   for (const view of [editor, bar, deepseek, preview]) win.contentView.addChildView(view);
@@ -34,13 +34,14 @@ app.whenReady().then(async () => {
   layout.register(); layout.apply();
   registerToolWorkspaceStatus({ ipc: ipcMain, webbar: bar.webContents, open: () => {} });
   ipcMain.handle(CHANNELS.collectReply, () => ({ ok: false, error: '离线夹具' }));
-  let busy = false; let chatgpt;
+  let busy = false; let raceReject = false; let chatgpt;
   const errors = [];
   bar.webContents.on('console-message', event => { if (event.level === 'error') errors.push(event.message); });
   session.fromPartition(WEB_PLATFORMS.chatgpt.partition).webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*'] }, (_details, reply) => reply({ cancel: true }));
   controller = new WebPlatformController({ ipc: ipcMain, editor: editor.webContents, webbar: bar.webContents, deepseek,
     createChatGPT: () => { chatgpt = createChatGPTView(); win.contentView.addChildView(chatgpt, 2); return chatgpt; },
-    prepareSwitch: async () => { if (busy) throw new Error('当前工具执行中'); }, applyView: view => layout.setWebView(view) });
+    switchBlock: () => busy ? '工具正在执行，完成后可切换' : undefined,
+    prepareSwitch: async () => { if (raceReject) { raceReject = false; busy = true; controller.refreshSwitchAvailability(); } if (busy) throw new Error('当前工具执行中'); }, applyView: view => layout.setWebView(view) });
   controller.register();
   await editor.webContents.loadURL('data:text/html,<p>Local editor fixture</p>');
   await deepseek.webContents.loadURL('data:text/html,<p>Local page fixture</p>');
@@ -49,9 +50,22 @@ app.whenReady().then(async () => {
   await waitFor(() => read('!document.getElementById("web-platform").disabled'));
   check('默认 DeepSeek 可采集且有顶栏平台入口', await read('document.getElementById("web-platform").value === "deepseek" && !document.getElementById("btn-collect").disabled'));
   busy = true;
+  controller.refreshSwitchAvailability();
+  await waitFor(() => read('document.getElementById("web-platform").disabled'));
+  check('执行中即时禁用，外层原因支持悬停和键盘读取', await read('document.getElementById("web-platform-control").title === "工具正在执行，完成后可切换" && document.getElementById("web-platform-control").tabIndex === 0 && document.getElementById("web-platform-hint").textContent === "工具正在执行，完成后可切换"'));
   const failure = await read('webbarBridge.setWebPlatform("chatgpt").then(() => "", e => e.message)');
-  check('执行中拒绝切换并保留原平台', failure.includes('执行中') && controller.state.platform === 'deepseek');
+  check('执行中拒绝切换并保留原平台', failure.includes('工具正在执行') && controller.state.platform === 'deepseek');
   busy = false;
+  controller.refreshSwitchAvailability();
+  await waitFor(() => read('!document.getElementById("web-platform").disabled'));
+  raceReject = true;
+  await read('document.getElementById("web-platform").value="chatgpt";document.getElementById("web-platform").dispatchEvent(new Event("change"));true');
+  await waitFor(() => read('document.getElementById("collect-status").textContent === "工具正在执行，完成后可切换"'));
+  check('竞态拒绝恢复选择，不向界面显示 IPC 技术异常', await read('document.getElementById("web-platform").value === "deepseek" && !document.body.textContent.includes("Error invoking remote method")'));
+  await new Promise(resolve => setTimeout(resolve, 3150));
+  check('三秒轻提示退出，执行仍忙时保持禁用', await read('document.getElementById("collect-status").textContent === "" && document.getElementById("web-platform").disabled'));
+  busy = false; controller.refreshSwitchAvailability();
+  await waitFor(() => read('!document.getElementById("web-platform").disabled'));
   await read('webbarBridge.setWebPlatform("chatgpt")');
   await waitFor(() => Boolean(controller.state.error));
   check('网络失败后可切回，错误为固定中文', controller.state.error === 'ChatGPT 页面加载失败，请手动重试或切回 DeepSeek' && !controller.state.switching);
@@ -70,7 +84,7 @@ app.whenReady().then(async () => {
   await read('webbarBridge.setWebPlatform("deepseek")');
   check('切回保留原视图且恢复采集按钮', deepseek.getVisible() && !chatgpt.getVisible() && await read('!document.getElementById("btn-collect").disabled'));
   check('编辑器只能读取平台状态', await editor.webContents.executeJavaScript('typeof editorBridge.setWebPlatform === "undefined" && typeof editorBridge.getWebPlatform === "function"'));
-  check('本地顶栏无脚本错误', errors.length === 0);
+  check('竞态技术异常进入日志，顶栏无非预期脚本错误', errors.length === 1 && errors[0].startsWith('[web-platform] 切换失败'));
   const chatgptContents = chatgpt.webContents;
   controller.dispose();
   await waitFor(() => chatgptContents.isDestroyed());

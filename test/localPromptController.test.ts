@@ -25,6 +25,14 @@ function fixture() {
     setRoot(value: string | null) { root = value; }, setSession(value: string) { session = value; }, setBusy(value: boolean) { busy = value; } };
 }
 
+it('需求准备与运输开始/结束通知平台忙状态，失败和非法需求同样释放禁用', async () => {
+  const f=fixture();const sending:boolean[]=[];f.options.sendingChanged=()=>sending.push(f.controller.isSending);
+  let release!:(value:unknown)=>void;f.options.sender.send=()=>new Promise(resolve=>{release=resolve;});
+  const pending=f.controller.send(f.input);while(!release)await Promise.resolve();
+  assert.deepEqual(sending,[true]);release({ok:false,error:'transport paused'});await pending;assert.deepEqual(sending,[true,false]);
+  sending.length=0;await f.controller.send({...f.input,requirement:''});assert.deepEqual(sending,[true,false]);
+});
+
 it('初始化由用户勾选，关闭仅需求与显式技能；发送后选择不自动复位', async () => {
   const f = fixture();
   assert.equal((await f.controller.send(f.input)).ok, true);

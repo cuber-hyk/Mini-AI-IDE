@@ -1,7 +1,7 @@
 /** 两个平台的本地生命周期；官网无 IPC、回复采集或发送能力。 */
 import type { BrowserWindow, IpcMain, WebContents, WebContentsView } from 'electron';
 import { CHANNELS } from '../shared/contract';
-import { WEB_PLATFORMS, type WebPlatform, type WebPlatformState } from '../shared/webPlatform';
+import { WEB_PLATFORMS, type WebPlatform, type WebPlatformState, type WebPlatformSwitchBlock } from '../shared/webPlatform';
 
 interface Options {
   ipc: Pick<IpcMain, 'handle' | 'removeHandler'>;
@@ -12,6 +12,7 @@ interface Options {
   prepareSwitch: () => Promise<void>;
   applyView: (view: WebContentsView) => void;
   changed?: (state: WebPlatformState) => void | Promise<void>;
+  switchBlock?: () => WebPlatformSwitchBlock | undefined;
 }
 
 export class WebPlatformController {
@@ -22,9 +23,18 @@ export class WebPlatformController {
   private registered = false;
   private chatgptError: string | undefined;
   private chatgptStarted = false;
+  private lastSwitchBlockedReason: WebPlatformSwitchBlock | undefined;
 
   constructor(private readonly options: Options) {}
-  get state(): WebPlatformState { return { ...this.current }; }
+  get state(): WebPlatformState {
+    const { switchBlockedReason: _previous, ...state } = this.current;
+    const switchBlockedReason = this.options.switchBlock?.();
+    return { ...state, ...(switchBlockedReason ? { switchBlockedReason } : {}) };
+  }
+  refreshSwitchAvailability(): void {
+    if (this.disposed || this.options.switchBlock?.() === this.lastSwitchBlockedReason) return;
+    this.broadcast(true);
+  }
   getView(platform: WebPlatform): WebContentsView {
     if (platform === 'deepseek') return this.options.deepseek;
     if (!this.chatgpt) throw new Error('ChatGPT 视图尚未创建');
@@ -50,9 +60,11 @@ export class WebPlatformController {
     return [CHANNELS.getWebPlatform, CHANNELS.setWebPlatform];
   }
 
-  private broadcast(): void {
-    for (const owner of [this.options.webbar, this.options.editor]) {
-      if (!owner.isDestroyed()) owner.mainFrame.send(CHANNELS.webPlatformState, this.state);
+  private broadcast(topbarOnly = false): void {
+    const state = this.state;
+    this.lastSwitchBlockedReason = state.switchBlockedReason;
+    for (const owner of topbarOnly ? [this.options.webbar] : [this.options.webbar, this.options.editor]) {
+      if (!owner.isDestroyed()) owner.mainFrame.send(CHANNELS.webPlatformState, state);
     }
   }
 
@@ -68,6 +80,8 @@ export class WebPlatformController {
   private async switchTo(platform: WebPlatform): Promise<WebPlatformState> {
     this.requireLive();
     if (this.current.switching) throw new Error('正在切换平台，请稍后重试');
+    const blocked = this.state.switchBlockedReason;
+    if (blocked) throw new Error(blocked);
     if (this.current.platform === platform) throw new Error('当前已是该平台');
     const previous = this.state;
     this.current = { ...previous, switching: true };

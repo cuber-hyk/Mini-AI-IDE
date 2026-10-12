@@ -3,7 +3,7 @@ import { LocalPromptController } from './localPromptController';
 import { LocalPromptAttachments } from './localPromptAttachments';
 import { SkillService } from './skills';
 import { WebComposerSender } from './webComposerSender';
-import { WEB_PLATFORMS } from '../shared/webPlatform';
+import { WEB_PLATFORMS, webPlatformSwitchBlock } from '../shared/webPlatform';
 import { webPlatformOf } from '../shared/webConversation';
 import { WebPlatformController } from './webPlatformController';
 import { createChatGPTView } from './webPlatformView';
@@ -248,6 +248,7 @@ async function bootstrap(): Promise<void> {
   let activeWeb = webView.webContents;
   let composerSender = new WebComposerSender(activeWeb, { allowLocalFixture: WORKSPACE_PROBE });
   let localPrompt: LocalPromptController | undefined;
+  let refreshPlatformSwitch: (() => void) | undefined;
   const layoutController = new WorkspaceLayoutController(win,
     { editor: editorView, web: webView, webbar: webBarView, preview: previewView }, settings,
     () => buildApplicationMenu());
@@ -498,7 +499,7 @@ async function loadLocalView(
     }, () => tools.getReviewState().records.length > 0 || returnPath.undoCount > 0);
   const tools = await createToolIntegration({
     ipc: ipcMain, editor: editorView.webContents, web: webView.webContents,
-    notifyState: toolWorkspaceStatus.publish,
+    notifyState: state => { toolWorkspaceStatus.publish(state); refreshPlatformSwitch?.(); },
     review: previewView.webContents, skills,
     // Keep the full sender contract: local prompts pass their current-scope guard and staged attachments.
     sender: composerSender,
@@ -534,11 +535,10 @@ async function loadLocalView(
       win.contentView.addChildView(view, 2);
       return view;
     },
+    switchBlock: () => webPlatformSwitchBlock(tools.getState(), localPrompt?.isSending),
     prepareSwitch: async () => {
-      const state = tools.getState();
-      if (state.busy || state.hasRunningProcesses || state.resultReturn?.phase === 'sending' ||
-          state.continuation?.phase === 'sending' || localPrompt?.isSending)
-        throw new Error('工具或需求正在执行或发送，请完成后再切换平台');
+      const reason = webPlatformSwitchBlock(tools.getState(), localPrompt?.isSending);
+      if (reason) throw new Error(reason);
       localPrompt?.cancel(false);
       toolSettingsWindow?.hide(false);
       await tools.setWebActive(false);
@@ -556,7 +556,9 @@ async function loadLocalView(
     },
   });
   const platformChannels = platforms.register();
+  refreshPlatformSwitch = () => platforms.refreshSwitchAvailability();
   localPrompt = new LocalPromptController({ ipc: ipcMain, editor: editorView.webContents, settings, skills, attachments: new LocalPromptAttachments(),
+    sendingChanged: refreshPlatformSwitch,
     chooseFiles: async () => { const root = fileService.getRoot(); const result = await dialog.showOpenDialog(win, { title: '选择需求附件', ...(root ? { defaultPath: root } : {}),
       properties: ['openFile', 'multiSelections'], filters: [{ name: '文档与图片', extensions: ['txt', 'md', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'png', 'jpg', 'jpeg', 'webp', 'gif'] }] }); return result.canceled ? [] : result.filePaths; },
     sender: { send: (text, session, _kind, current, attachments) => tools.sendLocalPrompt(text, session, current, attachments), cancel: kind => composerSender.cancel(kind) },

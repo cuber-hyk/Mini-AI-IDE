@@ -26,6 +26,10 @@ html, body {
 }
 .webbar-platform { flex: 0 0 auto; width: 102px; min-width: 0; padding: 0 6px; color: var(--ui-text); }
 .webbar-platform option { background: var(--ui-surface); color: var(--ui-text); }
+.webbar-platform-control { display: inline-flex; flex: 0 0 auto; border-radius: var(--ui-radius); }
+.webbar-platform-control:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 2px; }
+.webbar-platform:disabled { pointer-events: none; }
+.webbar-platform-hint { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 .tool-workspace-status {
   min-width: 0;
   color: var(--text-dim);
@@ -55,7 +59,7 @@ html, body {
   stroke-linecap: round;
 }
 .ui-icon.active { background: #5b8def29; border-color: #5b8def6b; color: var(--accent); }
-@media (max-width: 440px) { .collect-status { display: none; } }
+@media (max-width: 440px) { .collect-status:not(.switch-notice) { display: none; } }
 @media (max-width: 380px) { .bar-wide { gap: 2px; padding-left: 4px; } .tool-workspace-status { display: none; } .webbar-platform { width: 91px; } #btn-tool-workspace { padding: 0 5px; } }
 .bar-wide .ui-button { background: transparent; border-color: transparent; }
 
