@@ -8,7 +8,7 @@ if (!process.versions.electron) {
  const run = spawnSync(require('electron'), [__filename], { cwd: paths.resolve(__dirname, '..'), env, windowsHide: true, encoding: 'utf8', timeout: 60000 });
  if (run.stdout) process.stdout.write(run.stdout); if (run.stderr) process.stderr.write(run.stderr);
  let code = run.status ?? 1;
- if (run.error) console.error(run.error.message);
+ if (run.error) { console.error(run.error.message); code = 1; }
  try {
    if (paths.dirname(paths.resolve(directory)) !== paths.resolve(os.tmpdir())) throw Error('Invalid fixture cleanup path');
    disk.rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
@@ -51,6 +51,11 @@ window.appendReply=(id,tool,args,complete=true)=>{
  code.textContent=JSON.stringify({protocol_version:1,batch_id:id,requests:[{id:'request',tool,args}]});
  surface.append(toolbar,code);reply.append(surface);markdown.append(reply);assistant.append(markdown);turn.append(assistant);
  const footer=document.createElement('div');footer.className='turn-action-controls';const copy=document.createElement('button');copy.setAttribute('aria-label','复制');footer.append(copy);if(complete)turn.append(footer);
+ // 同轮前一条assistant自带局部页脚，最后一条使用轮末页脚；较早的工具请求不得执行。
+ const earlier=assistant.cloneNode(true);earlier.dataset.chatgptSearchUnitKey='earlier-message';
+ earlier.querySelector('[data-dil-message-id]').dataset.dilMessageId='earlier-'+id;
+ earlier.querySelector('code').textContent=JSON.stringify({protocol_version:1,batch_id:'earlier-'+id,requests:[{id:'earlier-request',tool:'get_project_info',args:{}}]});
+ earlier.append(footer.cloneNode(true));turn.insertBefore(earlier,assistant);
  document.getElementById('turns').append(turn);return {turn,footer,reply,code};
 };
 const input=document.querySelector('.ProseMirror'),send=document.querySelector('button[type="submit"]');

@@ -13,10 +13,27 @@ export const CHATGPT_REPLY_NODES = `
   const excluded = '[data-user-message-bubble],[class~="group/user-message"],[data-testid*="thought"],[data-testid*="reasoning"],details,[data-d-component*="thought"],[data-d-component*="reasoning"]';
   const markers = frame ? Array.from(frame.querySelectorAll('h4[data-conversation-role="assistant"]')).filter(e => !e.closest(excluded)
     && e.closest(${JSON.stringify(CHATGPT_TURN_SELECTOR)}) === frame) : [];
-  const assistant = markers.length === 1 ? markers[0].closest('div[data-chatgpt-search-unit-key]') : null;
+  const ownerSelector = 'div[data-chatgpt-search-unit-key]';
+  const ownerOf = marker => {
+    const owner = marker?.closest(ownerSelector);
+    if (!owner || owner.closest(${JSON.stringify(CHATGPT_TURN_SELECTOR)}) !== frame) return null;
+    const roles = Array.from(owner.querySelectorAll('h4[data-conversation-role="assistant"]')).filter(e => !e.closest(excluded));
+    return roles.length === 1 && roles[0] === marker ? owner : null;
+  };
+  const latestOwner = ownerOf(markers.at(-1));
+  // 同轮较早消息须有自己的局部页脚；只接纳已知连续消息结构，不从未知最后角色向前回退。
+  const earlierOwners = markers.slice(0, -1).map(ownerOf);
+  const earlierComplete = new Set(earlierOwners).size === earlierOwners.length && earlierOwners.every(owner => owner
+    && owner !== latestOwner && !owner.contains(latestOwner) && !latestOwner?.contains(owner)
+    && Array.from(owner.querySelectorAll('.turn-action-controls')).filter(e => e.closest(ownerSelector) === owner
+      && !e.closest(excluded) && !e.closest(${JSON.stringify(CHATGPT_REPLY_SELECTOR)})).length === 1);
+  const latestHasFooter = latestOwner && Array.from(latestOwner.querySelectorAll('.turn-action-controls')).some(e => e.closest(ownerSelector) === latestOwner
+    && !e.closest(excluded) && !e.closest(${JSON.stringify(CHATGPT_REPLY_SELECTOR)}));
+  const assistant = earlierComplete && (!earlierOwners.length || !latestHasFooter) ? latestOwner : null;
   const candidates = assistant && assistant.closest(${JSON.stringify(CHATGPT_TURN_SELECTOR)}) === frame
     ? Array.from(assistant.querySelectorAll(${JSON.stringify(CHATGPT_REPLY_SELECTOR)})).filter(e => !e.closest(excluded)
       && e.closest(${JSON.stringify(CHATGPT_TURN_SELECTOR)}) === frame
+      && e.closest(ownerSelector) === assistant
       && !!e.closest('div[data-markdown-text-style]') && assistant.contains(e.closest('div[data-markdown-text-style]'))) : [];
   const nodes = candidates.length === 1 ? candidates : [];
   const reply = nodes[0] || null;
@@ -68,7 +85,7 @@ export const CHATGPT_COMPLETION_SCRIPT = `(() => {
   if (!reply || !visible(reply) || frame.getAttribute('data-talvt-turn-state') !== 'complete') return 'unknown';
   if (assistant.querySelector('details[open]')) return 'unknown';
   const footers = Array.from(frame.querySelectorAll('.turn-action-controls')).filter(e => e.closest(${JSON.stringify(CHATGPT_TURN_SELECTOR)}) === frame
-    && !assistant.contains(e) && !e.closest(excluded) && !e.closest(${JSON.stringify(CHATGPT_REPLY_SELECTOR)}));
+    && !e.closest(ownerSelector) && !e.closest(excluded) && !e.closest(${JSON.stringify(CHATGPT_REPLY_SELECTOR)}));
   if (footers.length !== 1) return 'unknown';
   const copies = Array.from(footers[0].querySelectorAll('button')).filter(e => visible(e) && !e.disabled && e.getAttribute('aria-disabled') !== 'true'
     && /^(复制|copy)$/i.test(String(e.getAttribute('aria-label') || '').trim()));

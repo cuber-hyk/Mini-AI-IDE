@@ -1,7 +1,7 @@
 ---
 artifact_type: design_system
 status: current
-updated: 2026-10-12
+updated: 2026-10-13
 token_source: design-tokens.json
 ---
 
@@ -65,6 +65,8 @@ token_source: design-tokens.json
 - 软件更新入口放在左侧品牌栏，发现新版只点亮下载图标及提示点；点击或帮助菜单打开同一独立本地更新窗口。窗口约 460px 宽，首次打开与重新打开居中于主窗口，受当前显示器可用区域限制；非模态，可继续编辑。无更新时紧凑高度，有发布说明时增加高度，说明可纵向滚动，不横向裁切。正文用状态头（图标 + 标题 + 副标题）表达当前阶段：成功态绿色勾、警告态橙色、更新/下载中蓝色；版本以卡片块展示当前版本与目标版本，右侧标注语义（当前版本 / 可更新至 / 待安装）；主按钮按动作分权——无更新时为普通按钮，可下载/可安装时才用强调色，底部提示文字位于按钮上方。完整说明默认折叠。关闭按钮与 Escape 隐藏窗口并恢复编辑器焦点；窗口失焦不关闭，不取消下载或触发安装，重新打开保留状态。独立窗口使用专用窄 preload，主窗口退出时销毁，不能提供工作区或官网能力。
 
 ## Sources
+
+网页草稿留底成功后，右侧自动打开实际备份TXT并恢复文件正文显示，复用文件标签和现有状态提示，明确显示“网页草稿已保存”；每份新备份只打开一次，不主动聚焦Monaco、不覆盖其他文件缓冲，不重放历史备份。自动打开失败提示已保存路径，工具回传独立继续。界面owner为`src/renderer/composerDraftFeedback.js`，文件打开与显隐沿用editorWorkspace/fileWorkspace。
 
 精确基础值只维护在 `design-tokens.json`，`scripts/copy-static.mjs` 生成 `dist/renderer/ui-tokens.css`。共享按钮使用 `src/renderer/ui.css` 的 `.ui-button`、`.primary`、`.ui-icon`；页面负责局部排列。文件类型图标颜色统一走 `design-tokens.json` 的 `--ui-file-*`，不在 `src/renderer/fileExplorer.css` 新增硬编码色值。
 

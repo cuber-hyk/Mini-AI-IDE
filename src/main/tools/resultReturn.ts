@@ -86,6 +86,7 @@ export class ToolResultReturn {
     if (generation === this.generation) {
       this.phase = result.ok ? 'sent' : 'paused';
       this.message = result.ok ? '本批结果与附件已发送' : `${result.error ?? '发送失败'}；本批不重复上传，请在官网处理或发起新批次`;
+      if (result.draftBackupPath) this.message += `；原网页草稿已备份：${result.draftBackupPath}`;
       this.options.changed();
     }
     return result;

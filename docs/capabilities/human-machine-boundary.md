@@ -1,9 +1,9 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-11
+updated: 2026-10-13
 owner: 胡运宽
-source_of_truth: [src/main/tools/replySource.ts, test/replySource.test.ts, docs/adr/2026-10-09-batch-error-auto-return.md, docs/adr/2026-10-09-tool-attachment-return.md, src/main/tools/attachments.ts, src/main/tools/resultReturn.ts, test/toolAttachmentIntegration.test.ts, test/toolAttachments.test.ts, test/toolResultReturn.test.ts, docs/capabilities/skills-and-local-prompt.md, docs/adr/2026-10-08-local-prompt-attachments.md, src/main/localPromptAttachments.ts, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, docs/adr/2026-10-07-automatic-result-return-boundary.md, src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, src/main/tools/integration.ts, src/main/tools/autoCollector.ts, src/main/tools/replyChangeWatcher.ts, src/main/preload.ts, src/shared/toolProtocol.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, tools/verify-web-result-sender.cjs]
+source_of_truth: [src/main/tools/replySource.ts, test/replySource.test.ts, docs/adr/2026-10-09-batch-error-auto-return.md, docs/adr/2026-10-09-tool-attachment-return.md, src/main/tools/attachments.ts, src/main/tools/resultReturn.ts, test/toolAttachmentIntegration.test.ts, test/toolAttachments.test.ts, test/toolResultReturn.test.ts, docs/capabilities/skills-and-local-prompt.md, docs/adr/2026-10-08-local-prompt-attachments.md, src/main/localPromptAttachments.ts, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, docs/adr/2026-10-07-automatic-result-return-boundary.md, src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, src/main/tools/integration.ts, src/main/tools/autoCollector.ts, src/main/tools/replyChangeWatcher.ts, src/main/preload.ts, src/shared/toolProtocol.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, src/main/composerDraftBackup.ts, test/composerDraftBackup.test.ts, tools/verify-web-result-sender.cjs]
 ---
 
 # 能力：人机边界与限定结果回传
@@ -21,7 +21,7 @@ source_of_truth: [src/main/tools/replySource.ts, test/replySource.test.ts, docs/
 | 读取回复与生成状态 | IDE | 同步只读快照，未知状态不自动执行 |
 | 校验与执行正式工具 | IDE 按预选权限 | 需要授权时询问，拒绝不执行 |
 | 查看实际修改 | IDE | 本批执行快照只读展示，不提供第二条应用链路 |
-| 发送本批工具结果 | automatic 开启时 IDE；关闭时用户点击自适应按钮手动发送含附件的本批 | 当前项目/会话/批次真实完成，空输入框，已授权附件，发送一次；同一点击复制文本结果 |
+| 发送本批工具结果 | automatic 开启时 IDE；关闭时用户点击自适应按钮手动发送含附件的本批 | 当前项目/会话/批次真实完成，ChatGPT已有纯文本草稿先备份后复核替换，其他输入仍须为空；已授权附件，发送一次；同一点击复制文本结果 |
 | 暂停后修正、续写、回答 AI | 用户 | 不自动点击继续生成或重试不确定发送 |
 | 处理未保存内容 | 用户或已保存策略 | 继续采用 AI 结果，停止保留草稿 |
 
@@ -44,13 +44,15 @@ source_of_truth: [src/main/tools/replySource.ts, test/replySource.test.ts, docs/
 - 用户可从目录树主动原生拖出当前项目单个普通文件，由官网处理真实 drop 和附件上传，正文仍由用户发送。此操作不写 DOM、不代上传、不新增官网路径查询/文件桥；本地需求框用相同 Files 接收入口暂存。见 `../adr/2026-10-11-native-workspace-file-drag.md`。
 - 工具结果正文与手动复制同源，通过 textarea 原生 value setter、input 事件和原生 click 完成，不读取剪贴板。当前批可携带经工具权限批准的 attach_file 附件；ToolAttachments 持有当前选择，ToolResultReturn 统一校验真实批次、一次运输及状态，自动与手动共用。
 - 用户主动本地需求可携带用户明确选择的附件；工具附件须明确请求并按工具权限执行。主进程校验类型、数量、大小、真实路径与文件身份后读取字节；唯一 sender 只通过官方文件输入控件提交，不向网页提供路径、磁盘读取或通用 IPC。sender 等待全部本次附件预览和上传进度结束后才发送正文。历史、拒绝、取消、无执行及失效附件不上传；开始运输后失败或未知都不重试同批。见 ../adr/2026-10-09-tool-attachment-return.md。
-- 两种发送都不保存或读取用户草稿、不使用 HTML；已有草稿或附件、未知控件及会话变化时停止。
-- 已有草稿、用户改写文本、控件变化或不可编辑时不覆盖。取消和点击前失败仅清理自有且未发送的文本；点击后不能确认、异常或超时均停止且不重试，不清理可能已提交的内容。清理无法确认时阻止后续自动发送。
+- ChatGPT当前有效工具结果/诊断运输可在世界1005读取必要纯文本草稿，主进程先在本项目`.mini-ai-ide/composer-drafts/`独占保存UTF-8原文并核对字节/路径，之后重新核验草稿、原输入/FORM、作用域、附件及空闲才能替换回传。没有项目、备份失败、未知结构或超过1MiB时不覆盖；详情见`../adr/2026-10-13-chatgpt-composer-draft-backup.md`。本地主动需求与DeepSeek仍要求输入为空，其他附件和未知控件继续暂停。
+- 备份准备期间真实用户编辑（即使字节未变）、输入节点/FORM替换、草稿变化或不可编辑时不覆盖；保存成功不恢复失效资格。取消和点击前失败仅清理自有且未发送的文本；点击后不能确认、异常或超时均停止且不重试，不清理可能已提交的内容。清理无法确认时阻止后续自动发送。
 - 不使用 `SendInput`、`sendInputEvent`、模拟回车、CDP、浏览器驱动或指纹伪造。大模型业务网络仍由 Chromium 发起，主进程不包装 AI HTTP，不读网页凭据，也不提供任意网页动作接口。
 
 自动采集由历史基线后的新完成工具输出触发，不依赖发送动作或回执。真实用户动作仍可取消旧待发送结果，合成发送不冒充真实用户动作；结果回传保持来源项目/会话/批次校验。见 `../adr/2026-10-08-output-driven-collection.md`。
 
 ## 验证与限制
+
+网页草稿落盘成功且当前运输资格仍有效时，编辑器接收`composerDraftSaved`单向通知，仅含当前项目root、工作区revision及备份相对路径。`composerDraftFeedback.js`核对项目与版本，每份新备份一次打开右侧实际TXT并提示已保存；文件打开采用非聚焦选项、保留其他编辑缓冲，收起的文件区恢复。空输入、备份失败、历史初始化或失效保存不触发；打开失败显示已保存位置，不阻断结果回传或重试运输。
 
 状态规则由 `test/autoContinuation.test.ts`、`test/webResultSender.test.ts` 及 integration 回归验证。`tools/verify-web-result-sender.cjs` 使用隔离本地 Electron 夹具验证真实 textarea、事件、点击与取消，不连接官网。
 

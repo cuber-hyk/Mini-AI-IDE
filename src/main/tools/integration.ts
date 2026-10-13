@@ -6,6 +6,7 @@ import type { App, IpcMain, WebContents } from 'electron';
 import { CHANNELS } from '../../shared/contract';
 import { parseToolBatch, type ToolRequest, type ToolState } from '../../shared/toolProtocol';
 import { sessionKeyOf } from '../consumptionStore';
+import { ComposerDraftBackup } from '../composerDraftBackup';
 import type { FileService } from '../fileService';
 import type { ReturnPathService } from '../returnPathService';
 import type { WorkspaceController } from '../workspaceController';
@@ -170,7 +171,9 @@ export async function createToolIntegration(options: Options) {
   };
   const selectionRevisions = new WeakMap<ToolSelection, number>();
   const toolAttachments = new ToolAttachments();
-  let sender = options.sender ?? new WebResultSender(web);
+  const draftBackup = new ComposerDraftBackup();
+  const createSender = (target: typeof web) => new WebResultSender(target, { backupDraft: (text, session) => draftBackup.save(options.files.getRoot() ?? '', session, text) });
+  let sender = options.sender ?? createSender(web);
   let localPromptTransport: Promise<unknown> | undefined;
   let retainedCopy: { root: string | null; results: ToolState['results']; batchError?: ToolState['batchError'] } | null = null;
   const review = new ChangeReviewOwner(options.notifyReview);
@@ -454,7 +457,7 @@ export async function createToolIntegration(options: Options) {
       await watcher.dispose();
       await sender.dispose();
       if (disposed) return;
-      web = next; sender = nextSender ?? new WebResultSender(web);
+      web = next; sender = nextSender ?? createSender(web);
       monitor = new ReplyMonitor(web, readOptions); watcher = createWatcher();
       auto.reset(true); changes.reset(); changeSession = sessionKeyOf(web.getURL());
       toolAttachments.reset(); resultReturn?.invalidate();

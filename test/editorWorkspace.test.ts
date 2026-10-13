@@ -17,7 +17,7 @@ it('批准丢弃 B 后读取 C，磁盘 C 同步为编辑器 C 并清除 dirty�
 async function fixture(path = 'a.txt') {
   const state = { root: 'A', currentPath: null as string | null, currentKind: null as string | null, currentText: '', savedText: '' };
   let leave = true; let write = true; let writeLater: any; let read: any = async () => ({ ok: true, text: 'saved', encoding: 'utf8' });
-  let report: any; let shown: any; let tabs: any; const writes: any[] = []; const disposed: any[] = [];
+  let report: any; let shown: any; let tabs: any; let focus: any; const writes: any[] = []; const disposed: any[] = [];
   let previewRead: any = async () => ({ ok: true, kind: 'image', bytes: new Uint8Array([1]), mimeType: 'image/png' });
   const bridge = { reportEditorState(value: any) { report = value; }, confirmLeave: async () => ({ ok: leave }), readFile: (...args: any[]) => read(...args),
     readFilePreview: (...args: any[]) => previewRead(...args),
@@ -25,12 +25,27 @@ async function fixture(path = 'a.txt') {
   const context: any = { window: {} }; vm.runInNewContext(fs.readFileSync('src/renderer/editorWorkspace.js', 'utf8'), context);
   const workspace = context.window.createEditorWorkspace({ state, bridge, ready: async () => {}, kindForPath: filePreviewKind,
     changed() { workspace.report(); }, highlight() {}, setInfo() {}, renderTabs(value: any) { tabs = value; }, captureViewState() { return { cursor: 8 }; },
-    createModel(path: string, text: string) { return { path, text }; }, showDocument(doc: any) { shown = doc; },
+    createModel(path: string, text: string) { return { path, text }; }, showDocument(doc: any, requestedFocus: boolean) { shown = doc; focus = requestedFocus; },
     disposeModel(model: any) { disposed.push(model); }, renameModel() {}, replaceContent(doc: any, text: string) { if (doc.model) doc.model.text = text; } });
   await workspace.open(path); state.currentText = 'draft'; workspace.report();
-  return { state, workspace, writes, disposed, shown: () => shown, report: () => report, tabs: () => tabs,
+  return { state, workspace, writes, disposed, shown: () => shown, focus: () => focus, report: () => report, tabs: () => tabs,
     cancel() { leave = false; }, allow() { leave = true; }, failSave() { write = false; }, writeLater(fn: any) { writeLater = fn; }, readLater(fn: any) { read = fn; }, previewLater(fn: any) { previewRead = fn; } };
 }
+
+it('自动打开备份不聚焦且保留原脏缓冲模型与视图，普通打开仍聚焦', async () => {
+  const f = await fixture(); const original = f.shown();
+  assert.equal(f.focus(), true);
+  f.state.currentText = 'unsaved original';
+  f.readLater(async () => ({ ok: true, text: 'web draft', encoding: 'utf8' }));
+  assert.equal(await f.workspace.open('.mini-ai-ide/composer-drafts/backup.txt', false), true);
+  assert.equal(f.focus(), false); assert.equal(f.state.currentText, 'web draft');
+  assert.equal(f.report().documents.find((doc: any) => doc.path === 'a.txt').dirty, true);
+  assert.equal(original.text, 'unsaved original'); assert.equal(original.viewState.cursor, 8);
+  assert.equal(f.disposed.length, 0); assert.equal(f.writes.length, 0);
+  await f.workspace.open('a.txt');
+  assert.equal(f.focus(), true); assert.equal(f.shown(), original); assert.equal(f.state.currentText, 'unsaved original');
+  await f.workspace.open('a.txt', false); assert.equal(f.focus(), false, '已打开标签也遵守无焦点请求');
+});
 
 it('附件与文本共用标签，预览不产生脏状态或保存写入，返回时保留文本草稿', async () => {
   const f = await fixture(); const draft = f.shown();

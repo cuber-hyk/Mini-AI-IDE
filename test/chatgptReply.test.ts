@@ -71,6 +71,80 @@ function turn(code: string, options: { complete?: boolean; role?: string; langua
 const run = (script: string, document: Node, extra: Record<string, unknown> = {}) => vm.runInNewContext(script, { document, URL, location: { href: 'https://chatgpt.com/c/one' }, ...extra });
 const batch = JSON.stringify({ protocol_version: 1, batch_id: 'gpt-batch', requests: [{ id: 'read-one', tool: 'read_file', args: { path: 'a.txt' } }] });
 
+function prependAssistant(current: ReturnType<typeof turn>) {
+  const earlier = turn('earlier assistant tools');
+  earlier.assistant.children.push(earlier.footer); earlier.footer.parentElement = earlier.assistant;
+  const parent = current.assistant.parentElement!;
+  parent.children.unshift(earlier.assistant); earlier.assistant.parentElement = parent;
+  return earlier;
+}
+
+it('普通同轮多消息只采最后正式消息，较早owner内页脚不污染轮末完成证据', () => {
+  const current = turn(batch); prependAssistant(current);
+  const document = el('body', {}, [current.frame]);
+  const text = run(CHATGPT_COLLECT_SCRIPT, document)[0];
+  assert.ok(text?.includes(batch)); assert.ok(!text.includes('earlier assistant tools'));
+  assert.equal(run(CHATGPT_COMPLETION_SCRIPT, document), 'complete');
+});
+
+it('最后角色的owner或正文未补齐时不得回退到同轮较早工具请求', () => {
+  for (const missing of ['owner', 'body']) {
+    const current = turn(batch); prependAssistant(current);
+    if (missing === 'owner') delete current.assistant.attrs['data-chatgpt-search-unit-key'];
+    else delete current.root.attrs['data-dil-message-id'];
+    const document = el('body', {}, [current.frame]);
+    assert.equal(run(CHATGPT_COLLECT_SCRIPT, document).length, 0, missing);
+    assert.equal(run(CHATGPT_COMPLETION_SCRIPT, document), 'unknown', missing);
+  }
+});
+
+it('多消息尚未形成已知归属或最新owner本身有歧义时仍暂停', () => {
+  for (const ambiguity of ['earlier-owner', 'earlier-footer', 'latest-role', 'latest-body']) {
+    const current = turn(batch); const earlier = prependAssistant(current);
+    if (ambiguity === 'earlier-owner') delete earlier.assistant.attrs['data-chatgpt-search-unit-key'];
+    if (ambiguity === 'earlier-footer') earlier.assistant.children.pop();
+    if (ambiguity === 'latest-role') {
+      const other = el('h4', { 'data-conversation-role': 'assistant' });
+      current.assistant.children.unshift(other); other.parentElement = current.assistant;
+    }
+    if (ambiguity === 'latest-body') {
+      const other = el('div', { 'data-dil-message-id': 'other' });
+      const markdown = current.root.closest('[data-markdown-text-style]')!;
+      markdown.children.push(other); other.parentElement = markdown;
+    }
+    const document = el('body', {}, [current.frame]);
+    assert.equal(run(CHATGPT_COLLECT_SCRIPT, document).length, 0, ambiguity);
+    assert.equal(run(CHATGPT_COMPLETION_SCRIPT, document), 'unknown', ambiguity);
+  }
+});
+
+it('多消息只认唯一轮末页脚，不能借较早消息页脚或两份各自带页脚的答案完成', () => {
+  for (const kind of ['missing-final', 'two-final', 'both-inside', 'both-inside-with-global']) {
+    const current = turn(batch); prependAssistant(current);
+    if (kind === 'two-final') {
+      const duplicate = el('div', { class: 'turn-action-controls' }, [el('button', { 'aria-label': '复制' })]);
+      current.frame.children.push(duplicate); duplicate.parentElement = current.frame;
+    } else if (kind === 'both-inside-with-global') {
+      const local = el('div', { class: 'turn-action-controls' }, [el('button', { 'aria-label': '复制' })]);
+      current.assistant.children.push(local); local.parentElement = current.assistant;
+      assert.equal(run(CHATGPT_COLLECT_SCRIPT, el('body', {}, [current.frame])).length, 0, kind);
+    } else {
+      current.frame.children.splice(current.frame.children.indexOf(current.footer), 1);
+      if (kind === 'both-inside') { current.assistant.children.push(current.footer); current.footer.parentElement = current.assistant; }
+    }
+    assert.equal(run(CHATGPT_COMPLETION_SCRIPT, el('body', {}, [current.frame])), 'unknown', kind);
+  }
+});
+
+it('同轮较早消息busy不覆盖最新正式消息，最新正文busy仍阻止完成', () => {
+  const current = turn(batch); const earlier = prependAssistant(current);
+  earlier.root.attrs['aria-busy'] = 'true';
+  const document = el('body', {}, [current.frame]);
+  assert.equal(run(CHATGPT_COMPLETION_SCRIPT, document), 'complete');
+  current.root.attrs['aria-busy'] = 'true';
+  assert.equal(run(CHATGPT_COMPLETION_SCRIPT, document), 'generating');
+});
+
 it('普通会话地址 fail closed；首页交接函数可直接注入隔离世界', () => {
   for (const url of ['https://chatgpt.com/', 'https://chatgpt.com/c/one-id?x=1']) assert.equal(webPlatformOf(url), 'chatgpt');
   for (const url of ['https://chatgpt.com/g/gpt-id', 'https://chatgpt.com/g/project/c/one', 'https://chatgpt.com/c/', 'https://chatgpt.com/c/one/more', 'https://evil.example/c/id', 'http://chatgpt.com/', 'https://user:pass@chatgpt.com/']) assert.equal(webPlatformOf(url), null);
@@ -231,6 +305,26 @@ it('监听来源seal后复制与朗读控件变化保持新资格，正文变化
   const changed = el('p', {}, [], 'new body'); current.root.children.push(changed); changed.parentElement = current.root;
   assert.notEqual(vm.runInContext(CHATGPT_OBSERVATION_SCRIPT, context).source, 'new');
   vm.runInContext(replyWatchScript('stop', 'source-reader', 'chatgpt'), context);
+});
+
+it('同轮追加最新消息仍保留来源见证，旧消息及其控件变化不触发重放', () => {
+  const current = turn(batch); const earlier = prependAssistant(current);
+  const parent = current.assistant.parentElement!;
+  parent.children.splice(parent.children.indexOf(current.assistant), 1);
+  const document: any = el('body', {}, [current.frame]);
+  document.documentElement = document; document.addEventListener = () => {}; document.removeEventListener = () => {};
+  const context = vm.createContext({ document, URL, Date, location: { href: 'https://chatgpt.com/c/one' }, clearTimeout, setTimeout, MutationObserver: class { observe() {} disconnect() {} } });
+  vm.runInContext(replyWatchScript('install', 'multi-source', 'chatgpt'), context);
+  parent.children.push(current.assistant);
+  const first = vm.runInContext(CHATGPT_OBSERVATION_SCRIPT, context);
+  assert.equal(first.completion, 'complete'); assert.equal(first.source, 'new');
+  earlier.footer.children[0]!.attrs['aria-label'] = 'copy';
+  const unchanged = vm.runInContext(CHATGPT_OBSERVATION_SCRIPT, context);
+  assert.equal(unchanged.sourceKey, first.sourceKey);
+  assert.equal(vm.runInContext('globalThis.__miniAIReplyChanges.sources.source(globalThis.__miniAIReplyChanges.sourceNodes()[0])', context), 'history');
+  current.root.children.push(el('p', {}, [], 'changed after seal'));
+  assert.notEqual(vm.runInContext(CHATGPT_OBSERVATION_SCRIPT, context).source, 'new');
+  vm.runInContext(replyWatchScript('stop', 'multi-source', 'chatgpt'), context);
 });
 
 it('伪停止控件的真实点击不能建立中断见证', () => {

@@ -45,14 +45,14 @@
       catch (error) { return { ok: true, preview: { ok: false, error: '预览读取失败：' + String(error) } }; }
     }
 
-    async function open(relPath) {
+    async function open(relPath, focus = true) {
       if (!state.root) return false;
       relPath = relPath.replace(/\\/g, '/');
       const request = ++openRequest;
       const root = state.root;
       const epoch = generation;
       const existing = documents.get(key(relPath));
-      if (existing) { activate(existing, true); return true; }
+      if (existing) { activate(existing, focus); return true; }
       try {
         await options.ready();
         if (epoch !== generation || request !== openRequest || root !== state.root) return false;
@@ -66,7 +66,7 @@
         const text = result.text || '';
         const doc = { path: relPath, kind, preview: result.preview, text, savedText: text, model: kind ? null : options.createModel(relPath, text), viewState: null, saving: null, reading: 0 };
         documents.set(key(relPath), doc);
-        activate(doc, true);
+        activate(doc, focus);
         options.setInfo(relPath + (kind ? ' · 只读预览' : ' · ' + result.encoding + ' · Ctrl+S 保存'));
         return true;
       } catch (error) {
