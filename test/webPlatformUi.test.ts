@@ -16,7 +16,7 @@ function node() {
     fire(name: string) { return Promise.all((listeners[name] || []).map(fn => fn({}))); } };
 }
 function webbar(overrides: any = {}) {
-  const ids = ['web-platform', 'web-platform-control', 'web-platform-hint', 'btn-collect', 'collect-status', 'btn-file-restore', 'btn-workspace-toggle', 'tool-workspace-status', 'btn-tool-workspace'];
+  const ids = ['web-platform', 'web-platform-control', 'web-platform-hint', 'btn-reload-web-platform', 'btn-collect', 'collect-status', 'btn-file-restore', 'btn-workspace-toggle', 'tool-workspace-status', 'btn-tool-workspace'];
   const nodes = Object.fromEntries(ids.map(id => [id, node()])); let listener!: (state: any) => void; let collectCount = 0; const switches: string[] = [];
   const bridge = { getWebPlatform: async () => deepseek, onWebPlatformState(fn: any) { listener = fn; },
     setWebPlatform: async (id: string) => { switches.push(id); return { platform: id, switching: false }; },
@@ -104,6 +104,77 @@ it('切走后旧采集回执不得覆盖新平台反馈', async () => {
   assert.equal(ui.nodes['btn-collect'].disabled, false); assert.doesNotMatch(ui.nodes['collect-status'].textContent, /已采集 1/);
 });
 
+it('主导航失败保留错误码并关闭采集，仅失败时展示恢复入口', async () => {
+  const ui = webbar(); await flush(); assert.equal(ui.nodes['btn-reload-web-platform'].hidden, true);
+  const failed = { ...deepseek, error: 'DeepSeek 加载失败：ERR_CONNECTION_CLOSED (-100)' };
+  ui.publish(failed);
+  assert.equal(ui.nodes['btn-reload-web-platform'].hidden, false); assert.equal(ui.nodes['btn-reload-web-platform'].disabled, false);
+  assert.equal(ui.nodes['web-platform'].disabled, false); assert.equal(ui.nodes['btn-collect'].disabled, true);
+  assert.match(ui.nodes['collect-status'].textContent, /ERR_CONNECTION_CLOSED/);
+  await ui.nodes['btn-collect'].fire('click'); assert.equal(ui.collected(), 0);
+  ui.publish({ ...failed, reloading: true });
+  assert.equal(ui.nodes['btn-reload-web-platform'].disabled, true); assert.equal(ui.nodes['web-platform'].disabled, false);
+  assert.equal(ui.nodes['btn-collect'].disabled, true);
+  ui.publish(deepseek);
+  assert.equal(ui.nodes['btn-reload-web-platform'].hidden, true); assert.equal(ui.nodes['btn-collect'].disabled, false);
+  assert.equal(ui.nodes['collect-status'].textContent, '');
+});
+
+it('重载只请求一次零参数入口，网络等待期间可切换，迟到旧状态不覆盖新平台', async () => {
+  const pending = deferred(); const calls: any[][] = [];
+  const ui = webbar({ reloadWebPlatform: (...args: any[]) => { calls.push(args); return pending.promise; } }); await flush();
+  const failed = { ...deepseek, error: 'DeepSeek 加载失败：ERR_CONNECTION_CLOSED (-100)' }; ui.publish(failed);
+  const request = ui.nodes['btn-reload-web-platform'].fire('click'); await ui.nodes['btn-reload-web-platform'].fire('click');
+  assert.equal(calls.length, 1); assert.deepEqual(calls[0], []);
+  assert.equal(ui.nodes['btn-collect'].disabled, true); assert.equal(ui.nodes['web-platform'].disabled, false);
+  ui.nodes['web-platform'].value = 'chatgpt'; await ui.nodes['web-platform'].fire('change');
+  assert.equal(ui.nodes['web-platform'].value, 'chatgpt');
+  pending.resolve(failed); await request;
+  assert.equal(ui.nodes['web-platform'].value, 'chatgpt'); assert.equal(ui.nodes['btn-reload-web-platform'].hidden, true);
+  assert.equal(ui.nodes['btn-collect'].disabled, false); assert.equal(ui.nodes['collect-status'].textContent, '');
+});
+
+it('权威重载完成广播优先于迟到调用回执，旧采集不能盖掉加载错误', async () => {
+  const reload = deferred(), collect = deferred();
+  const ui = webbar({ reloadWebPlatform: () => reload.promise, collectReply: () => collect.promise }); await flush();
+  const collecting = ui.nodes['btn-collect'].fire('click');
+  const failed = { ...deepseek, error: 'DeepSeek 加载失败：ERR_CONNECTION_CLOSED (-100)' }; ui.publish(failed);
+  collect.resolve({ ok: true, noNewContent: true }); await collecting;
+  assert.equal(ui.nodes['collect-status'].textContent, failed.error);
+  const request = ui.nodes['btn-reload-web-platform'].fire('click');
+  ui.publish({ ...failed, reloading: true }); ui.publish(deepseek); reload.resolve(failed); await request;
+  assert.equal(ui.nodes['btn-reload-web-platform'].hidden, true); assert.equal(ui.nodes['btn-collect'].disabled, false);
+  assert.equal(ui.nodes['collect-status'].textContent, '');
+});
+
+it('重载调用失败不泄露 IPC 技术细节，不清除网络错误并允许再次手动恢复', async () => {
+  const ui = webbar({ reloadWebPlatform: async () => { throw new Error("Error invoking remote method with private path"); } }); await flush();
+  const failed = { ...deepseek, error: 'DeepSeek 加载失败：ERR_CONNECTION_CLOSED (-100)' }; ui.publish(failed);
+  await ui.nodes['btn-reload-web-platform'].fire('click');
+  assert.match(ui.nodes['collect-status'].textContent, /^重新加载失败/); assert.match(ui.nodes['collect-status'].textContent, /ERR_CONNECTION_CLOSED/);
+  assert.doesNotMatch(ui.nodes['collect-status'].textContent, /remote method|private path/);
+  assert.equal(ui.nodes['btn-reload-web-platform'].disabled, false); assert.equal(ui.nodes['btn-collect'].disabled, true);
+  ui.publish(deepseek); assert.equal(ui.nodes['collect-status'].textContent, ''); assert.equal(ui.nodes['btn-reload-web-platform'].hidden, true);
+  ui.publish(chatgpt); assert.equal(ui.nodes['collect-status'].textContent, '');
+});
+
+it('失败广播先到时初始快照不能重新开放采集，忙门禁也限制手动重载', async () => {
+  const initial = deferred(); let calls = 0;
+  const ui = webbar({ getWebPlatform: () => initial.promise, reloadWebPlatform: async () => { calls += 1; return deepseek; } });
+  ui.publish({ ...deepseek, error: 'DeepSeek 加载失败', switchBlockedReason: '正在发送，请稍候' }); initial.resolve(deepseek); await flush();
+  assert.equal(ui.nodes['btn-collect'].disabled, true); assert.equal(ui.nodes['btn-reload-web-platform'].disabled, true);
+  await ui.nodes['btn-reload-web-platform'].fire('click'); assert.equal(calls, 0);
+});
+
+it('主进程拒绝重载并广播恢复失败状态时，仍显示固定调用失败提示', async () => {
+  const failed = { ...deepseek, error: 'DeepSeek 加载失败：ERR_CONNECTION_CLOSED (-100)' };
+  let ui: ReturnType<typeof webbar>;
+  ui = webbar({ reloadWebPlatform: async () => { ui.publish({ ...failed, switching: true }); ui.publish(failed); throw new Error('prepare failed'); } });
+  await flush(); ui.publish(failed); await ui.nodes['btn-reload-web-platform'].fire('click');
+  assert.match(ui.nodes['collect-status'].textContent, /^重新加载失败/); assert.match(ui.nodes['collect-status'].textContent, /ERR_CONNECTION_CLOSED/);
+  assert.equal(ui.nodes['btn-reload-web-platform'].disabled, false);
+});
+
 function composer(overrides: any = {}) {
   const nodes: any = { requirement: node(), 'prompt-custom': node(), 'btn-send-prompt': node(), 'requirement-panel': { ...node(), open: false }, 'prompt-actions': { offsetHeight: 30 } };
   const messages: string[] = []; let busy = false; let listener!: (state: any) => void; let promptListener!: (state: any) => void;
@@ -122,4 +193,13 @@ it('ChatGPT 允许纯文本需求并保留草稿，切换中提示词刷新不�
 it('需求区初始平台查询失败或迟到都不能许可未知平台代发送', async () => {
   const failed = composer({ getWebPlatform: async () => { throw new Error('不可用'); } }); await flush(); assert.equal(failed.busy(), true); assert.match(failed.messages.at(-1)!, /平台状态失败/);
   const pending = deferred(); const ui = composer({ getWebPlatform: () => pending.promise }); ui.publish({ ...chatgpt, switching: true }); pending.resolve(deepseek); await flush(); assert.equal(ui.busy(), true);
+});
+
+it('加载失败与手动恢复期间保留本地草稿，提示词广播不能解除发送门禁', async () => {
+  const ui = composer(); await flush(); ui.nodes.requirement.value = '下一条需求草稿';
+  const failed = { ...chatgpt, error: 'ChatGPT 加载失败：ERR_CONNECTION_CLOSED (-100)' }; ui.publish(failed);
+  assert.equal(ui.busy(), true); assert.match(ui.nodes.requirement.title, /ERR_CONNECTION_CLOSED/);
+  ui.publishPrompt({ isCustom: false }); assert.equal(ui.busy(), true);
+  ui.publish({ ...failed, reloading: true }); assert.equal(ui.busy(), true); assert.match(ui.nodes.requirement.title, /重新加载/);
+  ui.publish(chatgpt); assert.equal(ui.busy(), false); assert.equal(ui.nodes.requirement.value, '下一条需求草稿');
 });

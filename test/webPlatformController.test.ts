@@ -11,17 +11,52 @@ function deferred() {
   const promise = new Promise<void>((yes, no) => { resolve = yes; reject = no; });
   return { promise, resolve, reject };
 }
-function contents() {
+function contents(initialUrl = WEB_PLATFORMS.deepseek.url as string) {
   let dead = false; const sent: Array<{ channel: string; state: WebPlatformState }> = []; const urls: string[] = [];
   const loading = deferred();
+  let reloads = 0; let currentUrl = initialUrl;
   const value = Object.assign(new EventEmitter(), {
     mainFrame: { send(channel: string, state: WebPlatformState) { sent.push({ channel, state }); } },
-    isDestroyed: () => dead, close() { dead = true; }, loadURL(url: string) { urls.push(url); return loading.promise; },
+    isDestroyed: () => dead, close() { dead = true; },
+    getURL: () => currentUrl,
+    reload() { reloads++; value.emit('did-start-navigation', {}, '', false, true); },
+    loadURL(url: string) { currentUrl = url; urls.push(url); value.emit('did-start-navigation', {}, url, false, true); return loading.promise.catch(error => {
+      value.emit('did-fail-load', {}, -2, 'ERR_FAILED', url, true); value.emit('did-finish-load'); throw error;
+    }); },
   });
-  return { value, sent, urls, loading };
+  return { value, sent, urls, loading, reloads: () => reloads, navigate: (url: string) => { currentUrl = url; } };
 }
+
+it('DeepSeek主frame加载失败后错误页完成不能冒充成功，隐藏错误切回仍可见', async () => {
+  const f = fixture();
+  try {
+    f.deepseek.value.emit('did-start-navigation', {}, 'https://chat.deepseek.com/', false, true);
+    f.deepseek.value.emit('did-fail-load', {}, -100, 'ERR_CONNECTION_CLOSED', 'https://private.invalid/?secret=1', true);
+    f.deepseek.value.emit('did-finish-load');
+    assert.match(f.controller.state.error!, /DeepSeek.*ERR_CONNECTION_CLOSED.*-100/);
+    assert.doesNotMatch(JSON.stringify(f.webbar.sent), /private|secret/);
+    await f.set('chatgpt'); assert.equal(f.controller.state.error, undefined);
+    await f.set('deepseek'); assert.match(f.controller.state.error!, /ERR_CONNECTION_CLOSED/);
+    f.deepseek.value.emit('did-start-navigation', {}, 'https://chat.deepseek.com/', false, true);
+    f.deepseek.value.emit('did-finish-load'); assert.equal(f.controller.state.error, undefined);
+  } finally { f.controller.dispose(); }
+});
+
+it('失败后的取消或子frame完成不清除旧错误，子frame失败不污染平台状态', async () => {
+  const f = fixture();
+  try {
+    f.deepseek.value.emit('did-fail-load', {}, -100, 'ERR_CONNECTION_CLOSED', '', false);
+    assert.equal(f.controller.state.error, undefined);
+    f.deepseek.value.emit('did-fail-load', {}, -100, 'ERR_CONNECTION_CLOSED', '', true);
+    f.deepseek.value.emit('did-start-navigation', {}, '', false, false);
+    f.deepseek.value.emit('did-finish-load'); assert.match(f.controller.state.error!, /ERR_CONNECTION_CLOSED/);
+    f.deepseek.value.emit('did-start-navigation', {}, '', false, true);
+    f.deepseek.value.emit('did-fail-load', {}, -3, 'ERR_ABORTED', '', true);
+    f.deepseek.value.emit('did-finish-load'); assert.match(f.controller.state.error!, /ERR_CONNECTION_CLOSED/);
+  } finally { f.controller.dispose(); }
+});
 function fixture() {
-  const webbar = contents(), editor = contents(), deepseek = contents(), chatgpt = contents();
+  const webbar = contents(), editor = contents(), deepseek = contents(), chatgpt = contents(WEB_PLATFORMS.chatgpt.url);
   const handlers = new Map<string, Function>(); const applied: WebContentsView[] = []; const changed: WebPlatformState[] = [];
   let prepare: () => Promise<void> = async () => {}; let create: () => WebContentsView = () => ({ webContents: chatgpt.value }) as unknown as WebContentsView;
   let gate: (state: WebPlatformState) => Promise<void> = async () => {}; let creations = 0;
@@ -109,6 +144,7 @@ it('创建失败恢复 DeepSeek，后续真实切换仍可创建；加载失败�
   assert.doesNotMatch(JSON.stringify(f.webbar.sent), /secret|token|private/);
   await f.set('deepseek'); assert.equal(f.controller.state.error, undefined);
   await f.set('chatgpt'); assert.match(f.controller.state.error!, /页面加载失败/);
+  f.chatgpt.value.emit('did-start-navigation', {}, '', false, true);
   f.chatgpt.value.emit('did-finish-load');
   assert.equal(f.controller.state.error, undefined, '手动恢复加载后不显示过期错误');
   await f.set('deepseek'); await f.set('chatgpt');
@@ -142,4 +178,80 @@ it('准备期间关闭窗口不再创建视图或广播过期切换', async () =
   const switching = f.set('chatgpt'); await new Promise(done => setImmediate(done));
   f.controller.dispose(); wait.resolve(); await assert.rejects(switching, /已关闭/);
   assert.equal(f.creations(), 0);
+});
+
+it('重载仅顶栏主frame零参数可发起，限当前失败页面并复用原视图', async () => {
+  const f = fixture();
+  try {
+    await assert.rejects(f.invoke(CHANNELS.reloadWebPlatform), /没有加载失败/);
+    f.deepseek.value.emit('did-fail-load', {}, -100, 'ERR_CONNECTION_CLOSED', '', true);
+    for (const event of [f.event(f.editor.value), { sender: f.webbar.value, senderFrame: {} }])
+      await assert.rejects(f.invoke(CHANNELS.reloadWebPlatform, event as IpcMainInvokeEvent), /主 frame/);
+    await assert.rejects(f.invoke(CHANNELS.reloadWebPlatform, undefined, 'https://example.test/'), /不接受参数/);
+    const result = await f.invoke(CHANNELS.reloadWebPlatform);
+    assert.equal(result.reloading, true); assert.match(result.error, /ERR_CONNECTION_CLOSED/);
+    assert.equal(result.switching, false); assert.equal(f.deepseek.reloads(), 1); assert.equal(f.deepseek.urls.length, 0);
+    assert.equal(f.controller.getView('deepseek'), f.original);
+    await assert.rejects(f.invoke(CHANNELS.reloadWebPlatform), /重新加载/);
+    await f.set('chatgpt'); assert.equal(f.controller.state.reloading, undefined); assert.equal(f.controller.state.error, undefined);
+    await f.set('deepseek'); assert.equal(f.controller.state.reloading, true);
+    f.deepseek.value.emit('did-finish-load'); f.deepseek.value.emit('did-stop-loading');
+    assert.deepEqual(f.controller.state, { platform: 'deepseek', switching: false });
+  } finally { f.controller.dispose(); }
+});
+
+it('忙、准备失败或准备期间退出不发起重载，关闭后撤销两平台加载监听', async () => {
+  for (const mode of ['busy', 'prepare', 'race', 'closed']) {
+    const f = fixture();
+    f.deepseek.value.emit('did-fail-load', {}, -100, 'ERR_CONNECTION_CLOSED', '', true);
+    if (mode === 'busy') f.block('工具正在执行，完成后可切换');
+    if (mode === 'prepare') f.prepare(async () => { throw Error('prepare failed'); });
+    if (mode === 'race') f.prepare(async () => { f.block('工具正在执行，完成后可切换'); });
+    if (mode === 'closed') f.prepare(async () => { f.controller.dispose(); });
+    await assert.rejects(f.invoke(CHANNELS.reloadWebPlatform)); assert.equal(f.deepseek.reloads(), 0);
+    const count = f.webbar.sent.length; f.controller.dispose();
+    assert.equal(f.deepseek.value.listenerCount('did-fail-load'), 0);
+    f.deepseek.value.emit('did-fail-load', {}, -2, 'ERR_FAILED', '', true);
+    assert.equal(f.webbar.sent.length, count);
+  }
+});
+
+it('重复失败仍保留错误，未成功的重载不报告恢复', async () => {
+  const f = fixture();
+  try {
+    f.deepseek.value.emit('did-fail-load', {}, -100, 'ERR_CONNECTION_CLOSED', '', true);
+    await f.invoke(CHANNELS.reloadWebPlatform);
+    f.deepseek.value.emit('did-fail-load', {}, -100, 'ERR_CONNECTION_CLOSED', '', true);
+    f.deepseek.value.emit('did-finish-load'); f.deepseek.value.emit('did-stop-loading');
+    assert.equal(f.controller.state.reloading, undefined); assert.match(f.controller.state.error!, /ERR_CONNECTION_CLOSED/);
+    await f.invoke(CHANNELS.reloadWebPlatform); assert.equal(f.deepseek.reloads(), 2);
+  } finally { f.controller.dispose(); }
+});
+
+it('当前非官网或准备期间地址改变时不重载，错误文案不能泄漏加载URL', async () => {
+  for (const url of ['file:///private.html', 'https://example.test/', 'https://chat.deepseek.com.evil.test/', 'https://user:password@chat.deepseek.com/', 'about:blank']) {
+    for (const duringPrepare of [false, true]) {
+      const f = fixture();
+      try {
+        f.deepseek.value.emit('did-fail-load', {}, -999999, 'https://secret.invalid/?token=private', '', true);
+        assert.match(f.controller.state.error!, /ERR_FAILED \/ -2/);
+        assert.doesNotMatch(JSON.stringify(f.webbar.sent), /secret|token|private/);
+        if (duringPrepare) f.prepare(async () => { f.deepseek.navigate(url); }); else f.deepseek.navigate(url);
+        await assert.rejects(f.invoke(CHANNELS.reloadWebPlatform)); assert.equal(f.deepseek.reloads(), 0);
+      } finally { f.controller.dispose(); }
+    }
+  }
+});
+
+it('准备期间已成功恢复时不再重载正常页面', async () => {
+  const f = fixture();
+  try {
+    f.deepseek.value.emit('did-fail-load', {}, -100, 'ERR_CONNECTION_CLOSED', '', true);
+    f.prepare(async () => {
+      f.deepseek.value.emit('did-start-navigation', {}, '', false, true);
+      f.deepseek.value.emit('did-finish-load');
+    });
+    await assert.rejects(f.invoke(CHANNELS.reloadWebPlatform), /状态已变化/);
+    assert.equal(f.deepseek.reloads(), 0); assert.equal(f.controller.state.error, undefined);
+  } finally { f.controller.dispose(); }
 });

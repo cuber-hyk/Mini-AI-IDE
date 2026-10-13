@@ -66,6 +66,8 @@ token_source: design-tokens.json
 
 ## Sources
 
+官网加载失败时，顶栏现有状态区显示固定平台名及有界错误码，旁边显示具名“重新加载”共用按钮；仅失败时出现，准备或重载中禁用重复点击，网络等待仍可切平台。失败/重载期间禁用采集及本地发送，保留需求草稿；恢复成功隐藏按钮并清除过期提示。窄栏保留失败反馈及重载入口，不聚焦输入或自动刷新正常会话。
+
 网页草稿留底成功后，右侧自动打开实际备份TXT并恢复文件正文显示，复用文件标签和现有状态提示，明确显示“网页草稿已保存”；每份新备份只打开一次，不主动聚焦Monaco、不覆盖其他文件缓冲，不重放历史备份。自动打开失败提示已保存路径，工具回传独立继续。界面owner为`src/renderer/composerDraftFeedback.js`，文件打开与显隐沿用editorWorkspace/fileWorkspace。
 
 精确基础值只维护在 `design-tokens.json`，`scripts/copy-static.mjs` 生成 `dist/renderer/ui-tokens.css`。共享按钮使用 `src/renderer/ui.css` 的 `.ui-button`、`.primary`、`.ui-icon`；页面负责局部排列。文件类型图标颜色统一走 `design-tokens.json` 的 `--ui-file-*`，不在 `src/renderer/fileExplorer.css` 新增硬编码色值。

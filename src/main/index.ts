@@ -574,7 +574,7 @@ async function loadLocalView(
     sender: { send: (text, session, _kind, current, attachments) => tools.sendLocalPrompt(text, session, current, attachments), cancel: kind => composerSender.cancel(kind) },
     resolveWorkspacePath: relative => fileService.resolveSafePath(relative).then(result => result.ok ? { ok: true, absolute: result.absolute } : { ok: false, error: result.error }),
     root: () => fileService.getRoot(), session: () => sessionKeyOf(activeWeb.getURL()),
-    webAvailable: () => !platforms.state.switching && (WORKSPACE_PROBE || webPlatformOf(activeWeb.getURL()) !== null),
+    webAvailable: () => !platforms.state.switching && !platforms.state.error && !platforms.state.reloading && (WORKSPACE_PROBE || webPlatformOf(activeWeb.getURL()) !== null),
     attachmentsAvailable: () => platforms.state.platform === 'deepseek',
     busy: () => { const state = tools.getState(); return state.busy || state.resultReturn?.phase === 'sending' || ['countdown', 'sending', 'waiting_tools'].includes(state.continuation?.phase ?? ''); },
     disabled: SELF_TEST || (UI_PROBE && !WORKSPACE_PROBE) || DIAGNOSE });
@@ -637,9 +637,9 @@ async function loadLocalView(
     const requestedPlatformRevision = platformRevision;
     return workspaceController.run(async () => {
     const emptyId = `c${(collectionSeq += 1)}`;
-    if (platforms.state.switching) return {
+    if (platforms.state.switching || platforms.state.error || platforms.state.reloading) return {
       ok: false, collectionId: emptyId, strategyId: null, strategyDescription: null, attempts: [], replyText: '',
-      notes: [], blocks: [], error: '正在切换官网平台，请稍后重新采集',
+      notes: [], blocks: [], error: platforms.state.error ?? '正在切换或重新加载官网，请稍后重新采集',
     };
     if (workspace.getState().revision !== requestedRevision) return {
       ok: false, collectionId: emptyId, strategyId: null, strategyDescription: null, attempts: [], replyText: '',
@@ -1120,17 +1120,8 @@ async function loadLocalView(
   updater.start();
 
   // 正常启动：右侧加载目标平台（**只读**，程序不向页面写入任何内容）
-  webView.webContents.on('did-finish-load', () => {
-    process.stdout.write(`[web] 已加载：${webView.webContents.getURL()}\n`);
-  });
-  webView.webContents.on('did-fail-load', (_e, code, desc, url, isMainFrame) => {
-    if (isMainFrame) process.stderr.write(`[web] 加载失败 ${code} ${desc} ${url}\n`);
-  });
-  try {
-    await webView.webContents.loadURL(TARGET_URL);
-  } catch (err) {
-    process.stderr.write(`[web] loadURL 抛错：${err instanceof Error ? err.message : String(err)}\n`);
-  }
+  // 两平台主frame加载状态统一由平台owner记录；错误页完成不能冒充官网加载成功。
+  await webView.webContents.loadURL(TARGET_URL).catch(() => {});
 
   // 分隔条由**编辑器渲染进程自身**的 DOM 承载（见 src/renderer 的 #resizer）。
   // 早期实现用一个独立 WebContentsView 覆盖在边界上，但它不接收拖动事件，

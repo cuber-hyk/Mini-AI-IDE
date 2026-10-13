@@ -10,6 +10,7 @@
     platform: document.getElementById('web-platform'),
     platformControl: document.getElementById('web-platform-control'),
     platformHint: document.getElementById('web-platform-hint'),
+    reload: /** @type {HTMLButtonElement} */ (document.getElementById('btn-reload-web-platform')),
   };
   if (!bridge || Object.values(el).some(function (node) { return !node; })) return;
   const restore = document.getElementById('btn-file-restore');
@@ -26,21 +27,29 @@
   let switchError = '';
   let switchErrorTimer;
   let platformReadError = '';
-  function supported() { return platform && ['deepseek', 'chatgpt'].includes(platform.platform) && !platform.switching && !switching; }
+  let reloadRequest = 0;
+  let reloadPendingPlatform = null;
+  let reloadError = '';
+  function reloading() { return platform && (platform.reloading || reloadPendingPlatform === platform.platform); }
+  function supported() { return platform && ['deepseek', 'chatgpt'].includes(platform.platform) && !platform.switching && !switching && !platform.error && !reloading(); }
   function platformReason() {
     return !platform ? '平台状态读取失败，采集暂不可用' : platform.switching || switching ? '正在切换官网平台…'
-      : '';
+      : reloading() ? '正在重新加载官网…' : platform.error || '';
   }
   function renderPlatform(keepFeedback = false) {
     const blocked = platform && platform.switchBlockedReason;
     el.platform.disabled = !platform || platform.switching || switching || Boolean(blocked);
     el.platform.value = platform ? platform.platform : 'deepseek';
-    const error = switchError || platformReadError || platform && platform.error;
+    const error = switchError || reloadError || platformReadError || platform && platform.error;
     el.platform.title = blocked || error || platformReason() || '切换 AI 官网平台';
     el.platformControl.title = el.platform.title;
     el.platformControl.tabIndex = el.platform.disabled ? 0 : -1;
     el.platformHint.textContent = blocked || platformReason() || '';
     el.collect.disabled = collecting || !supported();
+    el.reload.hidden = !platform || !platform.error;
+    el.reload.disabled = !platform || platform.switching || switching || Boolean(blocked) || Boolean(reloading());
+    el.reload.textContent = reloading() ? '重新加载中…' : '重新加载';
+    el.reload.title = blocked || (reloading() ? '正在重新加载官网，请稍候' : '重新加载当前失败的官网页面');
     if (!collecting) el.collect.title = error || platformReason() || '只读采集最新回复，结果显示在工具区';
     if (!keepFeedback) {
       if (error) feedback(error, true);
@@ -48,15 +57,20 @@
       else if (!collecting) feedback('');
     }
     el.status.classList.toggle('switch-notice', Boolean(switchError));
+    el.status.classList.toggle('load-notice', Boolean(reloadError || platform && (platform.error || platform.reloading)));
     renderToolStatus();
   }
-  function receivePlatform(next, keepFeedback = false) { platform = next; platformReadError = ''; renderPlatform(keepFeedback); }
+  function receivePlatform(next, keepFeedback = false) {
+    if (platform && platform.platform !== next.platform) { reloadRequest += 1; reloadPendingPlatform = null; reloadError = ''; }
+    if (!next.error) reloadError = '';
+    platform = next; platformReadError = ''; renderPlatform(keepFeedback);
+  }
   function renderToolStatus() {
     if (countdownTimer !== undefined) window.clearTimeout(countdownTimer);
     countdownTimer = undefined;
     if (!supported()) {
       const text = platformReason(); el.toolStatus.textContent = text; el.toolStatus.title = text;
-      el.toolStatus.classList.toggle('warn', !platform); el.toolStatus.classList.toggle('running', Boolean(platform && platform.switching || switching));
+      el.toolStatus.classList.toggle('warn', !platform || Boolean(platform.error)); el.toolStatus.classList.toggle('running', Boolean(platform && platform.switching || switching || reloading()));
       return;
     }
     if (!summary) { el.toolStatus.textContent = '正在读取工具状态'; el.toolStatus.title = el.toolStatus.textContent; return; }
@@ -75,8 +89,8 @@
   bridge.onToolWorkspaceStatus(function (state) { statusReceived = true; summary = state; renderToolStatus(); });
   bridge.onWebPlatformState(function (next) {
     platformStateVersion += 1;
-    const changed = !platform || platform.platform !== next.platform || platform.switching !== next.switching;
-    const keepFeedback = !changed && platform.error === next.error;
+    const changed = !platform || platform.platform !== next.platform || platform.switching !== next.switching || platform.error !== next.error || platform.reloading !== next.reloading;
+    const keepFeedback = !changed;
     if (changed) platformVersion += 1;
     receivePlatform(next, keepFeedback);
   });
@@ -97,6 +111,21 @@
       renderPlatform(keepFeedback);
     }, 3000);
   }
+  el.reload.addEventListener('click', async function () {
+    if (el.reload.disabled || !platform || !platform.error) return;
+    const request = ++reloadRequest;
+    const version = platformStateVersion;
+    reloadPendingPlatform = platform.platform; reloadError = ''; clearSwitchError(); renderPlatform();
+    try {
+      const next = await bridge.reloadWebPlatform();
+      if (request === reloadRequest && version === platformStateVersion) receivePlatform(next);
+    } catch (error) {
+      console.error('[web-platform] 重新加载失败', error);
+      if (request === reloadRequest && platform && platform.error && !platform.reloading) reloadError = '重新加载失败，请稍后重试；' + platform.error;
+    } finally {
+      if (request === reloadRequest) { reloadPendingPlatform = null; renderPlatform(); }
+    }
+  });
   el.platform.addEventListener('change', async function () {
     if (el.platform.disabled || !platform || switching) { renderPlatform(); return; }
     const requested = el.platform.value;

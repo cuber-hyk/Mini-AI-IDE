@@ -16,6 +16,7 @@ import type { WebPlatformState } from './webPlatform';
 export const CHANNELS = {
   getWebPlatform: 'ui:get-web-platform',
   setWebPlatform: 'ui:set-web-platform',
+  reloadWebPlatform: 'ui:reload-web-platform',
   webPlatformState: 'ui:web-platform-state',
   readFilePreview: 'fs:read-file-preview',
   filePreviewZoom: 'ui:file-preview-zoom',

@@ -89,9 +89,10 @@ window.setupPromptComposer = function (bridge, setInfo, localPrompt) {
   let platform = null;
   let platformRevision = 0;
   function composerAvailability() {
-    const unavailable = !platform || platform.switching || !['deepseek', 'chatgpt'].includes(platform.platform);
+    const unavailable = !platform || platform.switching || Boolean(platform.error) || Boolean(platform.reloading) || !['deepseek', 'chatgpt'].includes(platform.platform);
     localPrompt.setComposerBusy(!status || unavailable);
     el.requirement.title = !platform ? '平台状态未就绪，本地需求暂不可发送' : platform.switching ? '正在切换官网平台，本地需求暂不可发送'
+      : platform.reloading ? '正在重新加载官网，本地需求暂不可发送' : platform.error ? platform.error + '；请在顶栏重新加载'
       : platform.platform === 'chatgpt' ? 'ChatGPT 本轮支持纯文本需求；附件请在官网手动上传。' : '';
     if (unavailable) {
       const send = document.getElementById('btn-send-prompt'); if (send) send.title = el.requirement.title;
@@ -99,7 +100,7 @@ window.setupPromptComposer = function (bridge, setInfo, localPrompt) {
   }
   function paintPlatform(next) {
     platform = next; composerAvailability();
-    if (next.platform === 'chatgpt' && !next.switching) setInfo('ChatGPT：支持普通对话的纯文本工具协作，附件请在官网手动上传。');
+    if (next.platform === 'chatgpt' && !next.switching && !next.error && !next.reloading) setInfo('ChatGPT：支持普通对话的纯文本工具协作，附件请在官网手动上传。');
   }
   function paint(next) {
     status = next;

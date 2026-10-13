@@ -48,7 +48,7 @@ html, body {
   white-space: nowrap;
 }
 .collect-status.warn { color: #e0a458; }
-#btn-collect, #btn-tool-workspace, .ui-icon { flex: 0 0 auto; }
+#btn-collect, #btn-tool-workspace, #btn-reload-web-platform, .ui-icon { flex: 0 0 auto; }
 .ui-icon { display: inline-flex; align-items: center; justify-content: center; }
 .ui-icon svg {
   width: 15px;
@@ -59,7 +59,7 @@ html, body {
   stroke-linecap: round;
 }
 .ui-icon.active { background: #5b8def29; border-color: #5b8def6b; color: var(--accent); }
-@media (max-width: 440px) { .collect-status:not(.switch-notice) { display: none; } }
+@media (max-width: 440px) { .collect-status:not(.switch-notice):not(.load-notice) { display: none; } }
 @media (max-width: 380px) { .bar-wide { gap: 2px; padding-left: 4px; } .tool-workspace-status { display: none; } .webbar-platform { width: 91px; } #btn-tool-workspace { padding: 0 5px; } }
 .bar-wide .ui-button { background: transparent; border-color: transparent; }
 

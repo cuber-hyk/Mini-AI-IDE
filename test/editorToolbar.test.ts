@@ -50,7 +50,7 @@ it('项目路径只在目录区显示，完整路径保留在悬停提示', () =
 });
 
 function webbar(overrides: Record<string, unknown> = {}) {
-  const ids = ['bar', 'web-platform', 'web-platform-control', 'web-platform-hint', 'btn-collect', 'collect-status', 'btn-file-restore', 'btn-workspace-toggle', 'tool-workspace-status', 'btn-tool-workspace'];
+  const ids = ['bar', 'web-platform', 'web-platform-control', 'web-platform-hint', 'btn-reload-web-platform', 'btn-collect', 'collect-status', 'btn-file-restore', 'btn-workspace-toggle', 'tool-workspace-status', 'btn-tool-workspace'];
   const nodes = Object.fromEntries(ids.map(id => [id, node()]));
   nodes['btn-workspace-toggle'].hidden = false;
   let chrome: (value: unknown) => void = () => {};
