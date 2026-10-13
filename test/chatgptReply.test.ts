@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { it } from 'node:test';
 import vm from 'node:vm';
-import { CHATGPT_COLLECT_SCRIPT, CHATGPT_COMPLETION_SCRIPT, CHATGPT_OBSERVATION_SCRIPT } from '../src/main/chatgptPage';
+import { CHATGPT_COLLECT_SCRIPT, CHATGPT_COMPLETION_SCRIPT, CHATGPT_OBSERVATION_SCRIPT, CHATGPT_SOURCE_TEXT_READER } from '../src/main/chatgptPage';
 import { webPlatformOf } from '../src/shared/webConversation';
 import { isFirstPromptSession, isPendingFirstPromptSession } from '../src/main/firstPromptSession';
 import { collectReply } from '../src/main/replyCollector';
@@ -152,6 +152,98 @@ it('完整JSON与复制页脚不能覆盖streaming或未知turn-state，busy状�
   current.frame.attrs['data-talvt-turn-state'] = 'complete';
   current.root.attrs['aria-busy'] = 'true';
   assert.equal(run(CHATGPT_COMPLETION_SCRIPT, document), 'generating');
+  delete current.root.attrs['aria-busy']; current.content.attrs['data-is-streaming'] = 'true';
+  assert.equal(run(CHATGPT_COMPLETION_SCRIPT, document), 'generating');
+  delete current.content.attrs['data-is-streaming']; current.surface.attrs['aria-busy'] = 'true';
+  assert.equal(run(CHATGPT_COMPLETION_SCRIPT, document), 'generating');
+});
+
+it('推荐提示词未挂载、骨架busy或已经出现均不改变正式回复结束证据', () => {
+  const current = turn(batch); const document = el('body', {}, [current.frame]);
+  assert.equal(run(CHATGPT_COMPLETION_SCRIPT, document), 'complete');
+  const suggestions = el('div', { 'aria-busy': 'true' }, [el('button'), el('button'), el('button')]);
+  document.children.push(suggestions); suggestions.parentElement = document;
+  assert.equal(run(CHATGPT_COMPLETION_SCRIPT, document), 'complete');
+  delete suggestions.attrs['aria-busy'];
+  assert.equal(run(CHATGPT_COMPLETION_SCRIPT, document), 'complete');
+  const nestedSuggestions = el('div', { 'aria-busy': 'true' }, [el('button')]);
+  current.assistant.children.push(nestedSuggestions); nestedSuggestions.parentElement = current.assistant;
+  assert.equal(run(CHATGPT_COMPLETION_SCRIPT, document), 'complete');
+});
+
+it('侧栏、附件加载和旧轮busy不污染最新轮；本轮思考和turn busy仍阻止采集', () => {
+  const old = turn('history'); old.root.attrs['aria-busy'] = 'true';
+  const current = turn(batch);
+  const document = el('body', {}, [old.frame, current.frame, el('aside', { 'aria-busy': 'true' }), el('form', {}, [el('div', { 'data-is-streaming': 'true' })])]);
+  assert.equal(run(CHATGPT_COMPLETION_SCRIPT, document), 'complete');
+  const thought = el('details', { 'data-testid': 'thoughts', 'aria-busy': 'true' });
+  current.assistant.children.push(thought); thought.parentElement = current.assistant;
+  assert.equal(run(CHATGPT_COMPLETION_SCRIPT, document), 'generating');
+  delete thought.attrs['aria-busy']; current.frame.attrs['data-is-streaming'] = 'true';
+  assert.equal(run(CHATGPT_COMPLETION_SCRIPT, document), 'generating');
+});
+
+it('用户、代码和正式回复正文的伪stop/continue/busy控件不改变生命周期', () => {
+  const current = turn(batch);
+  for (const owner of [current.user, current.surface, current.root]) {
+    const stop = el('button', { 'aria-label': 'Stop generating', 'aria-busy': 'true' });
+    const resume = el('button', { 'aria-label': 'Continue generating' });
+    owner.children.push(stop, resume); stop.parentElement = owner; resume.parentElement = owner;
+  }
+  current.user.attrs['aria-busy'] = 'true'; current.bar.attrs['data-is-streaming'] = 'true';
+  assert.equal(run(CHATGPT_COMPLETION_SCRIPT, el('body', {}, [current.frame])), 'complete');
+});
+
+it('ChatGPT监听的生成见证与结束判据一致，不将推荐区域busy视作新生成', () => {
+  const current = turn(batch); const document: any = el('body', {}, [current.frame, el('div', { 'aria-busy': 'true' })]);
+  document.documentElement = document; document.addEventListener = () => {}; document.removeEventListener = () => {};
+  const context = vm.createContext({ document, URL, Date, location: { href: 'https://chatgpt.com/c/one' }, clearTimeout, setTimeout, MutationObserver: class { observe() {} disconnect() {} } });
+  vm.runInContext(replyWatchScript('install', 'generation', 'chatgpt'), context);
+  assert.equal(vm.runInContext('globalThis.__miniAIReplyChanges.generating()', context), false);
+  current.root.attrs['aria-busy'] = 'true';
+  assert.equal(vm.runInContext('globalThis.__miniAIReplyChanges.generating()', context), true);
+  vm.runInContext(replyWatchScript('stop', 'generation', 'chatgpt'), context);
+});
+
+it('来源正文读取保留语言及代码逐字，排除复制控件和思考正文', () => {
+  const current = turn('\n  exact();\n\n');
+  const thought = el('details', { 'data-testid': 'thoughts' }, [el('p', {}, [], 'private thought')]);
+  current.root.children.push(thought); thought.parentElement = current.root;
+  const text = run(`${CHATGPT_SOURCE_TEXT_READER}(document)`, current.root);
+  assert.equal(text, '工具请求mini-ai-tools\n  exact();\n\n');
+});
+
+it('监听来源seal后复制与朗读控件变化保持新资格，正文变化仍失效', () => {
+  const current = turn(batch); const document: any = el('body');
+  document.documentElement = document; document.addEventListener = () => {}; document.removeEventListener = () => {};
+  const context = vm.createContext({ document, URL, Date, location: { href: 'https://chatgpt.com/' }, clearTimeout, setTimeout, MutationObserver: class { observe() {} disconnect() {} } });
+  vm.runInContext(replyWatchScript('install', 'source-reader', 'chatgpt'), context);
+  document.children.push(current.frame); current.frame.parentElement = document;
+  const first = vm.runInContext(CHATGPT_OBSERVATION_SCRIPT, context);
+  assert.equal(first.source, 'new');
+  const copyParent = current.bar.children[1]!;
+  const translated = el('button', { 'aria-label': 'copy' }, [], 'copy');
+  copyParent.children[0] = translated; translated.parentElement = copyParent;
+  const readAloud = el('button', { 'aria-label': '朗读' }, [], 'Read aloud');
+  current.footer.children[1] = readAloud; readAloud.parentElement = current.footer;
+  const controlsChanged = vm.runInContext(CHATGPT_OBSERVATION_SCRIPT, context);
+  assert.equal(controlsChanged.source, 'new'); assert.equal(controlsChanged.sourceKey, first.sourceKey);
+  const changed = el('p', {}, [], 'new body'); current.root.children.push(changed); changed.parentElement = current.root;
+  assert.notEqual(vm.runInContext(CHATGPT_OBSERVATION_SCRIPT, context).source, 'new');
+  vm.runInContext(replyWatchScript('stop', 'source-reader', 'chatgpt'), context);
+});
+
+it('伪停止控件的真实点击不能建立中断见证', () => {
+  const current = turn(batch); const listeners = new Map<string, (event: any) => void>();
+  const stop = el('button', { 'aria-label': 'Stop generating', 'data-testid': 'stop-button' });
+  current.surface.children.push(stop); stop.parentElement = current.surface;
+  const document: any = el('body', {}, [current.frame]);
+  document.documentElement = document; document.addEventListener = (name: string, fn: any) => listeners.set(name, fn); document.removeEventListener = (name: string) => listeners.delete(name);
+  const context = vm.createContext({ document, URL, Date, location: { href: 'https://chatgpt.com/c/one' }, clearTimeout, setTimeout, MutationObserver: class { observe() {} disconnect() {} } });
+  vm.runInContext(replyWatchScript('install', 'fake-stop', 'chatgpt'), context);
+  listeners.get('click')!({ type: 'click', isTrusted: true, target: stop });
+  assert.equal(vm.runInContext(CHATGPT_COMPLETION_SCRIPT, context), 'complete');
+  vm.runInContext(replyWatchScript('stop', 'fake-stop', 'chatgpt'), context);
 });
 
 it('同turn用户代码和正文内复制控件不授权正式回复或结束', () => {
@@ -289,4 +381,59 @@ it('停止见证只在旧生成结束后再次生成时释放，旧页脚及无�
   stop.hidden = true; observe([{ type: 'attributes', target: stop }]);
   assert.equal(vm.runInContext(CHATGPT_COMPLETION_SCRIPT, context), 'complete');
   vm.runInContext(replyWatchScript('stop', 'two', 'chatgpt'), context);
+});
+
+it('role控件包裹代码及代码内子节点不能隐藏真正JSON变化的来源', () => {
+  for (const area of ['role-wrapper', 'code-child']) {
+    const current = turn(batch);let content=batch;
+    if (area === 'role-wrapper') {
+      const parent=current.surface.parentElement!;
+      const index=parent.children.indexOf(current.surface);
+      const wrapper=el('div',{role:'button'},[current.surface]);
+      parent.children[index]=wrapper;wrapper.parentElement=parent;
+      Object.defineProperty(current.content,'textContent',{get:()=>content});
+    } else {
+      const inline=el('button',{role:'button'});
+      Object.defineProperty(inline,'textContent',{get:()=>content});
+      current.content.children.push(inline);inline.parentElement=current.content;
+      Object.defineProperty(current.content,'textContent',{get:()=>inline.textContent});
+    }
+    const document:any=el('body');document.documentElement=document;document.addEventListener=()=>{};document.removeEventListener=()=>{};
+    const context=vm.createContext({document,URL,Date,location:{href:'https://chatgpt.com/'},setTimeout,clearTimeout,MutationObserver:class {observe(){}disconnect(){}}});
+    vm.runInContext(replyWatchScript('install','source-body','chatgpt'),context);
+    document.children.push(current.frame);current.frame.parentElement=document;
+    const before=vm.runInContext(CHATGPT_COLLECT_SCRIPT,context)[0];
+    const first=vm.runInContext(CHATGPT_OBSERVATION_SCRIPT,context);assert.equal(first.source,'new');
+    content=batch.replace('gpt-batch','different-batch');
+    const after=vm.runInContext(CHATGPT_COLLECT_SCRIPT,context)[0];assert.notEqual(after,before);
+    const changed=vm.runInContext(CHATGPT_OBSERVATION_SCRIPT,context);assert.notEqual(changed.source,'new',area);assert.notEqual(changed.sourceKey,first.sourceKey,area);
+    vm.runInContext(replyWatchScript('stop','source-body','chatgpt'),context);
+  }
+});
+
+it('已有会话正文样式类改变或缺失时仍采最新语义消息，历史不因修复获得资格', () => {
+  for (const css of ['RuntimeAnswerBlock-hash', 'DilResponseRoot', '']) {
+    const old=turn('old history');const current=turn(batch);current.root.attrs.class=css;
+    const document:any=el('body',{},[old.frame]);document.documentElement=document;document.addEventListener=()=>{};document.removeEventListener=()=>{};
+    const context=vm.createContext({document,URL,Date,location:{href:'https://chatgpt.com/c/existing'},setTimeout,clearTimeout,MutationObserver:class {observe(){}disconnect(){}}});
+    vm.runInContext(replyWatchScript('install','existing-style','chatgpt'),context);
+    assert.notEqual(vm.runInContext(CHATGPT_OBSERVATION_SCRIPT,context).source,'new');
+    document.children.push(current.frame);current.frame.parentElement=document;
+    const text=vm.runInContext(CHATGPT_COLLECT_SCRIPT,context)[0];assert.equal(parseToolBatch(text||'').kind,'batch',css||'no class');
+    const observation=vm.runInContext(CHATGPT_OBSERVATION_SCRIPT,context);assert.equal(observation.completion,'complete');assert.equal(observation.source,'new');
+    vm.runInContext(replyWatchScript('stop','existing-style','chatgpt'),context);
+  }
+});
+
+it('无固定样式类的多个正文、用户和思考区仍不能扩大采集资格', () => {
+  const current=turn(batch);current.root.attrs.class='';
+  const other=el('div',{'data-dil-message-id':'second'},[el('p',{},[],'other')]);
+  const markdown=current.root.closest('div[data-markdown-text-style]')!;markdown.children.push(other);other.parentElement=markdown;
+  assert.equal(run(CHATGPT_COLLECT_SCRIPT,el('body',{},[current.frame])).length,0);
+  assert.equal(run(CHATGPT_COMPLETION_SCRIPT,el('body',{},[current.frame])),'unknown');
+  for(const owner of [el('div',{'data-user-message-bubble':''}),el('details',{'data-testid':'thoughts'})]) {
+    const current=turn(batch);current.root.attrs.class='';const parent=current.root.parentElement!,index=parent.children.indexOf(current.root);
+    parent.children[index]=owner;owner.parentElement=parent;owner.children.push(current.root);current.root.parentElement=owner;
+    assert.equal(run(CHATGPT_COLLECT_SCRIPT,el('body',{},[current.frame])).length,0);
+  }
 });

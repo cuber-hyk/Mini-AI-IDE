@@ -2,7 +2,7 @@
 export type ReplySource = 'new' | 'history' | 'unknown';
 interface ReplyNode { textContent: string | null }
 
-export function createReplySourceTracker(initial: readonly ReplyNode[], epoch = '') {
+export function createReplySourceTracker(initial: readonly ReplyNode[] = [], epoch = '', readText?: (node: ReplyNode) => string) {
   const known = new Set<string>();
   const remembered = new WeakSet<ReplyNode>();
   const identities = new WeakMap<ReplyNode, number>(); let nextIdentity = 0;
@@ -11,7 +11,7 @@ export function createReplySourceTracker(initial: readonly ReplyNode[], epoch = 
     if (id === undefined) { id = ++nextIdentity; identities.set(node, id); }
     return id;
   }, fingerprint(node: ReplyNode): string {
-    const text = String(node.textContent || '');
+    const text = readText ? readText(node) : String(node.textContent || '');
     let first = 2166136261, second = 5381;
     for (let i = 0; i < text.length; i++) {
       first = Math.imul(first ^ text.charCodeAt(i), 16777619);

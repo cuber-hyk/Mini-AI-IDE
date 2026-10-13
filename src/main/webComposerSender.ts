@@ -9,7 +9,7 @@ import type { PromptAttachmentData } from '../shared/localPrompt';
 import { traceCollection } from './tools/collectionTrace';
 import { webPlatformOf } from '../shared/webConversation';
 import type { WebPlatform } from '../shared/webPlatform';
-import { CHATGPT_SEND_SELECTOR } from './chatgptPage';
+import { CHATGPT_SEND_SELECTOR, CHATGPT_GENERATING_SCRIPT } from './chatgptPage';
 
 export const COMPOSER_SEND_WORLD = 1005;
 const KEY = '__miniAIComposerSend';
@@ -109,12 +109,20 @@ function sendScript(token: string, text: string, scope: string, fixture: boolean
     const labels = e => [e.getAttribute('aria-label'), e.getAttribute('title'), e.getAttribute('data-tooltip'), e.getAttribute('data-tooltip-content'), e.textContent].filter(Boolean).join(' ').trim();
     const interrupted = ${CONTINUATION_BUTTON};
     const stateOfPage = () => {
+      if (chatgpt) {
+        if (${CHATGPT_GENERATING_SCRIPT}) return 'generating';
+        const buttons = Array.from(document.querySelectorAll('button')).filter(e => visible(e) && !e.closest('pre,code,[class*="CodeSurface-"],[data-user-message-bubble]'));
+        return buttons.some(interrupted) ? 'interrupted' : 'idle';
+      }
       const buttons = Array.from(document.querySelectorAll(selector)).filter(visible);
       if (buttons.some(e => e.getAttribute('data-testid') === 'stop-button' || /停止生成|停止回答|停止响应|stop generating|stop streaming|stop response|^stop$|^停止$/i.test(labels(e))) || Array.from(document.querySelectorAll('[aria-busy="true"],[data-is-streaming="true"]')).some(visible)) return 'generating';
       if (buttons.some(interrupted)) return 'interrupted';
       return 'idle';
     };
     const enabled = e => !e.disabled && e.getAttribute('aria-disabled') !== 'true' && !e.classList.contains('ds-button--disabled');
+    // 输入内的markdown装饰不是回复；真实消息标记无论位置均拒绝，输入正文仍逐字核验。
+    const containsReply = (area, input) => !!area.querySelector('.ds-message,[data-message-author-role],[data-talvt-turn-state],[data-markdown-text-style],[data-dil-message-id]')
+      || Array.from(area.querySelectorAll('[class*="markdown"]')).some(e => !input.contains(e));
     const controls = (waiting = false) => {
       const inputs = Array.from(document.querySelectorAll(chatgpt ? 'div.ProseMirror[contenteditable="true"][role="textbox"]' : 'textarea')).filter(visible);
       const sends = chatgpt ? Array.from(document.querySelectorAll(${JSON.stringify(CHATGPT_SEND_SELECTOR)})).filter(e => visible(e) && outside(e)) : Array.from(document.querySelectorAll('.ds-button.ds-button--primary.ds-button--filled.ds-button--circle')).filter(e => visible(e) && outside(e) && Array.from(e.querySelectorAll('svg path')).some(p => String(p.getAttribute('d') || '').replace(/\\s+/g, ' ').startsWith(${JSON.stringify(DEEPSEEK_SEND_ICON)})));
@@ -124,7 +132,7 @@ function sendScript(token: string, text: string, scope: string, fixture: boolean
       if (chatgpt) {
         const composer = input.closest('form');
         if (!composer || composer === document.body || composer === document.documentElement
-          || composer.querySelector('.ds-message,[class*="markdown"],[data-message-author-role],[data-talvt-turn-state],[data-markdown-text-style],[data-dil-message-id]') || (send && send.closest('form') !== composer)) return null;
+          || containsReply(composer, input) || (send && send.closest('form') !== composer)) return null;
         return { input, send: send || null, composer };
       }
       // 只接纳不含回复正文的局部共同容器；全页面共同祖先不能证明 composer 关联。
@@ -154,7 +162,7 @@ function sendScript(token: string, text: string, scope: string, fixture: boolean
       if (!chatgpt) return false;
       // 检查有界 composer 及相邻附件区；不读取文件名、草稿或回复正文。
       const area = composer.closest('form');
-      if (!area || area === document.body || area.querySelector('[data-message-author-role],.markdown,[data-talvt-turn-state],[data-markdown-text-style],[data-dil-message-id]')) return true;
+      if (!area || area === document.body || containsReply(area, input)) return true;
       return Array.from(area.querySelectorAll('img,video,audio,canvas,[data-testid*="attachment"],[data-testid*="file"],[data-testid*="upload"],[data-testid*="image"],button,[role="button"]')).filter(visible).some(e => /^(IMG|VIDEO|AUDIO|CANVAS)$/.test(e.tagName) || (!e.matches('button,[role="button"]') && /attachment|file|upload|image/i.test(e.getAttribute('data-testid') || '')) || /remove.*(file|attachment|image)|删除.*(文件|附件|图片)|移除.*(文件|附件|图片)/i.test([e.getAttribute('aria-label'), e.getAttribute('title')].filter(Boolean).join(' ')));
     };
     if (stateOfPage() !== 'idle') return { ok: false, error: '网页仍在生成或等待继续生成' };
@@ -172,8 +180,47 @@ function sendScript(token: string, text: string, scope: string, fixture: boolean
     const ownedText = () => {
       if (!chatgpt) return input.value;
       const blocks = Array.from(input.childNodes);
-      if (blocks.some(e => e.nodeType !== Node.ELEMENT_NODE || e.tagName !== 'P' || Array.from(e.childNodes).some(child => child.nodeType !== Node.TEXT_NODE && !(child.nodeType === Node.ELEMENT_NODE && child.tagName === 'BR' && e.childNodes.length === 1)))) return null;
-      return blocks.map(e => e.textContent).join('\\n');
+      const appearance = ['class', 'data-appearance', 'data-layout', 'data-font-weight', 'data-tone', 'data-underline-on-hover'];
+      const onlyAttributes = (node, names) => Array.from(node.attributes).every(attr => names.includes(attr.name));
+      const iconTree = node => {
+        if (node.nodeType === Node.TEXT_NODE) return node.textContent === '';
+        if (node.nodeType !== Node.ELEMENT_NODE) return false;
+        const names = node.tagName === 'SPAN' ? ['class', 'contenteditable']
+          : node.tagName === 'svg' ? ['width', 'height', 'viewBox', 'fill', 'xmlns', 'class']
+          : node.tagName === 'path' ? ['d', 'fill'] : null;
+        return names !== null && onlyAttributes(node, names)
+          && (!node.hasAttribute('contenteditable') || node.getAttribute('contenteditable') === 'false')
+          && Array.from(node.childNodes).every(iconTree);
+      };
+      // ProseMirror 可整理文本 span 和末尾占位 BR；只比较逐字正文，不 trim 草稿。
+      const read = (node, parent) => {
+        if (node.nodeType === Node.TEXT_NODE) return node.textContent;
+        if (node.nodeType !== Node.ELEMENT_NODE) return null;
+        if (node.tagName === 'BR') {
+          if (parent.childNodes.length === 1 || (node === parent.lastChild && node.classList.contains('ProseMirror-trailingBreak'))) return '';
+          return null;
+        }
+        // 官网在颜色和自动链接旁插入无文字装饰；仅跳过明确身份与受限结构，不接纳任意原子节点。
+        if (node.tagName === 'SPAN' && node.getAttribute('aria-hidden') === 'true' && node.getAttribute('contenteditable') === 'false') {
+          if (node.hasAttribute('data-hex-color-swatch') && node.childNodes.length === 0
+            && onlyAttributes(node, ['aria-hidden', 'class', 'contenteditable', 'data-hex-color-swatch', 'style'])) return '';
+          if (node.hasAttribute('data-inline-url-icon') && node.closest('span[data-rich-text-generated-autolink]')
+            && onlyAttributes(node, [...appearance, 'data-inline-url-icon', 'aria-hidden', 'contenteditable'])
+            && Array.from(node.childNodes).every(iconTree)) return '';
+        }
+        const autolink = node.tagName === 'SPAN' && node.hasAttribute('data-rich-text-generated-autolink')
+          && onlyAttributes(node, [...appearance, 'rich-link-source-app-id', 'data-breakable-url', 'text-link-href', 'data-rich-text-generated-autolink']);
+        if (node.tagName !== 'SPAN' || node.hasAttribute('contenteditable') || node.hasAttribute('role') || node.hasAttribute('hidden')
+          || (!autolink && Array.from(node.attributes).some(attr => attr.name.startsWith('data-'))) || getComputedStyle(node).display === 'none' || getComputedStyle(node).visibility === 'hidden') return null;
+        const pieces = Array.from(node.childNodes).map(child => read(child, node));
+        return pieces.some(piece => piece === null) ? null : pieces.join('');
+      };
+      const lines = blocks.map(block => {
+        if (block.nodeType !== Node.ELEMENT_NODE || block.tagName !== 'P') return null;
+        const pieces = Array.from(block.childNodes).map(child => read(child, block));
+        return pieces.some(piece => piece === null) ? null : pieces.join('');
+      });
+      return lines.some(line => line === null) ? null : lines.join('\\n');
     };
     const write = value => {
       if (chatgpt) {
@@ -183,18 +230,26 @@ function sendScript(token: string, text: string, scope: string, fixture: boolean
       } else { setter.call(input, value); input.dispatchEvent(new Event('input', { bubbles: true })); }
     };
     return new Promise(resolve => {
-      const state = { token, clicked: false, done: false, timer: null, cancel: null };
-      const owns = () => input.isConnected && ownedText() === payload;
+      const state = { token, clicked: false, done: false, takenOver: false, timer: null, cancel: null };
+      const owns = () => !state.takenOver && input.isConnected && ownedText() === payload;
       const clearOwned = () => {
         if (!state.clicked && owns()) write('');
       };
       const finish = result => {
         if (state.done) return;
         state.done = true; clearTimeout(state.timer);
+        if (chatgpt) editEvents.forEach(name => document.removeEventListener(name, takeOver, true));
         try { if (!result.ok && !state.clicked) clearOwned(); } catch { result = { ok: false, error: '未发送结果的清理失败，请检查网页输入框', uncertain: true }; }
         if (globalThis[key] === state) delete globalThis[key];
         resolve(result);
       };
+      const editEvents = ['beforeinput', 'input', 'paste', 'drop', 'compositionstart'];
+      const takeOver = event => {
+        if (state.clicked || state.done || !event.isTrusted || !(event.target === input || input.contains(event.target))) return;
+        state.takenOver = true;
+        finish({ ok: false, error: '用户正在编辑网页输入，自动发送暂停' });
+      };
+      if (chatgpt) editEvents.forEach(name => document.addEventListener(name, takeOver, true));
       state.cancel = () => finish({ ok: false, error: '自动发送已取消', ...(state.clicked ? { uncertain: true } : {}) });
       globalThis[key] = state;
       try { write(payload); }
@@ -223,7 +278,17 @@ function sendScript(token: string, text: string, scope: string, fixture: boolean
           if (Date.now() - clickedAt >= 3000) return finish({ ok: false, error: '发送后未确认网页接收，已停止且不会重试', uncertain: true });
         } else {
           const current = controls(true);
-          if (!current || current.input !== input || (send && current.send !== send) || (chatgpt && current.composer.closest('form') !== composer.closest('form'))) return finish({ ok: false, error: '网页发送控件已变化' });
+          // 已知按钮可被官网重绘；只在原输入与原FORM未变、旧按钮已断开时选取唯一新按钮。
+          // 自有正文、编辑接管、生成及附件仍在本次同步点击前完整复核。
+          if (chatgpt && send && !send.isConnected && current?.input === input && current.composer === composer && current.send) send = current.send;
+          const changed = !current ? '无法唯一确认输入框与发送按钮' : current.input !== input ? '输入框已替换'
+            : chatgpt && current.composer.closest('form') !== composer.closest('form') ? '输入区域已替换'
+            : send && current.send !== send ? '发送按钮已替换或消失' : '';
+          if (changed) return finish({ ok: false, error: '网页发送控件已变化：' + changed, controlState: {
+            inputConnected: input.isConnected, controlsKnown: !!current, sameInput: current?.input === input,
+            sameSend: current?.send === send, sameForm: current?.composer.closest('form') === composer.closest('form'),
+            ownTextKnown: ownedText() !== null, ownsText: owns()
+          } });
           if (!send && current.send) send = current.send;
           if (!owns()) return finish({ ok: false, error: '网页输入已被修改，自动发送暂停' });
           if (!editable() || stateOfPage() !== 'idle') return finish({ ok: false, error: '网页输入不可编辑或仍在生成' });
@@ -374,7 +439,8 @@ export class WebComposerSender {
       const result: unknown = await Promise.race([this.web.executeJavaScriptInIsolatedWorld(COMPOSER_SEND_WORLD, [{ code: sendScript(token, text, expectedSession, this.options.allowLocalFixture === true, this.kind === 'prompt', attachments, platform) }]), cancelled, bounded]);
       traceCollection('composer.send-result', { kind: this.kind, attachmentCount: attachments.length,
         ok: Boolean(result && typeof result === 'object' && 'ok' in result && result.ok === true),
-        error: result && typeof result === 'object' && 'error' in result ? String(result.error) : null });
+        error: result && typeof result === 'object' && 'error' in result ? String(result.error) : null,
+        controlState: result && typeof result === 'object' && 'controlState' in result ? result.controlState : undefined });
       if (result && typeof result === 'object' && 'ok' in result && result.ok === false && !('uncertain' in result) && attachments.length) {
         const cleaned = await this.web.executeJavaScriptInIsolatedWorld(COMPOSER_SEND_WORLD, [{ code: attachmentCleanupScript(token) }]).catch(() => false);
         if (cleaned !== true) return { ok: false, error: '发送未完成，官网附件清理状态未确认，请检查页面', uncertain: true };

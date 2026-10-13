@@ -161,6 +161,7 @@ export async function createToolIntegration(options: Options) {
   const selectionRevisions = new WeakMap<ToolSelection, number>();
   const toolAttachments = new ToolAttachments();
   let sender = options.sender ?? new WebResultSender(web);
+  let localPromptTransport: Promise<unknown> | undefined;
   let retainedCopy: { root: string | null; results: ToolState['results']; batchError?: ToolState['batchError'] } | null = null;
   const review = new ChangeReviewOwner(options.notifyReview);
   const reviewTokens = new WeakMap<ToolSelection, number>();
@@ -294,9 +295,14 @@ export async function createToolIntegration(options: Options) {
       : Promise.resolve({ ok: false, error: '当前网页平台不可发送工具结果' }),
     verify: async (_text, session, current, source) => {
       if (!webActive || disposed || !current()) return { ok: false, error: '当前网页平台不可发送工具结果' };
+      // 新输出可先执行；回传先等本地主动需求的运输结束，再核验当前批次。
+      // 前一需求失败由其调用方报告；这里只等待互斥释放，不推断成功。
+      if (localPromptTransport) await localPromptTransport.catch(error => traceCollection('integration.local-prompt-wait-error', { error: error instanceof Error ? error.message : String(error) }));
+      if (!webActive || disposed || !current()) return { ok: false, error: '本批发送已取消' };
       const reply = await readAutoReply(web, readOptions);
       if (!webActive || disposed || !current()) return { ok: false, error: '本批发送已取消' };
-      if (reply.url !== session || reply.completion !== 'complete') return { ok: false, error: '网页回复状态或会话已变化，请在官网处理' };
+      if (reply.url !== session) return { ok: false, error: '网页会话已变化，未发送旧工具结果' };
+      if (reply.completion !== 'complete') return { ok: false, error: reply.completion === 'generating' ? '网页仍在生成，未发送工具结果' : reply.completion === 'interrupted' ? '网页生成已中断，未发送工具结果' : '无法确认网页回复结束，未发送工具结果' };
       const parsed = parseToolBatch(reply.text);
       if (source.kind === 'diagnostic') {
         if (parsed.kind !== 'error' || reply.text !== source.diagnostic.sourceText || parsed.error !== source.diagnostic.error.error)
@@ -411,9 +417,13 @@ export async function createToolIntegration(options: Options) {
       // 首页首发的地址分配先于正文挂载且生成控件无可读标签；发送前打短期标记，watcher 交接时据此保留新轮基线，失败退回既有判据。
       try { await watcher.markLocalSubmit(); } catch (error) { traceCollection('integration.local-submit-mark-error', { error: error instanceof Error ? error.message : String(error) }); /* 页面忙时由既有回复/生成判据兜底 */ }
       if (!current()) return { ok: false, error: '网页平台或发送选项已变化，需求未发送' };
-      const result = await sender.send(text, session, 'prompt', current, attachments);
-      traceCollection('integration.local-prompt-result', { session: traceScope(session), ok: result.ok, error: result.ok ? null : result.error ?? null });
-      return result;
+      const transport = sender.send(text, session, 'prompt', current, attachments);
+      localPromptTransport = transport;
+      try {
+        const result = await transport;
+        traceCollection('integration.local-prompt-result', { session: traceScope(session), ok: result.ok, error: result.ok ? null : result.error ?? null });
+        return result;
+      } finally { if (localPromptTransport === transport) localPromptTransport = undefined; }
     },
     invalidate: (relative: string, isDirectory: boolean) => { changes.invalidate(relative, isDirectory); publish(harness.getState()); },
     getReviewState: () => { harness.getState(); return review.getState(); },

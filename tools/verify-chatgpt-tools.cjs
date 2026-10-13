@@ -1,4 +1,20 @@
 /** 离线原生闭环：本地模拟页面，不连接 ChatGPT、不代表官网验收。 */
+// 父进程等原生fixture退出后再清理profile，避免Windows数据库文件仍被Electron持有。
+if (!process.versions.electron) {
+ const { spawnSync } = require('node:child_process');
+ const disk = require('node:fs'), paths = require('node:path'), os = require('node:os');
+ const directory = disk.mkdtempSync(paths.join(os.tmpdir(), 'mini-gpt-loop-'));
+ const env = { ...process.env, MINI_CHATGPT_TOOL_FIXTURE_DIR: directory }; delete env.ELECTRON_RUN_AS_NODE;
+ const run = spawnSync(require('electron'), [__filename], { cwd: paths.resolve(__dirname, '..'), env, windowsHide: true, encoding: 'utf8', timeout: 60000 });
+ if (run.stdout) process.stdout.write(run.stdout); if (run.stderr) process.stderr.write(run.stderr);
+ let code = run.status ?? 1;
+ if (run.error) console.error(run.error.message);
+ try {
+   if (paths.dirname(paths.resolve(directory)) !== paths.resolve(os.tmpdir())) throw Error('Invalid fixture cleanup path');
+   disk.rmSync(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+ } catch (error) { console.error(error); code = 1; }
+ process.exit(code);
+}
 require('tsx/cjs');
 const { app, BrowserWindow, session } = require('electron');
 const fs = require('node:fs/promises');
@@ -11,8 +27,10 @@ const { FileService } = require('../src/main/fileService.ts');
 const { ReturnPathService } = require('../src/main/returnPathService.ts');
 const { CHANNELS } = require('../src/shared/contract.ts');
 const { readAutoReply } = require('../src/main/tools/replyObservation.ts');
-const temporary = require('node:fs').mkdtempSync(path.join(os.tmpdir(), 'mini-gpt-loop-'));
+const temporary = process.env.MINI_CHATGPT_TOOL_FIXTURE_DIR || require('node:fs').mkdtempSync(path.join(os.tmpdir(), 'mini-gpt-loop-'));
 app.setPath('userData', path.join(temporary, 'profile'));
+// 显式finally完成清理后退出，窗口销毁不能抢先以0掩盖失败。
+app.on('window-all-closed', () => {});
 const html = `<!doctype html><meta charset="utf-8"><style>[data-dil-message-id]{min-height:40px}.ProseMirror{min-height:50px}button{min-height:20px}</style>
 <main id="turns"></main><form data-chatgpt-composer><div><div class="ProseMirror" role="textbox" contenteditable="true"><p><br></p></div><button type="submit" aria-label="发送" disabled>Send</button></div></form>
 <script>
@@ -25,7 +43,7 @@ window.appendReply=(id,tool,args,complete=true)=>{
  const assistant=document.createElement('div');assistant.dataset.chatgptSearchUnitKey='message';
  const heading=document.createElement('h4');heading.dataset.conversationRole='assistant';assistant.append(heading);
  const markdown=document.createElement('div');markdown.dataset.markdownTextStyle='';
- const reply=document.createElement('div');reply.className='DilRenderer-fixture DilResponseRoot-fixture';reply.dataset.dilMessageId=id;
+ const reply=document.createElement('div');reply.className='ExistingConversationAnswer-fixture';reply.dataset.dilMessageId=id;
  const surface=document.createElement('div');surface.className='CodeSurface-fixture';surface.dataset.markdownCopy='';
  const toolbar=document.createElement('div');toolbar.className='StickyActionBar-fixture';toolbar.dataset.markdownCopy='';
  const language=document.createElement('div');language.textContent='mini-ai-tools';toolbar.append(language);
@@ -56,7 +74,7 @@ async function until(read, label) { const end = Date.now()+12000; while(!await r
 app.whenReady().then(async()=>{
  const offline=session.fromPartition('chatgpt-tools-offline');
  await offline.protocol.handle('https', request => request.url.startsWith('https://chatgpt.com/') ? new Response(html,{headers:{'content-type':'text/html; charset=utf-8'}}) : new Response('',{status:403}));
- window=new BrowserWindow({show:false,webPreferences:{session:offline,sandbox:true,contextIsolation:true,nodeIntegration:false}});
+ window=new BrowserWindow({show:false,webPreferences:{session:offline,sandbox:true,contextIsolation:true,nodeIntegration:false,backgroundThrottling:false}});
  await window.loadURL('https://chatgpt.com/c/offline');
  const run=code=>window.webContents.executeJavaScript(code);
  await run("appendReply('history','get_project_info',{})");
@@ -107,7 +125,7 @@ app.whenReady().then(async()=>{
  console.log('ChatGPT 原生离线闭环：历史不执行、两轮真实工具、复制回传一致、重复不回传、无网页桥及首页编码占位交接，7 项通过；官网验收仍待实际对话。');
 }).catch(async error=>{
  console.error(error.stack||error);
- if(system) {const s=system.getState();console.error(JSON.stringify({message:s.message,busy:s.busy,resultStatuses:s.results.map(r=>r.status),return:s.resultReturn?.phase,continuation:s.continuation?.phase}));}
+ if(system) {const s=system.getState();console.error(JSON.stringify({message:s.message,busy:s.busy,resultStatuses:s.results.map(r=>r.status),return:s.resultReturn?.phase,returnMessage:s.resultReturn?.message,continuation:s.continuation?.phase,continuationMessage:s.continuation?.message}));}
  if(window&&!window.isDestroyed()) {
   const snapshot=await readAutoReply(window.webContents).catch(()=>null);
   console.error(JSON.stringify({completion:snapshot?.completion,source:snapshot?.source,length:snapshot?.text.length}));
@@ -117,5 +135,6 @@ app.whenReady().then(async()=>{
  if(system)await system.dispose();else if(sender)await sender.dispose();
  if(window&&!window.isDestroyed())window.destroy();
  assert.equal(path.dirname(path.resolve(temporary)),path.resolve(os.tmpdir()));
- await fs.rm(temporary,{recursive:true,force:true});app.exit(process.exitCode||0);
+ // 父进程等Electron退出后清理自有profile，直接Electron调用保留临时数据。
+ app.exit(process.exitCode||0);
 });

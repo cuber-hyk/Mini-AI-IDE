@@ -4,6 +4,68 @@ import * as vm from 'node:vm';
 import { createReplySourceTracker } from '../src/main/tools/replySource';
 
 const reply = (textContent: string) => ({ textContent });
+const bodyText = new WeakMap<object, string>();
+const bodyReply = (body: string, control = '复制') => {
+  const node = reply(body + control); bodyText.set(node, body); return node;
+};
+const readBody = (node: object) => bodyText.get(node) ?? '';
+
+it('正式正文不变时控件文案改变不撤销已封存的新输出资格', () => {
+  const tail = bodyReply('baseline'), next = bodyReply('new tools');
+  const raw = createReplySourceTracker([tail]);
+  const tracker = createReplySourceTracker([tail], 'body', readBody);
+  raw.observe([tail, next]); raw.seal(next);
+  tracker.observe([tail, next]); tracker.seal(next);
+  const accepted = tracker.key(next);
+  next.textContent = 'new toolscopy';
+  raw.observe([tail, next]); tracker.observe([tail, next]);
+  assert.equal(raw.source(next), 'unknown', '整节点文案指纹会误判无关控件变化');
+  assert.equal(tracker.source(next), 'new');
+  assert.equal(tracker.key(next), accepted, '正文、节点和作用域均未改变');
+  tracker.seal(next, accepted);
+  assert.equal(tracker.source(next), 'new');
+});
+
+it('正文读取器不允许已封存节点在无生成见证时替换真正的工具正文', () => {
+  const tail = bodyReply('baseline'), next = bodyReply('new tools');
+  const tracker = createReplySourceTracker([tail], 'body', readBody);
+  tracker.observe([tail, next]); tracker.seal(next);
+  bodyText.set(next, 'unseen historical tools');
+  tracker.observe([tail, next]);
+  assert.equal(tracker.source(next), 'unknown');
+});
+
+it('历史正式正文覆盖新节点仍是历史，不受控件文案差异影响', () => {
+  const tail = bodyReply('old tools'), next = bodyReply('new tools');
+  const tracker = createReplySourceTracker([tail], 'body', readBody);
+  tracker.observe([tail, next]); tracker.seal(next);
+  bodyText.set(next, 'old tools'); next.textContent = 'old toolscopy';
+  tracker.observe([tail, next]);
+  assert.equal(tracker.source(next), 'history');
+});
+
+it('正文读取器不能把同正文重挂载或未知整段替换授予新输出身份', () => {
+  const tail = bodyReply('baseline'), next = bodyReply('new tools');
+  const tracker = createReplySourceTracker([tail], 'body', readBody);
+  tracker.observe([tail, next]); tracker.seal(next);
+  const remounted = bodyReply('new tools', 'copy');
+  tracker.observe([tail, remounted]);
+  assert.equal(tracker.source(remounted), 'history');
+  const unknown = bodyReply('unseen tools');
+  assert.equal(tracker.source(unknown), 'unknown');
+  tracker.observe([unknown]);
+  assert.notEqual(tracker.source(unknown), 'new');
+});
+
+it('正文读取器参数可与来源跟踪一起注入隔离世界，不依赖宿主闭包', () => {
+  const tracker = vm.runInNewContext(`(${createReplySourceTracker.toString()})([], 'body', node => node.body)`);
+  const first = { body: 'first tools', textContent: 'first tools复制' };
+  tracker.observe([first]); tracker.seal(first);
+  const accepted = tracker.key(first);
+  first.textContent = 'first toolscopy'; tracker.observe([first]);
+  assert.equal(tracker.source(first), 'new');
+  assert.equal(tracker.key(first), accepted);
+});
 
 it('开启时全部消息都是历史；向上滚动露出未执行的旧批次不能成为新输出', () => {
   const old = reply('unexecuted dangerous tools'), tail = reply('conversation finished');

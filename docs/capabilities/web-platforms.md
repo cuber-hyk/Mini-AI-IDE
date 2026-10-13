@@ -1,7 +1,7 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-12
+updated: 2026-10-13
 owner: 胡运宽
 source_of_truth: [src/main/firstPromptSession.ts, src/main/tools/replyChangeWatcher.ts, test/chatgptReply.test.ts, test/replyChangeWatcher.test.ts, src/main/tools/replySource.ts, test/replySource.test.ts, src/shared/webPlatform.ts, src/main/webPlatformController.ts, src/main/webPlatformView.ts, src/main/index.ts, src/main/tools/integration.ts, src/main/localPromptController.ts, src/main/workspaceLayoutController.ts, src/renderer/webbar.js, src/renderer/promptComposer.js, src/renderer/toolHarness.js, test/webPlatformController.test.ts, test/toolPlatformActivity.test.ts, test/webPlatformUi.test.ts, src/main/chatgptPage.ts, src/shared/webConversation.ts, src/main/webComposerSender.ts, test/chatgptToolIntegration.test.ts, tools/verify-chatgpt-composer.cjs, tools/verify-chatgpt-tools.cjs, tools/verify-web-platform.cjs, docs/adr/2026-10-11-web-platform-switching.md]
 ---
@@ -27,8 +27,22 @@ ChatGPT 首页首发可经过 `/c/local-chatgpt%3A<UUID>` 编码占位地址，�
 
 验证入口：`pnpm run build`、`pnpm exec electron tools/verify-web-platform.cjs`（仅离线本地夹具，拦截公网请求）、相关 test 与应用 self-test。真实官网登录、对话和重启保持由用户手动验证，不能凭页面 loaded 事件推断。完整 IDE 隔离验收可运行 `pnpm exec electron tools/chatgpt-ide-preview.cjs`，其固定独立 userData 不共享安装版登录资料。
 
-ChatGPT 只读规则由 `chatgptPage.ts` 提供：以最新 `data-talvt-turn-state` 轮次及明确 assistant 角色标记定位唯一正式 DilResponseRoot，要求该轮状态为 complete 且正文外有本轮唯一复制页脚；用户消息容器内的操作栏不能计入完成证据，后续用户轮、思考、生成、中断及歧义均不能回退采历史。CodeSurface 中的唯一 CodeContent 保留原始文本，语言仅取对应 StickyActionBar 的明确局部标签。变化监听涵盖这些轮次、角色、正文及页脚节点与状态属性。
+ChatGPT 只读规则由 `chatgptPage.ts` 提供：以最新 `data-talvt-turn-state` 轮次及明确 assistant 角色标记定位唯一带 data-dil-message-id 的正式正文，要求该轮状态为 complete 且正文外有本轮唯一复制页脚；用户消息容器内的操作栏不能计入完成证据，后续用户轮、思考、生成、中断及歧义均不能回退采历史。CodeSurface 中的唯一 CodeContent 保留原始文本，语言仅取对应 StickyActionBar 的明确局部标签。变化监听涵盖这些轮次、角色、正文及页脚节点与状态属性。
 
 `webComposerSender.ts` 仍是唯一网页 DOM 写入 owner，分别验证平台官方 origin、普通会话、唯一可编辑 composer 和局部发送控件；ChatGPT 统一以最近且不含回复的 FORM 关联 ProseMirror 与唯一 type=submit/发送控件，空 composer 的语音控件只用于确认输入区，填入后等待真正发送控件出现。发送只接纳用户主动需求或当前批真实结果，已有草稿/附件、生成中、未知控件、不确定回执均暂停，点击后不重试。
 
 真实 ChatGPT 页面只读结构核验与离线夹具是不同证据。原生结构诊断已核验 ProseMirror/FORM、submit/发送、DilResponseRoot、轮次完成标记、局部复制页脚及代码语言标题；官网输入事件接收和连续闭环以真实对话验收为准，离线测试不能替代该证据，也不能证明重启登录保持。登录保持由用户推迟验证。预览模式可开启 MINI_CHATGPT_STRUCTURE_TRACE，按 `tools/chatgpt-page-structure.cjs` 输出不含正文、草稿、凭据或会话 ID 的结构快照；不向官网提供桥。网页能力依赖平台当前 DOM，技术实现也不代表平台授权程序化提取输出。
+
+ChatGPT 的生成见证由 chatgptPage 的 CHATGPT_GENERATING_SCRIPT 单一提供给完成核验、变化监听和发送运输：仅识别当前正式回复/代码/思考及已知停止控件，忽略推荐区、侧栏、附件和旧轮次的 busy；推荐提示词不是完成条件，仍要求本轮 complete 与唯一正式复制页脚。来源指纹使用 CHATGPT_SOURCE_TEXT_READER 保留语言标签和正文，排除按钮等非正文显示；历史、未知节点重挂载及封存后正文改变仍无自动执行资格。
+
+自有 ChatGPT 输入允许段落中原文逐字相同的文本/span，以及空段落或带 ProseMirror-trailingBreak 的末尾占位 BR。带明确自动链接标记的span须通过属性白名单并递归读取原文字，不读取或跟随链接地址；已知颜色色块须为空SPAN且aria-hidden=true、contenteditable=false，已知自动链接图标须属于自动链接span、具同样隐藏/不可编辑标记且子树仅含无文字的受限SPAN/svg/path，才可作为零正文装饰忽略。未知属性、任意原子节点或SVG、非空装饰、未知换行和正文变化仍拒绝，不trim或使用任意innerText。真实 beforeinput/input/paste/drop/compositionstart 接管使本次正文失去发送和取消清理资格，即使当时字节未变；合成事件不冒充用户接管。已有草稿、附件、会话或控件变化及点击后未知运输仍暂停，不重试。
+
+2026-10-12 用户在新版开发 IDE 的 ChatGPT 普通新会话完成三轮只读工具全程自动采集、执行与回传验收，无手动恢复；该实际闭环反馈与离线 DOM 夹具结果分别记录。
+
+ChatGPT 正文根以 div[data-dil-message-id] 的消息语义属性定位，不依赖 DilResponseRoot 样式类；仍须属于最新轮次的唯一 assistant owner/markdown 区域，并排除用户和思考内容。多个候选、缺角色或归属不明确时拒绝采集；类名变化不使既有会话失去能力，也不授予初始化历史自动执行资格。
+
+本地主动需求的运输确认尚未结束时，新完成工具输出仍可独立采集并执行。integration 的结果发送前复核先等待该需求运输释放，再重新检查活动平台、取消状态、会话、最新回复和当前批次；等待不代表前需求已成功，不重试发送，取消后重新开启 automatic 也不补发旧批。
+
+ChatGPT 点击前发送按钮重绘时，仅在旧按钮已断开、原输入框及原FORM不变、当前按钮为唯一已知发送控件时重新选择。点击前仍逐字核验自有结果、编辑接管、会话、生成和附件；原输入重挂载、未知或歧义按钮继续暂停，点击后不重新选择或重试。控件变化提示区分唯一性、输入框、FORM与按钮身份，开启collection trace时补充不含正文的布尔结构诊断。
+
+ChatGPT控件和附件区域核验共用FORM回复判据：原输入框内的inline-markdown等文本span样式不作为回复混入，正文仍须满足原有允许节点和逐字一致检查；真实角色、轮次及正式正文标记无论位置均拒绝，输入框外的markdown样式区域同样拒绝。官网整理自有输入的样式不会单独撤回发送资格，真实编辑接管继续优先。

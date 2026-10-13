@@ -112,3 +112,29 @@ it('网页最新回复被改为同 ID 不同参数时不发送旧结果，项目
   await f.system.accept(fresh, 'complete'); await until(() => f.system.getState().continuation?.phase === 'countdown');
   f.switchSession(); await until(() => f.system.getState().results.length === 0); await delay(30); assert.equal(f.sent.length, 0);
 });
+
+it('发送前复核区分真实生成、中断与未知完成，拒绝原因不混称会话变化', async t => {
+  for (const [phase, reason] of [['generating','网页仍在生成'],['interrupted','网页生成已中断'],['unknown','无法确认网页回复结束']]) {
+    const f = await fixture(t); await f.call(CHANNELS.setToolConfig, { permission: 'full', automatic: true, sendIntervalSeconds: 0 });
+    const body = batch('verify-'+phase, 'get_project_info', {}); f.setReply(body, phase); await f.system.accept(body, 'complete');
+    await until(() => f.system.getState().continuation?.phase === 'paused');
+    assert.equal(f.sent.length, 0); assert.ok(f.system.getState().continuation?.message.includes(reason!));
+  }
+});
+
+it('本地需求确认未结束时新工具照常执行，结果等待运输释放且取消不会补发', async t => {
+  for (const cancelled of [false, true]) {
+    const f=await fixture(t);await f.call(CHANNELS.setToolConfig,{permission:'full',automatic:true,sendIntervalSeconds:0});
+    let finish!:(value:{ok:boolean})=>void;
+    f.setAction(async()=>f.sent.length===1?new Promise(resolve=>{finish=resolve;}):{ok:true});
+    const prompting=f.system.sendLocalPrompt('只读需求','https://chat.deepseek.com/a/chat/continue',()=>true);
+    await until(()=>f.sent.length===1);
+    const body=batch('prompt-confirm-'+cancelled,'get_project_info',{});f.setReply(body);await f.system.accept(body,'complete');
+    await until(()=>!f.system.getState().busy&&f.system.getState().results[0]?.status==='done');
+    await delay(30);assert.equal(f.sent.length,1,'工具已执行，但前一个运输未结束时不能尝试回传');
+    if(cancelled){await f.call(CHANNELS.setToolConfig,{automatic:false});await f.call(CHANNELS.setToolConfig,{automatic:true});}
+    finish({ok:true});await prompting;
+    if(cancelled){await delay(40);assert.equal(f.sent.length,1,'关闭再开启不能复活等待运输的旧批');}
+    else {await until(()=>f.sent.length===2);assert.equal(JSON.parse(f.sent[1]!).tool_results[0].batch_id,'prompt-confirm-false');}
+  }
+});

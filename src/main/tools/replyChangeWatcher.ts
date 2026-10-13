@@ -8,7 +8,7 @@ import { CONTINUATION_BUTTON } from './replyContinuation';
 import { traceCollection, traceScope } from './collectionTrace';
 import { webPlatformOf } from '../../shared/webConversation';
 import type { WebPlatform } from '../../shared/webPlatform';
-import { CHATGPT_REPLY_NODES, CHATGPT_SEND_SELECTOR, CHATGPT_REPLY_SELECTOR, CHATGPT_TURN_SELECTOR } from '../chatgptPage';
+import { CHATGPT_REPLY_NODES, CHATGPT_SEND_SELECTOR, CHATGPT_REPLY_SELECTOR, CHATGPT_TURN_SELECTOR, CHATGPT_CODE_SURFACE_SELECTOR, CHATGPT_GENERATING_SCRIPT, CHATGPT_SOURCE_TEXT_READER } from '../chatgptPage';
 import { createReplySourceTracker } from './replySource';
 
 export const REPLY_WATCH_WORLD = 1004;
@@ -46,7 +46,7 @@ export function replyWatchScript(action: 'install' | 'wait' | 'stop' | 'navigati
     previous.handoffCancelled = false;
     clearTimeout(previous.history?.timer);
     previous.history = preserve ? null : { reply, generating: previous.generating(), ready: false, timer: null };
-    if (!preserve) previous.sources = previous.createSources(previous.sourceNodes(), token + ':' + (++previous.sourceEpoch));
+    if (!preserve) previous.sources = previous.createSources(previous.sourceNodes(), token + ':' + (++previous.sourceEpoch), previous.readSourceText);
     previous.sourceHistory = false; previous.sourceGeneratingReply = null;
     previous.dirty = false; previous.historyReady = false; previous.generated = false; clearTimeout(previous.timer); previous.timer = null;
     previous.lastAction = 'none';
@@ -78,19 +78,20 @@ export function replyWatchScript(action: 'install' | 'wait' | 'stop' | 'navigati
     const page = new URL(location.href);
     const state = { token, scope: (page.protocol === 'file:' ? 'null' : page.origin) + page.pathname, replyNodes, initialReplies: replyNodes(), generating: null, history: null, historyReady: false, generated: false, turn: 0, dirty: false, waiter: null, timer: null, observer: null, dispose: null, submitAt: 0, handoffCancelled: false, lastAction: 'none', stopWasIdle: false };
     state.sourceEpoch = 0;
-    state.createSources = createSources; state.sourceNodes = sourceNodes; state.sources = createSources(sourceNodes(), token + ':' + state.sourceEpoch);
+    state.readSourceText = ${platform === 'chatgpt' ? CHATGPT_SOURCE_TEXT_READER : 'undefined'};
+    state.createSources = createSources; state.sourceNodes = sourceNodes; state.sources = createSources(sourceNodes(), token + ':' + state.sourceEpoch, state.readSourceText);
     state.sourceHistory = false; state.sourceGeneratingReply = null;
     state.updateSources = () => {
       const latest = state.replyNodes().at(-1);
       state.sources.observe(state.sourceNodes(), state.sourceHistory, !!latest && state.sourceGeneratingReply === latest);
       state.sourceHistory = false; state.sourceGeneratingReply = null;
     };
-    state.generating = () => {
+    state.generating = ${platform === 'chatgpt' ? `() => ${CHATGPT_GENERATING_SCRIPT}` : `() => {
       const visible = element => !!element && element.getClientRects().length > 0;
       if (Array.from(document.querySelectorAll('[aria-busy="true"],[data-is-streaming="true"]')).some(visible)) return true;
       return Array.from(document.querySelectorAll('button,[role="button"],.ds-button,.ds-icon-button')).some(element => visible(element)
         && (element.getAttribute('data-testid') === 'stop-button' || /停止生成|停止回答|停止响应|停止流式传输|stop generating|stop streaming|stop response|^stop$|^停止$/i.test([element.getAttribute('aria-label'), element.getAttribute('title'), element.getAttribute('data-tooltip'), element.getAttribute('data-tooltip-content'), element.getAttribute('data-icon'), element.textContent].filter(Boolean).join(' ').trim())));
-    };
+    }`};
     const awaitingHistory = !state.initialReplies.length && page.protocol !== 'file:' && page.pathname !== '/';
     if (awaitingHistory) state.history = { reply: null, generating: state.generating(), ready: false, timer: null };
     const enabled = element => element && !element.disabled && element.getAttribute('aria-disabled') !== 'true' && !element.classList.contains('ds-button--disabled');
@@ -108,7 +109,7 @@ export function replyWatchScript(action: 'install' | 'wait' | 'stop' | 'navigati
       const sends = form ? Array.from(form.querySelectorAll(${JSON.stringify(CHATGPT_SEND_SELECTOR)})) : [];
       const sendControl = sends.length === 1 && enabled(sends[0]) ? sends[0] : null;
       const send = event.type === 'click' && button === sendControl && !!sendControl;
-      const stop = event.type === 'click' && enabled(button) && (button.getAttribute('data-testid') === 'stop-button' || /^(stop|停止|stop generating|stop streaming|停止生成|停止回答|停止流式传输)$/i.test(String(button.getAttribute('aria-label') || '').trim()));
+      const stop = event.type === 'click' && enabled(button) && !button.closest(${JSON.stringify(CHATGPT_CODE_SURFACE_SELECTOR + ',' + CHATGPT_REPLY_SELECTOR + ',[data-user-message-bubble],[class~="group/user-message"]')}) && (button.getAttribute('data-testid') === 'stop-button' || /^(stop|停止|stop generating|stop streaming|停止生成|停止回答|停止流式传输)$/i.test(String(button.getAttribute('aria-label') || '').trim()));
       const regenerate = false;
       const resume = false;
       const enter = event.type === 'keydown' && event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey && !event.isComposing && !event.defaultPrevented && event.target === composer && !!sendControl;
