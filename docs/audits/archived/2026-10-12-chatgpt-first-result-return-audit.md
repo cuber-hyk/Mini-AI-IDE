@@ -1,6 +1,6 @@
 ---
 artifact_type: audit
-status: active
+status: archived
 created: 2026-10-12
 updated: 2026-10-13
 scope: "ChatGPT 首批回传状态复核暂停，以及用户无操作时自有输入检查暂停"
@@ -8,6 +8,10 @@ source_of_truth: [src/main/tools/integration.ts, src/main/tools/resultReturn.ts,
 ---
 
 # ChatGPT 采集与回传误暂停诊断
+
+## 结案与归档（2026-10-13）
+
+用户明确要求收尾本报告，只保留性能探索为活跃审计。CGR-001 至 CGR-004、CGR-006 至 CGR-011 的已知机制已由对应回归和官网验收闭合；CGR-005 剩余早期未知现场停止追查，以 wont_fix 关闭调查。下文各轮 active、待验和未提交文字保留为历史证据；不代表现在仍有待办，也不宣称所有未知时序或双答案比较界面均已验证。
 
 ## 原始核查范围（历史阶段）
 
@@ -24,8 +28,8 @@ source_of_truth: [src/main/tools/integration.ts, src/main/tools/resultReturn.ts,
 
 | ID | Severity | Status | Finding | Evidence | Owner Plan | Branch/Commit | Verification | Closeout |
 |---|---|---|---|---|---|---|---|---|
-| CGR-001 | P2 | resolved | 发送前复核混称会话变化与未完成状态，无法从提示确定暂停原因 | 旧 integration.ts:299 合并守卫；当前分别返回会话/生成/中断/未知结束 | docs/plans/archived/2026-10-12-chatgpt-collection-composer-pause.md | codex/chatgpt-auto-collection-pause / 未提交 | 三种完成复核反例均拒发送并返回准确原因；旧结果不重发 | fixed：区分诊断；原截图具体触发结构不冒称已取得 |
-| CGR-002 | P2 | resolved | ChatGPT 同文编辑器整理触发自有输入失效 | 旧 ownedText 拒 span/末尾 BR；新限 P/文本/span/明确 trailingBreak，原文逐字比对 | docs/plans/archived/2026-10-12-chatgpt-collection-composer-pause.md | codex/chatgpt-auto-collection-pause / 未提交 | 原生同文整理发送与取消通过；真改文、未知节点、接管反例仍暂停不清草稿 | fixed：已修复确定机制；官网实际变形仍由用户验收核对 |
+| CGR-001 | P2 | verified | 发送前复核混称会话变化与未完成状态，无法从提示确定暂停原因 | 旧 integration.ts:299 合并守卫；当前分别返回会话/生成/中断/未知结束 | docs/plans/archived/2026-10-12-chatgpt-collection-composer-pause.md | master / v0.3.0（c841515） | 三种完成复核反例均拒发送并返回准确原因；旧结果不重发 | fixed：区分诊断；原截图具体触发结构不冒称已取得 |
+| CGR-002 | P2 | verified | ChatGPT 同文编辑器整理触发自有输入失效 | 旧 ownedText 拒 span/末尾 BR；新限 P/文本/span/明确 trailingBreak，原文逐字比对 | docs/plans/archived/2026-10-12-chatgpt-collection-composer-pause.md | master / v0.3.0（c841515） | 原生同文整理发送与取消通过；真改文、未知节点、接管反例仍暂停不清草稿 | fixed：已修复确定机制；官网实际变形仍由用户验收核对 |
 
 ## ADR Gate
 
@@ -36,7 +40,7 @@ source_of_truth: [src/main/tools/integration.ts, src/main/tools/resultReturn.ts,
 
 - Commands run: git status/log；读取相关 owner 与文档；检查前台进程和现有诊断日志来源。
 - 内存验证：发送器的 WebContents 被 mock，仅捕获序列化脚本，世界 1005 不注入实际页面；执行其中 ownedText 函数。三组正文同为 unchanged text；plain ownershipAccepted=true，inline-span/trailing-break=false。复现脚本存临时目录 mini-chatgpt-owned-text-probe.cjs，不加入产品构建。
-- Not verified: 当前暂停时的 URL 是否一致、具体 completion、生成/复制页脚控件；第二次官网实际 DOM 和程序填入前后正文是否字节相等。不能断言本次实际发生了 span/BR 整理，不能用仅 trim/任意 innerText 比对替换草稿保护。
+- 历史验证范围限制（不再作为待办）: 当前暂停时的 URL 是否一致、具体 completion、生成/复制页脚控件；第二次官网实际 DOM 和程序填入前后正文是否字节相等。不能断言本次实际发生了 span/BR 整理，不能用仅 trim/任意 innerText 比对替换草稿保护。
 
 ## Git Visibility
 
@@ -52,9 +56,9 @@ source_of_truth: [src/main/tools/integration.ts, src/main/tools/resultReturn.ts,
 
 | ID | Severity | Status | Finding | Evidence | Owner Plan | Branch/Commit | Verification | Closeout |
 |---|---|---|---|---|---|---|---|---|
-| CGR-003 | P2 | resolved | 全页 busy 把推荐区/侧栏加载误认为 AI 生成，影响完成/监听/发送和点击后确认 | 旧生产脚本中给完整回复外加 aria-busy 推荐区域即 complete→generating | docs/plans/archived/2026-10-12-chatgpt-collection-composer-pause.md | codex/chatgpt-auto-collection-pause / 未提交 | 新生成范围反例及原生发送反例通过 | fixed：统一当前正式回复生成见证；官网实际是否用该 busy 属性待确认 |
-| CGR-004 | P2 | resolved | seal 后代码复制按钮文案变化污染整个 textContent 指纹，正式工具文本不变却 new→unknown | 现有 fixture 中复制→copy，采集文本不变，旧来源失效 | docs/plans/archived/2026-10-12-chatgpt-collection-composer-pause.md | codex/chatgpt-auto-collection-pause / 未提交 | 接线和来源回归证明控件改文案 key 稳定；真实正文变化、旧历史和未知重挂载仍拒绝 | fixed：ChatGPT 来源只读正文 reader；不开放任意 sealed 节点变化 |
-| CGR-005 | P2 | open | 手动采集为空、实际回复节点重挂载及取消未确认的具体现场仍未定位 | 截图“未采集到回复”、无操作却暂停；缺该瞬间 DOM/时序 | docs/plans/archived/2026-10-12-chatgpt-collection-composer-pause.md | codex/chatgpt-auto-collection-pause / 未提交 | 不以 busy 修复解释 collect 脚本返回空；节点重挂载守卫保持 | 待新版真实官网验收与失败时结构证据，不放宽唯一最新回复或点击后不重试 |
+| CGR-003 | P2 | verified | 全页 busy 把推荐区/侧栏加载误认为 AI 生成，影响完成/监听/发送和点击后确认 | 旧生产脚本中给完整回复外加 aria-busy 推荐区域即 complete→generating | docs/plans/archived/2026-10-12-chatgpt-collection-composer-pause.md | master / v0.3.0（c841515） | 新生成范围反例及原生发送反例通过 | fixed：统一当前正式回复生成见证；官网实际是否用该 busy 属性待确认 |
+| CGR-004 | P2 | verified | seal 后代码复制按钮文案变化污染整个 textContent 指纹，正式工具文本不变却 new→unknown | 现有 fixture 中复制→copy，采集文本不变，旧来源失效 | docs/plans/archived/2026-10-12-chatgpt-collection-composer-pause.md | master / v0.3.0（c841515） | 接线和来源回归证明控件改文案 key 稳定；真实正文变化、旧历史和未知重挂载仍拒绝 | fixed：ChatGPT 来源只读正文 reader；不开放任意 sealed 节点变化 |
+| CGR-005 | P2 | resolved | 手动采集为空、实际回复节点重挂载及取消未确认的具体现场仍未定位 | 截图“未采集到回复”、无操作却暂停；缺该瞬间 DOM/时序 | 用户批准结束旧现场追查，无后续计划 | codex/chatgpt-auto-collection-pause / 未提交 | 不以 busy 修复解释 collect 脚本返回空；节点重挂载守卫保持；2026-10-13用户要求收尾归档 | wont_fix：停止追查缺少原始证据的旧现场，保留归因边界；不认定已修复 |
 
 CGR-001 的复核错误已区分会话变化、generating、interrupted 和未知结束；CGR-002 的同文 span/明确末尾占位 BR 已修复，未知结构保留，真实编辑优先停止。当前不宣称六张截图所有现场均已修复，审计因 CGR-005 和官网验收继续 active。
 
@@ -74,11 +78,11 @@ CGR-001 的复核错误已区分会话变化、generating、interrupted 和未�
 
 | ID | Severity | Status | Finding | Evidence | Owner Plan | Branch/Commit | Verification | Closeout |
 |---|---|---|---|---|---|---|---|---|
-| CGR-006 | P1 | resolved | 已有会话正式正文不满足DilResponseRoot-样式类约束，采集根为空 | 用户现场matchingReplyRoots=0，但唯一正文ID、角色、归属、markdown和代码框均满足 | docs/plans/archived/2026-10-12-chatgpt-existing-conversation-collection.md | codex/chatgpt-auto-collection-pause / 未提交 | 旧代码class改变/缺失正例失败；新根按稳定语义属性限定，独立94聚焦通过；主目录全量975及原生11通过 | fixed：原会话两轮及同一HTML自动闭环成功；用户确认接受本次验收并归档计划，不伪称单独手动采集已实测 |
+| CGR-006 | P1 | verified | 已有会话正式正文不满足DilResponseRoot-样式类约束，采集根为空 | 用户现场matchingReplyRoots=0，但唯一正文ID、角色、归属、markdown和代码框均满足 | docs/plans/archived/2026-10-12-chatgpt-existing-conversation-collection.md | master / v0.3.0（c841515） | 旧代码class改变/缺失正例失败；新根按稳定语义属性限定，独立94聚焦通过；主目录全量975及原生11通过 | fixed：原会话两轮及同一HTML自动闭环成功；用户确认接受本次验收并归档计划，不伪称单独手动采集已实测 |
 
 | ID | Severity | Status | Finding | Evidence | Owner Plan | Branch/Commit | Verification | Closeout |
 |---|---|---|---|---|---|---|---|---|
-| CGR-007 | P2 | resolved | 首发需求尚在确认时当前新工具已完成，结果立即运输触发已有内容正在发送 | 更名正文原生首页闭环多次复现，完整拒绝原因为运输互斥；对齐backgroundThrottling=false后仍复现 | docs/plans/archived/2026-10-12-chatgpt-existing-conversation-collection.md | codex/chatgpt-auto-collection-pause / 未提交 | 延迟需求确认反例旧code失败；新verify等待再复核，25接线、39独立评审聚焦和原生11全部通过；取消不补发 | fixed：运输等待及当前批次/不重试保护已验证；用户确认本次官网自动闭环验收通过 |
+| CGR-007 | P2 | verified | 首发需求尚在确认时当前新工具已完成，结果立即运输触发已有内容正在发送 | 更名正文原生首页闭环多次复现，完整拒绝原因为运输互斥；对齐backgroundThrottling=false后仍复现 | docs/plans/archived/2026-10-12-chatgpt-existing-conversation-collection.md | master / v0.3.0（c841515） | 延迟需求确认反例旧code失败；新verify等待再复核，25接线、39独立评审聚焦和原生11全部通过；取消不补发 | fixed：运输等待及当前批次/不重试保护已验证；用户确认本次官网自动闭环验收通过 |
 
 CGR-005所包含的手动采集为空现场，本次已取得结构证据并单独归因至CGR-006；未知节点重挂载或取消未确认的其他瞬间仍未取得现场，不因本次修复自动关闭。审计保持active。
 
@@ -88,7 +92,7 @@ CGR-005所包含的手动采集为空现场，本次已取得结构证据并单�
 
 | ID | Severity | Status | Finding | Evidence | Owner Plan | Branch/Commit | Verification | Closeout |
 |---|---|---|---|---|---|---|---|---|
-| CGR-008 | P2 | resolved | 已知发送按钮被官网重绘时仍按节点身份拒绝；聚合控件变化提示无法区分真实输入替换与按钮重绘 | 原生同一原输入/FORM、旧button断开及唯一已知新button正例在旧代码失败；官网具体触发分支尚未取得 | docs/plans/archived/2026-10-12-chatgpt-existing-conversation-collection.md | codex/chatgpt-auto-collection-pause / 未提交 | 仅受控未点击阶段选择唯一已知新按钮，再核验原文/接管/会话/生成/附件；细分提示及不含正文的布尔诊断 | fixed：已知按钮重绘及反例验证通过，用户接受新版续聊验收；不冒称原截图瞬时节点身份已取得 |
+| CGR-008 | P2 | verified | 已知发送按钮被官网重绘时仍按节点身份拒绝；聚合控件变化提示无法区分真实输入替换与按钮重绘 | 原生同一原输入/FORM、旧button断开及唯一已知新button正例在旧代码失败；官网具体触发分支尚未取得 | docs/plans/archived/2026-10-12-chatgpt-existing-conversation-collection.md | master / v0.3.0（c841515） | 仅受控未点击阶段选择唯一已知新按钮，再核验原文/接管/会话/生成/附件；细分提示及不含正文的布尔诊断 | fixed：已知按钮重绘及反例验证通过，用户接受新版续聊验收；不冒称原截图瞬时节点身份已取得 |
 
 原生反例及生产函数只读内存核对证明：纯按钮替换而原输入逐字自有时原代码会清空；原输入断开或未知正文结构可能保留结果。细分控件错误及可选collection trace仅记录连接、身份、归属布尔值，不记录正文或草稿。CGR-006已有原会话两轮全自动成功反馈；关闭automatic后的手动采集验收尚未反馈，且当前发送问题由CGR-008独立跟踪。
 
@@ -102,7 +106,7 @@ CGR-008验证：构建/类型检查通过，8运输单测全部通过、0失败/
 
 | ID | Severity | Status | Finding | Evidence | Owner Plan | Branch/Commit | Verification | Closeout |
 |---|---|---|---|---|---|---|---|---|
-| CGR-009 | P1 | verified | ChatGPT输入内inline-markdown装饰被FORM回复检查误判，填入后暂停回传 | 真实官网唯一输入/发送/FORM正常，仅输入内span.inline-markdown触发回复排除 | docs/plans/archived/2026-10-12-chatgpt-existing-conversation-collection.md | codex/chatgpt-auto-collection-pause / 未提交 | 现场嵌套span正例旧代码失败；修复后原生38项、相关14单测通过，构建与独立审查通过 | fixed：原输入范围判据及保护不变；2026-10-13同一故障会话含颜色和URL的HTML读取自动采集/回传验收通过 |
+| CGR-009 | P1 | verified | ChatGPT输入内inline-markdown装饰被FORM回复检查误判，填入后暂停回传 | 真实官网唯一输入/发送/FORM正常，仅输入内span.inline-markdown触发回复排除 | docs/plans/archived/2026-10-12-chatgpt-existing-conversation-collection.md | master / v0.3.0（c841515） | 现场嵌套span正例旧代码失败；修复后原生38项、相关14单测通过，构建与独立审查通过 | fixed：原输入范围判据及保护不变；2026-10-13同一故障会话含颜色和URL的HTML读取自动采集/回传验收通过 |
 
 CGR-009验证检查点：主目录原生38项全部通过、退出0；14相关单测通过、0失败/取消/跳过，生产构建通过。独立只读审查无阻断发现，独立8发送器单测与类型检查通过。组合fixture覆盖长JSON、空行和末尾空格、busy推荐区、取消、原输入inline装饰下五种真实编辑接管，以及9项消息标记/未知语义/改文/外部markdown反例。主目录文档校验无问题，差异检查通过；最终官网复验待用户反馈，不归档计划或关闭其他未知现场，不提交、合并或推送。
 
@@ -112,7 +116,7 @@ CGR-009验证检查点：主目录原生38项全部通过、退出0；14相关�
 
 | ID | Severity | Status | Finding | Evidence | Owner Plan | Branch/Commit | Verification | Closeout |
 |---|---|---|---|---|---|---|---|---|
-| CGR-010 | P1 | verified | 官网颜色预览和自动链接排版被自有正文节点白名单拒绝，误报输入修改 | 用户真实官网三次只读结构检查，23+4×5=43个拒绝节点全部定位 | docs/plans/archived/2026-10-12-chatgpt-existing-conversation-collection.md | codex/chatgpt-auto-collection-pause / 未提交 | 旧代码新增五万字颜色结果正例false!==true复现；实现后初轮44原生检查通过，组合含颜色、链接及busy推荐区 | fixed：主目录44原生/14单测、构建与独立审查通过；2026-10-13用户确认原会话同一HTML自动采集/回传成功 |
+| CGR-010 | P1 | verified | 官网颜色预览和自动链接排版被自有正文节点白名单拒绝，误报输入修改 | 用户真实官网三次只读结构检查，23+4×5=43个拒绝节点全部定位 | docs/plans/archived/2026-10-12-chatgpt-existing-conversation-collection.md | master / v0.3.0（c841515） | 旧代码新增五万字颜色结果正例false!==true复现；实现后初轮44原生检查通过，组合含颜色、链接及busy推荐区 | fixed：主目录44原生/14单测、构建与独立审查通过；2026-10-13用户确认原会话同一HTML自动采集/回传成功 |
 
 范围限发送owner的正文判据：仅允许明确自动链接span的属性白名单；仅忽略无文字且受限结构的明确颜色/链接装饰。不放宽任意不可编辑节点或SVG、不跟随链接、不改正文、不新增重试。原文逐字、用户接管、附件、原输入/FORM、会话及点击后不重试仍独立核验。Design system gate: not needed，本轮无布局、样式或交互控件变化。ADR gate: not needed，既有运输授权及所有权边界不变。计划/审计继续active，待用户复验，不进行Git操作。
 
@@ -150,7 +154,7 @@ Verification：主目录 master 工作区在核查开始时干净；现有 colle
 
 | ID | Severity | Status | Finding | Evidence | Owner Plan | Branch/Commit | Verification | Closeout |
 |---|---|---|---|---|---|---|---|---|
-| CGR-011 | P1 | verified | 普通同轮多消息被整轮唯一assistant标题和页脚规则拒绝，自动与手动采集均为空 | 用户三次结构快照：同轮双标题、两个owner及正文；较早消息页脚在其owner内，轮末唯一外部页脚 | docs/plans/archived/2026-10-13-chatgpt-multi-message-collection.md | codex/chatgpt-multi-message-collection / 未提交 | 981单测、原生11项、独立93项通过；用户原会话自动两轮及手动采集成功 | fixed：2026-10-13官网验收通过；本计划归档，不关闭其他未知旧现场 |
+| CGR-011 | P1 | verified | 普通同轮多消息被整轮唯一assistant标题和页脚规则拒绝，自动与手动采集均为空 | 用户三次结构快照：同轮双标题、两个owner及正文；较早消息页脚在其owner内，轮末唯一外部页脚 | docs/plans/archived/2026-10-13-chatgpt-multi-message-collection.md | master / v0.3.0（c841515） | 981单测、原生11项、独立93项通过；用户原会话自动两轮及手动采集成功 | fixed：2026-10-13官网验收通过；本计划归档，不关闭其他未知旧现场 |
 
 
 ### CGR-011 实现与验证检查点
@@ -172,3 +176,9 @@ chatgptPage.ts 的共用只读规则改为最后有效角色及其唯一正文�
 本次工作区另出现IDE生成的未跟踪性能审计docs/audits/2026-10-13-performance-exploratory-audit.md，保持原状，属于用户另一任务，不纳入本次采集修复。没有提交、合并、分支清理或推送。
 
 归档后的仓库文档复核：本次任务文档在性能审计出现前的正式检查通过；最后全仓检查发现另一任务新生成的docs/audits/2026-10-13-performance-exploratory-audit.md缺少YAML frontmatter（1错误），并有1项ADR门禁提醒。该未跟踪文档保持原状，本次未修正或纳入变更；不把全仓文档门禁报告为通过。任务差异检查通过，当前未执行Git提交/合并。
+
+## 最终收尾
+
+用户明确要求收尾本报告，只保留性能探索为活跃审计。CGR-001 至 CGR-004、CGR-006 至 CGR-011 的已知机制已由对应回归和官网验收闭合；CGR-005 剩余早期未知现场停止追查，以 wont_fix 关闭调查。下文各轮 active、待验和未提交文字保留为历史证据；不代表现在仍有待办，也不宣称所有未知时序或双答案比较界面均已验证。
+
+本次仅整理审计生命周期与引用，不修改生产代码，不重新执行或冒称执行历史测试，不提交、合并或推送。报告状态为 archived。

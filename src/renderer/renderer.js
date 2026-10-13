@@ -494,11 +494,7 @@
       emptyModel = window.monaco.editor.createModel('', 'plaintext');
       state.editor = window.monaco.editor.create(el.monacoHost, { model: emptyModel, ...EDITOR_OPTIONS });
       state.editor.onDidChangeModelContent(function () {
-        const text = state.editor.getValue();
-        if (text !== state.currentText) {
-          state.currentText = text;
-          renderDirty();
-        }
+        editorWorkspace.contentChanged(state.editor.getModel());
       });
       // Ctrl+S 保存
       state.editor.addCommand(window.monaco.KeyMod.CtrlCmd | window.monaco.KeyCode.KeyS, function () {
@@ -574,7 +570,7 @@
 
   /** 未保存状态：与主流编辑器一致——有改动才显示标记（工具栏文字 + 文件头右侧白点） */
   function renderDirty() {
-    const dirty = !state.currentKind && state.currentText !== state.savedText;
+    const dirty = editorWorkspace.isDirty();
     el.dirty.textContent = dirty ? '● 未保存' : '';
     el.dirty.classList.toggle('is-dirty', dirty);
     if (typeof editorWorkspace !== 'undefined') editorWorkspace.report();

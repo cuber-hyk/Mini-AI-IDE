@@ -126,7 +126,7 @@ const bridge = {
     ipcRenderer.invoke(CH.sliceFile, relPath, startLine, endLine),
   writeFile: (relPath: string, text: string, root: string) => ipcRenderer.invoke(CH.writeFile, relPath, text, root),
   setSplit: (editorWidth: number) => ipcRenderer.invoke(CH.setSplit, editorWidth),
-  setWorkspaceLayout: (patch: unknown) => ipcRenderer.invoke(CH.setWorkspaceLayout, patch),
+  setWorkspaceLayout: (patch: unknown, temporary = false) => ipcRenderer.invoke(CH.setWorkspaceLayout, patch, temporary),
   copyFormatSpec: () => ipcRenderer.invoke(CH.copyFormatSpec),
   getPromptStatus: () => ipcRenderer.invoke(CH.getPromptStatus),
   onPromptStatus: (listener: (status: unknown) => void) => {

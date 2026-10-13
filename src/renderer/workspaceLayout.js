@@ -18,8 +18,9 @@
       const node = document.getElementById(id); node.hidden = !visible;
       Object.assign(node.style, { left: (x * scale - 3) + 'px', top: '0px', height: height * scale + 'px' });
     }
-    function apply(state) {
+    function apply(state, force) {
       if (!state || !state.layout) return;
+      if (!force && latest && Number.isFinite(state.layoutRevision) && state.layoutRevision <= latest.layoutRevision) return;
       latest = state;
       const layout = state.layout; const content = layout.contentBounds; const file = layout.fileBounds;
       scale = layout.editorBounds.width ? window.innerWidth / layout.editorBounds.width : 1;
@@ -51,18 +52,33 @@
       divider('sidebar-resizer', layout.treeBounds.x, file.height, !tree.hidden);
       document.dispatchEvent(new Event('workspace-layout-changed'));
     }
-    function patch(value) { return bridge.setWorkspaceLayout(value).then(apply); }
+    function patch(value, temporary) { return bridge.setWorkspaceLayout(value, temporary === true).then(function (state) { apply(state); }).catch(function (error) { console.error('布局更新失败', error); }); }
     function drag(id, key, boundsKey, direction, reset) {
-      const node = document.getElementById(id); let start;
+      const node = document.getElementById(id); let start; let frame = null;
       node.setAttribute('role', 'separator'); node.setAttribute('aria-orientation', 'vertical'); node.tabIndex = 0;
       node.addEventListener('pointerdown', function (event) {
         if (!latest || event.button !== 0) return;
-        start = { id: event.pointerId, x: event.clientX, width: latest.layout[boundsKey].width };
+        if (start) return;
+        start = { id: event.pointerId, x: event.clientX, width: latest.layout[boundsKey].width, pending: null };
         node.setPointerCapture(event.pointerId); node.classList.add('dragging'); event.preventDefault();
       });
-      node.addEventListener('pointermove', function (event) { if (start && start.id === event.pointerId) void patch({ [key]: Math.max(0, Math.round(start.width + direction * (event.clientX - start.x) / scale)) }); });
-      function finish() { if (!start) return; const id = start.id; start = null; node.classList.remove('dragging'); if (node.hasPointerCapture(id)) node.releasePointerCapture(id); }
+      node.addEventListener('pointermove', function (event) {
+        if (!start || start.id !== event.pointerId) return;
+        start.pending = Math.max(0, Math.round(start.width + direction * (event.clientX - start.x) / scale));
+        if (frame === null) frame = requestAnimationFrame(function () {
+          frame = null;
+          if (start && start.pending !== null) void patch({ [key]: start.pending }, true);
+        });
+      });
+      function finish(event) {
+        if (!start || (event && event.pointerId !== undefined && event.pointerId !== start.id)) return;
+        const done = start; start = null;
+        if (frame !== null) { cancelAnimationFrame(frame); frame = null; }
+        node.classList.remove('dragging'); if (node.hasPointerCapture(done.id)) node.releasePointerCapture(done.id);
+        if (done.pending !== null) void patch({ [key]: done.pending });
+      }
       node.addEventListener('pointerup', finish); node.addEventListener('pointercancel', finish); node.addEventListener('lostpointercapture', finish);
+      window.addEventListener('blur', finish); window.addEventListener('beforeunload', finish);
       node.addEventListener('dblclick', function () { void patch({ [key]: reset }); });
       node.addEventListener('keydown', function (event) { if (!latest || !['ArrowLeft', 'ArrowRight', 'Home'].includes(event.key)) return; event.preventDefault(); void patch({ [key]: event.key === 'Home' ? reset : Math.max(0, latest.layout[boundsKey].width + (event.key === 'ArrowRight' ? 24 : -24) * direction) }); });
     }
@@ -76,7 +92,7 @@
     document.getElementById('file-maximize').addEventListener('click', function () { if (latest) void patch({ fileMaximized: !latest.fileMaximized }); });
     treeButton.addEventListener('click', function () { void patch({ treeVisible: tree.hidden }); });
     bridge.onChromeState(apply);
-    window.addEventListener('resize', function () { if (latest) apply(latest); });
+    window.addEventListener('resize', function () { if (latest) apply(latest, true); });
     void patch({});
     let measured = -1;
     function measureDock() {

@@ -7,10 +7,13 @@ import { computeLayout, WORKSPACE_DEFAULT_WIDTH, FILE_DEFAULT_WIDTH, TREE_DEFAUL
 export class WorkspaceLayoutController {
   private options: WorkspaceLayoutOptions;
   private temporaryFileWidth: number | null = null;
+  private pendingLayout = false;
+  private loadingVisible = false;
+  private revision = 0;
   layout: ReturnType<typeof computeLayout>;
 
   constructor(private readonly win: BaseWindow,
-    private readonly views: { editor: WebContentsView; web: WebContentsView; webbar: WebContentsView; preview: WebContentsView },
+    private readonly views: { editor: WebContentsView; web: WebContentsView; webbar: WebContentsView; preview: WebContentsView; loading?: WebContentsView },
     private readonly settings: SettingsStore, private readonly changed: () => void) {
     this.options = { ...(settings.get().workspaceLayout ?? {}), previewVisible: false, toolsVisible: false };
     const [width, height] = win.getContentSize();
@@ -21,6 +24,7 @@ export class WorkspaceLayoutController {
     const layout = this.layout;
     return {
       layout,
+      layoutRevision: this.revision,
       fileVisible: this.options.fileVisible !== false,
       fileMaximized: this.options.fileMaximized === true,
       previewVisible: layout.previewVisible,
@@ -37,16 +41,25 @@ export class WorkspaceLayoutController {
     this.apply();
   }
 
+  setLoadingViewVisible(visible: boolean): void {
+    this.loadingVisible = visible;
+    const bounds = this.layout.webBounds;
+    this.views.loading?.setVisible(visible && bounds.width > 0 && bounds.height > 0);
+  }
+
   apply(): void {
     if (this.win.isDestroyed()) return;
     const [width, height] = this.win.getContentSize();
     this.layout = computeLayout(width!, height!, this.options);
+    this.revision++;
     const layout = this.layout;
     this.views.editor.setBounds(layout.editorBounds);
     this.views.webbar.setBounds(layout.webBarBounds);
     this.views.webbar.setVisible(layout.webBarBounds.width > 0);
     this.views.web.setBounds(layout.webBounds);
     this.views.web.setVisible(layout.webBounds.width > 0 && layout.webBounds.height > 0);
+    this.views.loading?.setBounds(layout.webBounds);
+    this.setLoadingViewVisible(this.loadingVisible);
     this.views.preview.setBounds(layout.previewBounds);
     this.views.preview.setVisible(this.state.previewVisible && layout.previewBounds.width > 0 && layout.previewBounds.height > 0);
     for (const view of [this.views.editor, this.views.webbar, this.views.preview]) {
@@ -54,8 +67,25 @@ export class WorkspaceLayoutController {
     }
   }
 
-  update(patch: WorkspaceLayoutOptions, persist = true) {
+  flushPendingLayout(): void {
+    if (!this.pendingLayout) return;
+    const { workspaceWidth, workspaceVisible, fileWidth, fileVisible, treeWidth, treeVisible } = this.layout;
+    this.settings.update({ workspaceLayout: {
+      workspaceWidth: workspaceVisible ? workspaceWidth : this.options.workspaceWidth ?? WORKSPACE_DEFAULT_WIDTH,
+      workspaceVisible,
+      fileWidth: this.temporaryFileWidth ?? (fileVisible && !this.options.fileMaximized ? fileWidth : this.options.fileWidth ?? FILE_DEFAULT_WIDTH),
+      fileVisible,
+      treeWidth: treeVisible && treeWidth > 0 ? treeWidth : this.options.treeWidth ?? TREE_DEFAULT_WIDTH,
+      treeVisible: this.options.treeVisible !== false,
+    } });
+    this.pendingLayout = false;
+  }
+
+  update(patch: WorkspaceLayoutOptions, persist = true, pending = false) {
     if (this.win.isDestroyed()) return this.state;
+    const menuState = () => [this.layout.workspaceVisible, this.layout.fileVisible, this.layout.treeVisible,
+      this.state.previewVisible, this.state.toolsVisible, this.state.fileMaximized].join(':');
+    const beforeMenu = menuState();
     const widths = { ...patch };
     if (widths.toolsVisible === true) widths.previewVisible = false;
     else if (widths.previewVisible === true) widths.toolsVisible = false;
@@ -69,18 +99,9 @@ export class WorkspaceLayoutController {
     }
     this.options = { ...this.options, ...widths };
     this.apply();
-    if (persist) {
-      const { workspaceWidth, workspaceVisible, fileWidth, fileVisible, treeWidth, treeVisible } = this.layout;
-      this.settings.update({ workspaceLayout: {
-        workspaceWidth: workspaceVisible ? workspaceWidth : this.options.workspaceWidth ?? WORKSPACE_DEFAULT_WIDTH,
-        workspaceVisible,
-        fileWidth: this.temporaryFileWidth ?? (fileVisible && !this.options.fileMaximized ? fileWidth : this.options.fileWidth ?? FILE_DEFAULT_WIDTH),
-        fileVisible,
-        treeWidth: treeVisible && treeWidth > 0 ? treeWidth : this.options.treeWidth ?? TREE_DEFAULT_WIDTH,
-        treeVisible: this.options.treeVisible !== false,
-      } });
-    }
-    this.changed();
+    if (pending || persist) this.pendingLayout = true;
+    if (persist) this.flushPendingLayout();
+    if (beforeMenu !== menuState()) this.changed();
     return this.state;
   }
 
@@ -120,8 +141,9 @@ export class WorkspaceLayoutController {
         throw new Error('切换工作区仅供本地官网顶栏主 frame');
       return this.update({ workspaceVisible: !this.layout.workspaceVisible });
     });
-    ipcMain.handle(CHANNELS.setWorkspaceLayout, (event, raw: unknown) => {
+    ipcMain.handle(CHANNELS.setWorkspaceLayout, (event, raw: unknown, temporary: unknown = false, ...extra: unknown[]) => {
       trusted(event, true);
+      if (typeof temporary !== 'boolean' || extra.length) throw new Error('布局提交参数无效');
       if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('布局参数无效');
       const patch: Record<string, number | boolean> = {};
       for (const [key, value] of Object.entries(raw)) {
@@ -132,6 +154,9 @@ export class WorkspaceLayoutController {
         } else throw new Error('未知布局参数');
         patch[key] = value as number | boolean;
       }
+      if (temporary && (!Object.keys(patch).length || Object.keys(patch).some(key => !['workspaceWidth', 'fileWidth', 'treeWidth'].includes(key))))
+        throw new Error('临时拖拽仅接受宽度');
+      if (temporary) return this.update(patch, false, true);
       return this.update(patch, Object.keys(patch).some(key => !['dockHeight', 'previewVisible', 'toolsVisible', 'fileMaximized'].includes(key)));
     });
     ipcMain.handle(CHANNELS.setSplit, (event, width: unknown) => {

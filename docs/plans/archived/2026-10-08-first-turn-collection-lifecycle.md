@@ -4,7 +4,7 @@ status: archived
 created: 2026-10-08
 updated: 2026-10-08
 owner: 胡运宽
-source_audit: docs/audits/2026-10-08-first-turn-auto-collection-audit.md
+source_audit: docs/audits/archived/2026-10-08-first-turn-auto-collection-audit.md
 covered_findings: [FTA-01, FTA-02, FTA-03]
 deferred_findings: [FTA-04]
 design_system_impact: none

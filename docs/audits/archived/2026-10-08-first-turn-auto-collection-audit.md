@@ -1,13 +1,17 @@
 ---
 artifact_type: audit
-status: active
+status: archived
 created: 2026-10-08
-updated: 2026-10-12
+updated: 2026-10-13
 scope: "147689e 后新会话首轮自动采集遗漏：官网直接发送、本地发送与历史基线交接"
 source_of_truth: code
 ---
 
 # 首轮自动采集失败分析
+
+## 结案与归档（2026-10-13）
+
+用户明确反馈 FTA-04 已测试通过并批准收尾；FTA-01 至 FTA-03 保留既有修复与验证证据。本次按用户验收结案，不新增文案修改。当前源码 waiting_user 仍映射为“等待你回答”，不把验收通过写成该映射已修改。下文早期 open、待验及未提交描述均为历史检查点，不再代表当前门禁。
 
 ## 历史修复跟进（2026-10-08）
 
@@ -46,7 +50,7 @@ source_of_truth: code
 | FTA-01 | P1 | verified | 官网直接发送无本地标记，地址先到且生成态不可识别时，首轮被判为历史 | replyChangeWatcher.ts:23、55、65、130、188；integration.ts:285 | docs/plans/archived/2026-10-08-first-turn-collection-lifecycle.md | codex/first-turn-collection / 未提交 | 修复前反例失败；最终单测 677/677、原生夹具 28/28；官网待验 | fixed：实现及离线回归已验证 |
 | FTA-02 | P1 | verified | 从已有会话回首页后，preserve 不清理采集器遗留的历史等待状态 | autoCollector.ts:17、19、35；integration.ts:179 | docs/plans/archived/2026-10-08-first-turn-collection-lifecycle.md | codex/first-turn-collection / 未提交 | 修复前反例失败；最终单测 677/677、原生夹具 28/28；官网待验 | fixed：实现及离线回归已验证 |
 | FTA-03 | P2 | verified | 既有首轮夹具未覆盖真实空档、官网入口和已有会话状态，且结束控件走简化分支 | verify-web-result-sender.cjs:184、231、238、248、278；replyChangeWatcher.test.ts:218 | docs/plans/archived/2026-10-08-first-turn-collection-lifecycle.md | codex/first-turn-collection / 未提交 | 修复前反例失败；最终单测 677/677、原生夹具 28/28；官网待验 | fixed：实现及离线回归已验证 |
-| FTA-04 | P2 | open | 结果回传的 waiting_user 覆盖采集状态摘要，使基线等待表现为“等待你回答” | autoContinuation.ts:62、107；toolHarness.js:211、218 | 无 | master / 147689e | 原生复现同时输出 complete、0 项、waiting_user、已有回复不执行 | 待明确采集与回传状态呈现优先级 |
+| FTA-04 | P2 | verified | 结果回传的 waiting_user 覆盖采集状态摘要，使基线等待表现为“等待你回答” | autoContinuation.ts:62、107；toolHarness.js:211、218 | 用户验收结案，不新增实施计划 | master / v0.3.0 | 用户2026-10-13明确反馈已测试通过并允许收尾；本轮静态核对原映射仍存在 | accepted_risk：用户验收接受当前行为，结束本项跟踪；不宣称已另行修改源码 |
 
 ### FTA-01：本次官网发送入口仍走旧的失败路径
 
@@ -187,3 +191,9 @@ node "$env:TEMP/mini-ide-first-turn-native-audit.cjs"
 - FTA-04 仍 open：src/renderer/toolHarness.js:236–237 仍将 waiting_user 无条件显示为“等待你回答”；src/main/toolWorkspaceStatus.ts 的顶栏摘要已改成“等待需求或新的工具结果”，但工具面板没有同步。
 - 用 test/toolHarnessUi.test.ts 的现有 setup 夹具执行当前生产渲染脚本：automatic=true、results=[]、continuation.phase=waiting_user、message=“自动继续已开启，等待新的工具结果”时，activity 实际为“等待你回答”，title 仍为等待新结果，复现文案覆盖问题。未修改测试或生产代码。
 - 聚焦测试 156 项通过、0 失败/取消/跳过。测试通过不表示已覆盖或修复 FTA-04；本报告因该已确认界面问题继续 active，后续如修复应另立计划。
+
+## 最终收尾
+
+用户明确反馈 FTA-04 已测试通过并批准收尾；FTA-01 至 FTA-03 保留既有修复与验证证据。本次按用户验收结案，不新增文案修改。当前源码 waiting_user 仍映射为“等待你回答”，不把验收通过写成该映射已修改。下文早期 open、待验及未提交描述均为历史检查点，不再代表当前门禁。
+
+本次仅整理审计生命周期与引用，不修改生产代码，不重新执行或冒称执行历史测试，不提交、合并或推送。报告状态为 archived。

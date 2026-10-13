@@ -1,7 +1,7 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-12
+updated: 2026-10-13
 owner: 胡运宽
 source_of_truth: ["docs/adr/2026-10-02-honest-electron-identity.md","docs/adr/2026-10-02-zero-injection-and-automation-trace-baseline.md","tools/reachability-probe/main.js","src/main/index.ts","src/main/diagnose.ts","src/main/selfTest.ts","test/limits-and-ua.test.ts"]
 ---
@@ -65,6 +65,8 @@ P2 期间把 P0b 工具（`reachability-probe`）的 profile 目录整体迁移�
 > 因此分区不变 + 同源访问，登录态即可跨重启保持。
 
 ## 登录次数最小化（重要）
+
+同一 Windows 账户下，开发版与安装版默认共用上述数据目录，避免同时运行。关闭窗口后若后台命令或 IDE 进程仍未退出，不能视为数据目录已释放；结束前一个实例后再启动另一版本。并发进程可能读不到既有页面存储，后启动实例的写入也可能无法跨重启保留，不应靠反复登录解决。
 
 **反复登录本身可能被判定为异常。** 因此：
 

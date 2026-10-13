@@ -8,20 +8,68 @@
     let generation = 0;
     let openRequest = 0;
     let closing = false;
+    let currentText = state.currentText;
+    let reportedState = null;
     function key(path) { return (path || '').replace(/\\/g, '/').toLowerCase(); }
 
-    function sync() {
+    function snapshot(doc) {
+      if (doc.textStale) {
+        doc.text = doc.model.getValue();
+        doc.textStale = false;
+        if (state.currentPath === doc.path) currentText = doc.text;
+      }
+      return doc.text;
+    }
+    function dirty(doc) {
+      if (doc.kind) return false;
+      const length = doc.textStale ? doc.model.getValueLength() : doc.text.length;
+      return length !== doc.savedText.length || snapshot(doc) !== doc.savedText;
+    }
+    // 保持 currentText 的真实全文语义；输入只让快照失效，操作时再读取模型。
+    Object.defineProperty(state, 'currentText', {
+      enumerable: true, configurable: true,
+      get() {
+        const doc = documents.get(key(state.currentPath));
+        return doc && !doc.kind ? snapshot(doc) : currentText;
+      },
+      set(text) {
+        currentText = text;
+        const doc = documents.get(key(state.currentPath));
+        if (doc && !doc.kind) { doc.text = text; doc.textStale = false; doc.dirty = dirty(doc); }
+      },
+    });
+    function sync(readText = true) {
       const current = documents.get(key(state.currentPath));
-      if (current && !current.kind) current.text = state.currentText;
+      if (current && !current.kind) {
+        if (readText) snapshot(current);
+        current.dirty = dirty(current);
+      }
+    }
+    function isDirty() {
+      sync(false);
+      const doc = documents.get(key(state.currentPath));
+      return Boolean(doc && doc.dirty);
+    }
+    function contentChanged(model) {
+      const doc = documents.get(key(state.currentPath));
+      if (!doc || doc.kind || doc.model !== model) return;
+      const before = doc.dirty;
+      doc.textStale = true;
+      doc.dirty = dirty(doc);
+      if (before !== doc.dirty) options.changed();
     }
     function report() {
-      sync();
+      sync(false);
       const tabs = Array.from(documents.values()).map(function (doc) {
-        const tab = { path: doc.path, dirty: !doc.kind && doc.text !== doc.savedText };
+        const tab = { path: doc.path, dirty: Boolean(doc.dirty) };
         if (doc.kind) tab.kind = doc.kind;
         return tab;
       });
-      bridge.reportEditorState({ root: state.root, path: state.currentPath, documents: tabs });
+      const value = { root: state.root, path: state.currentPath, documents: tabs };
+      const signature = JSON.stringify(value);
+      if (signature === reportedState) return;
+      reportedState = signature;
+      bridge.reportEditorState(value);
       options.renderTabs(tabs, state.currentPath);
     }
     function activate(doc, focus) {
@@ -64,7 +112,7 @@
           return false;
         }
         const text = result.text || '';
-        const doc = { path: relPath, kind, preview: result.preview, text, savedText: text, model: kind ? null : options.createModel(relPath, text), viewState: null, saving: null, reading: 0 };
+        const doc = { path: relPath, kind, preview: result.preview, text, savedText: text, dirty: false, textStale: false, model: kind ? null : options.createModel(relPath, text), viewState: null, saving: null, reading: 0 };
         documents.set(key(relPath), doc);
         activate(doc, focus);
         options.setInfo(relPath + (kind ? ' · 只读预览' : ' · ' + result.encoding + ' · Ctrl+S 保存'));
@@ -87,6 +135,7 @@
           if (!sameDocument(doc, root, epoch) || doc.path !== target) return false;
           if (!result.ok) { options.setInfo('保存失败：' + (result.error || '未知错误'), true); return false; }
           sync(); doc.savedText = text;
+          doc.dirty = dirty(doc);
           if (state.currentPath === doc.path) state.savedText = text;
           options.changed();
           options.setInfo('已保存 ' + target + ' · ' + (result.byteLength || 0) + ' 字节');
@@ -138,6 +187,7 @@
         if (!sameDocument(doc, root, epoch) || request !== doc.reading || doc.text !== before || (focus && navigation !== openRequest)) return false;
         if (!result.ok || result.tooLarge) { options.setInfo('读取失败：' + (result.error || '文件过大'), true); return false; }
         doc.text = doc.savedText = result.text || '';
+        doc.textStale = doc.dirty = false;
         doc.preview = result.preview;
         if (state.currentPath === doc.path) state.currentText = state.savedText = doc.text;
         options.replaceContent(doc, doc.text);
@@ -182,6 +232,6 @@
     bridge.onEditorRequest(async function (request) {
       if (request.kind === 'save') await bridge.editorReply(request.id, await save(request.path));
     });
-    return { open, save, close, reload, clear, entryChanged, report };
+    return { open, save, close, reload, clear, entryChanged, report, contentChanged, isDirty };
   };
 })();

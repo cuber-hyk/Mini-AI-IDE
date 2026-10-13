@@ -4,7 +4,7 @@ status: archived
 created: 2026-10-13
 updated: 2026-10-13
 owner: 胡运宽
-source_audit: docs/audits/2026-10-12-chatgpt-first-result-return-audit.md
+source_audit: docs/audits/archived/2026-10-12-chatgpt-first-result-return-audit.md
 covered_findings: [CGR-011]
 ---
 

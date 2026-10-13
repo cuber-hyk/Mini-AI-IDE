@@ -572,7 +572,7 @@ export interface EditorBridge {
   onPromptStatus(listener: (status: PromptComposerStatus) => void): void;
   /** 上报期望的编辑器宽度（像素）；主进程会做最小宽度约束并回传实际值 */
   setSplit(editorWidth: number): Promise<SplitResult>;
-  setWorkspaceLayout(patch: WorkspaceLayoutPatch): Promise<{ ok: boolean }>;
+  setWorkspaceLayout(patch: WorkspaceLayoutPatch, temporary?: boolean): Promise<{ ok: boolean }>;
   /**
    * 请求把"输出格式要求"模板写入系统剪贴板。
    * **程序不会把它送进输入框**——需要用户自己粘贴到提示词里（零注入边界，见 ADR-0003）。

@@ -21,12 +21,13 @@ async function fixture(settingsOverride?: Pick<SettingsStore, 'get' | 'update'>)
     update(patch: any) { writes.push(structuredClone(patch)); saved = { ...saved, ...structuredClone(patch) }; },
   };
   const notifications: any[] = [];
+  let menus = 0;
   const view = () => ({ bounds: null as any, visible: true,
     setBounds(bounds: any) { this.bounds = bounds; },
     setVisible(visible: boolean) { this.visible = visible; },
     webContents: { mainFrame: {}, isDestroyed() { return false; }, send(...args: any[]) { notifications.push(args); } },
   });
-  const views = { editor: view(), web: view(), webbar: view(), preview: view() };
+  const views = { editor: view(), web: view(), webbar: view(), preview: view(), loading: view() };
   const dependencies: Record<string, unknown> = {
     electron: { ipcMain: { handle(channel: string, handler: any) { handlers.set(channel, handler); } } },
     '../shared/contract': { CHANNELS }, './windowLayout': geometry,
@@ -37,10 +38,11 @@ async function fixture(settingsOverride?: Pick<SettingsStore, 'get' | 'update'>)
   }).outputText;
   vm.runInNewContext(code, { exports, require(name: string) { assert.ok(name in dependencies, name); return dependencies[name]; } });
   let contentSize = [1600, 900];
-  const controller = new exports.WorkspaceLayoutController({ isDestroyed: () => false, getContentSize: () => contentSize }, views, settings, () => {});
+  const controller = new exports.WorkspaceLayoutController({ isDestroyed: () => false, getContentSize: () => contentSize }, views, settings, () => { menus++; });
   controller.register(); controller.apply();
   const event = { sender: views.editor.webContents, senderFrame: views.editor.webContents.mainFrame };
   return { controller, views, writes, notifications, settings,
+    get menus() { return menus; },
     resize(width: number, height: number) { contentSize = [width, height]; controller.apply(); },
     invoke(channel: string, ...args: unknown[]) { return handlers.get(channel)!(event, ...args); },
     withEvent(other: any, channel: string, ...args: unknown[]) { return handlers.get(channel)!(other, ...args); },
@@ -59,6 +61,96 @@ it('布局写入仅接受受信本地主 frame，网页和子 frame 不能改变
   assert.equal(f.writes.length, 0);
   f.invoke(CHANNELS.setWorkspaceLayout, { fileWidth: 800 });
   assert.equal(f.controller.layout.fileBounds.width, 800);
+});
+
+it('高频临时拖拽只改几何，结束或退出前落盘一次并可重启恢复最后宽度', async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'mini-layout-drag-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const f = await fixture();
+  for (let i = 0; i < 60; i++) f.invoke(CHANNELS.setWorkspaceLayout, { fileWidth: 600 + i }, true);
+  assert.equal(f.writes.length, 0);
+  assert.equal(f.menus, 0, '宽度改变不重建菜单');
+  f.invoke(CHANNELS.setWorkspaceLayout, { fileWidth: 659 });
+  assert.equal(f.writes.length, 1);
+  assert.equal(f.settings.get().workspaceLayout.fileWidth, 659);
+  const restarted = await fixture(f.settings);
+  assert.equal(restarted.controller.layout.fileBounds.width, 659);
+  const real = new SettingsStore('drag.json', directory);
+  const pending = await fixture(real);
+  pending.invoke(CHANNELS.setWorkspaceLayout, { workspaceWidth: 280 }, true);
+  assert.equal(real.get().workspaceLayout, null);
+  pending.controller.flushPendingLayout();
+  assert.equal(new SettingsStore('drag.json', directory).get().workspaceLayout?.workspaceWidth, 280);
+  const count = f.writes.length;
+  f.controller.flushPendingLayout();
+  assert.equal(f.writes.length, count, '没有待提交变化时退出不重复写盘');
+});
+
+it('退出前布局保存失败保留待提交宽度，重试保存最新值且重启可恢复', async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'mini-layout-retry-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const real = new SettingsStore('retry.json', directory);
+  let fail = true; let attempts = 0;
+  const f = await fixture({
+    get: () => real.get(),
+    update(patch) {
+      attempts++;
+      if (fail) throw new Error('设置保存失败：EACCES');
+      return real.update(patch);
+    },
+  });
+  f.invoke(CHANNELS.setWorkspaceLayout, { fileWidth: 620 }, true);
+  assert.throws(() => f.controller.flushPendingLayout(), /EACCES/);
+  assert.equal(attempts, 1);
+  assert.equal(f.controller.layout.fileBounds.width, 620, '失败不能撤销用户当前几何');
+  assert.equal(real.get().workspaceLayout, null, '失败不能冒充已保存偏好');
+  f.invoke(CHANNELS.setWorkspaceLayout, { fileWidth: 740 }, true);
+  fail = false;
+  f.controller.flushPendingLayout();
+  assert.equal(attempts, 2, '失败后 pending 仍有效，可再次提交');
+  const restarted = new SettingsStore('retry.json', directory);
+  assert.equal(restarted.get().workspaceLayout?.fileWidth, 740, '重试必须保存最新宽度');
+  assert.equal((await fixture(restarted)).controller.layout.fileBounds.width, 740);
+  f.controller.flushPendingLayout();
+  assert.equal(attempts, 2, '成功后清除 pending，后续退出不重复写盘');
+});
+
+it('临时拖拽入口仍严格限制主 frame、宽度字段、参数形状，失败不能部分修改', async () => {
+  const f = await fixture(); const before = JSON.stringify(f.controller.state);
+  for (const patch of [{}, { fileVisible: false }, { fileWidth: 650, toolsVisible: true }, { dockHeight: 300 }, { fileWidth: NaN }]) {
+    assert.throws(() => f.invoke(CHANNELS.setWorkspaceLayout, patch, true));
+    assert.equal(JSON.stringify(f.controller.state), before);
+  }
+  assert.throws(() => f.invoke(CHANNELS.setWorkspaceLayout, { fileWidth: 650 }, 'true'));
+  assert.throws(() => f.invoke(CHANNELS.setWorkspaceLayout, { fileWidth: 650 }, true, 1));
+  const sender = f.views.editor.webContents;
+  assert.throws(() => f.withEvent({ sender, senderFrame: {} }, CHANNELS.setWorkspaceLayout, { fileWidth: 650 }, true));
+  assert.equal(f.writes.length, 0);
+});
+
+it('只有菜单语义变化调用 changed，加载层几何同步且全屏退出恢复受控显隐', async () => {
+  const f = await fixture();
+  const revision = f.controller.state.layoutRevision;
+  f.invoke(CHANNELS.setWorkspaceLayout, { dockHeight: 200 });
+  f.invoke(CHANNELS.setWorkspaceLayout, { treeWidth: 190 }, true);
+  assert.equal(f.menus, 0);
+  assert.ok(f.controller.state.layoutRevision > revision);
+  assert.equal(f.views.loading.visible, false);
+  f.controller.setLoadingViewVisible(true);
+  assert.equal(f.views.loading.visible, true);
+  f.invoke(CHANNELS.setWorkspaceLayout, { fileMaximized: true });
+  assert.equal(f.views.loading.visible, false);
+  assert.deepEqual(f.views.loading.bounds, f.controller.layout.webBounds);
+  f.invoke(CHANNELS.setWorkspaceLayout, { fileMaximized: false });
+  assert.equal(f.views.loading.visible, true);
+  f.controller.setLoadingViewVisible(false);
+  f.resize(1400, 800);
+  assert.equal(f.views.loading.visible, false);
+  f.invoke(CHANNELS.setWorkspaceLayout, { previewVisible: true });
+  const menus = f.menus;
+  f.invoke(CHANNELS.setWorkspaceLayout, { previewVisible: true });
+  assert.equal(f.menus, menus, '同一显隐状态不会反复重建菜单');
+  assert.equal(menus, 3);
 });
 
 it('零宽请求通过真实设置归一化后仍保留完整布局，极窄目录恢复窗口后可见', async t => {

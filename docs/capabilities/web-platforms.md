@@ -3,7 +3,7 @@ artifact_type: capability
 status: current
 updated: 2026-10-13
 owner: 胡运宽
-source_of_truth: [src/main/composerDraftBackup.ts, test/composerDraftBackup.test.ts, src/main/firstPromptSession.ts, src/main/tools/replyChangeWatcher.ts, test/chatgptReply.test.ts, test/replyChangeWatcher.test.ts, src/main/tools/replySource.ts, test/replySource.test.ts, src/shared/webPlatform.ts, src/main/webPlatformController.ts, src/main/webPlatformView.ts, src/main/index.ts, src/main/tools/integration.ts, src/main/localPromptController.ts, src/main/workspaceLayoutController.ts, src/renderer/webbar.js, src/renderer/promptComposer.js, src/renderer/toolHarness.js, test/webPlatformController.test.ts, test/toolPlatformActivity.test.ts, test/webPlatformUi.test.ts, src/main/chatgptPage.ts, src/shared/webConversation.ts, src/main/webComposerSender.ts, test/chatgptToolIntegration.test.ts, tools/verify-chatgpt-composer.cjs, tools/verify-chatgpt-tools.cjs, tools/verify-web-platform.cjs, docs/adr/2026-10-11-web-platform-switching.md]
+source_of_truth: [src/main/webLoadingView.ts, src/renderer/webLoading.html, src/renderer/webLoading.css, tools/verify-web-loading.cjs, src/main/composerDraftBackup.ts, test/composerDraftBackup.test.ts, src/main/firstPromptSession.ts, src/main/tools/replyChangeWatcher.ts, test/chatgptReply.test.ts, test/replyChangeWatcher.test.ts, src/main/tools/replySource.ts, test/replySource.test.ts, src/shared/webPlatform.ts, src/main/webPlatformController.ts, src/main/webPlatformView.ts, src/main/index.ts, src/main/tools/integration.ts, src/main/localPromptController.ts, src/main/workspaceLayoutController.ts, src/renderer/webbar.js, src/renderer/promptComposer.js, src/renderer/toolHarness.js, test/webPlatformController.test.ts, test/toolPlatformActivity.test.ts, test/webPlatformUi.test.ts, src/main/chatgptPage.ts, src/shared/webConversation.ts, src/main/webComposerSender.ts, test/chatgptToolIntegration.test.ts, tools/verify-chatgpt-composer.cjs, tools/verify-chatgpt-tools.cjs, tools/verify-web-platform.cjs, docs/adr/2026-10-11-web-platform-switching.md]
 ---
 
 # 官网平台
@@ -54,3 +54,9 @@ ChatGPT网页草稿备份owner为`composerDraftBackup.ts`，由index和工具int
 
 
 已核验的ChatGPT粘贴原文包装SPAN[data-prompt-literal-paste]仅允许该标记与class属性，无属性STRONG允许递归读取内部纯文本；段落换行及节点外空白逐字保留。备份和运输后自有结果共用同一reader；未知属性、可编辑/原子节点、隐藏结构或正文变化仍拒绝，不以任意innerText替代。页面隐藏编辑器不计入唯一可见输入判定，也不作为备份来源，多个可见输入仍暂停。
+
+## 官网加载反馈
+
+首次启动、平台首次创建及主 frame 实际导航期间，独立本地沙箱视图按当前主题展示平台名和“正在加载…”。无 preload、IPC 或官网 DOM 写入；布局与显隐仍由 WorkspaceLayoutController 管理，只覆盖官网区域，文件全屏时隐藏。正常已加载平台切换复用原页面，不刷新。
+
+WebPlatformController 在文档完成后用只读隔离世界核验是否已有可见内容；SPA 空壳继续显示，最长观察 10 秒后撤下提示，避免未知结构长期遮挡官网。加载失败或取消撤下提示，失败继续走顶栏错误及具名重新加载入口。后台平台事件不覆盖前台提示，导航修订使旧检测失效，关闭清理计时器。这仅管理加载提示，不代表 AI 回复完成或授予工具执行/发送资格。

@@ -61,6 +61,8 @@ function fixture() {
   let prepare: () => Promise<void> = async () => {}; let create: () => WebContentsView = () => ({ webContents: chatgpt.value }) as unknown as WebContentsView;
   let gate: (state: WebPlatformState) => Promise<void> = async () => {}; let creations = 0;
   let blocked: WebPlatformState['switchBlockedReason'];
+  const loadingStates: Array<{ platform: string; loading: boolean }> = [];
+  let contentReady = async () => true;
   const original = { webContents: deepseek.value } as unknown as WebContentsView;
   const controller = new WebPlatformController({
     ipc: { handle(channel, handler) { handlers.set(channel, handler); }, removeHandler(channel) { handlers.delete(channel); } },
@@ -68,11 +70,14 @@ function fixture() {
     createChatGPT() { creations++; return create(); }, prepareSwitch: () => prepare(), applyView(view) { applied.push(view); },
     async changed(state) { changed.push(state); await gate(state); },
     switchBlock: () => blocked,
+    loadingChanged: (platform, loading) => loadingStates.push({ platform, loading }),
+    contentReady: () => contentReady(),
   });
   const channels = controller.register();
   const event = (sender = webbar.value) => ({ sender, senderFrame: sender.mainFrame }) as unknown as IpcMainInvokeEvent;
   const invoke = (channel: string, input = event(), ...args: unknown[]) => Promise.resolve().then(() => handlers.get(channel)!(input, ...args));
   return { controller, webbar, editor, chatgpt, deepseek, original, changed, applied, channels, handlers, event, invoke,
+    loadingStates, ready(fn: () => Promise<boolean>) { contentReady = fn; },
     set: (platform: unknown) => invoke(CHANNELS.setWebPlatform, undefined, platform),
     prepare(fn: () => Promise<void>) { prepare = fn; }, create(fn: () => WebContentsView) { create = fn; },
     gate(fn: (state: WebPlatformState) => Promise<void>) { gate = fn; }, creations: () => creations,
@@ -253,5 +258,74 @@ it('准备期间已成功恢复时不再重载正常页面', async () => {
     });
     await assert.rejects(f.invoke(CHANNELS.reloadWebPlatform), /状态已变化/);
     assert.equal(f.deepseek.reloads(), 0); assert.equal(f.controller.state.error, undefined);
+  } finally { f.controller.dispose(); }
+});
+
+it('首次加载与 SPA 空壳保留提示，完成正文核验后收起，正常切换不重载', async () => {
+  const f = fixture();
+  let release!: (ready: boolean) => void;
+  f.ready(() => new Promise(resolve => { release = resolve; }));
+  try {
+    assert.deepEqual(f.loadingStates.at(-1), { platform: 'deepseek', loading: true });
+    f.deepseek.value.emit('dom-ready');
+    assert.equal(f.loadingStates.at(-1)?.loading, true);
+    f.deepseek.value.emit('did-finish-load');
+    assert.equal(f.loadingStates.at(-1)?.loading, true);
+    release(true); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.loadingStates.at(-1)?.loading, false);
+    f.ready(async () => true);
+    await f.set('chatgpt');
+    assert.deepEqual(f.loadingStates.at(-1), { platform: 'chatgpt', loading: true });
+    f.chatgpt.value.emit('did-finish-load'); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.loadingStates.at(-1)?.loading, false);
+    await f.set('deepseek');
+    assert.deepEqual(f.loadingStates.at(-1), { platform: 'deepseek', loading: false });
+    assert.equal(f.deepseek.reloads(), 0); assert.equal(f.chatgpt.urls.length, 1);
+  } finally { f.controller.dispose(); }
+});
+
+it('导航过期、隐藏平台完成及失败不能掩盖当前平台状态', async () => {
+  const f = fixture();
+  const pending: Array<(value: boolean) => void> = [];
+  f.ready(() => new Promise(resolve => pending.push(resolve)));
+  try {
+    f.deepseek.value.emit('did-finish-load');
+    f.deepseek.value.emit('did-start-navigation', {}, '', false, true);
+    pending.shift()!(true); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.loadingStates.at(-1)?.loading, true);
+    await f.set('chatgpt');
+    const count = f.loadingStates.length;
+    f.deepseek.value.emit('did-finish-load');
+    assert.equal(pending.length, 0, '后台页面不持续扫描 DOM');
+    assert.equal(f.loadingStates.length, count);
+    f.chatgpt.value.emit('did-fail-load', {}, -100, 'ERR_CONNECTION_CLOSED', '', true);
+    assert.deepEqual(f.loadingStates.at(-1), { platform: 'chatgpt', loading: false });
+    assert.match(f.controller.state.error!, /ERR_CONNECTION_CLOSED/);
+  } finally { f.controller.dispose(); }
+});
+
+it('文档完成后即使只读渲染检查无回执，也在有界等待后撤下遮罩', async context => {
+  context.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 0 });
+  const f = fixture(); f.ready(() => new Promise(() => {}));
+  try {
+    f.deepseek.value.emit('did-finish-load');
+    assert.equal(f.loadingStates.at(-1)?.loading, true);
+    context.mock.timers.tick(10_000);
+    assert.deepEqual(f.loadingStates.at(-1), { platform: 'deepseek', loading: false });
+    assert.equal(f.controller.state.error, undefined, '观察超时不伪造官网加载失败');
+  } finally { f.controller.dispose(); }
+});
+
+it('取消主 frame 导航撤下加载提示，迟到只读结果不能恢复遮罩或清除旧错误', async () => {
+  const f = fixture(); let release!: (ready: boolean) => void;
+  f.ready(() => new Promise(resolve => { release = resolve; }));
+  try {
+    f.deepseek.value.emit('did-fail-load', {}, -100, 'ERR_CONNECTION_CLOSED', '', true);
+    f.deepseek.value.emit('did-start-navigation', {}, '', false, true);
+    f.deepseek.value.emit('did-finish-load');
+    f.deepseek.value.emit('did-fail-load', {}, -3, 'ERR_ABORTED', '', true);
+    assert.equal(f.loadingStates.at(-1)?.loading, false);
+    release(true); await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.loadingStates.at(-1)?.loading, false);
   } finally { f.controller.dispose(); }
 });

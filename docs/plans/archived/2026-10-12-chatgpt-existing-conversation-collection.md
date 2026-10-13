@@ -5,7 +5,7 @@ created: 2026-10-12
 updated: 2026-10-13
 owner: Codex
 plan_readiness: ready
-source_audit: docs/audits/2026-10-12-chatgpt-first-result-return-audit.md
+source_audit: docs/audits/archived/2026-10-12-chatgpt-first-result-return-audit.md
 covered_findings: [CGR-006, CGR-007, CGR-008, CGR-009, CGR-010]
 ---
 

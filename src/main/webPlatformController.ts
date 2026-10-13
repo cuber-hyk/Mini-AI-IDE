@@ -13,6 +13,20 @@ interface Options {
   applyView: (view: WebContentsView) => void;
   changed?: (state: WebPlatformState) => void | Promise<void>;
   switchBlock?: () => WebPlatformSwitchBlock | undefined;
+  loadingChanged?: (platform: WebPlatform, loading: boolean) => void;
+  contentReady?: (web: WebContents) => Promise<boolean>;
+}
+
+/** 加载完成仍可能是 SPA 空壳；只读返回是否已有可见内容，不读取正文回主进程。 */
+export async function webContentReady(web: WebContents): Promise<boolean> {
+  return await web.executeJavaScriptInIsolatedWorld(1004, [{ code: `(() => {
+    if (!document.body || !document.body.getClientRects().length) return false;
+    return [...document.body.querySelectorAll('main,p,h1,h2,button,input,textarea,[role="textbox"]')].some(e => {
+      const s = getComputedStyle(e);
+      return e.getClientRects().length > 0 && s.display !== 'none' && s.visibility !== 'hidden' &&
+        (e.matches('input,textarea,[role="textbox"]') || !!e.innerText?.trim());
+    });
+  })()` }]) === true;
 }
 
 export class WebPlatformController {
@@ -27,8 +41,13 @@ export class WebPlatformController {
   private readonly loadCleanup: Array<() => void> = [];
   private chatgptStarted = false;
   private lastSwitchBlockedReason: WebPlatformSwitchBlock | undefined;
+  private readonly loading = new Set<WebPlatform>(['deepseek']);
+  private readonly resumeReadiness = new Map<WebPlatform, () => void>();
 
-  constructor(private readonly options: Options) { this.watchLoads('deepseek', options.deepseek); }
+  constructor(private readonly options: Options) {
+    this.watchLoads('deepseek', options.deepseek);
+    options.loadingChanged?.('deepseek', true);
+  }
   get state(): WebPlatformState {
     const { switchBlockedReason: _previous, error: _error, reloading: _reloading, ...state } = this.current;
     const switchBlockedReason = this.options.switchBlock?.();
@@ -38,12 +57,42 @@ export class WebPlatformController {
 
   private watchLoads(platform: WebPlatform, view: WebContentsView): void {
     const web = view.webContents;
+    let generation = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    let checkingRevision: number | undefined;
+    let finishedDocument = false;
+    let deadline = 0;
+    const clear = () => {
+      generation++;
+      if (timer) clearTimeout(timer); timer = undefined;
+      if (deadlineTimer) clearTimeout(deadlineTimer); deadlineTimer = undefined;
+    };
+    const present = () => {
+      if (this.current.platform === platform) this.options.loadingChanged?.(platform, this.loading.has(platform));
+    };
+    const ready = async (revision: number): Promise<void> => {
+      timer = undefined;
+      if (this.current.platform !== platform || checkingRevision === revision || !this.loading.has(platform)) return;
+      checkingRevision = revision;
+      let visibleContent = false;
+      try { visibleContent = await (this.options.contentReady ?? webContentReady)(web); } catch { /* 导航或销毁中的读取不表示已渲染。 */ }
+      if (checkingRevision === revision) checkingRevision = undefined;
+      if (this.disposed || web.isDestroyed() || revision !== generation || this.failedLoads.has(platform)) return;
+      // 未知布局最多观察 10 秒；网络文档已完成后不无限遮挡用户可手动操作的页面。
+      if (visibleContent || Date.now() >= deadline) { clear(); this.loading.delete(platform); present(); }
+      else if (this.current.platform === platform) { timer = setTimeout(() => { void ready(revision); }, 250); timer.unref?.(); }
+    };
+    this.resumeReadiness.set(platform, () => { if (finishedDocument && !timer) void ready(generation); });
     const start = (_event: unknown, _url: string, inPlace: boolean, mainFrame: boolean) => {
-      if (!this.disposed && mainFrame && !inPlace) this.failedLoads.delete(platform);
+      if (!this.disposed && mainFrame && !inPlace) {
+        clear(); finishedDocument = false; this.failedLoads.delete(platform); this.loading.add(platform); present();
+      }
     };
     const failed = (_event: unknown, code: number, description: string, _url: string, mainFrame: boolean) => {
       if (this.disposed || !mainFrame) return;
       this.failedLoads.add(platform);
+      clear(); this.loading.delete(platform); present();
       if (code === -3) return;
       const name = platform === 'deepseek' ? 'DeepSeek' : 'ChatGPT';
       const errorCode = /^ERR_[A-Z0-9_]{1,56}$/.test(description) ? description : 'ERR_FAILED';
@@ -55,6 +104,10 @@ export class WebPlatformController {
     const finished = () => {
       if (this.disposed || this.failedLoads.has(platform)) return;
       const hadError = !!this.loadErrors[platform]; delete this.loadErrors[platform];
+      clear(); finishedDocument = true; deadline = Date.now() + 10_000;
+      deadlineTimer = setTimeout(() => { clear(); this.loading.delete(platform); present(); }, 10_000);
+      deadlineTimer.unref?.();
+      void ready(generation);
       process.stdout.write(`[web:${platform}] 官网加载完成\n`);
       if (hadError && this.current.platform === platform) this.broadcast();
     };
@@ -64,6 +117,8 @@ export class WebPlatformController {
     web.on('did-start-navigation', start); web.on('did-fail-load', failed);
     web.on('did-finish-load', finished); web.on('did-stop-loading', stopped);
     this.loadCleanup.push(() => {
+      clear();
+      this.resumeReadiness.delete(platform);
       web.removeListener('did-start-navigation', start); web.removeListener('did-fail-load', failed);
       web.removeListener('did-finish-load', finished); web.removeListener('did-stop-loading', stopped);
     });
@@ -105,6 +160,8 @@ export class WebPlatformController {
 
   private broadcast(topbarOnly = false): void {
     const state = this.state;
+    if (!topbarOnly) this.options.loadingChanged?.(state.platform, this.loading.has(state.platform));
+    this.resumeReadiness.get(state.platform)?.();
     this.lastSwitchBlockedReason = state.switchBlockedReason;
     for (const owner of topbarOnly ? [this.options.webbar] : [this.options.webbar, this.options.editor]) {
       if (!owner.isDestroyed()) owner.mainFrame.send(CHANNELS.webPlatformState, state);
@@ -166,6 +223,7 @@ export class WebPlatformController {
       await this.options.prepareSwitch();
       this.requireLive();
       if (platform === 'chatgpt' && !this.chatgpt) {
+        this.loading.add('chatgpt');
         this.chatgpt = this.options.createChatGPT();
         this.watchLoads('chatgpt', this.chatgpt);
         this.chatgpt.webContents.on('did-create-window', popup => {
@@ -173,6 +231,7 @@ export class WebPlatformController {
           this.popups.add(popup); popup.once('closed', () => this.popups.delete(popup));
         });
       }
+      this.options.loadingChanged?.(platform, this.loading.has(platform));
       this.options.applyView(platform === 'deepseek' ? this.options.deepseek : this.chatgpt!);
       await this.publish({ platform, switching: false });
     } catch (error) {

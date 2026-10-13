@@ -8,6 +8,7 @@ import { WEB_PLATFORMS, webPlatformSwitchBlock } from '../shared/webPlatform';
 import { webPlatformOf } from '../shared/webConversation';
 import { WebPlatformController } from './webPlatformController';
 import { createChatGPTView } from './webPlatformView';
+import { WebLoadingView } from './webLoadingView';
 /**
  * Mini-AI-IDE 主进程
  *
@@ -182,6 +183,8 @@ async function bootstrap(): Promise<void> {
     userAgent: uaPlan.effective,
   };
   const webView = new WebContentsView({ webPreferences: webPagePreferences });
+  const webLoading = new WebLoadingView();
+  const webLoadingReady = webLoading.load();
   // UA 处理：会话级 setUserAgent 对 WebContentsView **不生效**（P0b 实测教训，见 P0B-7），
   // 因此对视图的 webContents 再显式设置一次，并在自检中验证生效。
   webView.webContents.setUserAgent(uaPlan.effective);
@@ -239,6 +242,8 @@ async function bootstrap(): Promise<void> {
   win.contentView.addChildView(editorView);
   win.contentView.addChildView(webBarView);
   win.contentView.addChildView(webView);
+  // 仅覆盖 webBounds；顶栏、本地需求及后加的提示词浮层保持各自层级。
+  win.contentView.addChildView(webLoading.view);
   win.contentView.addChildView(previewView);
   /*
    * 提示词面板**最后添加**：后加入的子视图在更上层。
@@ -260,7 +265,7 @@ async function bootstrap(): Promise<void> {
   let localPrompt: LocalPromptController | undefined;
   let refreshPlatformSwitch: (() => void) | undefined;
   const layoutController = new WorkspaceLayoutController(win,
-    { editor: editorView, web: webView, webbar: webBarView, preview: previewView }, settings,
+    { editor: editorView, web: webView, webbar: webBarView, preview: previewView, loading: webLoading.view }, settings,
     () => buildApplicationMenu());
   let layout = layoutController.layout;
   function relayout(): void { layoutController.apply(); layout = layoutController.layout; }
@@ -554,6 +559,10 @@ async function loadLocalView(
       await tools.setWebActive(false);
     },
     applyView: view => layoutController.setWebView(view),
+    loadingChanged: (platform, loading) => {
+      webLoading.setPlatform(platform);
+      layoutController.setLoadingViewVisible(loading);
+    },
     changed: async state => {
       platformRevision++;
       const next = platforms.getView(state.platform).webContents;
@@ -579,6 +588,7 @@ async function loadLocalView(
     busy: () => { const state = tools.getState(); return state.busy || state.resultReturn?.phase === 'sending' || ['countdown', 'sending', 'waiting_tools'].includes(state.continuation?.phase ?? ''); },
     disabled: SELF_TEST || (UI_PROBE && !WORKSPACE_PROBE) || DIAGNOSE });
   const localPromptChannels = localPrompt.register();
+  await webLoadingReady;
   await loadLocalView(webBarView, 'webbar.html');
   // 先注册只读变更桥，再加载会立即请求初始状态的面板。
   await loadLocalView(previewView, 'preview.html');
@@ -1094,23 +1104,37 @@ async function loadLocalView(
   // 退出保护和软件更新不等待 AI 网页联网成功。
   registerToolShutdown(app, () => workspaceController.run(async () => {
     if (!closeApproved && !updater?.installing && !await workspaceController.editor.canLeave()) return false;
+    try { layoutController.flushPendingLayout(); }
+    catch (error) {
+      void dialog.showMessageBox(win, { type: 'error', message: '分栏布局保存失败，请重试退出', detail: String(error) });
+      return false;
+    }
     closeApproved = true;
     // 菜单退出也先关闭窗口，停止清理期间新增编辑或工具请求。
     if (!win.isDestroyed()) win.close(); return true;
   }), () => tools.dispose(), error => process.stderr.write(`[tools] 退出时停止命令失败：${String(error)}\n`));
   win.on('close', (event) => {
     // 仅安装进行中复用更新器的离开批准；安装失败恢复普通退出保护。
-    if (closeApproved || updater?.installing || SELF_TEST || UI_PROBE || DIAGNOSE) return;
+    if (closeApproved || updater?.installing || SELF_TEST || UI_PROBE || DIAGNOSE) {
+      try { layoutController.flushPendingLayout(); }
+      catch (error) {
+        event.preventDefault(); closeApproved = false;
+        void dialog.showMessageBox(win, { type: 'error', message: '分栏布局保存失败，请重试关闭', detail: String(error) });
+      }
+      return;
+    }
     event.preventDefault();
     if (closePending) return;
     closePending = true;
     void workspaceController.run(async () => {
-      try { if (await workspaceController.editor.canLeave()) { closeApproved = true; win.close(); } }
+      try { if (await workspaceController.editor.canLeave()) { layoutController.flushPendingLayout(); closeApproved = true; win.close(); } }
+      catch (error) { void dialog.showMessageBox(win, { type: 'error', message: '关闭前保存失败，请重试关闭', detail: String(error) }); }
       finally { closePending = false; }
     });
   });
   win.on('closed', () => {
     platforms.dispose();
+    webLoading.dispose();
     toolSettingsWindow?.dispose();
     updateWindow.dispose();
     updater?.dispose();

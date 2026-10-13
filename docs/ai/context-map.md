@@ -113,3 +113,5 @@ JSON 解析定位由 `src/shared/toolJsonDiagnostic.ts` 负责；本地执行秒
 ChatGPT 普通对话纯文本适配：平台 URL 规则为 `src/shared/webConversation.ts`，只读 DOM 规则为 `src/main/chatgptPage.ts`，正文/完成快照为 `tools/replyObservation.ts`，监听生命周期为 `tools/replyChangeWatcher.ts`，唯一 DOM 写入仍为 `src/main/webComposerSender.ts`；活动绑定由 `tools/integration.ts` 管理。验证为 `test/chatgptToolIntegration.test.ts` 与 `tools/verify-chatgpt-composer.cjs`，源站真实连续对话另需人工验收。
 
 ChatGPT 原生只读结构诊断为 `tools/chatgpt-page-structure.cjs`，由 `tools/chatgpt-ide-preview.cjs` 在显式诊断开关开启时运行，不记录正文、输入或凭据；离线两轮真实工具验证为 `tools/verify-chatgpt-tools.cjs`。
+
+官网启动/切换的本地加载反馈先读 `docs/capabilities/web-platforms.md` 与 `docs/adr/2026-10-11-web-platform-switching.md`；状态 owner 为 `src/main/webPlatformController.ts`，展示 owner 为 `src/main/webLoadingView.ts` 与 `src/renderer/webLoading.html/css`，统一几何仍归 `workspaceLayoutController.ts`。回归入口为 `test/webPlatformController.test.ts`、`tools/verify-web-loading.cjs`。

@@ -17,9 +17,9 @@ it('批准丢弃 B 后读取 C，磁盘 C 同步为编辑器 C 并清除 dirty�
 async function fixture(path = 'a.txt') {
   const state = { root: 'A', currentPath: null as string | null, currentKind: null as string | null, currentText: '', savedText: '' };
   let leave = true; let write = true; let writeLater: any; let read: any = async () => ({ ok: true, text: 'saved', encoding: 'utf8' });
-  let report: any; let shown: any; let tabs: any; let focus: any; const writes: any[] = []; const disposed: any[] = [];
+  let report: any; let reports = 0; let shown: any; let tabs: any; let focus: any; const writes: any[] = []; const disposed: any[] = [];
   let previewRead: any = async () => ({ ok: true, kind: 'image', bytes: new Uint8Array([1]), mimeType: 'image/png' });
-  const bridge = { reportEditorState(value: any) { report = value; }, confirmLeave: async () => ({ ok: leave }), readFile: (...args: any[]) => read(...args),
+  const bridge = { reportEditorState(value: any) { report = value; reports++; }, confirmLeave: async () => ({ ok: leave }), readFile: (...args: any[]) => read(...args),
     readFilePreview: (...args: any[]) => previewRead(...args),
     writeFile: async (...args: any[]) => { writes.push(args); return writeLater ? writeLater(...args) : { ok: write }; }, onEditorRequest() {}, editorReply: async () => ({ ok: true }) };
   const context: any = { window: {} }; vm.runInNewContext(fs.readFileSync('src/renderer/editorWorkspace.js', 'utf8'), context);
@@ -28,7 +28,7 @@ async function fixture(path = 'a.txt') {
     createModel(path: string, text: string) { return { path, text }; }, showDocument(doc: any, requestedFocus: boolean) { shown = doc; focus = requestedFocus; },
     disposeModel(model: any) { disposed.push(model); }, renameModel() {}, replaceContent(doc: any, text: string) { if (doc.model) doc.model.text = text; } });
   await workspace.open(path); state.currentText = 'draft'; workspace.report();
-  return { state, workspace, writes, disposed, shown: () => shown, focus: () => focus, report: () => report, tabs: () => tabs,
+  return { state, workspace, writes, disposed, shown: () => shown, focus: () => focus, report: () => report, reportCount: () => reports, tabs: () => tabs,
     cancel() { leave = false; }, allow() { leave = true; }, failSave() { write = false; }, writeLater(fn: any) { writeLater = fn; }, readLater(fn: any) { read = fn; }, previewLater(fn: any) { previewRead = fn; } };
 }
 
@@ -45,6 +45,64 @@ it('自动打开备份不聚焦且保留原脏缓冲模型与视图，普通打�
   await f.workspace.open('a.txt');
   assert.equal(f.focus(), true); assert.equal(f.shown(), original); assert.equal(f.state.currentText, 'unsaved original');
   await f.workspace.open('a.txt', false); assert.equal(f.focus(), false, '已打开标签也遵守无焦点请求');
+});
+
+async function typingFixture() {
+  const f = await fixture();
+  f.state.currentText = 'saved'; f.workspace.report();
+  const model = f.shown().model;
+  model.text = 'saved';
+  let reads = 0;
+  model.getValue = () => { reads++; return model.text; };
+  model.getValueLength = () => model.text.length;
+  return { ...f, model, reads: () => reads, edit(text: string) { model.text = text; f.workspace.contentChanged(model); } };
+}
+
+it('首次输入立即保护草稿，连续追加不读取全文、不反复报告全部标签；按需快照始终最新', async () => {
+  const f = await typingFixture(); const reports = f.reportCount();
+  for (let i = 0; i < 100; i++) {
+    f.edit('saved' + 'x'.repeat(i + 1));
+    assert.equal(f.workspace.isDirty(), true);
+    assert.equal(f.report().documents[0].dirty, true);
+  }
+  assert.equal(f.reads(), 0); assert.equal(f.reportCount() - reports, 1);
+  assert.equal(f.state.currentText, 'saved' + 'x'.repeat(100)); assert.equal(f.reads(), 1);
+  assert.equal(f.state.currentText, f.model.text); assert.equal(f.reads(), 1);
+  assert.equal(await f.workspace.save(), true); assert.equal(f.writes[0][1], f.model.text);
+  assert.equal(f.workspace.isDirty(), false); assert.equal(f.reportCount() - reports, 2);
+});
+
+it('等长替换仍按真实全文比较，撤销及手工还原立即清除未保存标记', async () => {
+  const f = await typingFixture(); const reports = f.reportCount();
+  f.edit('sXved'); assert.equal(f.workspace.isDirty(), true); assert.equal(f.reads(), 1);
+  f.edit('saved'); assert.equal(f.workspace.isDirty(), false); assert.equal(f.reads(), 2);
+  f.edit('saved plus'); assert.equal(f.workspace.isDirty(), true); assert.equal(f.reads(), 2);
+  f.edit('saved'); assert.equal(f.workspace.isDirty(), false); assert.equal(f.reads(), 3);
+  assert.equal(f.reportCount() - reports, 4);
+});
+
+it('保存中的继续输入保留真实最新文本和脏状态，关闭确认与切换不会丢失惰性快照', async () => {
+  const f = await typingFixture(); let finish: any;
+  f.edit('saved first'); f.writeLater(() => new Promise(resolve => { finish = resolve; }));
+  const saving = f.workspace.save(); f.edit('saved first second'); finish({ ok: true });
+  assert.equal(await saving, false); assert.equal(f.state.savedText, 'saved first');
+  assert.equal(f.workspace.isDirty(), true); assert.equal(f.state.currentText, 'saved first second');
+  f.edit('latest before close'); f.cancel();
+  assert.equal(await f.workspace.close('a.txt'), false); assert.equal(f.state.currentText, 'latest before close');
+  f.edit('latest before switch'); await f.workspace.open('b.txt'); await f.workspace.open('a.txt');
+  assert.equal(f.state.currentText, 'latest before switch'); assert.equal(f.workspace.isDirty(), true);
+});
+
+it('异步外部重载拒绝覆盖期间的真实输入，切项目后旧模型事件不能重新产生草稿', async () => {
+  const f = await typingFixture(); let finish: any;
+  f.readLater(() => new Promise(resolve => { finish = resolve; }));
+  const reload = f.workspace.reload('a.txt', false, false);
+  await new Promise(resolve => setImmediate(resolve));
+  f.edit('typed during reload'); finish({ ok: true, text: 'external' });
+  assert.equal(await reload, false); assert.equal(f.state.currentText, 'typed during reload');
+  f.state.root = 'B'; f.workspace.clear(); f.edit('stale model event');
+  assert.equal(f.state.currentText, ''); assert.equal(f.workspace.isDirty(), false);
+  assert.equal(f.report().root, 'B'); assert.equal(f.report().documents.length, 0);
 });
 
 it('附件与文本共用标签，预览不产生脏状态或保存写入，返回时保留文本草稿', async () => {

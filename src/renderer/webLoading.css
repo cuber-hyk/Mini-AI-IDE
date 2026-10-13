@@ -1,0 +1,8 @@
+html, body { margin: 0; height: 100%; overflow: hidden; background: var(--ui-bg); color: var(--ui-text); }
+body { display: grid; place-items: center; font: 14px 'Segoe UI', 'Microsoft YaHei UI', system-ui, sans-serif; user-select: none; }
+main { text-align: center; padding: 24px; }
+h1 { font-size: 18px; font-weight: 600; margin: 18px 0 8px; }
+p { color: var(--ui-muted); margin: 0; }
+.loading-mark { display: inline-block; width: 24px; height: 24px; border: 2px solid var(--ui-border); border-top-color: var(--ui-accent); border-radius: 50%; animation: loading 1s linear infinite; }
+@keyframes loading { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .loading-mark { animation: none; } }

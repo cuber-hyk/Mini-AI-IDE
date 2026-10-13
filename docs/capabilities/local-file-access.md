@@ -1,7 +1,7 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-12
+updated: 2026-10-13
 owner: 胡运宽
 source_of_truth: [src/renderer/workspaceNavigation.js, docs/adr/2026-10-07-workspace-ui-shell-layout.md, docs/adr/2026-10-02-filesystem-permission-model.md, src/main/fileService.ts, src/main/fileManagement.ts, src/main/workspaceService.ts, src/main/workspaceController.ts, src/main/editorSession.ts, src/main/settings.ts, src/shared/contract.ts, src/main/preload.ts, src/renderer/editorWorkspace.js, src/renderer/editorTabs.js, src/renderer/fileExplorer.js, src/renderer/fileIcons.js, src/renderer/fileExplorer.css, test/workspaceService.test.ts, test/fileManagement.test.ts, test/workspaceController.test.ts, test/fileExplorer.test.ts, test/fileIcons.test.ts, test/editorSession.test.ts, test/editorWorkspace.test.ts, test/fileService.test.ts, src/main/filePreview.ts, src/main/filePreviewZoom.ts, src/main/workspaceFileDrag.ts, docs/adr/2026-10-11-native-workspace-file-drag.md, test/workspaceFileDrag.test.ts, tools/verify-workspace-file-drag.cjs, src/main/filePreviewIpc.ts, src/main/docxArchive.ts, src/shared/filePreview.ts, src/shared/imageDimensions.ts, src/renderer/filePreview.js, src/renderer/filePreview.css, test/filePreview.test.ts, test/filePreviewZoom.test.ts, test/filePreviewIpc.test.ts, test/filePreviewRenderer.test.ts, test/imageDimensions.test.ts, tools/verify-file-preview.cjs, src/main/tools/aiTempDirectory.ts, test/aiTempDirectory.test.ts]
 ---
@@ -149,3 +149,8 @@ source_of_truth: [src/renderer/workspaceNavigation.js, docs/adr/2026-10-07-works
 - `src/renderer/editorTabs.js` — 标签呈现、关闭入口与键盘导航
 - `src/renderer/fileExplorer.js`、`fileIcons.js`、`fileExplorer.css` — 文件树、静态类型图标、名称输入与右键菜单
 - `src/shared/encoding.ts`、`src/shared/pathGuard.ts`、`src/shared/limits.ts` — 纯逻辑（可单测）
+
+
+## 编辑输入与真实正文快照
+
+editorWorkspace 持有模型对应的按需全文快照：追加等长度变化只需长度即可立即确定未保存状态，等长修改仍精确比较实际全文，支持撤销及手动恢复原文。相同标签状态不重复报告或渲染；这不延迟首次未保存反馈。state.currentText 仍在读取时返回最新真实全文，保存、切换及离开确认先同步快照；保存期间继续编辑保留最新草稿，不以旧保存回执覆盖。只读附件不生成编辑脏状态。

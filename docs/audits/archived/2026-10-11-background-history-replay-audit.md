@@ -66,7 +66,7 @@ source_of_truth: code
 
 ## Closeout
 
-BH-1/BH-2/BH-3 已修复且回归验证，当前能力和来源限制已写入对应 capability/ADR，本报告归档。未被识别的现场 payload 归因继续由 `docs/audits/2026-10-11-json-truncation-audit.md` 的 JT-5 管理，不转成已确认的后台截断根因，也不新增长度上限或官网 API 任务。
+BH-1/BH-2/BH-3 已修复且回归验证，当前能力和来源限制已写入对应 capability/ADR，本报告归档。原现场 payload 的归因边界保留于 `docs/audits/archived/2026-10-11-json-truncation-audit.md` 的 JT-5；用户于2026-10-13明确结束旧现场追查，不将其写成已确认的后台截断根因，也不新增长度上限或官网 API 任务。
 
 ## 修复验收
 
