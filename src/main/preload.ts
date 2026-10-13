@@ -23,6 +23,7 @@ const CH = {
   webPlatformState: 'ui:web-platform-state',
   readFilePreview: 'fs:read-file-preview',
   filePreviewZoom: 'ui:file-preview-zoom',
+  composerDraftSaved: 'ui:composer-draft-saved',
   startWorkspaceFileDrag: 'fs:start-workspace-file-drag',
   getLocalPromptOptions: 'ui:get-local-prompt-options', setLocalPromptOptions: 'ui:set-local-prompt-options',
   choosePromptAttachments: 'ui:choose-prompt-attachments', stagePromptAttachments: 'ui:stage-prompt-attachments',
@@ -80,6 +81,7 @@ const CH = {
   promptStatus: 'ui:prompt-status',
 } as const;
 const bridge = {
+  onComposerDraftSaved: (listener: (event: unknown) => void) => ipcRenderer.on(CH.composerDraftSaved, (_event, data) => listener(data)),
   getWebPlatform: () => ipcRenderer.invoke(CH.getWebPlatform),
   onWebPlatformState: (listener: (state: unknown) => void) => ipcRenderer.on(CH.webPlatformState, (_event, state) => listener(state)),
   startWorkspaceFileDrag: (relPath: string, root: string) => ipcRenderer.invoke(CH.startWorkspaceFileDrag, relPath, root),

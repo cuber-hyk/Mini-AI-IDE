@@ -15,9 +15,11 @@
         tabs.setTools(toolsOpen, toolsVisible);
       }
     }
-    async function select(visible) {
+    async function select(visible, reveal) {
       navigationVersion += 1;
-      await bridge.setWorkspaceLayout({ previewVisible: visible, toolsVisible: false });
+      const patch = { previewVisible: visible, toolsVisible: false };
+      if (reveal) patch.fileVisible = true;
+      await bridge.setWorkspaceLayout(patch);
     }
     async function openReview() {
       navigationVersion += 1;
@@ -90,7 +92,7 @@
 
     });
     return {
-      showEditor: function () { return select(false); }, openReview, closeReview, openTools, closeTools,
+      showEditor: function (reveal) { return select(false, reveal); }, openReview, closeReview, openTools, closeTools,
       attachTabs: function (owner) { tabs = owner; renderReview(); },
       resetReview: function () { navigationVersion += 1; reviewOpen = false; previewVisible = false; toolsOpen = false; toolsVisible = false; renderReview(); }
     };

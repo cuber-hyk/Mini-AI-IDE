@@ -15,11 +15,12 @@ if (!process.versions.electron) {
   assert.equal(path.dirname(path.resolve(directory)), path.resolve(os.tmpdir()));
   fs.rmSync(directory, { recursive: true, force: true });
   if (run.error) console.error(run.error.message);
-  process.exit(run.status ?? 1);
+  process.exit(run.error ? 1 : run.status ?? 1);
 }
 require('tsx/cjs');
 const { app, BrowserWindow, session } = require('electron');
 const { WebComposerSender } = require('../src/main/webComposerSender.ts');
+const { ComposerDraftBackup } = require('../src/main/composerDraftBackup.ts');
 const temporary = process.env.MINI_CHATGPT_SEND_FIXTURE_DIR || fs.mkdtempSync(path.join(os.tmpdir(), 'mini-chatgpt-send-'));
 app.setPath('userData', path.join(temporary, 'userData'));
 const html = `<!doctype html><meta charset="utf-8"><style>.ProseMirror{min-width:300px;min-height:60px}button{min-width:40px;min-height:40px}</style>
@@ -38,11 +39,11 @@ const state = () => run(`({text:document.querySelector('.ProseMirror')?.textCont
 const inlineMarkdownSetup = `input.addEventListener('input',()=>{for(const p of input.children){if(!p.textContent)continue;const outer=document.createElement('span'),inner=document.createElement('span');inner.className='inline-markdown';inner.textContent=p.textContent;outer.append(inner);p.replaceChildren(outer)}})`;
 const colorSwatchSetup = `input.addEventListener('input',()=>{for(const p of input.children){const parts=p.textContent.split(/(#[a-fA-F0-9]{6}\\b)/);if(parts.length===1)continue;p.replaceChildren();for(const part of parts){p.append(document.createTextNode(part));if(/^#[a-fA-F0-9]{6}$/.test(part)){const swatch=document.createElement('span');swatch.className='ms-1 me-1 inline-block size-3';swatch.setAttribute('aria-hidden','true');swatch.setAttribute('contenteditable','false');swatch.setAttribute('data-hex-color-swatch','');swatch.style.backgroundColor=part;p.append(swatch)}}}})`;
 const autolinkSetup = `input.addEventListener('input',()=>{const walker=document.createTreeWalker(input,NodeFilter.SHOW_TEXT),nodes=[];while(walker.nextNode())nodes.push(walker.currentNode);for(const node of nodes){const parts=node.textContent.split(/(https:\\/\\/example\\.test\\/[a-z]+)/);if(parts.length===1)continue;const fragment=document.createDocumentFragment();for(const part of parts){if(!part.startsWith('https://example.test/')){fragment.append(document.createTextNode(part));continue}const link=document.createElement('span');link.className='Mention-fixture';for(const attr of ['rich-link-source-app-id','data-appearance','data-layout','data-font-weight','data-tone','data-underline-on-hover','data-breakable-url','data-rich-text-generated-autolink'])link.setAttribute(attr,'');link.setAttribute('text-link-href',part);const label=document.createElement('span');label.className='Label-fixture';const icon=document.createElement('span');icon.setAttribute('data-inline-url-icon','');icon.setAttribute('aria-hidden','true');icon.setAttribute('contenteditable','false');icon.className='Mention-fixture ProseMirror-widget';for(const attr of ['data-appearance','data-layout','data-font-weight','data-tone','data-underline-on-hover'])icon.setAttribute(attr,'');const box=document.createElement('span');box.setAttribute('contenteditable','false');box.className='IconContainer-fixture';const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');for(const attr of ['width','height','viewBox','fill','xmlns','class'])svg.setAttribute(attr,attr==='class'?'Icon-fixture':'');const path=document.createElementNS('http://www.w3.org/2000/svg','path');path.setAttribute('d','M0 0');path.setAttribute('fill','currentColor');svg.append(path);box.append(svg);icon.append(box,document.createTextNode(''));label.append(icon,document.createTextNode(part));link.append(label);fragment.append(link)}node.replaceWith(fragment)}})`;
-async function setup(code = '', url = 'https://chatgpt.com/c/current') {
+async function setup(code = '', url = 'https://chatgpt.com/c/current', backupDraft, draftSaved) {
   if (sender) await sender.dispose();
   await window.loadURL(url);
   if (code) await run(code);
-  sender = new WebComposerSender(window.webContents);
+  sender = new WebComposerSender(window.webContents, { backupDraft, draftSaved });
 }
 const send = (text = 'result', kind = 'results', scope = 'https://chatgpt.com/c/current') => sender.send(text, scope, kind);
 async function test(name, check) { await check(); passed++; console.log('ok ' + name); }
@@ -50,6 +51,130 @@ app.whenReady().then(async () => {
   const offline = session.fromPartition('chatgpt-composer-offline');
   await offline.protocol.handle('https', request => request.url.startsWith('https://chatgpt.com/') ? new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8' } }) : new Response('', { status: 403 }));
   window = new BrowserWindow({ show: false, webPreferences: { session: offline, sandbox: true, contextIsolation: true, nodeIntegration: false } });
+  const backupProject = path.join(temporary, 'draft-project'); fs.mkdirSync(backupProject);
+  const backups = new ComposerDraftBackup();
+  const saveDraft = (text, scope) => backups.save(backupProject, scope, text);
+  const draft = ' 草稿 https://example.test/url #123abc\n\n末行 ';
+  const draftSetup = `input.replaceChildren(...${JSON.stringify(draft)}.split('\\n').map(line=>{const p=document.createElement('p');if(line)p.textContent=line;else p.append(document.createElement('br'));return p}));send.disabled=false;`;
+  const literalPasteSetup = `for(const p of input.children){if(p.textContent){const span=document.createElement('span');span.setAttribute('data-prompt-literal-paste','');span.textContent=p.textContent;p.replaceChildren(span)}}`;
+  await test('已有纯文本草稿先完整落盘再覆盖，工具结果只发送一次且反馈路径', async () => {
+    await setup(draftSetup, undefined, async (text, scope) => {
+      assert.equal(text, draft); assert.equal(await run('value()'), draft); assert.equal((await state()).clicks, 0);
+      return saveDraft(text, scope);
+    });
+    const result = await send('真实工具结果'); assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(fs.readFileSync(result.draftBackupPath, 'utf8'), draft);
+    assert.deepEqual((await state()).received, ['真实工具结果']); assert.equal((await state()).clicks, 1);
+  });
+  await test('原生备份落盘后通知一次，通知失败也继续发送真实结果', async () => {
+    let notices = 0;
+    await setup(draftSetup, undefined, saveDraft, savedPath => {
+      assert.equal(fs.readFileSync(savedPath, 'utf8'), draft); notices++;
+      throw Error('offline editor unavailable');
+    });
+    const result = await send('draft notice result'); assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(notices, 1); assert.deepEqual((await state()).received, ['draft notice result']);
+    assert.equal((await state()).clicks, 1);
+  });
+  await test('官网粘贴文本标记逐字备份，隐藏的第二编辑器不影响唯一可见输入', async () => {
+    await setup(draftSetup + literalPasteSetup + `;const hidden=input.cloneNode(true);hidden.style.display='none';document.body.prepend(hidden)`, undefined, saveDraft);
+    const result = await send('literal paste result'); assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(fs.readFileSync(result.draftBackupPath, 'utf8'), draft);
+    assert.deepEqual((await state()).received, ['literal paste result']); assert.equal((await state()).clicks, 1);
+  });
+  await test('填入结果被官网包入literal-paste同文标记仍可发送且不创建草稿备份', async () => {
+    let saved = 0;
+    await setup(`input.addEventListener('input',()=>{${literalPasteSetup}})`, undefined, async () => { saved++; throw Error('unexpected backup'); });
+    assert.equal((await send(' owned\n\n result ')).ok, true);
+    assert.deepEqual((await state()).received, [' owned\n\n result ']); assert.equal(saved, 0);
+  });
+  await test('literal-paste不放宽未知属性、原子节点、隐藏结构或正文变更检查', async () => {
+    for (const change of [
+      `span.setAttribute('data-unknown','')`, `span.setAttribute('contenteditable','false')`, `span.setAttribute('role','button')`,
+      `span.setAttribute('hidden','')`, `span.style.display='none'`, `span.append(document.createElement('a'))`
+    ]) {
+      let saved = 0;
+      await setup(draftSetup + literalPasteSetup + `;const span=input.querySelector('[data-prompt-literal-paste]');${change}`, undefined, async () => { saved++; throw Error('unexpected backup'); });
+      assert.equal((await send()).ok, false); assert.equal(saved, 0); assert.equal((await state()).clicks, 0); assert.equal((await state()).inputs, 0);
+    }
+    await setup(draftSetup + literalPasteSetup, undefined, async (text, scope) => {
+      const saved = await saveDraft(text, scope); await run(`input.querySelector('[data-prompt-literal-paste]').append(' changed')`); return saved;
+    });
+    const result = await send(); assert.equal(result.ok, false); assert.equal((await state()).clicks, 0); assert.equal((await state()).inputs, 0);
+    assert.equal(fs.readFileSync(result.draftBackupPath, 'utf8'), draft);
+  });
+  await test('可见草稿加粗文本及尾部空白完整备份，隐藏编辑器不能替代原文', async () => {
+    const text = '草稿留底验收 draft-backup-ok', visibleDraft = text + '  ';
+    assert.equal(text.length, 22); assert.equal(visibleDraft.length, 24);
+    await setup(`const p=document.createElement('p'),bold=document.createElement('strong');bold.textContent=${JSON.stringify(text)};p.append(bold,document.createTextNode('  '));input.replaceChildren(p);send.disabled=false;const hidden=input.cloneNode(true);hidden.textContent=${JSON.stringify(text)};hidden.style.display='none';document.body.prepend(hidden)`, undefined, async (original, scope) => {
+      assert.equal(original, visibleDraft); assert.equal(await run('value()'), visibleDraft); assert.equal((await state()).clicks, 0);
+      return saveDraft(original, scope);
+    });
+    const result = await send('bold draft result'); assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(fs.readFileSync(result.draftBackupPath, 'utf8'), visibleDraft);
+    assert.deepEqual((await state()).received, ['bold draft result']); assert.equal((await state()).clicks, 1);
+  });
+  await test('官网将自有结果包入无属性STRONG仍逐字核验并仅发送一次', async () => {
+    let saved = 0;
+    await setup(`input.addEventListener('input',()=>{for(const p of input.children){if(!p.textContent)continue;const bold=document.createElement('strong');bold.textContent=p.textContent;p.replaceChildren(bold)}})`, undefined, async () => { saved++; throw Error('unexpected backup'); });
+    const payload = ' bold result \n\n tail ';
+    assert.equal((await send(payload)).ok, true); assert.equal(saved, 0);
+    assert.deepEqual((await state()).received, [payload]); assert.equal((await state()).clicks, 1);
+  });
+  await test('加粗不接纳额外属性或未知子树，备份后正文变化仍拒绝覆盖', async () => {
+    const boldSetup = `const bold=document.createElement('strong');bold.textContent='original draft';input.replaceChildren(document.createElement('p'));input.firstChild.append(bold);send.disabled=false;`;
+    for (const change of [`bold.setAttribute('data-unknown','')`, `bold.setAttribute('class','unknown')`, `bold.setAttribute('contenteditable','false')`, `bold.setAttribute('role','button')`, `bold.setAttribute('hidden','')`, `bold.style.display='none'`, `bold.append(document.createElement('a'))`, `bold.append(document.createComment('unknown'))`]) {
+      let saved = 0;
+      await setup(boldSetup + change, undefined, async () => { saved++; throw Error('unexpected backup'); });
+      assert.equal((await send()).ok, false); assert.equal(saved, 0); assert.equal((await state()).inputs, 0); assert.equal((await state()).clicks, 0);
+    }
+    await setup(boldSetup, undefined, async (text, scope) => {
+      const saved = await saveDraft(text, scope); await run(`input.querySelector('strong').append(' changed')`); return saved;
+    });
+    const result = await send(); assert.equal(result.ok, false); assert.equal((await state()).inputs, 0); assert.equal((await state()).clicks, 0);
+    assert.equal(await run('value()'), 'original draft changed'); assert.equal(fs.readFileSync(result.draftBackupPath, 'utf8'), 'original draft');
+  });
+  await test('备份失败保留草稿，不写入也不点击', async () => {
+    await setup(draftSetup, undefined, async () => { throw Error('backup failure'); });
+    const result = await send(); assert.equal(result.ok, false); assert.match(result.error, /备份失败/);
+    assert.equal(await run('value()'), draft); assert.equal((await state()).inputs, 0); assert.equal((await state()).clicks, 0);
+  });
+  await test('备份等待期间正文、输入节点、附件或会话改变均保留现场不覆盖', async () => {
+    for (const change of [`input.firstChild.append(' changed')`, `input.replaceWith(input.cloneNode(true))`,
+      `const file=document.createElement('img');file.src='data:image/png;base64,AA==';file.style='width:20px;height:20px';document.querySelector('form').append(file)`,
+      `history.pushState({},'', '/c/other')`]) {
+      let savedPath;
+      await setup(draftSetup, undefined, async (text, scope) => { savedPath = await saveDraft(text, scope); await run(change); return savedPath; });
+      const result = await send(); assert.equal(result.ok, false); assert.equal((await state()).inputs, 0); assert.equal((await state()).clicks, 0);
+      assert.equal(fs.readFileSync(savedPath, 'utf8'), draft);
+    }
+  });
+  await test('备份期间取消不清理尚未覆盖的原草稿，迟到保存不补发', async () => {
+    let entered, release; const started = new Promise(resolve => entered = resolve);
+    await setup(draftSetup, undefined, async (text, scope) => { entered(); await new Promise(resolve => release = resolve); return saveDraft(text, scope); });
+    const sending = send(); await started; await sender.cancel(); assert.equal((await sending).ok, false);
+    assert.equal(await run('value()'), draft); assert.equal((await state()).inputs, 0); release(); await pause(100);
+    assert.equal((await state()).clicks, 0); assert.equal(await run('value()'), draft);
+  });
+  await test('备份期间同文真实编辑见证仍撤回覆盖资格，不将保存成功作为重新授权', async () => {
+    for (const name of ['beforeinput', 'input', 'paste', 'drop', 'compositionstart']) {
+      let entered, release; const started = new Promise(resolve => entered = resolve);
+      await setup(draftSetup, undefined, async (text, scope) => { entered(); await new Promise(resolve => release = resolve); return saveDraft(text, scope); });
+      // 捕获生产处理器做可信事件逻辑反例；不伪造或派发真实浏览器输入。
+      await window.webContents.executeJavaScriptInIsolatedWorld(1005, [{ code: 'globalThis.fixtureEdits={};const add=document.addEventListener.bind(document);document.addEventListener=(name,handler,...args)=>{globalThis.fixtureEdits[name]=handler;return add(name,handler,...args)};void 0' }]);
+      const sending = send(); await started;
+      await window.webContents.executeJavaScriptInIsolatedWorld(1005, [{ code: 'globalThis.fixtureEdits[' + JSON.stringify(name) + ']({isTrusted:true,target:document.querySelector(".ProseMirror")})' }]);
+      release(); assert.equal((await sending).ok, false);
+      assert.equal(await run('value()'), draft); assert.equal((await state()).inputs, 0); assert.equal((await state()).clicks, 0);
+    }
+  });
+  await test('本地主动需求与未知富文本不读取或覆盖草稿，空输入不产生备份', async () => {
+    let saved = 0; const save = async (text, scope) => { saved++; return saveDraft(text, scope); };
+    await setup(draftSetup, undefined, save); assert.equal((await send('prompt', 'prompt')).ok, false); assert.equal(saved, 0);
+    await setup(draftSetup + `input.firstChild.append(document.createElement('a'))`, undefined, save);
+    assert.equal((await send()).ok, false); assert.equal(saved, 0); assert.equal((await state()).clicks, 0);
+    await setup('', undefined, save); assert.equal((await send()).ok, true); assert.equal(saved, 0);
+  });
   await test('原生contenteditable保持换行与空行，仅一次input和click', async () => {
     await setup(); assert.equal((await send('a\r\nb\n\n尾行')).ok, true);
     const s = await state(); assert.deepEqual(s.received, ['a\nb\n\n尾行']); assert.equal(s.clicks, 1); assert.equal(s.inputs, 1); assert.deepEqual(s.trusted, [false]);

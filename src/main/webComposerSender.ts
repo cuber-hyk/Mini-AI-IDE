@@ -15,8 +15,8 @@ export const COMPOSER_SEND_WORLD = 1005;
 const KEY = '__miniAIComposerSend';
 const ATTACHMENT_KEY = '__miniAIComposerAttachments';
 type SendWeb = Pick<WebContents, 'getURL' | 'isDestroyed' | 'executeJavaScriptInIsolatedWorld' | 'on' | 'removeListener'>;
-export type WebSendResult = { ok: boolean; error?: string; uncertain?: boolean; session?: string };
-type SendOptions = { allowLocalFixture?: boolean };
+export type WebSendResult = { ok: boolean; error?: string; uncertain?: boolean; session?: string; draftBackupPath?: string };
+type SendOptions = { allowLocalFixture?: boolean; backupDraft?: (text: string, session: string) => Promise<string>; draftSaved?: (path: string) => void };
 
 function attachmentStartScript(token: string, scope: string, fixture: boolean): string {
   return `(() => {
@@ -91,7 +91,7 @@ function attachmentCleanupScript(token: string): string {
   return `(() => { const key = ${JSON.stringify(ATTACHMENT_KEY)}, s = globalThis[key]; if (!s || s.token !== ${JSON.stringify(token)}) return true; try { if (s.committed && s.input.isConnected) { const actual = Array.from(s.input.files || []); if (actual.length !== s.committed.length || actual.some((f, i) => f.name !== s.committed[i].name || f.size !== s.committed[i].size)) return false; s.input.files = new DataTransfer().files; s.input.dispatchEvent(new Event('input', { bubbles: true })); s.input.dispatchEvent(new Event('change', { bubbles: true })); } delete globalThis[key]; return true; } catch { return false; } })()`;
 }
 
-function sendScript(token: string, text: string, scope: string, fixture: boolean, prompt: boolean, expectedFiles: readonly PromptAttachmentData[], platform: WebPlatform): string {
+function sendScript(token: string, text: string, scope: string, fixture: boolean, prompt: boolean, expectedFiles: readonly PromptAttachmentData[], platform: WebPlatform, backupDraft = false): string {
   return `(() => {
     const key = ${JSON.stringify(KEY)}, token = ${JSON.stringify(token)}, payload = ${JSON.stringify(text.replace(/\r\n?/g, '\n'))}, scope = ${JSON.stringify(scope)};
     const previous = globalThis[key];
@@ -166,7 +166,7 @@ function sendScript(token: string, text: string, scope: string, fixture: boolean
       return Array.from(area.querySelectorAll('img,video,audio,canvas,[data-testid*="attachment"],[data-testid*="file"],[data-testid*="upload"],[data-testid*="image"],button,[role="button"]')).filter(visible).some(e => /^(IMG|VIDEO|AUDIO|CANVAS)$/.test(e.tagName) || (!e.matches('button,[role="button"]') && /attachment|file|upload|image/i.test(e.getAttribute('data-testid') || '')) || /remove.*(file|attachment|image)|删除.*(文件|附件|图片)|移除.*(文件|附件|图片)/i.test([e.getAttribute('aria-label'), e.getAttribute('title')].filter(Boolean).join(' ')));
     };
     if (stateOfPage() !== 'idle') return { ok: false, error: '网页仍在生成或等待继续生成' };
-    if (!editable() || !empty()) return { ok: false, error: '网页输入框已有内容或不可编辑，未覆盖草稿' };
+    if (!editable() || (!empty() && !${backupDraft})) return { ok: false, error: '网页输入框已有内容或不可编辑，未覆盖草稿' };
     const attachmentState = globalThis[${JSON.stringify(ATTACHMENT_KEY)}];
     if (${expectedFiles.length > 0}) {
       const expected = ${JSON.stringify(expectedFiles.map(file => ({ name: file.name, size: file.size })))};
@@ -210,8 +210,11 @@ function sendScript(token: string, text: string, scope: string, fixture: boolean
         }
         const autolink = node.tagName === 'SPAN' && node.hasAttribute('data-rich-text-generated-autolink')
           && onlyAttributes(node, [...appearance, 'rich-link-source-app-id', 'data-breakable-url', 'text-link-href', 'data-rich-text-generated-autolink']);
-        if (node.tagName !== 'SPAN' || node.hasAttribute('contenteditable') || node.hasAttribute('role') || node.hasAttribute('hidden')
-          || (!autolink && Array.from(node.attributes).some(attr => attr.name.startsWith('data-'))) || getComputedStyle(node).display === 'none' || getComputedStyle(node).visibility === 'hidden') return null;
+        const literalPaste = node.tagName === 'SPAN' && node.hasAttribute('data-prompt-literal-paste')
+          && onlyAttributes(node, ['class', 'data-prompt-literal-paste']);
+        const boldText = node.tagName === 'STRONG' && node.attributes.length === 0;
+        if ((node.tagName !== 'SPAN' && !boldText) || node.hasAttribute('contenteditable') || node.hasAttribute('role') || node.hasAttribute('hidden')
+          || (!autolink && !literalPaste && Array.from(node.attributes).some(attr => attr.name.startsWith('data-'))) || getComputedStyle(node).display === 'none' || getComputedStyle(node).visibility === 'hidden') return null;
         const pieces = Array.from(node.childNodes).map(child => read(child, node));
         return pieces.some(piece => piece === null) ? null : pieces.join('');
       };
@@ -222,6 +225,8 @@ function sendScript(token: string, text: string, scope: string, fixture: boolean
       });
       return lines.some(line => line === null) ? null : lines.join('\\n');
     };
+    const draftText = empty() ? null : ownedText();
+    if (!empty() && (draftText === null || draftText === '')) return { ok: false, error: '网页草稿无法无损读取，未覆盖' };
     const write = value => {
       if (chatgpt) {
         const blocks = value.split('\\n').map(line => { const p = document.createElement('p'); if (line) p.textContent = line; else p.append(document.createElement('br')); return p; });
@@ -230,8 +235,9 @@ function sendScript(token: string, text: string, scope: string, fixture: boolean
       } else { setter.call(input, value); input.dispatchEvent(new Event('input', { bubbles: true })); }
     };
     return new Promise(resolve => {
-      const state = { token, clicked: false, done: false, takenOver: false, timer: null, cancel: null };
-      const owns = () => !state.takenOver && input.isConnected && ownedText() === payload;
+      let complete = resolve;
+      const state = { token, clicked: false, done: false, takenOver: false, written: false, timer: null, cancel: null, resume: null };
+      const owns = () => state.written && !state.takenOver && input.isConnected && ownedText() === payload;
       const clearOwned = () => {
         if (!state.clicked && owns()) write('');
       };
@@ -241,7 +247,7 @@ function sendScript(token: string, text: string, scope: string, fixture: boolean
         if (chatgpt) editEvents.forEach(name => document.removeEventListener(name, takeOver, true));
         try { if (!result.ok && !state.clicked) clearOwned(); } catch { result = { ok: false, error: '未发送结果的清理失败，请检查网页输入框', uncertain: true }; }
         if (globalThis[key] === state) delete globalThis[key];
-        resolve(result);
+        complete(result);
       };
       const editEvents = ['beforeinput', 'input', 'paste', 'drop', 'compositionstart'];
       const takeOver = event => {
@@ -252,9 +258,7 @@ function sendScript(token: string, text: string, scope: string, fixture: boolean
       if (chatgpt) editEvents.forEach(name => document.addEventListener(name, takeOver, true));
       state.cancel = () => finish({ ok: false, error: '自动发送已取消', ...(state.clicked ? { uncertain: true } : {}) });
       globalThis[key] = state;
-      try { write(payload); }
-      catch { return finish({ ok: false, error: '网页输入失败，已停止发送' }); }
-      const started = Date.now(); let clickedAt = 0;
+      let started = 0, clickedAt = 0;
       const poll = () => {
         try {
         if (state.done) return;
@@ -303,10 +307,31 @@ function sendScript(token: string, text: string, scope: string, fixture: boolean
         state.timer = setTimeout(poll, 25);
         } catch { finish({ ok: false, error: '网页发送检查失败，已停止且不会重试', ...(state.clicked ? { uncertain: true } : {}) }); }
       };
-      // 留出一轮事件循环，使关闭开关、用户输入和导航可在点击前取消。
-      state.timer = setTimeout(poll, 25);
+      const start = () => {
+        state.written = true;
+        try { write(payload); }
+        catch { return finish({ ok: false, error: '网页输入失败，已停止发送' }); }
+        started = Date.now();
+        // 留出一轮事件循环，使关闭开关、用户输入和导航可在点击前取消。
+        state.timer = setTimeout(poll, 25);
+      };
+      if (draftText !== null) {
+        state.resume = () => new Promise(next => {
+          complete = next; state.resume = null;
+          const current = controls(true);
+          if (!inScope() || !current || current.input !== input || current.composer !== composer
+            || !editable() || stateOfPage() !== 'idle' || hasAttachments() || ownedText() !== draftText)
+            return finish({ ok: false, error: '备份期间网页草稿、控件或会话已变化，未覆盖' });
+          start();
+        });
+        resolve({ ok: true, draftText });
+      } else start();
     });
   })()`;
+}
+
+function resumeDraftScript(token: string): string {
+  return `(() => { const state = globalThis[${JSON.stringify(KEY)}]; if (state?.token !== ${JSON.stringify(token)} || state.done || state.takenOver || typeof state.resume !== 'function') return { ok: false, error: '草稿备份后的发送已取消，未覆盖' }; return state.resume(); })()`;
 }
 
 function cancelScript(token: string): string {
@@ -424,6 +449,7 @@ export class WebComposerSender {
     const bounded = new Promise<WebSendResult>(resolve => { timeout = setTimeout(() => {
       void this.cancel(); resolve({ ok: false, error: '网页发送等待超时，已停止且不会重试', uncertain: true });
     }, attachments.length ? Math.min(300_000, Math.max(30_000, 30_000 + Math.ceil(attachments.reduce((sum, file) => sum + file.size, 0) / (1024 * 1024)) * 1000)) : 7500); });
+    let draftBackupPath: string | undefined;
     try {
       if (attachments.length) {
         const staged = await Promise.race([this.stageAttachments(token, expectedSession, this.options.allowLocalFixture === true, attachments, generation, current), cancelled, bounded]);
@@ -436,7 +462,31 @@ export class WebComposerSender {
         }
         return { ok: false, error: '需求、项目或会话已变化，未发送' };
       }
-      const result: unknown = await Promise.race([this.web.executeJavaScriptInIsolatedWorld(COMPOSER_SEND_WORLD, [{ code: sendScript(token, text, expectedSession, this.options.allowLocalFixture === true, this.kind === 'prompt', attachments, platform) }]), cancelled, bounded]);
+      const canBackup = platform === 'chatgpt' && this.kind === 'results' && !!this.options.backupDraft;
+      let result: unknown = await Promise.race([this.web.executeJavaScriptInIsolatedWorld(COMPOSER_SEND_WORLD, [{ code: sendScript(token, text, expectedSession, this.options.allowLocalFixture === true, this.kind === 'prompt', attachments, platform, canBackup) }]), cancelled, bounded]);
+      if (canBackup && result && typeof result === 'object' && 'draftText' in result && typeof result.draftText === 'string') {
+        if (generation !== this.generation || !current() || sessionKeyOf(this.web.getURL()) !== expectedSession) {
+          await this.cancel('results'); return { ok: false, error: '草稿备份前发送资格已失效，未覆盖' };
+        }
+        try {
+          const saved = await Promise.race([this.options.backupDraft!(result.draftText, expectedSession), cancelled, bounded]);
+          if (typeof saved !== 'string') return saved;
+          if (!saved) throw new Error('无法确认草稿备份路径');
+          draftBackupPath = saved;
+        } catch (error) {
+          await this.cancel('results');
+          return { ok: false, error: `网页草稿备份失败，未覆盖：${error instanceof Error ? error.message : String(error)}` };
+        }
+        if (generation !== this.generation || !current() || sessionKeyOf(this.web.getURL()) !== expectedSession) {
+          await this.cancel('results'); return { ok: false, error: '草稿已备份，但发送资格已失效，未覆盖', draftBackupPath };
+        }
+        try { this.options.draftSaved?.(draftBackupPath); }
+        catch { traceCollection('composer.draft-notice-failed', { kind: this.kind }); }
+        if (generation !== this.generation || !current() || sessionKeyOf(this.web.getURL()) !== expectedSession) {
+          await this.cancel('results'); return { ok: false, error: '草稿已备份，但发送资格已失效，未覆盖', draftBackupPath };
+        }
+        result = await Promise.race([this.web.executeJavaScriptInIsolatedWorld(COMPOSER_SEND_WORLD, [{ code: resumeDraftScript(token) }]), cancelled, bounded]);
+      }
       traceCollection('composer.send-result', { kind: this.kind, attachmentCount: attachments.length,
         ok: Boolean(result && typeof result === 'object' && 'ok' in result && result.ok === true),
         error: result && typeof result === 'object' && 'error' in result ? String(result.error) : null,
@@ -445,11 +495,11 @@ export class WebComposerSender {
         const cleaned = await this.web.executeJavaScriptInIsolatedWorld(COMPOSER_SEND_WORLD, [{ code: attachmentCleanupScript(token) }]).catch(() => false);
         if (cleaned !== true) return { ok: false, error: '发送未完成，官网附件清理状态未确认，请检查页面', uncertain: true };
       }
-      if (result && typeof result === 'object' && 'ok' in result && typeof result.ok === 'boolean') return result as WebSendResult;
+      if (result && typeof result === 'object' && 'ok' in result && typeof result.ok === 'boolean') return { ...result as WebSendResult, ...(draftBackupPath ? { draftBackupPath } : {}) };
       return { ok: false, error: '网页发送状态不可识别，已停止且不会重试', uncertain: true };
     } catch {
       // 渲染进程异常可能发生在点击后，不能推断为未发送。
-      return { ok: false, error: '网页发送检查失败，已停止且不会重试', uncertain: true };
+      return { ok: false, error: '网页发送检查失败，已停止且不会重试', uncertain: true, ...(draftBackupPath ? { draftBackupPath } : {}) };
     } finally {
       clearTimeout(timeout);
       if (this.token === token) { this.token = undefined; this.kind = undefined; this.abort = undefined; }

@@ -36,6 +36,9 @@ it('编辑和 Diff 共用工作区，切换不请求文件写入；Diff 阻止�
   assert.equal(node('monaco').inert, false);
   assert.equal(JSON.stringify(tabStates.at(-1)), '[true,false]', '切回文件保留改动标签');
   assert.equal(JSON.stringify(patches), '[{"previewVisible":true,"fileVisible":true},{"previewVisible":false,"toolsVisible":false}]');
+  publish({ previewVisible: false, fileVisible: false } as any);
+  await workspace.showEditor(true);
+  assert.equal(JSON.stringify(patches.at(-1)), '{"previewVisible":false,"toolsVisible":false,"fileVisible":true}', '草稿备份展示恢复收起的文件区并退出工具或Diff正文');
   await workspace.closeReview();
   assert.equal(JSON.stringify(tabStates.at(-1)), '[false,false]', '关闭改动标签不关闭任何文件');
   publish({ previewVisible: true });

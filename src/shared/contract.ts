@@ -19,6 +19,7 @@ export const CHANNELS = {
   webPlatformState: 'ui:web-platform-state',
   readFilePreview: 'fs:read-file-preview',
   filePreviewZoom: 'ui:file-preview-zoom',
+  composerDraftSaved: 'ui:composer-draft-saved',
   startWorkspaceFileDrag: 'fs:start-workspace-file-drag',
   getLocalPromptOptions: 'ui:get-local-prompt-options',
   setLocalPromptOptions: 'ui:set-local-prompt-options',
@@ -522,6 +523,7 @@ export interface EditorDiffSibling {
 
 /** preload 通过 contextBridge 暴露给渲染进程的唯一接口面 */
 export interface EditorBridge {
+  onComposerDraftSaved(listener: (event: { root: string; relPath: string; revision: number }) => void): void;
   getWebPlatform(): Promise<WebPlatformState>;
   onWebPlatformState(listener: (state: WebPlatformState) => void): void;
   startWorkspaceFileDrag(relPath: string, root: string): Promise<{ ok: boolean; error?: string }>;

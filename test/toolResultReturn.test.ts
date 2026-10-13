@@ -21,6 +21,16 @@ function fixture(automatic = false) {
   return { owner, context, selection, file, sent, get resolved() { return resolved; }, setVerify(fn: typeof verify) { verify = fn; }, setTransport(fn: typeof transport) { transport = fn; } };
 }
 
+it('结果发送完成或暂停都保留原网页草稿备份位置供用户恢复', async () => {
+  for (const ok of [true, false]) {
+    const f = fixture(true);
+    f.setTransport(async () => ({ ok, ...(ok ? {} : { error: 'input changed' }), draftBackupPath: '/project/.mini-ai-ide/composer-drafts/one.txt' }));
+    const result = await f.owner.send('automatic'); assert.equal(result.ok, ok);
+    assert.match(f.owner.getState(f.context).message, /原网页草稿已备份：\/project/);
+    assert.equal((await f.owner.send('automatic')).ok, false);
+  }
+});
+
 it('当前完整真实批次手动发送正文及字节流一次，自动与手动入口互斥', async () => {
   const f = fixture(); assert.equal(f.owner.getState(f.context).canSend, true);
   assert.equal((await f.owner.send('automatic')).ok, false);

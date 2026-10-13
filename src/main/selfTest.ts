@@ -270,6 +270,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
   // 只在 contract.ts 里加常量是**不够**的 —— 自检会误报"未注册 ipcMain 处理器"。
   // 判断依据：代码里只有 `webContents.send(CHANNELS.x)`、没有 `ipcMain.handle(CHANNELS.x)`。
   const oneWayChannels: string[] = [
+    CHANNELS.composerDraftSaved,
     CHANNELS.filePreviewZoom,
     CHANNELS.toolState,
     CHANNELS.toolWorkspaceStatus,

@@ -641,12 +641,16 @@
     setInfo, openFile: function (path) { return openFile(path, null); },
   });
   function loadTree() { return explorer.refresh(false); }
-  async function openFile(relPath) {
+  async function openFile(relPath, options) {
     const root = state.root; const revision = workspaceRevision;
-    await fileWorkspace.showEditor();
+    await fileWorkspace.showEditor(options && options.reveal);
     if (root !== state.root || revision !== workspaceRevision) return false;
-    return editorWorkspace.open(relPath);
+    const opened = await editorWorkspace.open(relPath, !(options && options.focus === false));
+    return root === state.root && revision === workspaceRevision && opened;
   }
+  window.setupComposerDraftFeedback({ bridge, setInfo, openFile,
+    getRoot: function () { return state.root; }, getRevision: function () { return workspaceRevision; },
+  });
   function save() { return editorWorkspace.save(); }
   function languageFor(p) {
     const ext = (p.split('.').pop() || '').toLowerCase();

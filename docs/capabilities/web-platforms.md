@@ -3,7 +3,7 @@ artifact_type: capability
 status: current
 updated: 2026-10-13
 owner: 胡运宽
-source_of_truth: [src/main/firstPromptSession.ts, src/main/tools/replyChangeWatcher.ts, test/chatgptReply.test.ts, test/replyChangeWatcher.test.ts, src/main/tools/replySource.ts, test/replySource.test.ts, src/shared/webPlatform.ts, src/main/webPlatformController.ts, src/main/webPlatformView.ts, src/main/index.ts, src/main/tools/integration.ts, src/main/localPromptController.ts, src/main/workspaceLayoutController.ts, src/renderer/webbar.js, src/renderer/promptComposer.js, src/renderer/toolHarness.js, test/webPlatformController.test.ts, test/toolPlatformActivity.test.ts, test/webPlatformUi.test.ts, src/main/chatgptPage.ts, src/shared/webConversation.ts, src/main/webComposerSender.ts, test/chatgptToolIntegration.test.ts, tools/verify-chatgpt-composer.cjs, tools/verify-chatgpt-tools.cjs, tools/verify-web-platform.cjs, docs/adr/2026-10-11-web-platform-switching.md]
+source_of_truth: [src/main/composerDraftBackup.ts, test/composerDraftBackup.test.ts, src/main/firstPromptSession.ts, src/main/tools/replyChangeWatcher.ts, test/chatgptReply.test.ts, test/replyChangeWatcher.test.ts, src/main/tools/replySource.ts, test/replySource.test.ts, src/shared/webPlatform.ts, src/main/webPlatformController.ts, src/main/webPlatformView.ts, src/main/index.ts, src/main/tools/integration.ts, src/main/localPromptController.ts, src/main/workspaceLayoutController.ts, src/renderer/webbar.js, src/renderer/promptComposer.js, src/renderer/toolHarness.js, test/webPlatformController.test.ts, test/toolPlatformActivity.test.ts, test/webPlatformUi.test.ts, src/main/chatgptPage.ts, src/shared/webConversation.ts, src/main/webComposerSender.ts, test/chatgptToolIntegration.test.ts, tools/verify-chatgpt-composer.cjs, tools/verify-chatgpt-tools.cjs, tools/verify-web-platform.cjs, docs/adr/2026-10-11-web-platform-switching.md]
 ---
 
 # 官网平台
@@ -29,13 +29,13 @@ ChatGPT 首页首发可经过 `/c/local-chatgpt%3A<UUID>` 编码占位地址，�
 
 ChatGPT 只读规则由 `chatgptPage.ts` 提供：以最新 `data-talvt-turn-state` 轮次及明确 assistant 角色标记定位唯一带 data-dil-message-id 的正式正文，要求该轮状态为 complete 且正文外有本轮唯一复制页脚；用户消息容器内的操作栏不能计入完成证据，后续用户轮、思考、生成、中断及歧义均不能回退采历史。CodeSurface 中的唯一 CodeContent 保留原始文本，语言仅取对应 StickyActionBar 的明确局部标签。变化监听涵盖这些轮次、角色、正文及页脚节点与状态属性。
 
-`webComposerSender.ts` 仍是唯一网页 DOM 写入 owner，分别验证平台官方 origin、普通会话、唯一可编辑 composer 和局部发送控件；ChatGPT 统一以最近且不含回复的 FORM 关联 ProseMirror 与唯一 type=submit/发送控件，空 composer 的语音控件只用于确认输入区，填入后等待真正发送控件出现。发送只接纳用户主动需求或当前批真实结果，已有草稿/附件、生成中、未知控件、不确定回执均暂停，点击后不重试。
+`webComposerSender.ts` 仍是唯一网页 DOM 写入 owner，分别验证平台官方 origin、普通会话、唯一可编辑 composer 和局部发送控件；ChatGPT 统一以最近且不含回复的 FORM 关联 ProseMirror 与唯一 type=submit/发送控件，空 composer 的语音控件只用于确认输入区，填入后等待真正发送控件出现。发送只接纳用户主动需求或当前批真实结果；当前工具结果/诊断可将已有纯文本草稿先保存到本项目隐藏目录，重新核验后替换回传。主动需求的已有草稿、已有附件、生成中、未知控件及不确定回执仍暂停，点击后不重试。
 
 真实 ChatGPT 页面只读结构核验与离线夹具是不同证据。原生结构诊断已核验 ProseMirror/FORM、submit/发送、DilResponseRoot、轮次完成标记、局部复制页脚及代码语言标题；官网输入事件接收和连续闭环以真实对话验收为准，离线测试不能替代该证据，也不能证明重启登录保持。2026-10-12 用户补充确认完整 IDE 跨重启登录保持验收通过；该结论来自用户实际验收反馈。预览模式可开启 MINI_CHATGPT_STRUCTURE_TRACE，按 `tools/chatgpt-page-structure.cjs` 输出不含正文、草稿、凭据或会话 ID 的结构快照；不向官网提供桥。网页能力依赖平台当前 DOM，技术实现也不代表平台授权程序化提取输出。
 
 ChatGPT 的生成见证由 chatgptPage 的 CHATGPT_GENERATING_SCRIPT 单一提供给完成核验、变化监听和发送运输：仅识别当前正式回复/代码/思考及已知停止控件，忽略推荐区、侧栏、附件和旧轮次的 busy；推荐提示词不是完成条件，仍要求本轮 complete 与唯一正式复制页脚。来源指纹使用 CHATGPT_SOURCE_TEXT_READER 保留语言标签和正文，排除按钮等非正文显示；历史、未知节点重挂载及封存后正文改变仍无自动执行资格。
 
-自有 ChatGPT 输入允许段落中原文逐字相同的文本/span，以及空段落或带 ProseMirror-trailingBreak 的末尾占位 BR。带明确自动链接标记的span须通过属性白名单并递归读取原文字，不读取或跟随链接地址；已知颜色色块须为空SPAN且aria-hidden=true、contenteditable=false，已知自动链接图标须属于自动链接span、具同样隐藏/不可编辑标记且子树仅含无文字的受限SPAN/svg/path，才可作为零正文装饰忽略。未知属性、任意原子节点或SVG、非空装饰、未知换行和正文变化仍拒绝，不trim或使用任意innerText。真实 beforeinput/input/paste/drop/compositionstart 接管使本次正文失去发送和取消清理资格，即使当时字节未变；合成事件不冒充用户接管。已有草稿、附件、会话或控件变化及点击后未知运输仍暂停，不重试。
+自有 ChatGPT 输入允许段落中原文逐字相同的文本/span，以及空段落或带 ProseMirror-trailingBreak 的末尾占位 BR。带明确自动链接标记的span须通过属性白名单并递归读取原文字，不读取或跟随链接地址；已知颜色色块须为空SPAN且aria-hidden=true、contenteditable=false，已知自动链接图标须属于自动链接span、具同样隐藏/不可编辑标记且子树仅含无文字的受限SPAN/svg/path，才可作为零正文装饰忽略。未知属性、任意原子节点或SVG、非空装饰、未知换行和正文变化仍拒绝，不trim或使用任意innerText。真实 beforeinput/input/paste/drop/compositionstart 接管使本次正文失去发送和取消清理资格，即使当时字节未变；合成事件不冒充用户接管。未获备份资格或无法完成备份的已有草稿、附件、会话或控件变化及点击后未知运输仍暂停，不重试。
 
 2026-10-12 用户在新版开发 IDE 的 ChatGPT 普通新会话完成三轮只读工具全程自动采集、执行与回传验收，无手动恢复；该实际闭环反馈与离线 DOM 夹具结果分别记录。
 
@@ -46,3 +46,9 @@ ChatGPT 正文根以 div[data-dil-message-id] 的消息语义属性定位，不�
 ChatGPT 点击前发送按钮重绘时，仅在旧按钮已断开、原输入框及原FORM不变、当前按钮为唯一已知发送控件时重新选择。点击前仍逐字核验自有结果、编辑接管、会话、生成和附件；原输入重挂载、未知或歧义按钮继续暂停，点击后不重新选择或重试。控件变化提示区分唯一性、输入框、FORM与按钮身份，开启collection trace时补充不含正文的布尔结构诊断。
 
 ChatGPT控件和附件区域核验共用FORM回复判据：原输入框内的inline-markdown等文本span样式不作为回复混入，正文仍须满足原有允许节点和逐字一致检查；真实角色、轮次及正式正文标记无论位置均拒绝，输入框外的markdown样式区域同样拒绝。官网整理自有输入的样式不会单独撤回发送资格，真实编辑接管继续优先。
+
+
+ChatGPT网页草稿备份owner为`composerDraftBackup.ts`，由index和工具integration注入当前项目；具体受控读取/替换运输仍由`webComposerSender.ts`在世界1005管理。发送前存在草稿时先冻结输入及原文并监听真实接管，保存成功后以一次token恢复；异步保存期间的编辑、节点/FORM替换、附件、生成、取消及会话/批次变化不覆盖。备份保留于`.mini-ai-ide/composer-drafts/`，专用归属/.gitignore与真实路径核验，UTF-8 TXT独占保存并sync，保存失败或超1MiB暂停。工具结果状态显示备份路径；不存原会话ID、不改剪贴板、不自动清理。参见`../adr/2026-10-13-chatgpt-composer-draft-backup.md`与对应落盘/发送测试。
+
+
+已核验的ChatGPT粘贴原文包装SPAN[data-prompt-literal-paste]仅允许该标记与class属性，无属性STRONG允许递归读取内部纯文本；段落换行及节点外空白逐字保留。备份和运输后自有结果共用同一reader；未知属性、可编辑/原子节点、隐藏结构或正文变化仍拒绝，不以任意innerText替代。页面隐藏编辑器不计入唯一可见输入判定，也不作为备份来源，多个可见输入仍暂停。

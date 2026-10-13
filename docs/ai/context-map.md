@@ -12,6 +12,10 @@
 
 ## 按任务类型路由
 
+ChatGPT工具回传前纯文本草稿备份读 `docs/capabilities/human-machine-boundary.md`、`docs/adr/2026-10-13-chatgpt-composer-draft-backup.md`；主进程留底 owner 为 `src/main/composerDraftBackup.ts`，唯一网页运输为 `webComposerSender.ts`，当前项目注入由 index/tools-integration 管理，路径反馈归 resultReturn。验证为 `test/composerDraftBackup.test.ts`、`test/chatgptComposerSender.test.ts`、`tools/verify-chatgpt-composer.cjs`。
+
+备份自动展示读同一人机边界能力及`DESIGN.md`；编辑器单向通知经contract/preload，界面owner为`src/renderer/composerDraftFeedback.js`，文件缓冲/非聚焦打开归editorWorkspace，正文显隐归fileWorkspace。验证为`test/composerDraftFeedback.test.ts`、`test/editorWorkspace.test.ts`、`test/fileWorkspace.test.ts`。
+
 后台运行读 `docs/capabilities/app-shell.md` 的“官网后台运行”，owner 为 `index.ts` / `webPlatformView.ts` 原生视图配置，验收为 `test/webBackgroundPolicy.test.ts`、`tools/verify-web-background.cjs`。历史回看/重挂载读 `docs/capabilities/tool-harness.md` 的“回复来源与历史隔离”；只读来源 owner 为 `src/main/tools/replySource.ts`，由 replyChangeWatcher 持有、replyObservation 与 chatgptPage 同步读取，AutoCollector 保存已接纳正文指纹，integration 按快照身份封存。回归为 `test/replySource.test.ts`、`test/replyChangeWatcher.test.ts`、`test/toolAutoCollector.test.ts`、`tools/audit-background-history.cjs`。
 
 目录树原生文件拖拽先读 `docs/adr/2026-10-11-native-workspace-file-drag.md`、`docs/capabilities/local-file-access.md`。运输 owner 为 `src/main/workspaceFileDrag.ts`，只允许编辑器主 frame 交付当前项目普通文件给系统；UI 为 `src/renderer/fileExplorer.js`，本地接收复用 `localPrompt.js` 的 Files 入口。验证为 `test/workspaceFileDrag.test.ts`、`test/fileExplorer.test.ts`、`test/localPrompt.test.ts`、`tools/verify-workspace-file-drag.cjs`，物理跨进程拖放/官网接收另需手动验收。

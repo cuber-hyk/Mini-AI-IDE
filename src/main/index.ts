@@ -3,6 +3,7 @@ import { LocalPromptController } from './localPromptController';
 import { LocalPromptAttachments } from './localPromptAttachments';
 import { SkillService } from './skills';
 import { WebComposerSender } from './webComposerSender';
+import { ComposerDraftBackup } from './composerDraftBackup';
 import { WEB_PLATFORMS, webPlatformSwitchBlock } from '../shared/webPlatform';
 import { webPlatformOf } from '../shared/webConversation';
 import { WebPlatformController } from './webPlatformController';
@@ -246,7 +247,16 @@ async function bootstrap(): Promise<void> {
   win.contentView.addChildView(promptView);
   const skills = new SkillService(probeDirectory ? path.join(probeDirectory, 'global-skills') : undefined);
   let activeWeb = webView.webContents;
-  let composerSender = new WebComposerSender(activeWeb, { allowLocalFixture: WORKSPACE_PROBE });
+  const draftBackup = new ComposerDraftBackup();
+  const backupDraft = (text: string, session: string) => draftBackup.save(fileService.getRoot() ?? '', session, text);
+  const draftSaved = (saved: string) => {
+    const root = fileService.getRoot();
+    if (!root || editorView.webContents.isDestroyed()) return;
+    const relPath = path.relative(root, saved).replace(/\\/g, '/');
+    if (!/^\.mini-ai-ide\/composer-drafts\/[^/]+\.txt$/.test(relPath)) return;
+    editorView.webContents.send(CHANNELS.composerDraftSaved, { root, relPath, revision: workspace.getState().revision });
+  };
+  let composerSender = new WebComposerSender(activeWeb, { allowLocalFixture: WORKSPACE_PROBE, backupDraft, draftSaved });
   let localPrompt: LocalPromptController | undefined;
   let refreshPlatformSwitch: (() => void) | undefined;
   const layoutController = new WorkspaceLayoutController(win,
@@ -548,7 +558,7 @@ async function loadLocalView(
       platformRevision++;
       const next = platforms.getView(state.platform).webContents;
       if (next !== activeWeb) {
-        const nextSender = new WebComposerSender(next);
+        const nextSender = new WebComposerSender(next, { backupDraft, draftSaved });
         await tools.bindWeb(next, nextSender);
         activeWeb = next; composerSender = nextSender;
       }
