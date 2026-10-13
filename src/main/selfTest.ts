@@ -1471,7 +1471,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
 
   const specAll = getFormatSpec();
   add('F3c', '格式模板实际覆盖替换、新建、覆盖全文且不输出定位范围', fullExamples.valid && JSON.stringify(fullExamples.operations) === '["create","overwrite","replace"]' && !/### 范围：/.test(specAll), fullExamples);
-  add('F3d', '完整模板十五组示例统一通过正式工具解析', fullExamples.valid && fullExamples.examples === 15, fullExamples);
+  add('F3d', '完整模板十六组示例统一通过正式工具解析', fullExamples.valid && fullExamples.examples === 16, fullExamples);
   add(
     'F3e',
     '正式工具标记不可由普通 JSON 或旧文件块代替',
