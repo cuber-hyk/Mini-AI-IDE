@@ -70,7 +70,7 @@ owner: 胡运宽
 
 ## 产物路由
 
-- 计划：`docs/plans/2026-10-09-update-panel-ui.md`
+- 计划：`docs/plans/archived/2026-10-09-update-panel-ui.md`
 - 能力文档：`docs/capabilities/application-update.md` 已补视觉规则。
 - ADR：本次不需要。
 - 设计系统：`DESIGN.md` 更新。

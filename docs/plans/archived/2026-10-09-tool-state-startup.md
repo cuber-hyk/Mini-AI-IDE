@@ -61,7 +61,7 @@ deferred_findings: []
 
 ## Git Visibility
 
-计划在 codex/fix-tool-state-startup 分支随修复审查；用户 docs/诊断json.md 保留且不纳入提交。
+计划在 codex/fix-tool-state-startup 分支随修复审查；用户 docs/references/diagnostics/deepseek-reply-diagnostic.txt 保留且不纳入提交。
 
 ## Closeout
 

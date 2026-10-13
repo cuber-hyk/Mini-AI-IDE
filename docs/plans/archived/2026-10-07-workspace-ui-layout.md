@@ -35,7 +35,7 @@ design_system_impact: update
 - 项目生命周期：`src/main/workspaceService.ts`、`workspaceController.ts`、`settings.ts`；当前一个活动根目录，recentRoots 最多 5 项，切换会重置编辑状态和工具状态。
 - 本地视图：`src/renderer/index.html`、`renderer.js`、`style.css`、`fileExplorer.*`、`editorWorkspace.js`、`editorTabs.js`、`toolHarness.*`、`toolPanelLayout.js`、`promptComposer.js`、`preview.*`、`webbar.*`。
 - IPC：`src/shared/contract.ts` 与各 preload。工具和文件控制仍只允许可信本地编辑器主 frame；previewBridge 保持只读快照与既有撤销能力。
-- 讨论记录：`docs/2026-10-07-multi-project-parallel-development.md`。它不是本次并行开发实施计划。
+- 讨论记录：`docs/references/discussions/2026-10-07-multi-project-parallel-development.md`。它不是本次并行开发实施计划。
 - 现有 DESIGN 中“工具与输入保持左侧”“目录包含在左侧编辑器”“右侧独立变更列”等位置规则与用户最新确认冲突；实施时按最新确认替换，不把新旧布局做成双模式。
 
 ## 模块放置与视图方案
@@ -184,7 +184,7 @@ design_system_impact: update
 
 ## 后续待办路由
 
-变更记录机制、Diff与变更列表UI参考Harness的优化统一记录于 `docs/2026-10-07-changes-review-follow-up.md`，本轮仅记录，后续独立规划和实施。
+变更记录机制、Diff与变更列表UI参考Harness的优化统一记录于 `docs/references/discussions/2026-10-07-changes-review-follow-up.md`，本轮仅记录，后续独立规划和实施。
 
 
 ## 当前阶段结案

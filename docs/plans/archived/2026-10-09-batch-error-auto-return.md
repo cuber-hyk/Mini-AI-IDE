@@ -39,7 +39,7 @@ owner: 胡运宽
 - `pnpm test`：741 项通过、0 失败、0 跳过。
 - 独立评审 mode=subagent：实现及回归符合计划、仅任务相关变更、验证证据通过、无剩余代码阻断；导航往返清零与关闭态保持问题均验证关闭。
 - `git diff --check`：通过。
-- Dev Flow 文档校验：本任务文件无错误或警告；仓库整体仍有既有错误 `docs/plans/2026-10-09-file-tree-icons.md` 缺 `created`（已核对 HEAD 同样缺失），以及既有 DESIGN 源路径、图标计划决策警告。范围外保留，不代表仓库整体文档检查通过。
+- Dev Flow 文档校验：本任务文件无错误或警告；仓库整体仍有既有错误 `docs/plans/archived/2026-10-09-file-tree-icons.md` 缺 `created`（已核对 HEAD 同样缺失），以及既有 DESIGN 源路径、图标计划决策警告。范围外保留，不代表仓库整体文档检查通过。
 - Design system gate：无 UI 组件、样式或设计规则变更。
 - 真实官网验收不在本地夹具验证范围；未连接官网发送消息。
 

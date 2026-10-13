@@ -18,7 +18,7 @@ source_of_truth: code
 - Code: `src/main/tools/replyObservation.ts`、`autoCollector.ts`、`integration.ts`、`resultReturn.ts`。
 - Tests: `test/deepseekReplyState.test.ts`、`test/fixtures/deepseek-reply-controls.json`、`test/fixtures/deepseek-thinking-reply-structure.json`。
 - Docs: `docs/capabilities/tool-harness.md`、`human-machine-boundary.md`。
-- Runtime checks: 用户已复现深度思考开启后的两种症状，并更新 `docs/诊断json.md` 提供回复区诊断。现场 `candidateCount: 2`，`frameCandidateIndexes: [0, 1]`；两个顶层候选的 class 分别为 `ds-markdown` 和 `ds-markdown ds-assistant-message-main-content`。
+- Runtime checks: 用户已复现深度思考开启后的两种症状，并更新 `docs/references/diagnostics/deepseek-reply-diagnostic.txt` 提供回复区诊断。现场 `candidateCount: 2`，`frameCandidateIndexes: [0, 1]`；两个顶层候选的 class 分别为 `ds-markdown` 和 `ds-markdown ds-assistant-message-main-content`。
 
 ## Findings
 

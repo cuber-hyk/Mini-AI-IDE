@@ -4,7 +4,7 @@ status: accepted
 created: 2026-10-02
 updated: 2026-10-07
 owner: 胡运宽
-source_of_truth: [src/shared/userAgent.ts, src/main/index.ts, test/limits-and-ua.test.ts, docs/audits/2026-10-02-p0b-experiment-noident.json]
+source_of_truth: [src/shared/userAgent.ts, src/main/index.ts, test/limits-and-ua.test.ts, docs/audits/archived/2026-10-02-p0b-experiment-noident.json]
 ---
 
 # ADR-0001：不伪造、不自报、内部自洽（原题「采用如实 Electron 身份」）
@@ -63,7 +63,7 @@ source_of_truth: [src/shared/userAgent.ts, src/main/index.ts, test/limits-and-ua
 | `navigator.userAgentData`（sec-ch-ua） | 原样 | **原样**（内核生成，动不了） |
 | 语言 / 时区 / 分辨率 / 硬件 | 原样 | **原样** |
 
-### 结果（证据：`docs/audits/2026-10-02-p0b-reachability-audit.md`）
+### 结果（证据：`docs/audits/archived/2026-10-02-p0b-reachability-audit.md`）
 
 | 观察项 | 基线 | noident |
 |---|---|---|
@@ -111,7 +111,7 @@ source_of_truth: [src/shared/userAgent.ts, src/main/index.ts, test/limits-and-ua
 
 ## 关联
 
-- 受控实验与证据：`docs/audits/2026-10-02-p0b-reachability-audit.md`
+- 受控实验与证据：`docs/audits/archived/2026-10-02-p0b-reachability-audit.md`
 - 验收判据：`docs/adr/2026-10-02-zero-injection-and-automation-trace-baseline.md`（ADR-0003）
 - 嵌入方式选型：`docs/adr/2026-10-02-filesystem-permission-model.md`（ADR-0002）
 - 能力文档：`docs/capabilities/app-shell.md`、`docs/capabilities/session-persistence.md`

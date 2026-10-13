@@ -1,15 +1,15 @@
 ---
 artifact_type: audit
-status: archived
+status: active
 created: 2026-10-08
-updated: 2026-10-08
+updated: 2026-10-12
 scope: "147689e 后新会话首轮自动采集遗漏：官网直接发送、本地发送与历史基线交接"
 source_of_truth: code
 ---
 
 # 首轮自动采集失败分析
 
-## 修复跟进（2026-10-08）
+## 历史修复跟进（2026-10-08）
 
 下文故障分析保留为 147689e 的复现记录。修复位于独立工作区的 codex/first-turn-collection 分支，尚未提交；原始主目录未改动。FTA-01、FTA-02、FTA-03 已完成实现及离线验证，FTA-04 界面摘要调整不在本次范围，仍 open。真实官网端到端仍待用户复测。
 
@@ -180,3 +180,10 @@ node "$env:TEMP/mini-ide-first-turn-native-audit.cjs"
 - npm run build（含 TypeScript）通过；渲染脚本未绑定标识符 0，另有检查器报告的 105 条非阻断语义诊断，未清理。
 - dev-flow validate-docs：No issues found；git diff --check 通过。
 - 独立评审：subagent，评审最终结论待回填。
+
+## 当前复核（2026-10-12）
+
+- FTA-01/02/03 的旧修复路径已纳入后续实现；当前采集采用输出驱动与来源基线，不能再把旧分支“未提交”文字视为当前 Git 状态。两平台当前正式工具闭环已由用户确认全程自动采集并回传；该验收不替代所有历史导航时间线的现场证明。
+- FTA-04 仍 open：src/renderer/toolHarness.js:236–237 仍将 waiting_user 无条件显示为“等待你回答”；src/main/toolWorkspaceStatus.ts 的顶栏摘要已改成“等待需求或新的工具结果”，但工具面板没有同步。
+- 用 test/toolHarnessUi.test.ts 的现有 setup 夹具执行当前生产渲染脚本：automatic=true、results=[]、continuation.phase=waiting_user、message=“自动继续已开启，等待新的工具结果”时，activity 实际为“等待你回答”，title 仍为等待新结果，复现文案覆盖问题。未修改测试或生产代码。
+- 聚焦测试 156 项通过、0 失败/取消/跳过。测试通过不表示已覆盖或修复 FTA-04；本报告因该已确认界面问题继续 active，后续如修复应另立计划。

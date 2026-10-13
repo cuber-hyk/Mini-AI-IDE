@@ -31,7 +31,7 @@ ChatGPT 只读规则由 `chatgptPage.ts` 提供：以最新 `data-talvt-turn-sta
 
 `webComposerSender.ts` 仍是唯一网页 DOM 写入 owner，分别验证平台官方 origin、普通会话、唯一可编辑 composer 和局部发送控件；ChatGPT 统一以最近且不含回复的 FORM 关联 ProseMirror 与唯一 type=submit/发送控件，空 composer 的语音控件只用于确认输入区，填入后等待真正发送控件出现。发送只接纳用户主动需求或当前批真实结果，已有草稿/附件、生成中、未知控件、不确定回执均暂停，点击后不重试。
 
-真实 ChatGPT 页面只读结构核验与离线夹具是不同证据。原生结构诊断已核验 ProseMirror/FORM、submit/发送、DilResponseRoot、轮次完成标记、局部复制页脚及代码语言标题；官网输入事件接收和连续闭环以真实对话验收为准，离线测试不能替代该证据，也不能证明重启登录保持。登录保持由用户推迟验证。预览模式可开启 MINI_CHATGPT_STRUCTURE_TRACE，按 `tools/chatgpt-page-structure.cjs` 输出不含正文、草稿、凭据或会话 ID 的结构快照；不向官网提供桥。网页能力依赖平台当前 DOM，技术实现也不代表平台授权程序化提取输出。
+真实 ChatGPT 页面只读结构核验与离线夹具是不同证据。原生结构诊断已核验 ProseMirror/FORM、submit/发送、DilResponseRoot、轮次完成标记、局部复制页脚及代码语言标题；官网输入事件接收和连续闭环以真实对话验收为准，离线测试不能替代该证据，也不能证明重启登录保持。2026-10-12 用户补充确认完整 IDE 跨重启登录保持验收通过；该结论来自用户实际验收反馈。预览模式可开启 MINI_CHATGPT_STRUCTURE_TRACE，按 `tools/chatgpt-page-structure.cjs` 输出不含正文、草稿、凭据或会话 ID 的结构快照；不向官网提供桥。网页能力依赖平台当前 DOM，技术实现也不代表平台授权程序化提取输出。
 
 ChatGPT 的生成见证由 chatgptPage 的 CHATGPT_GENERATING_SCRIPT 单一提供给完成核验、变化监听和发送运输：仅识别当前正式回复/代码/思考及已知停止控件，忽略推荐区、侧栏、附件和旧轮次的 busy；推荐提示词不是完成条件，仍要求本轮 complete 与唯一正式复制页脚。来源指纹使用 CHATGPT_SOURCE_TEXT_READER 保留语言标签和正文，排除按钮等非正文显示；历史、未知节点重挂载及封存后正文改变仍无自动执行资格。
 

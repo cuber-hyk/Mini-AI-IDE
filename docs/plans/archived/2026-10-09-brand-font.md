@@ -1,7 +1,8 @@
 ---
 artifact_type: plan
 status: archived
-updated: 2026-10-09
+created: 2026-10-09
+updated: 2026-10-12
 owner: 胡运宽
 ---
 
@@ -34,3 +35,7 @@ owner: 胡运宽
 ## 代码归属
 
 品牌区结构归 `index.html`；样式归 `style.css`；字体资源归 `src/renderer/fonts/`。不新增模块。
+
+## ADR Gate
+
+not needed：可逆的品牌视觉规则已写入 DESIGN.md，不引入跨模块生命周期或权限决策，无需新增架构 ADR。

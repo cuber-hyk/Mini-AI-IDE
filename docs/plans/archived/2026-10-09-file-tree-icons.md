@@ -1,7 +1,8 @@
 ---
 artifact_type: plan
 status: archived
-updated: 2026-10-09
+created: 2026-10-09
+updated: 2026-10-12
 owner: 胡运宽
 ---
 
@@ -20,8 +21,8 @@ owner: 胡运宽
 
 ## 决策（用户已确认）
 
-- 未跟踪的 `docs/诊断json.md` 不纳入本分支。
-- 图标类型按方案 A 全面扩充（语言、框架、配置、文档、媒体、包管理/构建、CI/编辑器、特殊文件名）。
+- 未跟踪的 `docs/references/diagnostics/deepseek-reply-diagnostic.txt` 不纳入本分支。
+- 图标类型全面扩充（语言、框架、配置、文档、媒体、包管理/构建、CI/编辑器、特殊文件名）。
 - 颜色允许改 `design-tokens.json`；尺寸与具体色相由实现方按推荐方案决定。
 - 执行中追加：图标风格改为参考 deepseek-harness 的「折角纸张 + 白色符号 + 彩色品牌标」；文件夹改线性描边（关闭灰、打开蓝）；`package.json` 用 Node JS 六边形标；文件树显示点文件但跳过 `.git` 目录。
 
@@ -44,3 +45,7 @@ owner: 胡运宽
 ## 代码归属（dev-split）
 
 本任务不新增模块、不跨归属边界：图标数据与渲染逻辑继续归 `src/renderer/fileIcons.js`，颜色值继续归 `design-tokens.json` 与 `src/renderer/fileExplorer.css`，测试归 `test/fileIcons.test.ts`。不产生大文件风险。
+
+## ADR Gate
+
+not needed：可逆的图标与 token 视觉规则由 DESIGN.md 管理，接口和安全边界保持，无需新增架构 ADR。

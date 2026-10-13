@@ -1,3 +1,11 @@
+---
+artifact_type: reference
+status: active
+created: 2026-10-07
+updated: 2026-10-12
+owner: 胡运宽
+---
+
 # 变更记录与 Diff 审阅：后续待办
 
 记录日期：2026-10-07。用户要求先记录，后续单独优化；本文不是已确认的执行计划，不改变当前能力。
@@ -15,7 +23,7 @@
 
 用户当前布局截图已保存：
 
-![当前变更列表与 Diff 布局](references/changes-review/2026-10-07-current-review-layout.png)
+![讨论时的变更列表与 Diff 布局](../changes-review/2026-10-07-current-review-layout.png)
 
 截图是当前项目的问题参考，不是 Harness 目标效果图。当前左侧变更导航包含多次修改记录，并较多占用Diff正文；后续与Harness实际界面对照，不直接将该截图固化为推荐样式。
 

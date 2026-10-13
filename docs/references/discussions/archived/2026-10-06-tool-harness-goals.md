@@ -1,3 +1,11 @@
+---
+artifact_type: reference
+status: archived
+created: 2026-10-06
+updated: 2026-10-12
+owner: 胡运宽
+---
+
 # Mini-AI-IDE 预期功能：网页版 AI 与本地工具协作
 
 讨论日期：2026-10-06。

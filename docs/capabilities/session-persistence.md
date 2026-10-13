@@ -1,7 +1,7 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-11
+updated: 2026-10-12
 owner: 胡运宽
 source_of_truth: ["docs/adr/2026-10-02-honest-electron-identity.md","docs/adr/2026-10-02-zero-injection-and-automation-trace-baseline.md","tools/reachability-probe/main.js","src/main/index.ts","src/main/diagnose.ts","src/main/selfTest.ts","test/limits-and-ua.test.ts"]
 ---
@@ -22,7 +22,7 @@ source_of_truth: ["docs/adr/2026-10-02-honest-electron-identity.md","docs/adr/20
 | **ChatGPT 分区** | **`persist:postcheck-02`** |
 | 磁盘目录 | `%APPDATA%\mini-ai-ide\Partitions\postcheck` 与 `postcheck-02` |
 | 命名理由 | 中性，不含应用名/项目名，长期留痕在磁盘上也不暴露工具身份 |
-| 多平台 | 每个平台固定独立分区，切换复用已有视图，启动默认 DeepSeek；ChatGPT 普通对话接入纯文本协作，登录保持须单独人工验收，见 `web-platforms.md` |
+| 多平台 | 每个平台固定独立分区，切换复用已有视图，启动默认 DeepSeek；ChatGPT 普通对话接入纯文本协作，用户已于 2026-10-12 确认完整 IDE 跨重启登录保持验收通过，见 `web-platforms.md` |
 | 实验隔离 | 需要隔离实验时用后缀（如 `persist:postcheck-experiment`），**不得**用后缀替代正式分区 |
 
 ## ⚠️ 跨应用迁移禁忌（实测教训）

@@ -178,7 +178,7 @@ AI 不再计算或回传用于定位的行号；IDE 根据明确的文件、操�
 
 ## Git Visibility
 
-- 计划创建后执行 git status --short --branch --untracked-files=all，确认 docs/plans/2026-10-05-explicit-edit-protocol.md 可见。
+- 计划创建后执行 git status --short --branch --untracked-files=all，确认 docs/plans/archived/2026-10-05-explicit-edit-protocol.md 可见。
 - 前序工作已单独提交并合并；本任务的源码、测试、协议样例与文档均在新分支可见。
 
 ## Closeout

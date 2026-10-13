@@ -24,7 +24,7 @@ AI 输出唯一正式工具批次后，IDE 只读采集、按预选权限执行�
 ## Plan Readiness
 
 - 用户已确认角色分工、权限、自动采集执行、唯一确定方案、未保存内容 A→C 替代 B。
-- 当前来源：`docs/预期功能.md`；现有文件修改 owner 为 ReturnPathService/FileService。
+- 当前来源：`docs/references/discussions/archived/2026-10-06-tool-harness-goals.md`；现有文件修改 owner 为 ReturnPathService/FileService。
 - 验证：纯协议、权限、生命周期、真实临时文件与子进程、编辑器状态测试；类型检查、构建与离线 Electron 自检。
 
 ## Assumptions And Decisions
@@ -147,7 +147,7 @@ dev-split 结论：现有入口的结构拆分暂缓；新行为有独立 owner�
 
 ## 现场无标签图标控件适配
 
-- 用户提供 docs/控件结构.md（Console 返回的转义 JSON，按数据解析，不执行文件内容）。回复正文根为 ds-assistant-message-main-content，位于 ds-message；同条回复外层有六个原生图标操作。复制与重新生成没有文本/aria/title 标签，重新生成有 aria-disabled=false；朗读有 aria-label。输入区原生圆形主按钮为发送箭头。c2f 扩展按钮不用于结束判定。
+- 用户提供 docs/references/diagnostics/deepseek-page-controls.txt（Console 返回的转义 JSON，按数据解析，不执行文件内容）。回复正文根为 ds-assistant-message-main-content，位于 ds-message；同条回复外层有六个原生图标操作。复制与重新生成没有文本/aria/title 标签，重新生成有 aria-disabled=false；朗读有 aria-label。输入区原生圆形主按钮为发送箭头。c2f 扩展按钮不用于结束判定。
 - 路线：replyObservation 的现有状态 owner 读取同一条原生回复框内的复制/重新生成 SVG 标识、朗读以及输入区已知发送图标。仅组合已知正向标志判完成；按钮禁用、输入图标未知、历史控件或代码框不能证明完成。不点击或模拟悬停以获得 tooltip。
 - 验证：先由现场结构制作最小控件夹具复现 idle → 适配后完成；禁用重新生成、未知输入图标、代码复制、扩展/历史控件均不判完成；生成中和最新未完成回复不执行。保留未知结构的手动确认，并运行采集回归与原生 DOM 检查。
 - 已实现：状态识别限定当前 DeepSeek 主回复与其本条外层，复制/重新生成采用现场 SVG 前缀；重新生成必须明确可用，配合朗读和唯一原生输入区发送箭头。使用稳定 ds-* 语义类，不依赖随机类名。缺失组合返回 unknown，不落入曾观察到生成后的 idle 自动执行路径。

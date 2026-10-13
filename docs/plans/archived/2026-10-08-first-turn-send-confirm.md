@@ -16,7 +16,7 @@ v0.2.1 已修正首发地址 `/a/chat/s/<ID>` 的 `/s/` 匹配（消除「网页
 `src/main/webComposerSender.ts` 内嵌 `sendScript` 点击后只用两个信号确认「网页已接收」，二者在真实首轮都观测不到：
 
 1. `input.isConnected && input.value === ''`：真实首轮从首页 `/` 同文档切到 `/a/chat/s/<ID>` 会卸载首页 composer、挂载聊天 composer，脚本持有的旧 textarea 被断开（`isConnected === false`），该信号永假。
-2. `stateOfPage() === 'generating'`：依赖 `/停止生成|stop generating|…/` 可读标签或 `aria-busy`/`data-is-streaming`。真实 DOM 快照 `docs/控件结构.md` 中按钮均为无文本、`aria`/`title` 为 null 的 `<div>` 图标按钮，该关键词与属性 0 命中，生成态检测在真实站失效。
+2. `stateOfPage() === 'generating'`：依赖 `/停止生成|stop generating|…/` 可读标签或 `aria-busy`/`data-is-streaming`。真实 DOM 快照 `docs/references/diagnostics/deepseek-page-controls.txt` 中按钮均为无文本、`aria`/`title` 为 null 的 `<div>` 图标按钮，该关键词与属性 0 命中，生成态检测在真实站失效。
 
 离线夹具 `tools/verify-web-result-sender.cjs` 默认 click 处理器是「原地 `input.value=''` + pushState」，从未模拟首轮 composer 重挂载导致 textarea 断开，因此首轮测试通过、真实站失败。
 

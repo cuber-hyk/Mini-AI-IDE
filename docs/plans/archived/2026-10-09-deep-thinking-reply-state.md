@@ -84,5 +84,5 @@ deferred_findings: []
 - Verification evidence: pass；相关九个测试文件 106 项通过、0 失败、0 跳过；pnpm run build 通过；git diff --check 通过。
 - Changelog: pass；Unreleased / Fixed 已记录用户可见修复。
 - Distill: pass；能力文档描述当前判据，审计记录 fixed，用户验收通过后归档；无需 ADR、布局规则或上下文路由调整。
-- Check gate: fail（仓库既有问题）；validate-docs 报 docs/plans/2026-10-09-file-tree-icons.md 缺 created，并有该计划与 DESIGN.md 的警告。git show HEAD 已确认这些文件的相关内容先于本任务存在，按任务范围保留。
+- Check gate: fail（仓库既有问题）；validate-docs 报 docs/plans/archived/2026-10-09-file-tree-icons.md 缺 created，并有该计划与 DESIGN.md 的警告。git show HEAD 已确认这些文件的相关内容先于本任务存在，按任务范围保留。
 - Blocking issues: 无已知实现阻断；全库文档门禁未通过，不宣称全部工程门禁通过。

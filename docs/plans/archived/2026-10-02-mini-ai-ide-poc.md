@@ -60,11 +60,11 @@ source_of_truth:
 
 | ID | 状态 | 步骤 | 验证方式 |
 |---|---|---|---|
-| P0a | done | **自动化特征核验**（不接触 DeepSeek，零平台暴露）：在默认 Electron 构建的内嵌 `WebContentsView` 中逐项核验 A 级判据（`navigator.webdriver`、CDP 端口、Playwright/Puppeteer 痕迹、无头特征、伪装脚本、UA 自洽性），并与真 Chrome 做**知情性**对照记录 | ✅ 已完成：**A 级 8/8 通过、C 级 0 失败**，两次运行结论一致。证据：`docs/audits/2026-10-02-p0a-trace-verification-audit.md` 与同名 `-raw.json`；工具 `tools/trace-verifier/` |
-| P0b | done | **真实可达性与登录实测 + 受控实验**：用 `WebContentsView` 加载 `chat.deepseek.com`，全人工登录与对话；随后做**单变量受控实验**（仅移除 UA 中的 Electron 与应用名标记）定位警告触发点。工具：`tools/reachability-probe/` | ✅ 已完成。基线：登录/对话成功但出现「使用环境异常」警告；实验：**警告消失**，其余一切照旧 → 触发点是 UA 自报标记。证据：`docs/audits/2026-10-02-p0b-reachability-audit.md` + 两份 `-raw.json` |
+| P0a | done | **自动化特征核验**（不接触 DeepSeek，零平台暴露）：在默认 Electron 构建的内嵌 `WebContentsView` 中逐项核验 A 级判据（`navigator.webdriver`、CDP 端口、Playwright/Puppeteer 痕迹、无头特征、伪装脚本、UA 自洽性），并与真 Chrome 做**知情性**对照记录 | ✅ 已完成：**A 级 8/8 通过、C 级 0 失败**，两次运行结论一致。证据：`docs/audits/archived/2026-10-02-p0a-trace-verification-audit.md` 与同名 `-raw.json`；工具 `tools/trace-verifier/` |
+| P0b | done | **真实可达性与登录实测 + 受控实验**：用 `WebContentsView` 加载 `chat.deepseek.com`，全人工登录与对话；随后做**单变量受控实验**（仅移除 UA 中的 Electron 与应用名标记）定位警告触发点。工具：`tools/reachability-probe/` | ✅ 已完成。基线：登录/对话成功但出现「使用环境异常」警告；实验：**警告消失**，其余一切照旧 → 触发点是 UA 自报标记。证据：`docs/audits/archived/2026-10-02-p0b-reachability-audit.md` + 两份 `-raw.json` |
 | P1 | done | 执行 **Gate**：确认 A 级自动化特征为零、UA 规则已落实、且 P0b 未出现平台针对性拦截 | ✅ 已完成：A 级 8/8 通过、C 级 0 失败；UA 中无自报标记且 `Chrome/152` == 真实内核；基线告警已定位并消除；无验证码、无 4xx/5xx；无 open 发现项。证据见 P0a/P0b 审计 |
 | P2 | done | 建 Electron 外壳：三视图（main / editor / webview）、Monaco、**复用 P0b 已登录的会话分区**、主进程 IPC 文件读取（编码探测 + 大小上限 + 路径白名单） | ✅ 已实现并通过启动自检 **28/28** 与单测 **53/53**。自检覆盖：UA 规则、分区 `persist:postcheck`、视图级 UA 生效、列目录/读写/GBK 回退/二进制拒绝/越界拒绝/分片、bridge 实际可用、未暴露通道被拒绝、渲染进程无 Node 泄漏、`window.require` 为 AMD、三进程隔离与分栏布局。**待你在普通 PowerShell 运行 `npm start` 做视觉确认**（沙箱限制子进程对外网络，UI 无法在此环境目视） |
-| P3 | done | **回程解析与应用**（本项目核心）：① 纯逻辑（解析器/格式模板/应用计算/目录记忆/行号片段）；② 采集与应用（只读采集回复、解析预览、应用、撤销）。程序不注入任何内容、不代写提示词 | ✅ 完成：**104/104 单测**、**58/58 自检**（F 解析/模板、G/H 目录记忆、I prompt 组装、J 行号与三向校验、K 采集与应用撤销闭环）。证据：`docs/audits/2026-10-02-p3-return-path-logic-audit.md`。⚠️ 遗留 **P3-5（open）**：4 套采集策略需在**真实页面**验证；已预置诊断输出使失败可定位。另：预览目前是表格化摘要，**逐行 diff 视图未做** |
+| P3 | done | **回程解析与应用**（本项目核心）：① 纯逻辑（解析器/格式模板/应用计算/目录记忆/行号片段）；② 采集与应用（只读采集回复、解析预览、应用、撤销）。程序不注入任何内容、不代写提示词 | ✅ 完成：**104/104 单测**、**58/58 自检**（F 解析/模板、G/H 目录记忆、I prompt 组装、J 行号与三向校验、K 采集与应用撤销闭环）。证据：`docs/audits/archived/2026-10-02-p3-return-path-logic-audit.md`。⚠️ 遗留 **P3-5（open）**：4 套采集策略需在**真实页面**验证；已预置诊断输出使失败可定位。另：预览目前是表格化摘要，**逐行 diff 视图未做** |
 | P4 | todo | 会话持久化与登录态：固定分区、登录流程、重启保持；确认登录方式 | 重启应用后无需重新登录；分区名在代码中为常量且不含应用身份标识；未创建任何随机分区 |
 | P5 | todo | 补 `DESIGN.md` + 设计令牌，并对齐双窗格 UI | `DESIGN.md` 与 `design-tokens.json` 成对存在且通过结构校验；引用路径真实可达 |
 
@@ -121,8 +121,8 @@ source_of_truth:
 
 ## 交付物路由
 
-- 计划：`docs/plans/2026-10-02-mini-ai-ide-poc.md`（本文件）
-- 审计：P0a 已产出 `docs/audits/2026-10-02-p0a-trace-verification-audit.md`（发现项 P0A-1 ~ P0A-5）；P0b 将产出 `docs/audits/2026-10-XX-reachability-audit.md`
+- 计划：`docs/plans/archived/2026-10-02-mini-ai-ide-poc.md`（本文件）
+- 审计：P0a 已产出 `docs/audits/archived/2026-10-02-p0a-trace-verification-audit.md`（发现项 P0A-1 ~ P0A-5）；P0b 将产出 `docs/audits/2026-10-XX-reachability-audit.md`
 - 覆盖的发现项：P0A-1、P0A-2、P0A-3、P0A-4（均已 `verified`）
 - 延迟的发现项：**P0A-5（Medium, `open`）**——平台是否针对 Electron 客户端，由 P0b 关闭
 - 核验工具：`tools/trace-verifier/`（P0a）与 `tools/reachability-probe/`（P0b）；两者共享 `tools/` workspace 中的一份 Electron 二进制，安装见 `tools/install-electron.ps1`；P0b 提供 `-SelfTest` 与 `-ProbeOnly`

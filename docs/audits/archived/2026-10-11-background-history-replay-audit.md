@@ -1,8 +1,8 @@
 ---
 artifact_type: audit
-status: active
+status: archived
 created: 2026-10-11
-updated: 2026-10-11
+updated: 2026-10-12
 scope: "窗口被遮挡时的工具可靠性，以及回看对话引发历史采集、执行与诊断回传"
 source_of_truth: code
 ---
@@ -57,7 +57,7 @@ source_of_truth: code
 
 - Commands run: `node tools/audit-background-history.cjs` 最终完整一轮退出码 0，9 个场景；`node --import tsx --test test/toolAutoCollector.test.ts test/replyObservation.test.ts test/replyChangeWatcher.test.ts test/toolHarness.test.ts test/toolStore.test.ts test/autoContinuation.test.ts test/webResultSender.test.ts test/toolIntegration.test.ts`：137 项通过，0 失败、0 取消、0 跳过。
 - 脚本使用临时目录，Electron 退出后核对目录父路径并清理；生产 tools.json、用户项目与官网会话未修改。脚本导出为单独 cjs，不参与产品构建。
-- Not verified: 用户发生问题的原始命令、stdout/stderr、JSON 诊断回执、当时官网 DOM、官网历史虚拟化行为、实际安装版与本工作区的版本对应关系、仅部分遮挡/多显示器差异、超过数分钟的后台冻结或系统休眠。短探针不能估计实际错误率。
+- 验证边界：证据覆盖本文已确认的实现路径，不推断用户原始命令、当时官网 DOM、安装版对应关系、多显示器或长时间系统休眠的现场归因。原始 payload/截断归因由活动的 JSON 截断审计 JT-5 保留；短探针不能估计实际错误率。
 - 未发现窗口遮挡直接截断 PowerShell 命令或输出的代码路径；本地命令由主进程 spawn、读取 stdout/stderr 和设置超时。既有字符/命令长度上限参见 JSON 截断审计，不能混同为后台节流。
 
 ## Git Visibility
@@ -66,9 +66,7 @@ source_of_truth: code
 
 ## Closeout
 
-保持 active：BH-1/BH-2/BH-3 的已确认实现路径已修复并验证；用户原始命令、官网历史虚拟化与截图 payload 归因仍缺现场证据。本任务计划归档，剩余现场未知不自动扩展为长度上限或官网 API 任务。
-
-在修复前，回看历史可关闭“自动继续”；正在运行的本地工具按既有行为继续完成，网页不再自动采集和发送新结果。需要连续后台工作时，临时保持官网窗口不被完全遮挡可避开本次验证的节流状态，但不能保证消除所有 payload/命令问题。
+BH-1/BH-2/BH-3 已修复且回归验证，当前能力和来源限制已写入对应 capability/ADR，本报告归档。未被识别的现场 payload 归因继续由 `docs/audits/2026-10-11-json-truncation-audit.md` 的 JT-5 管理，不转成已确认的后台截断根因，也不新增长度上限或官网 API 任务。
 
 ## 修复验收
 

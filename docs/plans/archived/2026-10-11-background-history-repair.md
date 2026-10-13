@@ -4,7 +4,7 @@ status: archived
 created: 2026-10-11
 updated: 2026-10-11
 owner: Codex
-source_audit: docs/audits/2026-10-11-background-history-replay-audit.md
+source_audit: docs/audits/archived/2026-10-11-background-history-replay-audit.md
 covered_findings: [BH-1, BH-2, BH-3]
 deferred_findings: []
 ---
