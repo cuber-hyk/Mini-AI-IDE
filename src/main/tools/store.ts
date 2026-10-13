@@ -6,6 +6,7 @@ import { TOOL_NAMES, ToolBatch, ToolConfig, ToolResult } from '../../shared/tool
 export type RuleAction = 'allow' | 'ask' | 'deny';
 interface Rule { root: string; fingerprint: string; action: RuleAction }
 export interface LedgerEntry {
+  source?: 'manual';
   scope: string;
   batch_id: string;
   hash: string;
@@ -81,16 +82,21 @@ export class ToolStore {
     await this.mutate(data => { data.rules = root === undefined ? [] : data.rules.filter(rule => rule.root !== rootKey(root)); });
   }
 
-  async reserve(root: string, session: string, batch: ToolBatch): Promise<Reservation> {
+  async reserve(root: string, session: string, batch: ToolBatch, source?: 'manual'): Promise<Reservation> {
     const scope = scopeKey(root, session);
     const contentHash = hash(JSON.stringify(batch));
     return this.mutate(data => {
       const existing = data.ledger.find(e => e.scope === scope && e.batch_id === batch.batch_id);
-      if (existing) return existing.hash === contentHash ? { kind: 'duplicate', entry: clone(existing) } : { kind: 'conflict' };
+      if (existing) {
+        if (existing.hash !== contentHash) return { kind: 'conflict' };
+        if (source === 'manual') existing.source = 'manual';
+        return { kind: 'duplicate', entry: clone(existing) };
+      }
       // 不淘汰去重记录，否则旧网页回复在重启后可能再次产生副作用。
       if (data.ledger.length >= 10_000) throw new Error('工具去重记录达到上限，需要人工归档记录；本次未执行');
       const entry: LedgerEntry = {
         scope, batch_id: batch.batch_id, hash: contentHash, at: Date.now(),
+        ...(source === 'manual' ? { source } : {}),
         requests: batch.requests.map(r => ({ request_id: r.id, tool: r.tool, status: 'unknown' })),
       };
       data.ledger.push(entry);
@@ -147,6 +153,7 @@ export class ToolStore {
     if (value.rules.length > 5000 || value.rules.some(r => !record(r) || !validHash(r.root) || typeof r.fingerprint !== 'string' || !r.fingerprint || r.fingerprint.length > 1000 || !['allow', 'ask', 'deny'].includes(String(r.action)))) return false;
     const scopes = new Set<string>();
     return value.ledger.length <= 10_000 && value.ledger.every(e => {
+      if (record(e) && e.source !== undefined && e.source !== 'manual') return false;
       if (!record(e) || !validHash(e.scope) || !validId(e.batch_id) || !validHash(e.hash) || typeof e.at !== 'number' || !Number.isFinite(e.at) || !Array.isArray(e.requests) || e.requests.length < 1 || e.requests.length > 50) return false;
       const key = `${e.scope}\0${e.batch_id}`;
       if (scopes.has(key)) return false;

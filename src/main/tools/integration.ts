@@ -14,6 +14,7 @@ import { SkillService } from '../skills';
 import { ToolFiles, resolveToolPath } from './files';
 import { AiTempDirectory } from './aiTempDirectory';
 import { JsonDraft } from './jsonDraft';
+import { ManualToolJson } from './manualToolJson';
 import { ToolProcesses } from './processes';
 import { ToolStore } from './store';
 import { ToolHarness, type ToolSelection } from './harness';
@@ -46,6 +47,7 @@ interface Options {
   sender?: Pick<WebResultSender, 'send' | 'cancel' | 'dispose'>;
   allowLocalFixture?: boolean;
   skills?: SkillService;
+  interactionBusy?: () => boolean;
 }
 const READ_TOOLS = new Set(['get_project_info', 'list_directory', 'search_files', 'read_file', 'search_text']);
 const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
@@ -164,6 +166,7 @@ export async function createToolIntegration(options: Options) {
   let continuation: AutoContinuation | undefined;
   let resultReturn: ToolResultReturn | undefined;
   let activeSelection: ToolSelection | null = null;
+  let manualToolJson: ManualToolJson;
   const draftScope = () => JSON.stringify([options.files.getRoot(), sessionKeyOf(web.getURL()), webPlatformOf(web.getURL()), revision]);
   const recoveryValid = () => {
     const origin = activeSelection?.recovered;
@@ -175,7 +178,7 @@ export async function createToolIntegration(options: Options) {
   const createSender = (target: typeof web) => new WebResultSender(target, { backupDraft: (text, session) => draftBackup.save(options.files.getRoot() ?? '', session, text) });
   let sender = options.sender ?? createSender(web);
   let localPromptTransport: Promise<unknown> | undefined;
-  let retainedCopy: { root: string | null; results: ToolState['results']; batchError?: ToolState['batchError'] } | null = null;
+  let retainedCopy: { root: string | null; results: ToolState['results']; batchError?: ToolState['batchError']; source?: 'manual' } | null = null;
   const review = new ChangeReviewOwner(options.notifyReview);
   const reviewTokens = new WeakMap<ToolSelection, number>();
   const clipboard = new ResultClipboard(options.copy);
@@ -184,7 +187,7 @@ export async function createToolIntegration(options: Options) {
   });
   const displayState = (state: ToolState): ToolState => {
     if (!retainedCopy || retainedCopy.root !== options.files.getRoot() || state.results.length || state.batchError || state.busy) return state;
-    return { ...state, results: structuredClone(retainedCopy.results), ...(retainedCopy.batchError ? { batchError: { ...retainedCopy.batchError } } : {}), message: '已切换官网平台；上一批结果保留，仅供复制' };
+    return { ...state, results: structuredClone(retainedCopy.results), ...(retainedCopy.batchError ? { batchError: { ...retainedCopy.batchError } } : {}), ...(retainedCopy.source ? { source: retainedCopy.source } : {}), message: '已切换官网平台；上一批结果保留，仅供复制' };
   };
   const broadcast = (state: ToolState) => {
     if (disposed) return;
@@ -230,6 +233,7 @@ export async function createToolIntegration(options: Options) {
     const capturedRevision = revision;
     const current = () => guard() && webActive && !disposed && capturedRevision === revision &&
       root === options.files.getRoot() && session === sessionKeyOf(web.getURL());
+    if (harness.getState().source === 'manual' && (harness.getState().busy || processes.hasRunning)) return;
     if (parsed.kind === 'repair') {
       if (manual) {
         const latest = await readAutoReply(web, readOptions);
@@ -283,6 +287,7 @@ export async function createToolIntegration(options: Options) {
     selected: selection => {
       continuation?.reset({ root: options.files.getRoot(), session: sessionKeyOf(web.getURL()) });
       activeSelection = selection; if (selection) retainedCopy = null; if (selection) selectionRevisions.set(selection, revision);
+      manualToolJson?.invalidate();
       toolAttachments.begin(selection); resultReturn?.begin(selection ? { kind: 'batch', selection } : null);
       synchronizeChangeSession();
       if (!selection) { review.clear(); return; }
@@ -293,6 +298,7 @@ export async function createToolIntegration(options: Options) {
     stopped: (selection, error) => review.stop(reviewTokens.get(selection), error),
     describe: async (root, request) => {
       if (!webActive || disposed || activeSelection && selectionRevisions.get(activeSelection) !== revision) throw new Error('当前网页平台不可执行工具');
+      if (request.tool === 'attach_file' && activeSelection?.source === 'manual') throw new Error('手动 JSON 批次不向官网回传，附件未读取或上传');
       if (request.tool === 'attach_file' && webPlatformOf(web.getURL()) === 'chatgpt') throw new Error('ChatGPT 本轮仅支持纯文本，附件未读取或上传');
       return describeTool(root, request);
     }, snapshotProcess: id => processes.snapshot(id), prepare: async (root, batch) => {
@@ -311,6 +317,7 @@ export async function createToolIntegration(options: Options) {
     execute: async (root, request, started, selection) => {
       if (!webActive || disposed || selectionRevisions.get(selection) !== revision) throw new Error('网页平台已切换，工具未启动');
       if (request.tool === 'attach_file') {
+        if (selection.source === 'manual') throw new Error('手动 JSON 批次不向官网回传，附件未读取或上传');
         if (webPlatformOf(web.getURL()) === 'chatgpt') throw new Error('ChatGPT 本轮仅支持纯文本，附件未读取或上传');
         const selectedRevision = revision;
         return toolAttachments.stage(root, request.args.path as string, () => webActive && !disposed && revision === selectedRevision && activeSelection === selection && root === options.files.getRoot() && selection.session === sessionKeyOf(web.getURL()));
@@ -381,6 +388,20 @@ export async function createToolIntegration(options: Options) {
     },
   });
   const channels: string[] = [];
+  manualToolJson = new ManualToolJson(web, () => {
+    const state = harness.getState();
+    const busy = state.busy || processes.hasRunning || !!localPromptTransport || options.interactionBusy?.() ||
+      continuation?.getState().phase === 'sending' || continuation?.getState().phase === 'countdown' ||
+      resultReturn?.getState({ root: options.files.getRoot(), session: sessionKeyOf(web.getURL()), state }).phase === 'sending';
+    return { project: options.files.getRoot(), scope: draftScope(),
+      ...(options.disabled ? { error: '当前运行模式不支持手动执行工具 JSON' } : disposed || !webActive ? { error: '当前上下文正在切换或已经关闭，请稍后校验' } :
+        store.getLoadError() ? { error: '工具记录不可用，未执行：' + store.getLoadError() } :
+        busy ? { error: '工具、后台命令或发送正在处理，请等待当前操作结束' } : {}) };
+  }, async batch => {
+    jsonDraft.invalidate(); toolAttachments.reset(); resultReturn?.begin(null);
+    continuation?.reset({ root: options.files.getRoot(), session: sessionKeyOf(web.getURL()) });
+    await harness.collectManual(batch);
+  });
   const register = (channel: string, action: (...args: unknown[]) => unknown, count: number) => {
     options.ipc.handle(channel, (event, ...args: unknown[]) => {
       if (event.sender !== options.editor || event.senderFrame !== options.editor.mainFrame) throw new Error('工具控制仅供本地编辑器主 frame 使用');
@@ -389,6 +410,8 @@ export async function createToolIntegration(options: Options) {
     }); channels.push(channel);
   };
   register(CHANNELS.getToolState, getState, 0);
+  register(CHANNELS.previewToolJson, text => manualToolJson.preview(text), 1);
+  register(CHANNELS.executeToolJson, token => manualToolJson.run(token), 1);
   register(CHANNELS.sendToolResults, () => resultReturn!.send('manual', () => webActive && !disposed && !options.disabled), 0);
   const configure = async (config: unknown) => {
     if (config && typeof config === 'object' && (config as { automatic?: unknown }).automatic === true && !harness.getState().config.automatic) await sender.cancel('results');
@@ -452,12 +475,13 @@ export async function createToolIntegration(options: Options) {
       if (webActive) throw new Error('绑定官网前必须暂停采集与发送');
       const state = displayState(harness.getState());
       if (state.busy || processes.hasRunning) throw new Error('工具正在执行，不能绑定其他官网');
-      if (state.results.length || state.batchError) retainedCopy = { root: options.files.getRoot(), results: structuredClone(state.results), ...(state.batchError ? { batchError: { ...state.batchError } } : {}) };
+      if (state.results.length || state.batchError) retainedCopy = { root: options.files.getRoot(), results: structuredClone(state.results), ...(state.batchError ? { batchError: { ...state.batchError } } : {}), ...(state.source ? { source: state.source } : {}) };
       revision++; jsonDraft.invalidate();
       await watcher.dispose();
       await sender.dispose();
       if (disposed) return;
       web = next; sender = nextSender ?? createSender(web);
+      manualToolJson.bindWeb(web);
       monitor = new ReplyMonitor(web, readOptions); watcher = createWatcher();
       auto.reset(true); changes.reset(); changeSession = sessionKeyOf(web.getURL());
       toolAttachments.reset(); resultReturn?.invalidate();
@@ -515,7 +539,7 @@ export async function createToolIntegration(options: Options) {
       auto.acknowledge(sessionKeyOf(web.getURL()), text);
       void collectReply(text, current, true); return true;
     },
-    reset(): void { retainedCopy = null; revision++; jsonDraft.invalidate(); toolAttachments.reset(); resultReturn?.begin(null); continuation?.reset({ root: options.files.getRoot(), session: sessionKeyOf(web.getURL()) }); harness.cancel(); watcher.reset(); changes.reset(); },
-    async dispose(): Promise<void> { disposed = true; revision++; jsonDraft.invalidate(); toolAttachments.reset(); resultReturn?.begin(null); continuation?.dispose(); await sender.dispose(); auto.dispose(); await watcher.dispose(); harness.cancel(); await processes.dispose(); },
+    reset(): void { manualToolJson.invalidate(); retainedCopy = null; revision++; jsonDraft.invalidate(); toolAttachments.reset(); resultReturn?.begin(null); continuation?.reset({ root: options.files.getRoot(), session: sessionKeyOf(web.getURL()) }); harness.cancel(); watcher.reset(); changes.reset(); },
+    async dispose(): Promise<void> { manualToolJson.dispose(); disposed = true; revision++; jsonDraft.invalidate(); toolAttachments.reset(); resultReturn?.begin(null); continuation?.dispose(); await sender.dispose(); auto.dispose(); await watcher.dispose(); harness.cancel(); await processes.dispose(); },
   };
 }

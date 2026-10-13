@@ -18,6 +18,7 @@ interface HarnessOptions {
   snapshotProcess?: (id: string) => unknown;
 }
 export interface ToolSelection {
+  source?: 'manual';
   root: string;
   session: string;
   batch: ToolBatch;
@@ -76,7 +77,7 @@ export class ToolHarness {
     const message = storageError
       ? `工具记录加载失败，工具执行和自动继续已停用；原始记录与权限未重置。${storageError}。请使用匹配版本或恢复有效记录后重启。`
       : this.message;
-    return { config: storageError ? { ...config, automatic: false } : config, results, message, busy: this.waiting > 0, ...(this.selection?.userInterrupted ? { userInterrupted: true as const } : {}), ...(this.selection && !this.selection.executed ? { restored: true as const } : {}), ...(this.selection?.startId ? { batchStart: { id: this.selection.startId, batch_id: this.selection.batch.batch_id } } : {}), ...(storageError ? { storageError } : {}), ...(this.diagnostic ? { batchError: { ...this.diagnostic.error } } : {}), ...(this.completion ? { completion: { ...this.completion } } : {}) };
+    return { ...(this.selection?.source ? { source: this.selection.source } : {}), config: storageError ? { ...config, automatic: false } : config, results, message, busy: this.waiting > 0, ...(this.selection?.userInterrupted ? { userInterrupted: true as const } : {}), ...(this.selection && !this.selection.executed ? { restored: true as const } : {}), ...(this.selection?.startId ? { batchStart: { id: this.selection.startId, batch_id: this.selection.batch.batch_id } } : {}), ...(storageError ? { storageError } : {}), ...(this.diagnostic ? { batchError: { ...this.diagnostic.error } } : {}), ...(this.completion ? { completion: { ...this.completion } } : {}) };
   }
   get state(): ToolState { return this.getState(); }
   getDiagnostic(): ToolDiagnostic | null {
@@ -170,15 +171,21 @@ export class ToolHarness {
     return this.collectBatch(batch, origin);
   }
 
-  private collectBatch(batch: ToolBatch, recovered?: RecoveredToolOrigin): Promise<void> {
+  async collectManual(batch: ToolBatch): Promise<void> {
+    if (this.options.store.getLoadError()) throw new Error(this.options.store.getLoadError()!);
+    await this.collectBatch(batch, undefined, 'manual');
+    if (!this.getState().results.length) throw new Error(this.getState().message || '手动工具批次未执行');
+  }
+
+  private collectBatch(batch: ToolBatch, recovered?: RecoveredToolOrigin, source?: 'manual'): Promise<void> {
     const root = this.options.root();
     if (!root) { this.clearResults(); this.report('尚未打开项目，工具批次未执行'); return Promise.resolve(); }
     const session = this.options.session();
     this.getCopyResults();
     if (!this.selection || this.selection.root !== root || this.selection.session !== session ||
-        JSON.stringify(this.selection.batch) !== JSON.stringify(batch) || this.selection.recovered !== recovered) {
+        JSON.stringify(this.selection.batch) !== JSON.stringify(batch) || this.selection.recovered !== recovered || this.selection.source !== source) {
       this.clearResults();
-      this.selection = { root, session, batch, ...(recovered ? { recovered } : {}) };
+      this.selection = { root, session, batch, ...(recovered ? { recovered } : {}), ...(source ? { source } : {}) };
       this.options.selected?.(this.selection);
     }
     const selection = this.selection;
@@ -200,12 +207,13 @@ export class ToolHarness {
     await this.options.store.ready();
     if (!this.current(root, session, generation)) { this.options.stopped?.(selection, '项目、会话已变化或批次已停止；未执行'); this.report('项目、会话已变化或批次已停止；未执行'); return; }
     // 在任何副作用及权限对话框之前落盘；落盘失败则整个批次不执行。
-    const reservation = await this.options.store.reserve(root, session, batch);
+    const reservation = await this.options.store.reserve(root, session, batch, selection.source);
     if (reservation.kind === 'conflict') {
       const message = `批次 ${batch.batch_id} 的 ID 被不同内容复用；未执行`;
       this.options.stopped?.(selection, message); this.report(message); return;
     }
     const entry: SelectedEntry = { ...reservation.entry, selection };
+    if (entry.source === 'manual') selection.source = 'manual';
     if (reservation.kind === 'duplicate') {
       this.restore(entry);
       this.report(`批次 ${batch.batch_id} 已采集，未重复执行；unknown 表示重启后无法确认的状态`);

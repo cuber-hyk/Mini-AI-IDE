@@ -3,7 +3,7 @@ artifact_type: capability
 status: current
 updated: 2026-10-13
 owner: 胡运宽
-source_of_truth: ["docs/adr/2026-10-02-honest-electron-identity.md","docs/adr/2026-10-02-zero-injection-and-automation-trace-baseline.md","tools/reachability-probe/main.js","src/main/index.ts","src/main/diagnose.ts","src/main/selfTest.ts","test/limits-and-ua.test.ts"]
+source_of_truth: [src/main/sharedSessionInstance.ts, test/sharedSessionInstance.test.ts, tools/verify-shared-session-instance.cjs, "docs/adr/2026-10-02-honest-electron-identity.md","docs/adr/2026-10-02-zero-injection-and-automation-trace-baseline.md","tools/reachability-probe/main.js","src/main/index.ts","src/main/diagnose.ts","src/main/selfTest.ts","test/limits-and-ua.test.ts"]
 ---
 
 # 能力：会话与登录持久化
@@ -66,7 +66,9 @@ P2 期间把 P0b 工具（`reachability-probe`）的 profile 目录整体迁移�
 
 ## 登录次数最小化（重要）
 
-同一 Windows 账户下，开发版与安装版默认共用上述数据目录，避免同时运行。关闭窗口后若后台命令或 IDE 进程仍未退出，不能视为数据目录已释放；结束前一个实例后再启动另一版本。并发进程可能读不到既有页面存储，后启动实例的写入也可能无法跨重启保留，不应靠反复登录解决。
+同一Windows账户下，开发版与安装版共用上述数据目录。包含单实例修复的版本在读取配置及创建session/窗口前，按固定应用名与userData取得Electron原生实例锁；失败实例退出，second-instance只激活已有主窗口，不处理第二实例的路径或参数，不导航/发送官网。主窗口尚未创建时延后激活。窗口关闭或后台命令清理开始时不提前释放锁，直到进程实际退出。
+
+开发/安装轮流使用复用原资料，不分割、迁移或清除存储。旧二进制没有该保护，必须先正常关闭全部旧实例及后台命令，并让两个版本均包含修复；新开发代码不能让仍运行的旧安装版参与互斥。共享目录并发可能读不到既有页面存储或无法跨重启保存，实例锁预防该争用，不恢复已丢失资料。自检/UI探针先配置独立临时目录，锁不占用正式目录；diagnose使用正式目录，已有实例时拒绝诊断。
 
 **反复登录本身可能被判定为异常。** 因此：
 
@@ -117,3 +119,8 @@ P2 期间把 P0b 工具（`reachability-probe`）的 profile 目录整体迁移�
 
 - `WebContentsView` 的 UA **必须**通过 `webPreferences.userAgent` 显式传入（`session.setUserAgent` 不生效）；会话分区只影响存储与 Cookie，不影响 UA。
 - 分区名一旦落到用户磁盘即为长期状态；发布前务必确定，避免升级时"换会话"。
+
+
+## 共享实例验收（2026-10-13）
+
+用户确认新版本地打包程序与开发版互相重复启动均只保留一个窗口，正常退出和交替启动时DeepSeek登录保持。此反馈覆盖真实不同程序入口；不替代ChatGPT登录验收。旧安装版未更新，其保护仍需包含本修复的版本。

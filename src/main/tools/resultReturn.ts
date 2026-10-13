@@ -36,7 +36,7 @@ export class ToolResultReturn {
   private eligible(context: Context): boolean {
     const { state, root, session } = context;
     const source = this.source;
-    if (!source || !root || state.busy) return false;
+    if (!source || !root || state.busy || state.source === 'manual' || source.kind === 'batch' && source.selection.source === 'manual') return false;
     const scope = source.kind === 'batch' ? source.selection : source.diagnostic;
     if (root !== scope.root || session !== scope.session) return false;
     if (source.kind === 'diagnostic') {

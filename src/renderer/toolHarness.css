@@ -103,6 +103,17 @@
 .tool-more button:hover:not(:disabled) { background: var(--ui-bg); }
 .tool-more button:disabled { opacity: .45; cursor: default; }
 .tool-panel-body { flex: 1; min-height: 0; overflow-y: auto; padding: 0 10px 8px; }
+.tool-json-entry { display: flex; padding: 4px 0 8px; }
+.tool-json-entry .ui-button, .tool-json-actions .ui-button { height: 28px; font-size: 12px; }
+.tool-json-panel { padding: 10px; margin-bottom: 10px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius); background: var(--ui-surface); font-size: 12px; }
+.tool-json-panel[hidden], .tool-json-preview[hidden], #tool-source-notice[hidden] { display: none; }
+.tool-json-hint, .tool-json-status { margin: 6px 0; color: var(--ui-muted); overflow-wrap: anywhere; }
+.tool-json-status.is-error { color: var(--warn); }
+#tool-json-input { display: block; box-sizing: border-box; width: 100%; min-height: 110px; max-height: 220px; resize: vertical; padding: 8px; border: 1px solid var(--ui-border); border-radius: var(--ui-radius); background: var(--ui-bg); color: var(--ui-text); font: 12px/1.5 Consolas, monospace; }
+#tool-json-input:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 2px; }
+.tool-json-preview p { margin: 6px 0; overflow-wrap: anywhere; }
+.tool-json-preview pre { margin: 6px 0 10px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.tool-json-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .tool-message { margin: 0 0 8px; padding: 7px 0; color: var(--ui-muted); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .tool-message:empty { display: none; }
 .tool-message.is-error, .tool-activity.is-error { color: var(--warn); }

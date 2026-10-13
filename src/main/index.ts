@@ -9,6 +9,7 @@ import { webPlatformOf } from '../shared/webConversation';
 import { WebPlatformController } from './webPlatformController';
 import { createChatGPTView } from './webPlatformView';
 import { WebLoadingView } from './webLoadingView';
+import { SharedSessionInstance } from './sharedSessionInstance';
 /**
  * Mini-AI-IDE 主进程
  *
@@ -79,6 +80,7 @@ const PROMPT_PANEL_MAX_HEIGHT = 900;
 
 const SELF_TEST = process.argv.includes('--self-test');
 const WORKSPACE_PROBE = process.argv.includes('--workspace-probe');
+const STARTUP_PROBE = WORKSPACE_PROBE && process.argv.includes('--startup-only');
 /** 界面运行时探针：不联网，加载编辑器后读回 Monaco 实际选项并试改文本，然后退出 */
 const UI_PROBE = process.argv.includes('--ui-probe') || WORKSPACE_PROBE;
 /** 会话与网络诊断模式：加载目标站点并输出登录态与网络失败明细，然后退出 */
@@ -109,6 +111,15 @@ async function bootstrap(): Promise<void> {
   app.setName('mini-ai-ide');
   const probeDirectory = SELF_TEST || UI_PROBE ? configureWorkspaceProbe() : null;
   const workspaceProbeDirectory = WORKSPACE_PROBE ? probeDirectory : null;
+
+  // 同名应用与数据目录共用原生实例锁；失败时不打开配置或任何浏览器分区。
+  const sharedInstance = new SharedSessionInstance(app);
+  if (!sharedInstance.acquire()) {
+    process.stderr.write('[app] 已有 IDE 实例或数据目录正在使用，本次未启动新的会话。\n');
+    if (DIAGNOSE) app.exit(1); else app.quit();
+    return;
+  }
+
 
   await app.whenReady();
 
@@ -152,7 +163,8 @@ async function bootstrap(): Promise<void> {
   }
 
   /* ---------------- 窗口与两个视图 ---------------- */
-  const win = new BaseWindow({ width: 1600, height: 960, minWidth: 1080, minHeight: 600, show: !SELF_TEST, title: 'Mini-AI-IDE' });
+  const win = new BaseWindow({ width: 1600, height: 960, minWidth: 1080, minHeight: 600, show: !SELF_TEST && !STARTUP_PROBE, title: 'Mini-AI-IDE' });
+  sharedInstance.setWindow(win);
   let updater: ApplicationUpdater | null = null;
   let toolSettingsWindow: ToolSettingsWindow | null = null;
   let closeApproved = false;
@@ -513,6 +525,7 @@ async function loadLocalView(
       editorView.webContents.send(CHANNELS.entryChanged, event);
     }, () => tools.getReviewState().records.length > 0 || returnPath.undoCount > 0);
   const tools = await createToolIntegration({
+    interactionBusy: () => localPrompt?.isSending === true,
     ipc: ipcMain, editor: editorView.webContents, web: webView.webContents,
     notifyState: state => { toolWorkspaceStatus.publish(state); refreshPlatformSwitch?.(); },
     review: previewView.webContents, skills,
@@ -966,7 +979,12 @@ async function loadLocalView(
   }
 
   if (workspaceProbeDirectory) {
-    const workspaceReport = await runWorkspaceProbe(editorView.webContents, webView.webContents, previewView.webContents, workspaceController, workspaceProbeDirectory, webBarView.webContents, () => toolSettingsWindow!.contents);
+    const workspaceReport = await runWorkspaceProbe(editorView.webContents, webView.webContents, previewView.webContents, workspaceController, workspaceProbeDirectory, webBarView.webContents, () => toolSettingsWindow!.contents, STARTUP_PROBE);
+    if (STARTUP_PROBE) {
+      process.stdout.write(`\n===== 启动与文件树探针 =====\n${JSON.stringify(workspaceReport, null, 2)}\n`);
+      app.exit(workspaceReport.pass ? 0 : 1);
+      return;
+    }
     const columns = await runLayoutProbe({
       win, editor: editorView, webbar: webBarView, preview: previewView,
       getLayout: () => layoutController.layout,

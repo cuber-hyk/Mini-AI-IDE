@@ -29,7 +29,7 @@ function state(overrides: Record<string, unknown> = {}) {
 function setup(overrides: Record<string, unknown> = {}, audioConstructor?: unknown) {
   const ids = ['tool-permission-control', 'tool-permission', 'tool-automatic', 'tool-count',
     'tool-activity', 'tool-message', 'tool-results', 'tool-copy', 'tool-undo', 'tool-settings-toggle',
-    'tool-panel', 'tool-completion-notice', 'tool-sound-notice', 'tool-more-toggle', 'tool-copy-notice', 'tool-continue-notice', 'tool-return-notice'];
+    'tool-panel', 'tool-completion-notice', 'tool-sound-notice', 'tool-more-toggle', 'tool-copy-notice', 'tool-continue-notice', 'tool-return-notice', 'tool-source-notice'];
   const nodes = Object.fromEntries(ids.map(id => [id, element()]));
   let current = state();
   let publish: (value: any) => void = () => {};
@@ -51,7 +51,7 @@ function setup(overrides: Record<string, unknown> = {}, audioConstructor?: unkno
     async undoToolChange() { calls.push('undo'); publish(state({ ...current, canUndo: false })); return { ok: true }; },
     ...overrides,
   };
-  const window = { editorBridge: bridge, setupToolHarness: null as any, setupToolPanelLayout: () => ({ refresh() {} }), createToolExecutionClock: () => ({ replace() {} }), AudioContext: audioConstructor, addEventListener() {} };
+  const window = { editorBridge: bridge, setupToolHarness: null as any, setupToolJsonPanel: () => ({ update() {} }), setupToolPanelLayout: () => ({ refresh() {} }), createToolExecutionClock: () => ({ replace() {} }), AudioContext: audioConstructor, addEventListener() {} };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/renderer/toolResultPresentation.js'), 'utf8'), { window });
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/renderer/toolAttention.js'), 'utf8'), { window });
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/renderer/toolCompletionSound.js'), 'utf8'), { window });
@@ -71,6 +71,16 @@ function setup(overrides: Record<string, unknown> = {}, audioConstructor?: unkno
 
 async function flush() { for (let i = 0; i < 8; i++) await Promise.resolve(); }
 const result = { batch_id: 'inspect', request_id: 'read', tool: 'read_file', status: 'done', data: { text: '真实文件内容' } };
+
+it('手动导入明确仅查看复制，即使附带旧发送状态也不显示或请求网页发送', async () => {
+  const ui = setup(); await flush();
+  ui.publish(attachmentState({ source: 'manual' }));
+  assert.equal(ui.nodes['tool-source-notice'].hidden, false);
+  assert.equal(ui.nodes['tool-copy'].dataset.action, 'copy'); assert.equal(ui.nodes['tool-return-notice'].textContent, '');
+  await ui.nodes['tool-copy'].fire('click'); assert.ok(ui.calls.includes('copy'));
+  assert.equal(ui.calls.some(call => Array.isArray(call) && call[0] === 'send'), false);
+  ui.publish(state({ results: [result] })); assert.equal(ui.nodes['tool-source-notice'].hidden, true);
+});
 
 it('工具页只为新批准、失败或暂停发出一次打开事件，普通完成不抢占', async () => {
   const ui = setup(); await flush();

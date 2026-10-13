@@ -12,6 +12,7 @@ import type { ToolConfig, ToolState } from './toolProtocol';
 import type { ToolSettingsAnchor, ToolSettingsVisibility } from './toolSettings';
 import type { FilePreviewResult, FilePreviewZoom } from './filePreview';
 import type { WebPlatformState } from './webPlatform';
+import type { ManualToolJsonPreview, ManualToolJsonExecution } from './manualToolJson';
 
 export const CHANNELS = {
   getWebPlatform: 'ui:get-web-platform',
@@ -30,6 +31,8 @@ export const CHANNELS = {
   removePromptAttachment: 'ui:remove-prompt-attachment',
   getSkillCatalog: 'skills:list', loadSkill: 'skills:load', sendPrompt: 'ui:send-prompt',
   getToolState: 'tools:get-state',
+  previewToolJson: 'tools:preview-json',
+  executeToolJson: 'tools:execute-json',
   setToolConfig: 'tools:set-config',
   toolState: 'tools:state',
   /** 本地官网顶栏只接收工具状态摘要，不接收正文或本地路径。 */
@@ -530,6 +533,8 @@ export interface EditorBridge {
   startWorkspaceFileDrag(relPath: string, root: string): Promise<{ ok: boolean; error?: string }>;
   onFilePreviewZoom(listener: (input: FilePreviewZoom) => void): void;
   getToolState(): Promise<ToolState>;
+  previewToolJson(text: string): Promise<ManualToolJsonPreview>;
+  executeToolJson(token: string): Promise<ManualToolJsonExecution>;
   setToolConfig(config: Partial<ToolConfig>): Promise<ToolState>;
   onToolState(listener: (state: ToolState) => void): void;
   copyToolResults(): Promise<{ ok: boolean; error?: string }>;

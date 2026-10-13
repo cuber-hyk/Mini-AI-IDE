@@ -423,6 +423,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
      * 本项目的按钮 id 与 el 键名有稳定对应（btn-send-prompt → btnSendPrompt），据此逐一对齐。
      */
     const htmlButtonIds = [...html.matchAll(/<button\s+id="([^"]+)"/g)].map((m) => m[1] as string);
+    const toolJsonJs = fs.readFileSync(path.join(rendererDir, 'toolJsonPanel.js'), 'utf8');
     const toCamel = (s: string): string => s.replace(/-([a-z])/g, (_m, c: string) => c.toUpperCase());
     const unboundButtons = htmlButtonIds.filter((id) => {
       const layoutBindings: Record<string, string> = {
@@ -446,6 +447,11 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       const explorerKey: Record<string, string> = { 'file-new': 'newFile', 'folder-new': 'newFolder', 'file-refresh': 'refresh' };
       if (explorerKey[id]) return !new RegExp(`options\\.${explorerKey[id]}\\.addEventListener\\('click'`).test(explorerJs);
       if (id.startsWith('tool-')) {
+        if (id.startsWith('tool-json-')) {
+          const key = id.slice('tool-json-'.length);
+          return !toolJsonJs.includes(`'${key}'`) || !toolJsonJs.includes("document.getElementById('tool-json-' + name)") ||
+            !new RegExp(`\\bel\\.${key}\\.addEventListener\\('click'`).test(toolJsonJs);
+        }
         if (id === 'tool-settings-toggle' || id === 'tool-more-toggle') {
           if (id === 'tool-settings-toggle') return !/settingsToggle\.addEventListener\('click'/.test(fs.readFileSync(path.join(rendererDir, 'toolHarness.js'), 'utf8'));
           return !/popup\('tool-more-wrap', 'tool-more-toggle', 'tool-more'\)/.test(toolLayoutJs) || !/trigger\.addEventListener\('click'/.test(toolLayoutJs);

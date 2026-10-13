@@ -17,7 +17,7 @@ export function configureWorkspaceProbe(): string {
   return directory;
 }
 
-export async function runWorkspaceProbe(view: WebContents, web: WebContents, preview: WebContents, controller: WorkspaceController, directory: string, webbar: WebContents, toolSettings: () => WebContents | null) {
+export async function runWorkspaceProbe(view: WebContents, web: WebContents, preview: WebContents, controller: WorkspaceController, directory: string, webbar: WebContents, toolSettings: () => WebContents | null, startupOnly = false) {
   const checks: Array<{ name: string; pass: boolean; observed?: unknown }> = [];
   const screenshotErrors: Array<{ file: string; error: string }> = [];
   async function capture(contents: WebContents, file: string) {
@@ -54,6 +54,24 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
   dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [picked] })) as typeof dialog.showOpenDialog;
   try {
     check('Monaco 初始化', await waitFor('Boolean(window.__uiProbe && window.__uiProbe().ready)'));
+    if (startupOnly) {
+      const treeReady = "Boolean(document.querySelector('#tree .tree-row[data-rel-path=\"a.txt\"]'))";
+      await evaluate("document.getElementById('workspace-add').click()");
+      check('启动后加入工作区显示目录', await waitFor(treeReady) && controller.workspace.getState().root === a);
+      fs.writeFileSync(path.join(a, 'refreshed.txt'), 'refresh fixture');
+      await evaluate("document.getElementById('file-refresh').click()");
+      check('刷新后呈现磁盘新增文件', await waitFor("Boolean(document.querySelector('#tree .tree-row[data-rel-path=\"refreshed.txt\"]'))"));
+      fs.renameSync(path.join(b, 'a.txt'), path.join(b, 'b.txt'));
+      picked = b;
+      await evaluate("document.getElementById('workspace-add').click()");
+      check('切换第二工作区同步根目录与目录树', await waitFor(`window.editorBridge.getRoot().then(s => s.root === ${JSON.stringify(b)})`) && await waitFor("Boolean(document.querySelector('#tree .tree-row[data-rel-path=\"b.txt\"]')) && !document.querySelector('#tree .tree-row[data-rel-path=\"a.txt\"]')"));
+      await waitFor("document.querySelectorAll('#workspace-list .workspace-project').length === 2");
+      await evaluate("document.querySelector('#workspace-list .workspace-project').click()");
+      check('切回第一工作区同步目录', await waitFor(`window.editorBridge.getRoot().then(s => s.root === ${JSON.stringify(a)})`) && await waitFor(treeReady));
+      await evaluate("document.querySelector('#tree .tree-row[data-rel-path=\"a.txt\"]').click()");
+      check('目录文件实际打开到编辑器', await waitFor("document.querySelector('#editor-tabs [data-kind=file][aria-selected=true]')?.getAttribute('data-path') === 'a.txt' && window.monaco.editor.getEditors()[0].getModel().getValue() === 'A original'"));
+      return { scope: 'startup', checks, pass: checks.every(item => item.pass), temporaryDirectory: directory, screenshotErrors };
+    }
     let initialWebUrl = web.getURL();
     const originalFileWidth = await evaluate<number>("document.querySelector('.toolbar').getBoundingClientRect().width");
     await evaluate("document.getElementById('file-maximize').click()");

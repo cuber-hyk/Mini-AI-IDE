@@ -85,6 +85,23 @@
         </span>
       </summary>
       <div id="tool-panel-body" class="tool-panel-body">
+        <div class="tool-json-entry"><button id="tool-json-open" type="button" class="ui-button" aria-expanded="false" aria-controls="tool-json-panel" disabled>执行 JSON</button></div>
+        <section id="tool-json-panel" class="tool-json-panel" aria-label="手动执行工具 JSON" hidden>
+          <label for="tool-json-input">工具 JSON</label>
+          <p class="tool-json-hint">粘贴完整原始 JSON 或 mini-ai-tools 围栏，校验预览后确认执行。结果仅供查看、复制。</p>
+          <textarea id="tool-json-input" maxlength="200000" rows="7" spellcheck="false" placeholder="粘贴一批完整工具请求" aria-describedby="tool-json-status"></textarea>
+          <p id="tool-json-status" class="tool-json-status" role="status" aria-live="polite"></p>
+          <div id="tool-json-preview" class="tool-json-preview" hidden>
+            <p id="tool-json-project"></p><p id="tool-json-batch"></p>
+            <pre id="tool-json-requests" aria-label="待执行请求参数"></pre>
+          </div>
+          <div class="tool-json-actions">
+            <button id="tool-json-validate" type="button" class="ui-button">校验并预览</button>
+            <button id="tool-json-execute" type="button" class="ui-button primary" disabled>确认执行</button>
+            <button id="tool-json-cancel" type="button" class="ui-button">取消</button>
+          </div>
+        </section>
+        <p id="tool-source-notice" class="tool-message" hidden>手动导入结果，仅供查看/复制</p>
         <p id="tool-message" class="tool-message" role="status" aria-live="polite" aria-atomic="true">正在读取工具状态…</p>
         <div id="tool-results" class="tool-results" aria-label="工具调用结果"></div>
       </div>
@@ -186,6 +203,7 @@
     <script src="./workspaceLayout.js"></script>
     <script src="./fileWorkspace.js"></script>
     <script src="./composerDraftFeedback.js"></script>
+    <script src="./toolJsonPanel.js"></script>
     <script src="./renderer.js"></script>
     <script src="./toolResultPresentation.js"></script>
     <script src="./toolPanelLayout.js"></script>

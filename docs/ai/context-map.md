@@ -115,3 +115,7 @@ ChatGPT 普通对话纯文本适配：平台 URL 规则为 `src/shared/webConver
 ChatGPT 原生只读结构诊断为 `tools/chatgpt-page-structure.cjs`，由 `tools/chatgpt-ide-preview.cjs` 在显式诊断开关开启时运行，不记录正文、输入或凭据；离线两轮真实工具验证为 `tools/verify-chatgpt-tools.cjs`。
 
 官网启动/切换的本地加载反馈先读 `docs/capabilities/web-platforms.md` 与 `docs/adr/2026-10-11-web-platform-switching.md`；状态 owner 为 `src/main/webPlatformController.ts`，展示 owner 为 `src/main/webLoadingView.ts` 与 `src/renderer/webLoading.html/css`，统一几何仍归 `workspaceLayoutController.ts`。回归入口为 `test/webPlatformController.test.ts`、`tools/verify-web-loading.cjs`。
+
+手动粘贴工具JSON先读 `docs/capabilities/tool-harness.md` 与 `docs/adr/2026-10-13-manual-tool-json.md`。预览令牌归 `src/main/tools/manualToolJson.ts`，执行及来源归harness/store，integration接线；回传资格归autoContinuation/resultReturn。UI归 `src/renderer/toolJsonPanel.js`，toolHarness只接线。回归入口为 `test/manualToolJson.test.ts`、`test/manualToolJsonIntegration.test.ts`、`test/toolJsonPanel.test.ts`。
+
+共享登录与重复启动先读 `docs/capabilities/session-persistence.md`、`docs/adr/2026-10-13-shared-session-instance.md`。锁/激活owner为 `src/main/sharedSessionInstance.ts`，index在配置/session初始化前接线；unit入口 `test/sharedSessionInstance.test.ts`，隔离原生互斥/存储夹具为 `tools/verify-shared-session-instance.cjs`。此机制不读取认证值、不更改分区，不保证旧二进制参与新增保护。

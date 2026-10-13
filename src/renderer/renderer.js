@@ -937,6 +937,8 @@
   // 未保存状态由工具栏「● 未保存」与文件名旁的白点提示。
 
   const localPrompt = window.setupLocalPrompt(bridge, setInfo);
+  const toolJsonPanel = window.setupToolJsonPanel(bridge);
+  localPrompt.onBusy(function (busy) { toolJsonPanel.setPromptBusy(busy); });
   window.setupPromptComposer(bridge, setInfo, localPrompt);
 
   function updateRoot(info) {

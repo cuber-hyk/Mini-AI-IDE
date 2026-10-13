@@ -26,6 +26,8 @@
     const panel = document.getElementById('tool-panel');
     const completionNotice = document.getElementById('tool-completion-notice');
     const soundNotice = document.getElementById('tool-sound-notice');
+    const sourceNotice = document.getElementById('tool-source-notice');
+    const jsonPanel = window.setupToolJsonPanel(bridge);
     let state = null;
     let platform = null;
     let platformVersion = 0;
@@ -192,14 +194,16 @@
     }
 
     function render() {
+      jsonPanel.update(state, platform);
+      sourceNotice.hidden = !state || state.source !== 'manual';
       const unavailable = Boolean(state && state.storageError);
       panel.classList.toggle('has-results', Boolean(state && (state.results.length || state.batchError)));
       permission.disabled = configuring || !state || unavailable;
       automatic.disabled = configuring || !state || unavailable || !supported();
       automatic.title = supported() ? '自动继续：执行工具并回传真实结果' : platformReason();
       const returned = state && state.resultReturn;
-      const hasAttachments = Boolean(returned && returned.attachmentCount > 0);
-      const sendAttachments = Boolean(attachmentsSupported() && hasAttachments && !configuring && !state.busy && !state.config.automatic && returned.canSend && returnedIdentity !== returnIdentity());
+      const hasAttachments = Boolean(returned && returned.attachmentCount > 0 && state.source !== 'manual');
+      const sendAttachments = Boolean(attachmentsSupported() && hasAttachments && state.source !== 'manual' && !configuring && !state.busy && !state.config.automatic && returned.canSend && returnedIdentity !== returnIdentity());
       const showSendAction = attachmentsSupported() && (sendAttachments || sending && hasAttachments);
       copy.dataset.action = showSendAction ? 'send' : 'copy';
       copy.title = copying ? (sending ? '正在复制并发送本批结果与附件…' : '正在复制本批结果…') : showSendAction ? '发送本批结果与附件，并复制结果到剪贴板' : '复制本批结果到剪贴板';
@@ -324,7 +328,7 @@
         render();
       }
       try {
-        const stillCanSendAttachments = attachmentsSupported() && identity === returnIdentity() && state && !configuring && !state.busy && !state.config.automatic &&
+        const stillCanSendAttachments = attachmentsSupported() && identity === returnIdentity() && state && state.source !== 'manual' && !configuring && !state.busy && !state.config.automatic &&
           state.resultReturn && state.resultReturn.canSend && returnedIdentity !== identity;
         if (sendAttachments && stillCanSendAttachments) {
           returnMessage = '正在提交本批结果与附件…'; render();
