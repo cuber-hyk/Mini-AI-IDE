@@ -68,7 +68,7 @@ send.addEventListener('click',event=>{event.preventDefault();
  setTimeout(()=>{stop.remove();if(received.length===1)appendReply('second','read_file',{path:'input.txt'});},250);
 });
 </script>`;
-let window, system, sender;
+let window, system, sender, failed=false;
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(read, label) { const end = Date.now()+12000; while(!await read()) { assert.ok(Date.now()<end,label); await wait(10); } }
 app.whenReady().then(async()=>{
@@ -122,8 +122,33 @@ app.whenReady().then(async()=>{
  assert.equal((await system.sendLocalPrompt('另一新对话获取概况','https://chatgpt.com/',()=>true)).ok,true);
  await until(async()=>await run('received.length')===3,'再次新建对话仍须两轮继续，无需重开自动开关');
  assert.equal(JSON.parse((await run('received'))[2]).tool_results[0].batch_id,'homepage-second-2');
- console.log('ChatGPT 原生离线闭环：历史不执行、两轮真实工具、复制回传一致、重复不回传、无网页桥及首页编码占位交接，7 项通过；官网验收仍待实际对话。');
+ await until(async()=>(await readAutoReply(window.webContents)).completion==='complete','新对话回传后的生成结束');
+ await run('homepage=false');
+ const beforeRecovery=await run('received.length'),copiesBeforeRecovery=copies.length;
+ const recoveryBody=JSON.stringify({protocol_version:1,batch_id:'native-json-recovery',requests:[
+  {id:'temp',tool:'get_ai_temp_dir',args:{task_id:'native-recovery'}},
+  {id:'create',tool:'apply_changes',depends_on:['temp'],args:{changes:[{path:'.mini-ai-ide/ai-temp/native-recovery/recovered.txt',operation:'create',content:'native recovered file'}]}}
+ ]});
+ async function appendBody(id,body){await run(`(()=>{const item=appendReply(${JSON.stringify(id)},'get_project_info',{},false);item.code.textContent=${JSON.stringify(body)};item.turn.dataset.talvtTurnState='complete';item.turn.append(item.footer)})()`);}
+ await appendBody('native-syntax-error',recoveryBody.slice(0,-1)+',}');
+ await until(async()=>await run('received.length')===beforeRecovery+1,'真实代码框的解析诊断必须经原生composer回传');
+ const draftId=system.getState().batchError?.error.match(/草稿 ([0-9a-f-]{36})/)?.[1];assert.ok(draftId);
+ await assert.rejects(fs.access(path.join(root,'.mini-ai-ide')),'语法错误阶段不创建临时目录或文件');
+ await until(async()=>(await readAutoReply(window.webContents)).completion==='complete','解析诊断发送后的生成结束');
+ const patchBody=JSON.stringify({repair_draft:{draft_id:draftId,version:1,old_string:',}',new_string:'}'}});
+ await appendBody('native-repair',patchBody);
+ await until(async()=>await run('received.length')===beforeRecovery+2,'恢复来源经真实DOM采集与composer完成整批回传');
+ assert.equal(await fs.readFile(path.join(root,'.mini-ai-ide/ai-temp/native-recovery/recovered.txt'),'utf8'),'native recovered file');
+ const recoveryReceipt=JSON.parse((await run('received')).at(-1));assert.equal(recoveryReceipt.tool_results.length,2);
+ assert.ok(recoveryReceipt.tool_results.every(result=>result.status==='done'));
+ assert.equal(copies.length,copiesBeforeRecovery+1,'解析错误不自动复制，恢复后只复制一次真实整批结果');
+ assert.equal(copies.at(-1),(await run('received')).at(-1));
+ await until(async()=>(await readAutoReply(window.webContents)).completion==='complete','恢复结果回传后的生成结束');
+ await appendBody('native-repeat-repair',patchBody);await wait(400);
+ assert.equal(await run('received.length'),beforeRecovery+2,'重复恢复补丁不能重新执行或回传');
+ console.log('ChatGPT 原生离线闭环：原7项、解析诊断与草稿恢复、临时目录与真实文件创建、恢复复制回传一致及补丁不重放，共11项通过；官网验收仍待实际对话。');
 }).catch(async error=>{
+ failed=true;
  console.error(error.stack||error);
  if(system) {const s=system.getState();console.error(JSON.stringify({message:s.message,busy:s.busy,resultStatuses:s.results.map(r=>r.status),return:s.resultReturn?.phase,returnMessage:s.resultReturn?.message,continuation:s.continuation?.phase,continuationMessage:s.continuation?.message}));}
  if(window&&!window.isDestroyed()) {
@@ -135,6 +160,6 @@ app.whenReady().then(async()=>{
  if(system)await system.dispose();else if(sender)await sender.dispose();
  if(window&&!window.isDestroyed())window.destroy();
  assert.equal(path.dirname(path.resolve(temporary)),path.resolve(os.tmpdir()));
- // 父进程等Electron退出后清理自有profile，直接Electron调用保留临时数据。
- app.exit(process.exitCode||0);
+ // 仅父进程拥有已退出profile的删除资格；直接Electron调用保留临时profile。
+ app.exit(failed?1:0);
 });

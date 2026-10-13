@@ -1,9 +1,9 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-11
+updated: 2026-10-12
 owner: 胡运宽
-source_of_truth: [src/main/tools/replySource.ts, test/replySource.test.ts, src/main/toolWorkspaceStatus.ts, src/renderer/toolAttention.js, src/renderer/fileWorkspace.js, src/renderer/editorTabs.js, test/toolWorkspaceStatus.test.ts, test/toolAttention.test.ts, test/fileWorkspace.test.ts, src/main/toolSettingsWindow.ts, src/main/toolSettingsIpc.ts, src/main/toolSettingsPreload.ts, src/shared/toolSettings.ts, src/renderer/toolSettings.html, src/renderer/toolSettings.js, src/renderer/toolSettings.css, src/renderer/toolCompletionSound.js, test/toolSettingsWindow.test.ts, test/toolSettingsIpc.test.ts, test/toolSettingsUi.test.ts, src/main/workspaceProbe.ts, docs/adr/2026-10-09-batch-error-auto-return.md, docs/adr/2026-10-09-tool-attachment-return.md, src/main/tools/attachments.ts, src/main/tools/resultReturn.ts, test/toolAttachmentIntegration.test.ts, test/toolAttachments.test.ts, test/toolResultReturn.test.ts, docs/capabilities/skills-and-local-prompt.md, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, src/renderer/workspaceLayout.js, src/main/workspaceLayoutController.ts, src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, tools/verify-web-result-sender.cjs, src/shared/toolJsonDiagnostic.ts, src/main/tools/resultClipboard.ts, src/renderer/toolExecutionClock.js, test/toolJsonDiagnostic.test.ts, test/toolResultClipboard.test.ts, test/toolExecutionClock.test.ts, test/toolExecutionIntegration.test.ts, src/shared/toolProtocol.ts, src/main/tools/harness.ts, src/main/tools/store.ts, src/main/tools/files.ts, src/main/tools/processes.ts, src/main/tools/changes.ts, src/main/tools/autoCollector.ts, src/main/tools/replyObservation.ts, src/main/tools/replyContinuation.ts, src/main/tools/replyChangeWatcher.ts, src/main/tools/integration.ts, src/renderer/toolHarness.js, src/renderer/toolHarness.css, src/renderer/toolPanelLayout.js, src/renderer/toolResultPresentation.js, test/toolProtocol.test.ts, test/toolHarness.test.ts, test/toolIntegration.test.ts, test/toolAutoCollector.test.ts, test/replyObservation.test.ts, test/replyChangeWatcher.test.ts, test/toolHarnessUi.test.ts, test/toolPanelLayout.test.ts, test/toolResultPresentation.test.ts, test/deepseekReplyState.test.ts, test/toolChanges.test.ts, test/toolProcesses.test.ts]
+source_of_truth: [src/main/tools/replySource.ts, test/replySource.test.ts, src/main/toolWorkspaceStatus.ts, src/renderer/toolAttention.js, src/renderer/fileWorkspace.js, src/renderer/editorTabs.js, test/toolWorkspaceStatus.test.ts, test/toolAttention.test.ts, test/fileWorkspace.test.ts, src/main/toolSettingsWindow.ts, src/main/toolSettingsIpc.ts, src/main/toolSettingsPreload.ts, src/shared/toolSettings.ts, src/renderer/toolSettings.html, src/renderer/toolSettings.js, src/renderer/toolSettings.css, src/renderer/toolCompletionSound.js, test/toolSettingsWindow.test.ts, test/toolSettingsIpc.test.ts, test/toolSettingsUi.test.ts, src/main/workspaceProbe.ts, docs/adr/2026-10-09-batch-error-auto-return.md, docs/adr/2026-10-09-tool-attachment-return.md, src/main/tools/attachments.ts, src/main/tools/resultReturn.ts, test/toolAttachmentIntegration.test.ts, test/toolAttachments.test.ts, test/toolResultReturn.test.ts, docs/capabilities/skills-and-local-prompt.md, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, src/renderer/workspaceLayout.js, src/main/workspaceLayoutController.ts, src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, tools/verify-web-result-sender.cjs, src/shared/toolJsonDiagnostic.ts, src/main/tools/resultClipboard.ts, src/renderer/toolExecutionClock.js, test/toolJsonDiagnostic.test.ts, test/toolResultClipboard.test.ts, test/toolExecutionClock.test.ts, test/toolExecutionIntegration.test.ts, src/shared/toolProtocol.ts, src/main/tools/harness.ts, src/main/tools/store.ts, src/main/tools/files.ts, src/main/tools/processes.ts, src/main/tools/changes.ts, src/main/tools/autoCollector.ts, src/main/tools/replyObservation.ts, src/main/tools/replyContinuation.ts, src/main/tools/replyChangeWatcher.ts, src/main/tools/integration.ts, src/renderer/toolHarness.js, src/renderer/toolHarness.css, src/renderer/toolPanelLayout.js, src/renderer/toolResultPresentation.js, test/toolProtocol.test.ts, test/toolHarness.test.ts, test/toolIntegration.test.ts, test/toolAutoCollector.test.ts, test/replyObservation.test.ts, test/replyChangeWatcher.test.ts, test/toolHarnessUi.test.ts, test/toolPanelLayout.test.ts, test/toolResultPresentation.test.ts, test/deepseekReplyState.test.ts, test/toolChanges.test.ts, test/toolProcesses.test.ts, src/main/tools/aiTempDirectory.ts, src/main/tools/jsonDraft.ts, test/aiTempDirectory.test.ts, test/jsonDraft.test.ts, test/toolAutoContinueIntegration.test.ts]
 ---
 
 # 能力：通用本地工具
@@ -30,6 +30,7 @@ AI 输出规范请求，IDE 只读采集、校验、按权限执行并显示真�
 |---|---|
 | attach_file | 明确请求上传受支持的真实文件；工具权限批准后暂存当前批附件，done 不表示官网已接收 |
 | get_project_info | 真实根目录、平台、目录概况 |
+| get_ai_temp_dir | 按需创建或验证当前项目内、具备归属标记的 AI 任务临时目录，返回真实路径和稳定 task_id |
 | load_skill | 固定项目/全局技能目录按名称加载完整 SKILL.md，项目同名优先，不执行资源 |
 | list_directory | 目录、深度、条目上限 |
 | search_files | glob 路径匹配 |
@@ -41,6 +42,16 @@ AI 输出规范请求，IDE 只读采集、校验、按权限执行并显示真�
 | stop_process | 只停止 IDE 创建并持有的进程 |
 
 读取使用磁盘内容；用户既有复制上下文可含草稿。目录搜索跳过依赖/构建目录及链接，返回跳过理由；拒绝二进制，不假称截断内容完整。
+
+## AI 临时目录与 JSON 草稿恢复
+
+`get_ai_temp_dir({task_id})` 由 `aiTempDirectory.ts` 管理当前项目真实根目录下的 `.mini-ai-ide/ai-temp/<task_id>/`。首次选择稳定的 task_id，后续同任务复用。创建及复用时检查目录归属标记、真实路径、符号链接与 Windows junction；未知或冲突目录直接拒绝，不迁移、不覆盖、不自动删除已有文件。专用 `.gitignore` 只忽略临时运行文件，不修改项目原有 `.gitignore`，也不改变命令默认 cwd。临时脚本、日志和敏感数据由用户自行管理；Git 忽略不代表安全删除。
+
+`jsonDraft.ts` 仅为一个完整顶层正式围栏内的 JSON.parse 错误维护内存草稿。诊断返回 draft_id 和从 1 开始的修订版本；下一次完整官网回复可发送单个 `repair_draft`，包含 draft_id、version、old_string 和 new_string。old_string 必须非空且在当前修订稿中唯一匹配。原始官网回复不变，补丁只修改未执行的内存修订稿。修复后仍存在 JSON 语法错误时可以继续按新版本修补；JSON 已合法但工具协议或参数错误时终止草稿，要求重新提交完整合法批次。错误标识、过期版本、重复或失效补丁均不得执行工具。
+
+恢复后的合法批次继续经过原有 ToolHarness 静态校验、权限审批、ToolStore 持久去重和结果回传。来源绑定草稿、原文与修订稿摘要、补丁原文及摘要、恢复批次摘要、项目、官网平台、会话及采集代次。ToolResultReturn 发送前必须重新读取官网最新已完成回复，确认仍是关联的有效补丁；来源变更、取消及作用域失效均阻断旧结果发送。解析及批次校验错误仍受连续最多 5 次自动回传限制，第 6 次暂停。命令启动或运行失败仍返回真实工具结果，不属于 JSON 语法草稿修复。
+
+以上行为有单元、集成和原生本地 DOM 测试；用户已确认 DeepSeek / ChatGPT 普通新会话的临时目录申请、JSON 短补丁恢复及后续文件操作均能全程自动采集回传。验收范围为本任务常规闭环，取消、历史与竞态边界由离线回归覆盖。
 
 ## 权限与状态
 
@@ -96,7 +107,7 @@ DeepSeek 主回复使用当前回复页脚的原生复制、可用重新生成�
 
 前台和后台命令在真实 spawn 后即发布进程身份，每行中断按当前项目、会话、批次、请求与 process_id 核验，只终止对应 IDE 所属进程树。旧进程的迟到中断响应不能禁用同 ID 的新命令或污染其状态。停止失败保留真实输出、错误、归属身份及重试入口，cleanup_pending 表示仍有树清理工作；主 shell 已退出时长保持真实退出值。超时报告失败，用户中断报告取消。退出清理仍取消剩余请求并停止全部所属命令，路径校验阶段的未启动命令不能迟到启动。后台所有命令及树清理结束后才生成本批完成事件，按实际退出状态判断反馈，不把启动成功当作执行成功。
 
-工具 JSON 错误整批不执行、不预约批次；多个请求中一项校验失败也不部分执行。工具结果列表显示一个展开的“批次校验”失败卡片，包含原生 SyntaxError；有位置时给 JSON 正文行列、UTF-16 偏移与短片段，没有位置时不推测。不能解析的批次不伪造工具名或请求 ID，复制本批结果返回 {protocol_version:1,tool_results:[],batch_error:{status:"failed",error:诊断正文}}。不另铺全局长诊断，正文只保留最近轮内存，切换项目/会话清除，不联网或自动修复 JSON。
+工具 JSON 错误整批不执行、不预约批次；多个请求中一项校验失败也不部分执行。工具结果列表显示一个展开的“批次校验”失败卡片，包含原生 SyntaxError；有位置时给 JSON 正文行列、UTF-16 偏移与短片段，没有位置时不推测。不能解析的批次不伪造工具名或请求 ID，复制本批结果返回 {protocol_version:1,tool_results:[],batch_error:{status:"failed",error:诊断正文}}。不另铺全局长诊断，正文只保留最近轮内存，切换项目/会话清除，不联网或直接自动修复 JSON；只在上述严格范围内接纳下一轮明确的局部修复指令。
 
 当前新批次全部工具真正结束且至少一个工具实际执行后自动复制完整 tool_results 一次，覆盖读取、搜索、修改、进程查询和命令，默认开启，在设置浮层的“完成反馈”可关闭并保存；工具执行失败输出也复制。已结束、清理完成的超时或用户停止命令视为实际执行终态，真实部分输出可复制；权限拒绝但没有任何实际执行的批次不自动复制。后台启动、全部未执行、整批取消、未知、历史恢复及界面状态查询/设置不会写剪贴板；切换项目/会话作废旧轮。手动复制按钮保留，复制失败独立提示，automatic 开启时成功复制不误提示用户必须再粘贴。批次完成事件主进程单调编号，状态广播、界面初始化或重绘不重复复制，失败不暗中重试。
 
@@ -114,6 +125,6 @@ DeepSeek 主回复使用当前回复页脚的原生复制、可用重新生成�
 
 `read_file` 继续只读文本；PDF/Word 可经 attach_file 上传原文件。技能需要 PDF 页或局部图时，通过已授权 run_command 使用真实可用的本地工具提取，再请求 attach_file。不会扫描命令日志猜测附件，也不把二进制编码进工具 JSON。新工具的完整提示词示例由 formatSpec 生成，补充格式上限 10,000 字以容纳完整内置模板。
 
-规则验收入口为 `test/autoContinuation.test.ts`、`test/webResultSender.test.ts`、`test/toolIntegration.test.ts`；原生 sender 验收为 `tools/verify-web-result-sender.cjs` 的本地 Electron 夹具。真实官网尚未验收，不能据夹具断言平台接受合成发送。
+规则验收入口为 `test/autoContinuation.test.ts`、`test/webResultSender.test.ts`、`test/toolIntegration.test.ts`；原生 sender 验收为 `tools/verify-web-result-sender.cjs` 的本地 Electron 夹具。用户已确认两平台本任务常规闭环的实际自动回传，现场结果与夹具证据分开记录。
 
 自动采集与受控发送独立：实际新完成工具输出无需等待本地发送或结果回传回执，发送失败和 unknown 不屏蔽真实输出。执行与结果回传仍使用来源项目/会话/批次校验，回传不重试未知提交，切换上下文作废旧待发送结果。

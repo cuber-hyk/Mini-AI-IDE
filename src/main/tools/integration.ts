@@ -11,6 +11,8 @@ import type { ReturnPathService } from '../returnPathService';
 import type { WorkspaceController } from '../workspaceController';
 import { SkillService } from '../skills';
 import { ToolFiles, resolveToolPath } from './files';
+import { AiTempDirectory } from './aiTempDirectory';
+import { JsonDraft } from './jsonDraft';
 import { ToolProcesses } from './processes';
 import { ToolStore } from './store';
 import { ToolHarness, type ToolSelection } from './harness';
@@ -92,6 +94,7 @@ export async function describeTool(root: string, request: ToolRequest): Promise<
   const actualRoot = await resolveToolPath(root, '.');
   const targets: string[] = [];
   if (READ_TOOLS.has(request.tool) && request.tool !== 'get_project_info') targets.push(await resolveToolPath(root, request.args.path as string | undefined));
+  if (request.tool === 'get_ai_temp_dir') targets.push(await resolveToolPath(root, path.join('.mini-ai-ide', 'ai-temp', request.args.task_id as string)));
   if (request.tool === 'attach_file') targets.push(await resolveToolPath(root, request.args.path as string));
   if (request.tool === 'run_command') targets.push(await resolveToolPath(root, request.args.cwd as string | undefined));
   if (request.tool === 'apply_changes') for (const c of request.args.changes as Array<{ path: string }>) targets.push(await resolveToolPath(root, c.path));
@@ -151,6 +154,8 @@ export async function createToolIntegration(options: Options) {
     process.stderr.write(`[tools] 工具记录加载失败，工具已停用：${error instanceof Error ? error.message : String(error)}\n`);
   }
   const fileTools = new ToolFiles();
+  const aiTempDirectory = new AiTempDirectory();
+  const jsonDraft = new JsonDraft();
   const skills = options.skills ?? new SkillService();
   let disposed = false; let revision = 0; let webActive = true;
   let automaticSuspended = false;
@@ -158,6 +163,11 @@ export async function createToolIntegration(options: Options) {
   let continuation: AutoContinuation | undefined;
   let resultReturn: ToolResultReturn | undefined;
   let activeSelection: ToolSelection | null = null;
+  const draftScope = () => JSON.stringify([options.files.getRoot(), sessionKeyOf(web.getURL()), webPlatformOf(web.getURL()), revision]);
+  const recoveryValid = () => {
+    const origin = activeSelection?.recovered;
+    return !origin || jsonDraft.matchesRecovery(options.files.getRoot(), sessionKeyOf(web.getURL()), draftScope(), origin);
+  };
   const selectionRevisions = new WeakMap<ToolSelection, number>();
   const toolAttachments = new ToolAttachments();
   let sender = options.sender ?? new WebResultSender(web);
@@ -178,7 +188,7 @@ export async function createToolIntegration(options: Options) {
     const notification = clipboard.notification(state);
     const current: ToolState = { ...displayState(state), canUndo: changes.canUndo, hasRunningProcesses: processes.hasRunning,
       ...(notification ? { clipboard: notification } : {}), ...(continuation ? { continuation: continuation.getState() } : {}),
-      ...(resultReturn ? { resultReturn: resultReturn.getState({ root: options.files.getRoot(), session: sessionKeyOf(web.getURL()), state }) } : {}) };
+      ...(resultReturn ? { resultReturn: resultReturn.getState({ root: options.files.getRoot(), session: sessionKeyOf(web.getURL()), state, recoveryValid: recoveryValid() }) } : {}) };
     if (!options.editor.isDestroyed()) options.editor.send(CHANNELS.toolState, current);
     options.notifyState?.(current);
   };
@@ -206,19 +216,50 @@ export async function createToolIntegration(options: Options) {
   let changeSession = sessionKeyOf(web.getURL());
   const synchronizeChangeSession = () => {
     const current = sessionKeyOf(web.getURL());
-    if (current !== changeSession) { changes.reset(); changeSession = current; }
+    if (current !== changeSession) { changes.reset(); jsonDraft.invalidate(); changeSession = current; }
   };
   const readOptions = { allowLocalFixture: options.allowLocalFixture === true };
   let monitor = new ReplyMonitor(web, readOptions);
+  const collectReply = async (text: string, guard: () => boolean = () => true, manual = false): Promise<void> => {
+    const parsed = parseToolBatch(text);
+    const root = options.files.getRoot();
+    const session = sessionKeyOf(web.getURL());
+    const capturedRevision = revision;
+    const current = () => guard() && webActive && !disposed && capturedRevision === revision &&
+      root === options.files.getRoot() && session === sessionKeyOf(web.getURL());
+    if (parsed.kind === 'repair') {
+      if (manual) {
+        const latest = await readAutoReply(web, readOptions);
+        if (!current() || latest.url !== session || latest.completion !== 'complete' || latest.text !== text) {
+          harness.report('当前补丁不是官网最新已完成回复，禁止执行历史补丁');
+          return;
+        }
+      }
+      if (!current()) return;
+      const outcome = jsonDraft.apply(root, session, draftScope(), text, parsed.patch);
+      if (outcome.kind === 'batch') await harness.collectRecovered(outcome.batch, outcome.origin);
+      else harness.reportDiagnostic(text, outcome.error, 'repair');
+      return;
+    }
+    if (!current()) return;
+    if (parsed.kind === 'error' && parsed.jsonBody !== undefined) {
+      const metadata = jsonDraft.capture(root, session, draftScope(), text, parsed.jsonBody);
+      await harness.collect(text, metadata ? JsonDraft.instruction(metadata) : '草稿超过内存限制或当前无项目，无法局部修复');
+      return;
+    }
+    if (!(parsed.kind === 'error' && parsed.repairAttempt)) jsonDraft.invalidate();
+    await harness.collect(text);
+  };
   const auto = new AutoCollector(() => monitor.read(), async (text, current, sourceKey) => {
     // 封存实际接纳的完成正文（包括已见生成后的 idle），节点复用不能继承执行资格。
     if (!webActive || disposed || !current()) return;
+    const collectionRevision = revision;
     await watcher.acknowledge(false, sourceKey);
     const root = options.files.getRoot(); const session = sessionKeyOf(web.getURL());
-    const allowed = webActive && !disposed && current() && root === options.files.getRoot() && session === sessionKeyOf(web.getURL());
+    const allowed = webActive && !disposed && current() && revision === collectionRevision && root === options.files.getRoot() && session === sessionKeyOf(web.getURL());
     traceCollection('integration.collect-check', { allowed, root: root ? traceText(root) : null, session: traceScope(session), text: traceText(text) });
     if (allowed) {
-      await harness.collect(text);
+      await collectReply(text, current);
       traceCollection('integration.collect-returned', { root: root ? traceText(root) : null, session: traceScope(session), text: traceText(text) });
     }
   }, message => harness.report(message));
@@ -272,6 +313,7 @@ export async function createToolIntegration(options: Options) {
         return toolAttachments.stage(root, request.args.path as string, () => webActive && !disposed && revision === selectedRevision && activeSelection === selection && root === options.files.getRoot() && selection.session === sessionKeyOf(web.getURL()));
       }
       if (request.tool === 'load_skill') return skills.load(root, request.args.name as string);
+      if (request.tool === 'get_ai_temp_dir') return aiTempDirectory.ensure(root, request.args.task_id as string);
       if (request.tool === 'apply_changes') return options.workspace.run(() => {
         if (!webActive || disposed || selectionRevisions.get(selection) !== revision || selection.session !== sessionKeyOf(web.getURL())) throw new Error('平台或会话已切换，未启动文件修改');
         return changes.execute(root, request, reviewTokens.get(selection));
@@ -284,10 +326,10 @@ export async function createToolIntegration(options: Options) {
     synchronizeChangeSession();
     const state = harness.getState();
     const notification = clipboard.notification(state);
-    return { ...displayState(state), canUndo: changes.canUndo, hasRunningProcesses: processes.hasRunning, ...(notification ? { clipboard: notification } : {}), ...(continuation ? { continuation: continuation.getState() } : {}), ...(resultReturn ? { resultReturn: resultReturn.getState({ root: options.files.getRoot(), session: sessionKeyOf(web.getURL()), state }) } : {}) };
+    return { ...displayState(state), canUndo: changes.canUndo, hasRunningProcesses: processes.hasRunning, ...(notification ? { clipboard: notification } : {}), ...(continuation ? { continuation: continuation.getState() } : {}), ...(resultReturn ? { resultReturn: resultReturn.getState({ root: options.files.getRoot(), session: sessionKeyOf(web.getURL()), state, recoveryValid: recoveryValid() }) } : {}) };
   };
   resultReturn = new ToolResultReturn({
-    current: () => ({ root: options.files.getRoot(), session: sessionKeyOf(web.getURL()), state: harness.getState(), diagnostic: harness.getDiagnostic() }),
+    current: () => ({ root: options.files.getRoot(), session: sessionKeyOf(web.getURL()), state: harness.getState(), diagnostic: harness.getDiagnostic(), recoveryValid: recoveryValid() }),
     changed: () => broadcast(getState()),
     attachments: state => toolAttachments.resolve(state.results),
     send: (text, session, current, files) => webActive && !disposed && current()
@@ -305,8 +347,21 @@ export async function createToolIntegration(options: Options) {
       if (reply.completion !== 'complete') return { ok: false, error: reply.completion === 'generating' ? '网页仍在生成，未发送工具结果' : reply.completion === 'interrupted' ? '网页生成已中断，未发送工具结果' : '无法确认网页回复结束，未发送工具结果' };
       const parsed = parseToolBatch(reply.text);
       if (source.kind === 'diagnostic') {
-        if (parsed.kind !== 'error' || reply.text !== source.diagnostic.sourceText || parsed.error !== source.diagnostic.error.error)
+        const matchesSource = reply.text === source.diagnostic.sourceText;
+        const matchesError = parsed.kind === 'error' && source.diagnostic.sourceKind !== 'repair' &&
+          source.diagnostic.error.error.startsWith(parsed.error);
+        const matchesPatch = parsed.kind === 'repair' && source.diagnostic.sourceKind === 'repair';
+        if (!matchesSource || !(matchesError || matchesPatch))
           return { ok: false, error: '网页最新回复已变化，未发送旧解析诊断' };
+      } else if (source.selection.recovered) {
+        const origin = source.selection.recovered;
+        if (parsed.kind !== 'repair' || reply.text !== origin.patchSourceText ||
+            hash(reply.text) !== origin.patchHash || hash(JSON.stringify(source.selection.batch)) !== origin.batchHash ||
+            parsed.patch.draft_id !== origin.draft_id || parsed.patch.version + 1 !== origin.version ||
+            origin.scope !== draftScope() || !harness.matchesRecovered(origin) ||
+            !harness.matchesBatch(source.selection.batch) ||
+            !jsonDraft.matchesRecovery(options.files.getRoot(), sessionKeyOf(web.getURL()), draftScope(), origin))
+          return { ok: false, error: '恢复来源、官网最新补丁、修订版本或执行批次不一致，未发送旧工具结果' };
       } else if (parsed.kind !== 'batch' || !harness.matchesBatch(parsed.batch)) return { ok: false, error: '网页最新回复已变化，未发送旧工具结果' };
       return { ok: true };
     },
@@ -350,7 +405,7 @@ export async function createToolIntegration(options: Options) {
     if (!results.length && !batchError) return { ok: false, error: '没有本项目当前会话的工具批次可复制' };
     options.copy(formatToolResults(results, batchError)); return { ok: true };
   }, 0);
-  register(CHANNELS.cancelTools, async () => { revision++; toolAttachments.reset(); resultReturn?.begin(null); harness.cancel(); await sender.cancel('results'); await processes.dispose(); return getState(); }, 0);
+  register(CHANNELS.cancelTools, async () => { revision++; jsonDraft.invalidate(); toolAttachments.reset(); resultReturn?.begin(null); harness.cancel(); await sender.cancel('results'); await processes.dispose(); return getState(); }, 0);
   register(CHANNELS.stopToolCommand, async target => {
     if (!target || typeof target !== 'object' || Array.isArray(target)) throw new Error('命令目标无效');
     const fields = target as Record<string, unknown>;
@@ -381,7 +436,7 @@ export async function createToolIntegration(options: Options) {
     channels, getState, approveDirty, configure,
     async setWebActive(active: boolean): Promise<void> {
       if (webActive === active || disposed) return;
-      webActive = active; revision++;
+      webActive = active; revision++; jsonDraft.invalidate();
       auto.setEnabled(false); watcher.setEnabled(false);
       toolAttachments.reset(); resultReturn?.invalidate();
       continuation?.reset({ root: options.files.getRoot(), session: sessionKeyOf(web.getURL()) });
@@ -395,7 +450,7 @@ export async function createToolIntegration(options: Options) {
       const state = displayState(harness.getState());
       if (state.busy || processes.hasRunning) throw new Error('工具正在执行，不能绑定其他官网');
       if (state.results.length || state.batchError) retainedCopy = { root: options.files.getRoot(), results: structuredClone(state.results), ...(state.batchError ? { batchError: { ...state.batchError } } : {}) };
-      revision++;
+      revision++; jsonDraft.invalidate();
       await watcher.dispose();
       await sender.dispose();
       if (disposed) return;
@@ -412,7 +467,7 @@ export async function createToolIntegration(options: Options) {
       if (!webActive || !submissionCurrent() || disposed || session !== sessionKeyOf(web.getURL())) return { ok: false, error: '项目、平台、会话或发送选项已变化' };
       const selectedRevision = revision;
       const current = () => webActive && !disposed && revision === selectedRevision && submissionCurrent();
-      toolAttachments.reset(); resultReturn?.invalidate();
+      jsonDraft.invalidate(); toolAttachments.reset(); resultReturn?.invalidate();
       traceCollection('integration.local-prompt-start', { session: traceScope(session), text: traceText(text), attachmentCount: attachments.length, attachmentBytes: attachments.reduce((sum, item) => sum + item.size, 0) });
       // 首页首发的地址分配先于正文挂载且生成控件无可读标签；发送前打短期标记，watcher 交接时据此保留新轮基线，失败退回既有判据。
       try { await watcher.markLocalSubmit(); } catch (error) { traceCollection('integration.local-submit-mark-error', { error: error instanceof Error ? error.message : String(error) }); /* 页面忙时由既有回复/生成判据兜底 */ }
@@ -442,7 +497,7 @@ export async function createToolIntegration(options: Options) {
       const current = () => webActive && !disposed && currentRevision === revision && !web.isDestroyed() && root === options.files.getRoot() && session === sessionKeyOf(web.getURL());
       if (completion === 'generating') { harness.report('AI 仍在生成回复，工具批次未执行；请等待回复结束'); return true; }
       if (completion === 'interrupted') { harness.report('AI 回复已中断，等待继续生成；当前工具批次未执行'); return true; }
-      if (parsed.kind === 'batch' && completion !== 'complete') {
+      if ((parsed.kind === 'batch' || parsed.kind === 'repair') && completion !== 'complete') {
         const choice = await options.ask('确认手动采集', '网页没有提供可识别的结束状态。请确认 AI 已停止生成，再采集当前工具批次。', ['确认已结束并采集', '取消']);
         if (!current()) { harness.report('采集期间项目、平台或会话已切换，请重新采集'); return true; }
         if (choice.response !== 0) { harness.report('未确认回复结束，工具未执行'); return true; }
@@ -455,9 +510,9 @@ export async function createToolIntegration(options: Options) {
         harness.report('采集期间项目或会话已切换，请重新采集'); return true;
       }
       auto.acknowledge(sessionKeyOf(web.getURL()), text);
-      void harness.collect(text); return true;
+      void collectReply(text, current, true); return true;
     },
-    reset(): void { retainedCopy = null; revision++; toolAttachments.reset(); resultReturn?.begin(null); continuation?.reset({ root: options.files.getRoot(), session: sessionKeyOf(web.getURL()) }); harness.cancel(); watcher.reset(); changes.reset(); },
-    async dispose(): Promise<void> { disposed = true; revision++; toolAttachments.reset(); resultReturn?.begin(null); continuation?.dispose(); await sender.dispose(); auto.dispose(); await watcher.dispose(); harness.cancel(); await processes.dispose(); },
+    reset(): void { retainedCopy = null; revision++; jsonDraft.invalidate(); toolAttachments.reset(); resultReturn?.begin(null); continuation?.reset({ root: options.files.getRoot(), session: sessionKeyOf(web.getURL()) }); harness.cancel(); watcher.reset(); changes.reset(); },
+    async dispose(): Promise<void> { disposed = true; revision++; jsonDraft.invalidate(); toolAttachments.reset(); resultReturn?.begin(null); continuation?.dispose(); await sender.dispose(); auto.dispose(); await watcher.dispose(); harness.cancel(); await processes.dispose(); },
   };
 }

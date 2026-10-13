@@ -1,9 +1,9 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-10
+updated: 2026-10-12
 owner: 胡运宽
-source_of_truth: [src/main/settings.ts, test/promptSettingsMigration.test.ts, src/renderer/prompt.js, docs/capabilities/skills-and-local-prompt.md, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, docs/adr/2026-10-06-native-tool-harness-boundary.md, src/shared/toolProtocol.ts, src/shared/formatSpec.ts, src/shared/returnPath.ts, src/main/replyCollector.ts, src/main/tools/changes.ts, src/main/tools/changeReview.ts, src/main/tools/integration.ts, src/main/returnPathService.ts, src/main/previewPreload.ts, src/main/fileService.ts, src/renderer/preview.js, src/renderer/editorWorkspace.js, test/replyCollector.test.ts, test/toolProtocol.test.ts, test/toolChanges.test.ts, test/formatSpec.test.ts, test/toolSamples.test.ts]
+source_of_truth: [src/main/settings.ts, test/promptSettingsMigration.test.ts, src/renderer/prompt.js, docs/capabilities/skills-and-local-prompt.md, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, docs/adr/2026-10-06-native-tool-harness-boundary.md, src/shared/toolProtocol.ts, src/shared/formatSpec.ts, src/shared/returnPath.ts, src/main/replyCollector.ts, src/main/tools/changes.ts, src/main/tools/changeReview.ts, src/main/tools/integration.ts, src/main/returnPathService.ts, src/main/previewPreload.ts, src/main/fileService.ts, src/renderer/preview.js, src/renderer/editorWorkspace.js, test/replyCollector.test.ts, test/toolProtocol.test.ts, test/toolChanges.test.ts, test/formatSpec.test.ts, test/toolSamples.test.ts, src/main/tools/jsonDraft.ts, test/jsonDraft.test.ts, test/toolAutoContinueIntegration.test.ts]
 ---
 
 # 能力：工具修改与变更查看
@@ -17,6 +17,12 @@ apply_changes 使用 changes，每项含 path 和 operation。replace 提供 edi
 同批次路径及真实目标别名冲突先检查，在任何请求产生副作用前拒绝。依赖只决定前置成功后的执行顺序，不提供输出插值。需要读取或进程 ID 时，AI 应先请求工具，等 IDE 自动回传或用户手动返回真实结果后再生成下一批。
 
 replyCollector 只读还原代码正文及语言：读取 code/pre 的 language-* 类名，或同一单代码框内、正文之前的独立工具栏语言标签。到回复根或多个代码框边界停止，不从正文提及、普通 JSON 或其他代码框补写正式协议。缺少明确语言仍作为资料。
+
+## 格式错误的局部修复
+
+正式执行协议仍只接受单个顶层 `mini-ai-tools` 围栏。只有其中的 JSON.parse 失败时，IDE 才建立未执行草稿并在诊断中给出 draft_id 和 version。后续完整回复可提交唯一 `repair_draft`，要求 old_string 在当前修订稿中恰好出现一次。替换仅发生于主进程内存，不修改官网原文、磁盘文件或工具审批状态。修复为合法完整批次后，仍须通过原有参数校验、整批冲突检查、文件真实路径校验、权限和去重；回传前核对最新官网补丁及恢复批次来源。已经合法的 JSON 若存在协议错误，不适用局部语法修复。内存补丁与 `apply_changes` 的磁盘修改是不同入口，不得混用。
+
+JSON 解析失败时，只读词法扫描仅在根对象的属性位置识别 `repair_draft`，覆盖漏冒号、裸属性名、单引号及转义属性名；嵌套内容和属性值不被视为修复指令。明确的畸形修复尝试只回传错误，不建立替代草稿或改变原修订版本。扫描只用于分类，不补全或执行非法 JSON，不推断任意破损文本的意图；执行仍要求完整合法协议。
 
 ## 复制与提示词
 

@@ -17,6 +17,8 @@
 目录树原生文件拖拽先读 `docs/adr/2026-10-11-native-workspace-file-drag.md`、`docs/capabilities/local-file-access.md`。运输 owner 为 `src/main/workspaceFileDrag.ts`，只允许编辑器主 frame 交付当前项目普通文件给系统；UI 为 `src/renderer/fileExplorer.js`，本地接收复用 `localPrompt.js` 的 Files 入口。验证为 `test/workspaceFileDrag.test.ts`、`test/fileExplorer.test.ts`、`test/localPrompt.test.ts`、`tools/verify-workspace-file-drag.cjs`，物理跨进程拖放/官网接收另需手动验收。
 技能与本地需求先读 `docs/capabilities/skills-and-local-prompt.md`、`docs/adr/2026-10-08-skills-and-local-demand-send.md`、`docs/adr/2026-10-09-default-local-prompt-send.md` 和 `docs/adr/2026-10-08-local-prompt-attachments.md`。固定目录 owner 为 `src/main/skills.ts`，附件暂存 owner 为 `src/main/localPromptAttachments.ts`，组装与窄 IPC 为 `localPromptController.ts`，本地 UI 为 `src/renderer/localPrompt.js/css`；唯一官网写入运输为 `src/main/webComposerSender.ts`，`tools/webResultSender.ts` 保留工具门面。技能工具与独立采集/发送入口由 `tools/integration.ts` 接线。附件已上传而正文未发送时，可由用户在内嵌官网 Console 手动执行只读 `tools/inspect-composer-attachments.js`，返回附件区祖先、预览和上传标记的结构与数量；开启 collection trace 后，`composer.attachment-status` 仅在等待状态变化时记录确认依据，不记录正文或文件内容。
 
+AI 临时目录及 JSON 草稿恢复先读 `docs/capabilities/tool-harness.md`、`docs/capabilities/return-path-and-format-contract.md`；生命周期与来源边界由已接受的 `docs/adr/2026-10-12-ai-temp-json-recovery.md` 管理。专用 owner 分别为 `src/main/tools/aiTempDirectory.ts` 与 `src/main/tools/jsonDraft.ts`；协议由 `src/shared/toolProtocol.ts` 定义，项目、平台、会话与官网最新来源核验由 `src/main/tools/integration.ts` 接线，执行和回传继续使用 `harness.ts`、`resultReturn.ts`、`autoContinuation.ts`。回归入口为 `test/aiTempDirectory.test.ts`、`test/aiTempIntegration.test.ts`、`test/jsonDraft.test.ts`、`test/toolAutoContinueIntegration.test.ts`，原生本地夹具为 `tools/verify-chatgpt-tools.cjs`。本地夹具与用户官网现场确认分开记录。
+
 通用工具协作先读 `docs/capabilities/tool-harness.md`、`docs/adr/2026-10-06-native-tool-harness-boundary.md`；入口为 `src/shared/toolProtocol.ts`、`src/main/tools/integration.ts`，执行及状态 owner 为同目录 files/processes/changes/harness/store/autoCollector，只读回复状态/快照为 replyObservation，隔离世界变化通知、历史DOM基线与用于取消旧回传的真实动作通知由 replyChangeWatcher 管理，UI 为 `src/renderer/toolHarness.js`。结束控件现场诊断可由用户在 IDE 内嵌 AI 网页 Console 手动执行 `tools/inspect-reply-state.js` 并返回结构文本。
 
 右侧工具更多菜单的定位与焦点由 `src/renderer/toolPanelLayout.js` 管理，纯结果摘要由 `src/renderer/toolResultPresentation.js` 管理；样式为 `src/renderer/toolHarness.css`，状态接线仍为 `toolHarness.js`。工具关注事件判定与去重由 `src/renderer/toolAttention.js` 管理，文件／工具／改动标签由 `src/renderer/fileWorkspace.js` 和 `editorTabs.js` 管理；官网顶栏只读摘要与零参数打开工具入口由 `src/main/toolWorkspaceStatus.ts` 管理。对应验收为 `test/toolAttention.test.ts`、`test/toolWorkspaceStatus.test.ts`、`test/fileWorkspace.test.ts`、`test/toolPanelLayout.test.ts`、`test/toolResultPresentation.test.ts`、`test/toolHarnessUi.test.ts`。工具设置独立原生窗口的几何和生命周期由 `src/main/toolSettingsWindow.ts` 管理，窄 IPC 为 `toolSettingsIpc.ts`、`toolSettingsPreload.ts`，契约为 `src/shared/toolSettings.ts`，内容为 `src/renderer/toolSettings.html/js/css`，共用音效为 `toolCompletionSound.js`；配置 owner 仍为 tools/integration、harness、store。验证为 `test/toolSettingsWindow.test.ts`、`test/toolSettingsIpc.test.ts`、`test/toolSettingsUi.test.ts` 和 `src/main/workspaceProbe.ts`。
@@ -60,7 +62,7 @@
 | 领域 | 入口 |
 |---|---|
 | 需求来源（初步想法，非最终裁决） | `IDE接入网页版AI.md` |
-| 活跃计划 | 无（当前无进行中的计划；历史计划见 `docs/plans/archived/`） |
+| 活跃计划 | 按具体任务读取 plans；ChatGPT已有会话采集与回传修复已按用户确认验收归档，不将过程记录加入默认能力上下文 |
 | 决策记录 | `docs/adr/` |
 | 回程机制（一键同步） | `docs/capabilities/return-path-and-format-contract.md` |
 | 明确编辑协议与复制上下文 | `src/shared/returnPath.ts`、`snippet.ts`、`formatSpec.ts`；应用与基线 owner `src/main/returnPathService.ts`；默认面板资源由 `scripts/copy-static.mjs` 生成 |

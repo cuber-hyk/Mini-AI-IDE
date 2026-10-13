@@ -32,7 +32,7 @@ test('完整工具示例可解析，包装及原文上下文只读，实际文�
   const seenTools = new Set<string>();
   for (const spec of [FORMAT_SPEC]) {
     assert.equal(parseToolBatch(spec).kind, 'none', '复制完整提示词不能执行其中的示例');
-    assert.equal((spec.match(/示例 \d+｜/g) || []).length, 15);
+    assert.equal((spec.match(/示例 \d+｜/g) || []).length, 16);
     for (const [index, example] of spec.split(/示例 \d+｜/).slice(1).entries()) {
       const input = unwrapped(example.split('【我给你的】')[1]!.split('【你该给我的】')[0]!);
       const output = unwrapped(example.split('【你该给我的】')[1]!);

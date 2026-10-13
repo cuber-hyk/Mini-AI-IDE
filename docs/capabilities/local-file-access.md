@@ -1,9 +1,9 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-11
+updated: 2026-10-12
 owner: 胡运宽
-source_of_truth: [src/renderer/workspaceNavigation.js, docs/adr/2026-10-07-workspace-ui-shell-layout.md, docs/adr/2026-10-02-filesystem-permission-model.md, src/main/fileService.ts, src/main/fileManagement.ts, src/main/workspaceService.ts, src/main/workspaceController.ts, src/main/editorSession.ts, src/main/settings.ts, src/shared/contract.ts, src/main/preload.ts, src/renderer/editorWorkspace.js, src/renderer/editorTabs.js, src/renderer/fileExplorer.js, src/renderer/fileIcons.js, src/renderer/fileExplorer.css, test/workspaceService.test.ts, test/fileManagement.test.ts, test/workspaceController.test.ts, test/fileExplorer.test.ts, test/fileIcons.test.ts, test/editorSession.test.ts, test/editorWorkspace.test.ts, test/fileService.test.ts, src/main/filePreview.ts, src/main/filePreviewZoom.ts, src/main/workspaceFileDrag.ts, docs/adr/2026-10-11-native-workspace-file-drag.md, test/workspaceFileDrag.test.ts, tools/verify-workspace-file-drag.cjs, src/main/filePreviewIpc.ts, src/main/docxArchive.ts, src/shared/filePreview.ts, src/shared/imageDimensions.ts, src/renderer/filePreview.js, src/renderer/filePreview.css, test/filePreview.test.ts, test/filePreviewZoom.test.ts, test/filePreviewIpc.test.ts, test/filePreviewRenderer.test.ts, test/imageDimensions.test.ts, tools/verify-file-preview.cjs]
+source_of_truth: [src/renderer/workspaceNavigation.js, docs/adr/2026-10-07-workspace-ui-shell-layout.md, docs/adr/2026-10-02-filesystem-permission-model.md, src/main/fileService.ts, src/main/fileManagement.ts, src/main/workspaceService.ts, src/main/workspaceController.ts, src/main/editorSession.ts, src/main/settings.ts, src/shared/contract.ts, src/main/preload.ts, src/renderer/editorWorkspace.js, src/renderer/editorTabs.js, src/renderer/fileExplorer.js, src/renderer/fileIcons.js, src/renderer/fileExplorer.css, test/workspaceService.test.ts, test/fileManagement.test.ts, test/workspaceController.test.ts, test/fileExplorer.test.ts, test/fileIcons.test.ts, test/editorSession.test.ts, test/editorWorkspace.test.ts, test/fileService.test.ts, src/main/filePreview.ts, src/main/filePreviewZoom.ts, src/main/workspaceFileDrag.ts, docs/adr/2026-10-11-native-workspace-file-drag.md, test/workspaceFileDrag.test.ts, tools/verify-workspace-file-drag.cjs, src/main/filePreviewIpc.ts, src/main/docxArchive.ts, src/shared/filePreview.ts, src/shared/imageDimensions.ts, src/renderer/filePreview.js, src/renderer/filePreview.css, test/filePreview.test.ts, test/filePreviewZoom.test.ts, test/filePreviewIpc.test.ts, test/filePreviewRenderer.test.ts, test/imageDimensions.test.ts, tools/verify-file-preview.cjs, src/main/tools/aiTempDirectory.ts, test/aiTempDirectory.test.ts]
 ---
 
 # 能力：本地文件访问
@@ -22,6 +22,8 @@ source_of_truth: [src/renderer/workspaceNavigation.js, docs/adr/2026-10-07-works
 `src/renderer/filePreview.js` 管理渲染、异步代次及释放。PDF.js、docx-preview 与字体/CMap/解码资源在构建时随包分发，`connect-src 'none'` 保持不变。PDF 仅绘制页面，不运行文档脚本；单页 canvas 限 1600 万像素及 8192 单边。Word 禁用 altChunk，净化 HTML 后放进无脚本、无同源权限的 sandbox iframe，禁止导航、外部图片及资源，无 IPC/文件桥。预览不提交官网或上传附件。
 
 通用工具有独立授权路径，详见 `tool-harness.md`；完全访问或明确批准可访问项目外目标，工具不能扩大本能力的编辑器文件 IPC 根目录。
+
+`get_ai_temp_dir` 由主进程在当前项目真实根目录下管理 `.mini-ai-ide/ai-temp/<task_id>/`，不向官网提供文件桥。复用前后验证归属标记、真实路径与链接边界，不认领未知目录，不修改全局 cwd，不自动删除文件。用户负责保护与清理临时内容；局部 Git 忽略并不保证保密或安全删除。
 
 > 本节记录当前行为；测试数量与结果以当次运行报告为准。
 

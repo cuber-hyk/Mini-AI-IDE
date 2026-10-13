@@ -1,5 +1,6 @@
 import { parseToolBatch, ToolBatch, ToolBatchError, ToolRequest, ToolResult, ToolState } from '../../shared/toolProtocol';
 import { LedgerEntry, ToolStore } from './store';
+import type { RecoveredToolOrigin } from './jsonDraft';
 
 interface HarnessOptions {
   store: ToolStore;
@@ -20,6 +21,7 @@ export interface ToolSelection {
   root: string;
   session: string;
   batch: ToolBatch;
+  recovered?: RecoveredToolOrigin;
 }
 /** 仅主进程持有的本次解析事实；不是工具执行 completion，不进入复制正文。 */
 export interface ToolDiagnostic {
@@ -28,6 +30,7 @@ export interface ToolDiagnostic {
   session: string;
   sourceText: string;
   error: ToolBatchError;
+  sourceKind?: 'error' | 'repair';
   cancelled?: boolean;
 }
 interface BatchSelection extends ToolSelection {
@@ -84,6 +87,10 @@ export class ToolHarness {
     this.getCopyResults();
     return !!this.selection && JSON.stringify(this.selection.batch) === JSON.stringify(batch);
   }
+  matchesRecovered(origin: RecoveredToolOrigin): boolean {
+    this.getCopyResults();
+    return !!this.selection?.recovered && this.selection.recovered === origin;
+  }
   getCopyResults(): ToolResult[] {
     const selection = this.selection;
     if (selection && (this.options.root() !== selection.root || this.options.session() !== selection.session)) this.clearResults();
@@ -130,39 +137,55 @@ export class ToolHarness {
     this.report('已停止尚未执行的请求；已启动工具的实际结果仍会保留');
   }
 
-  collect(text: string): Promise<void> {
-    // 在协议解析之前停止，不能把存储故障转成可自动回传的解析错误。
+  reportDiagnostic(sourceText: string, error: string, sourceKind: 'error' | 'repair' = 'error'): void {
+    if (this.options.store.getLoadError()) { this.publish(); return; }
+    this.getCopyResults();
+    if (this.diagnostic?.sourceText === sourceText) { this.report('工具批次校验失败，未执行'); return; }
+    this.clearResults();
+    this.diagnostic = { id: ++this.diagnosticId, root: this.options.root(), session: this.options.session(), sourceText,
+      sourceKind, error: { status: 'failed', error } };
+    this.options.diagnosed?.(this.getDiagnostic()!);
+    this.report('工具批次校验失败，未执行');
+  }
+
+  collect(text: string, diagnosticHint?: string): Promise<void> {
     if (this.options.store.getLoadError()) { this.publish(); return Promise.resolve(); }
     const parsed = parseToolBatch(text);
-    if (parsed.kind !== 'batch') {
-      this.getCopyResults();
-      if (parsed.kind === 'error' && this.diagnostic?.sourceText === text) {
-        this.report('工具批次校验失败，未执行'); return Promise.resolve();
-      }
-      this.clearResults();
-      if (parsed.kind === 'error') {
-        this.diagnostic = { id: ++this.diagnosticId, root: this.options.root(), session: this.options.session(), sourceText: text,
-          error: { status: 'failed', error: parsed.error } };
-        this.options.diagnosed?.(this.getDiagnostic()!);
-        this.report('工具批次校验失败，未执行');
-      }
-      else this.report('本轮为普通回复，暂无工具请求。');
+    if (parsed.kind === 'error') {
+      this.reportDiagnostic(text, diagnosticHint ? `${parsed.error}\n${diagnosticHint}` : parsed.error);
       return Promise.resolve();
     }
+    if (parsed.kind === 'repair') {
+      this.reportDiagnostic(text, '修复指令尚未经当前草稿核验；未执行任何工具', 'repair');
+      return Promise.resolve();
+    }
+    if (parsed.kind === 'none') {
+      this.clearResults(); this.report('本轮为普通回复，暂无工具请求。'); return Promise.resolve();
+    }
+    return this.collectBatch(parsed.batch);
+  }
+
+  collectRecovered(batch: ToolBatch, origin: RecoveredToolOrigin): Promise<void> {
+    if (this.options.store.getLoadError()) { this.publish(); return Promise.resolve(); }
+    return this.collectBatch(batch, origin);
+  }
+
+  private collectBatch(batch: ToolBatch, recovered?: RecoveredToolOrigin): Promise<void> {
     const root = this.options.root();
     if (!root) { this.clearResults(); this.report('尚未打开项目，工具批次未执行'); return Promise.resolve(); }
     const session = this.options.session();
     this.getCopyResults();
-    if (!this.selection || this.selection.root !== root || this.selection.session !== session || JSON.stringify(this.selection.batch) !== JSON.stringify(parsed.batch)) {
+    if (!this.selection || this.selection.root !== root || this.selection.session !== session ||
+        JSON.stringify(this.selection.batch) !== JSON.stringify(batch) || this.selection.recovered !== recovered) {
       this.clearResults();
-      this.selection = { root, session, batch: parsed.batch };
+      this.selection = { root, session, batch, ...(recovered ? { recovered } : {}) };
       this.options.selected?.(this.selection);
     }
     const selection = this.selection;
     const generation = this.generation;
     this.waiting++;
     this.publish();
-    const run = this.queue.then(() => this.runBatch(root, session, generation, parsed.batch, selection));
+    const run = this.queue.then(() => this.runBatch(root, session, generation, batch, selection));
     const finish = run.catch(error => { this.options.stopped?.(selection, errorText(error)); this.report(`工具批次停止：${errorText(error)}；未确认状态不会自动重试`); }).finally(() => {
       this.waiting--;
       this.getCopyResults();

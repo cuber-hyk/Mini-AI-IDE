@@ -7,7 +7,7 @@ import type { WebSendResult } from '../webComposerSender';
 import { formatToolResults } from './resultClipboard';
 
 export type ToolReturnSource = { kind: 'batch'; selection: ToolSelection } | { kind: 'diagnostic'; diagnostic: ToolDiagnostic };
-interface Context { root: string | null; session: string; state: ToolState; diagnostic?: ToolDiagnostic | null }
+interface Context { root: string | null; session: string; state: ToolState; diagnostic?: ToolDiagnostic | null; recoveryValid?: boolean }
 interface Options {
   current: () => Context;
   verify: (text: string, session: string, current: () => boolean, source: ToolReturnSource) => Promise<WebSendResult>;
@@ -46,7 +46,7 @@ export class ToolResultReturn {
         !state.completion && state.results.length === 0 && !!state.batchError &&
         state.batchError.status === diagnostic.error.status && state.batchError.error === diagnostic.error.error;
     }
-    return !state.batchError && !!state.completion && !state.completion.cancelled &&
+    return (!source.selection.recovered || context.recoveryValid === true) && !state.batchError && !!state.completion && !state.completion.cancelled &&
       state.completion.batch_id === source.selection.batch.batch_id && state.results.length === source.selection.batch.requests.length &&
       state.results.every(result => result.batch_id === state.completion!.batch_id &&
         (['done', 'failed', 'permission_denied', 'skipped_dependency'].includes(result.status) || isCompletedStoppedCommand(result)) &&
