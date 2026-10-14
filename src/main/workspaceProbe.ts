@@ -143,6 +143,51 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     await evaluate("window.__tabModelA = window.monaco.editor.getEditors()[0].getModel(); window.monaco.editor.getEditors()[0].executeEdits('workspace-probe',[{range:window.__tabModelA.getFullModelRange(),text:'tab draft A'}]); window.monaco.editor.getEditors()[0].pushUndoStop(); window.monaco.editor.getEditors()[0].setPosition({lineNumber:1,column:5})");
     await evaluate("document.querySelector('#tree .tree-row[data-rel-path=\"tabs.txt\"]').click()");
     check('两个文件各有顶部标签', await waitFor("document.querySelectorAll('#editor-tabs [data-kind=file]').length === 2 && (document.querySelector('#editor-tabs [data-kind=file][aria-selected=true]')?.getAttribute('data-path') ?? '未打开文件') === 'tabs.txt'"));
+    const tabScrollBaseline = await evaluate<{
+      normal: {
+        width: number; height: number; clientWidth: number; scrollWidth: number;
+        clientHeight: number; scrollHeight: number; overflowX: string; overflowY: string;
+        scrollbarWidth: string; toolbarHeight: number;
+        tabs: Array<{ width: number; height: number }>;
+      };
+      narrow: {
+        width: number; height: number; clientWidth: number; scrollWidth: number;
+        clientHeight: number; scrollHeight: number; overflowX: string; overflowY: string;
+        scrollbarWidth: string; toolbarHeight: number;
+        tabs: Array<{ width: number; height: number }>;
+      };
+    }>(`(() => {
+      const host = document.getElementById('editor-tabs');
+      const toolbar = host.closest('.toolbar');
+      const measure = () => {
+        const style = getComputedStyle(host);
+        const rect = host.getBoundingClientRect();
+        return { width: rect.width, height: rect.height, clientWidth: host.clientWidth, scrollWidth: host.scrollWidth,
+          clientHeight: host.clientHeight, scrollHeight: host.scrollHeight, overflowX: style.overflowX,
+          overflowY: style.overflowY, scrollbarWidth: style.scrollbarWidth,
+          toolbarHeight: toolbar.getBoundingClientRect().height,
+          tabs: Array.from(host.children).map(tab => ({ width: tab.getBoundingClientRect().width,
+            height: tab.getBoundingClientRect().height })) };
+      };
+      const normal = measure();
+      const previousWidth = host.style.width;
+      const previousFlex = host.style.flex;
+      let narrow;
+      try { host.style.width = '150px'; host.style.flex = '0 0 150px'; narrow = measure(); }
+      finally { host.style.width = previousWidth; host.style.flex = previousFlex; }
+      return { normal, narrow };
+    })()`);
+    check('标签栏隐藏原生滚动条且窄宽度保留横向滚动',
+      tabScrollBaseline.normal.overflowX === 'auto' &&
+      tabScrollBaseline.normal.overflowY === 'hidden' &&
+      tabScrollBaseline.normal.scrollbarWidth === 'none' &&
+      tabScrollBaseline.narrow.scrollbarWidth === 'none' &&
+      tabScrollBaseline.narrow.overflowY === 'hidden' &&
+      tabScrollBaseline.narrow.clientWidth >= 149 &&
+      tabScrollBaseline.narrow.scrollWidth > tabScrollBaseline.narrow.clientWidth &&
+      Math.abs(tabScrollBaseline.narrow.clientHeight - tabScrollBaseline.normal.clientHeight) <= 1 &&
+      tabScrollBaseline.narrow.tabs.every(tab => Math.abs(tab.height - tabScrollBaseline.narrow.height) <= 1),
+      tabScrollBaseline);
     await evaluate("window.monaco.editor.getEditors()[0].getModel().setValue('tab draft B'); document.querySelector('#editor-tabs [role=tab][data-path=\"a.txt\"]').click()");
     check('点击标签恢复草稿、同一模型及光标', await waitFor("(document.querySelector('#editor-tabs [data-kind=file][aria-selected=true]')?.getAttribute('data-path') ?? '未打开文件') === 'a.txt'") && await evaluate("window.monaco.editor.getEditors()[0].getModel() === window.__tabModelA && window.__tabModelA.getValue() === 'tab draft A' && window.monaco.editor.getEditors()[0].getPosition().column === 5"));
     check('各标签独立显示未保存标记', await evaluate("document.querySelectorAll('#editor-tabs .editor-tab.dirty').length === 2"));
@@ -479,10 +524,11 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
       return {moved,prevented:event.defaultPrevented,zoomUnchanged:host.scrollLeft===beforeZoom && !zoom.defaultPrevented};
     })()`);
     check('标签滚轮横滚且不拦截Ctrl缩放', wheel.moved && wheel.prevented && wheel.zoomUnchanged, wheel);
-    check('标签滚动条细轨透明且无箭头', await evaluate(`(() => {
+    check('标签栏原生滚动条隐藏且内容仍可横向访问', await evaluate(`(() => {
       const host=document.getElementById('editor-tabs');
-      const bar=getComputedStyle(host,'::-webkit-scrollbar'), track=getComputedStyle(host,'::-webkit-scrollbar-track'), button=getComputedStyle(host,'::-webkit-scrollbar-button');
-      return bar.height==='5px' && track.backgroundColor==='rgba(0, 0, 0, 0)' && button.display==='none';
+      const style=getComputedStyle(host), bar=getComputedStyle(host,'::-webkit-scrollbar');
+      return style.scrollbarWidth==='none' && style.overflowX==='auto' && style.overflowY==='hidden' &&
+        bar.display==='none' && host.scrollWidth>host.clientWidth;
     })()`));
     await evaluate("document.querySelector('#editor-tabs [role=tab][data-path=\"scroll-tab-0.txt\"]').click()");
     await waitFor("(document.querySelector('#editor-tabs [data-kind=file][aria-selected=true]')?.getAttribute('data-path') ?? '未打开文件') === 'scroll-tab-0.txt'");
