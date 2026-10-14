@@ -1,7 +1,7 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-13
+updated: 2026-10-14
 owner: 胡运宽
 source_of_truth: [src/renderer/workspaceNavigation.js, docs/adr/2026-10-07-workspace-ui-shell-layout.md, docs/adr/2026-10-02-filesystem-permission-model.md, src/main/fileService.ts, src/main/fileManagement.ts, src/main/workspaceService.ts, src/main/workspaceController.ts, src/main/editorSession.ts, src/main/settings.ts, src/shared/contract.ts, src/main/preload.ts, src/renderer/editorWorkspace.js, src/renderer/editorTabs.js, src/renderer/fileExplorer.js, src/renderer/fileIcons.js, src/renderer/fileExplorer.css, test/workspaceService.test.ts, test/fileManagement.test.ts, test/workspaceController.test.ts, test/fileExplorer.test.ts, test/fileIcons.test.ts, test/editorSession.test.ts, test/editorWorkspace.test.ts, test/fileService.test.ts, src/main/filePreview.ts, src/main/filePreviewZoom.ts, src/main/workspaceFileDrag.ts, docs/adr/2026-10-11-native-workspace-file-drag.md, test/workspaceFileDrag.test.ts, tools/verify-workspace-file-drag.cjs, src/main/filePreviewIpc.ts, src/main/docxArchive.ts, src/shared/filePreview.ts, src/shared/imageDimensions.ts, src/renderer/filePreview.js, src/renderer/filePreview.css, test/filePreview.test.ts, test/filePreviewZoom.test.ts, test/filePreviewIpc.test.ts, test/filePreviewRenderer.test.ts, test/imageDimensions.test.ts, tools/verify-file-preview.cjs, src/main/tools/aiTempDirectory.ts, test/aiTempDirectory.test.ts]
 ---
@@ -56,6 +56,7 @@ source_of_truth: [src/renderer/workspaceNavigation.js, docs/adr/2026-10-07-works
 
 - 每个打开文件拥有独立 Monaco model；一个编辑器实例切换 model，保留草稿、撤销栈、光标与滚动位置。重复打开激活已有标签，Windows 路径键统一斜杠并忽略大小写。
 - 标签显示文件名、完整路径提示和未保存点，提供关闭、方向键／Home／End 切换及 Delete 关闭。关闭当前标签后激活相邻标签，最后一个关闭后显示空白页。
+- 超长名称在标签最大宽度内收缩省略，关闭按钮独立占位，不与相邻标签重叠；标签栏保持横向滚动。离线真实布局验证为 `node tools/verify-editor-tabs.cjs`（先构建），只使用内存文件列表、不读取或关闭真实文件。
 - 保存请求明确指定文档路径；后台标签的保存不切换当前标签。保存失败或保存期间继续输入保留未保存状态。
 - AI 写盘检查所有打开文档中的目标草稿，按用户设置询问或采用已选策略；继续时以 AI 基于磁盘 A 生成的 C 替换草稿 B，停止则保留 A/B。成功写回刷新对应模型，不切换当前标签。
 - 改名同步所有受影响标签的路径并保留草稿；删除关闭受影响标签，其余标签保留。目录切换释放旧模型；异步旧读写结果不可覆盖新目录。

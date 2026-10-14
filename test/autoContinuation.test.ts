@@ -234,3 +234,16 @@ it('发送间隔修改更新本批倒计时，无需轮次计数或固定轮询'
   assert.equal(f.owner.getState().dueAt, 2100); t.mock.timers.tick(999); await flush(); assert.equal(f.sent.length, 0);
   t.mock.timers.tick(1); await flush(); assert.equal(f.sent.length, 1);
 });
+
+it('手动解析诊断来源阻断自动计时，状态省略 source 也不回传，随后官网新批正常发送', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const state: ToolState = { config: { ...config }, busy: false, results: [], message: '', batchError: { status: 'failed', error: 'bad json' } };
+  const context = { root: 'root', session: 'chat', state, diagnostic: null as ToolDiagnostic | null }; const sent: string[] = [];
+  const owner = new AutoContinuation({ current: () => context, changed() {}, cancelSend: async () => {}, send: async text => { sent.push(text); return { ok: true }; } });
+  t.after(() => owner.dispose()); owner.observe(context);
+  context.diagnostic = { id: 1, source: 'manual', root: 'root', session: 'chat', sourceText: '{bad', error: state.batchError! };
+  owner.observe(context); assert.equal(owner.getState().phase, 'paused'); t.mock.timers.tick(9000); await flush(); assert.equal(sent.length, 0);
+  context.state = { ...state, config: { ...config, automatic: false } }; owner.observe(context);
+  context.state = state; owner.observe(context); t.mock.timers.tick(9000); await flush(); assert.equal(sent.length, 0);
+  context.state = completed(1); context.diagnostic = null; owner.observe(context); t.mock.timers.tick(3000); await flush(); assert.equal(sent.length, 1);
+});

@@ -41,6 +41,7 @@
     el.platform.disabled = !platform || platform.switching || switching || Boolean(blocked);
     el.platform.value = platform ? platform.platform : 'deepseek';
     const error = switchError || reloadError || platformReadError || platform && platform.error;
+    const noticeError = switchError || reloadError || platformReadError || !reloading() && platform && platform.error;
     el.platform.title = blocked || error || platformReason() || '切换 AI 官网平台';
     el.platformControl.title = el.platform.title;
     el.platformControl.tabIndex = el.platform.disabled ? 0 : -1;
@@ -52,7 +53,7 @@
     el.reload.title = blocked || (reloading() ? '正在重新加载官网，请稍候' : '重新加载当前失败的官网页面');
     if (!collecting) el.collect.title = error || platformReason() || '只读采集最新回复，结果显示在工具区';
     if (!keepFeedback) {
-      if (error) feedback(error, true);
+      if (noticeError) feedback(noticeError, true);
       else if (platformReason()) feedback(platformReason(), !platform);
       else if (!collecting) feedback('');
     }
@@ -69,8 +70,8 @@
     if (countdownTimer !== undefined) window.clearTimeout(countdownTimer);
     countdownTimer = undefined;
     if (!supported()) {
-      const text = platformReason(); el.toolStatus.textContent = text; el.toolStatus.title = text;
-      el.toolStatus.classList.toggle('warn', !platform || Boolean(platform.error)); el.toolStatus.classList.toggle('running', Boolean(platform && platform.switching || switching || reloading()));
+      el.toolStatus.textContent = ''; el.toolStatus.title = '';
+      el.toolStatus.classList.toggle('warn', false); el.toolStatus.classList.toggle('running', false);
       return;
     }
     if (!summary) { el.toolStatus.textContent = '正在读取工具状态'; el.toolStatus.title = el.toolStatus.textContent; return; }

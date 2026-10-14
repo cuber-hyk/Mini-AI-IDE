@@ -74,7 +74,8 @@
     <section id="tool-dock" class="tool-dock" aria-label="工具结果面板">
     <details id="tool-panel" class="tool-panel" open>
       <summary class="tool-panel-summary">
-        <span class="tool-panel-heading"><span>工具结果</span><span id="tool-count" class="tool-count">0 项</span></span>
+        <span class="tool-panel-heading">
+        <span class="tool-panel-title"><strong><span class="tool-title-full">工具结果</span><span class="tool-title-compact">工具</span></strong><span id="tool-count" class="tool-count">0 项</span></span>
         <span class="tool-panel-status">
           <span id="tool-activity" class="tool-activity">读取状态…</span>
           <span id="tool-completion-notice" class="tool-completion-notice" role="status" aria-live="polite" aria-atomic="true"></span>
@@ -83,43 +84,43 @@
           <span id="tool-return-notice" class="tool-completion-notice" role="status" aria-live="polite"></span>
           <span id="tool-sound-notice" class="tool-sound-notice" role="status" aria-live="polite"></span>
         </span>
+        </span>
+        <span class="tool-result-actions">
+          <button id="tool-json-open" type="button" class="ui-button header-json-btn" aria-expanded="false" aria-controls="tool-json-panel" disabled title="手动执行工具 JSON（展开或收起）" aria-label="手动执行工具 JSON：展开或收起输入区"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5c-4 0-1 7-5 7 4 0 1 7 5 7M16 5c4 0 1 7 5 7-4 0-1 7-5 7"/></svg>JSON</button>
+          <span class="tool-actions-sep tool-actions-sep-json" aria-hidden="true"></span>
+          <button id="tool-view-changes" type="button" class="ui-icon" title="查看改动" aria-label="查看改动"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2h5l3 3v9H4z"/><path d="M9 2v3h3"/></svg></button>
+          <span class="tool-actions-sep" aria-hidden="true"></span>
+          <button id="tool-copy" type="button" class="ui-icon" title="复制本批结果到剪贴板" aria-label="复制本批结果到剪贴板" data-action="copy" disabled>
+            <svg class="tool-copy-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="8" height="9" rx="1.5"/><path d="M3 11V3.5A1.5 1.5 0 0 1 4.5 2H11"/></svg>
+            <svg class="tool-send-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 8h12M8 2l6 6-6 6"/></svg>
+          </button>
+          <span id="tool-more-wrap" class="tool-more-wrap">
+            <button id="tool-more-toggle" type="button" class="ui-icon" aria-label="工具结果操作" title="工具结果操作" aria-haspopup="dialog" aria-expanded="false" aria-controls="tool-more" hidden><svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="3" cy="8" r=".8"/><circle cx="8" cy="8" r=".8"/><circle cx="13" cy="8" r=".8"/></svg></button>
+            <span id="tool-more" class="tool-more" role="dialog" aria-label="工具结果操作" hidden>
+              <button id="tool-menu-view-changes" type="button">查看改动</button>
+              <button id="tool-undo" type="button" disabled>撤销工具修改</button>
+            </span>
+          </span>
+        </span>
       </summary>
       <div id="tool-panel-body" class="tool-panel-body">
-        <div class="tool-json-entry"><button id="tool-json-open" type="button" class="ui-button" aria-expanded="false" aria-controls="tool-json-panel" disabled>执行 JSON</button></div>
         <section id="tool-json-panel" class="tool-json-panel" aria-label="手动执行工具 JSON" hidden>
-          <label for="tool-json-input">工具 JSON</label>
-          <p class="tool-json-hint">粘贴完整原始 JSON 或 mini-ai-tools 围栏，校验预览后确认执行。结果仅供查看、复制。</p>
-          <textarea id="tool-json-input" maxlength="200000" rows="7" spellcheck="false" placeholder="粘贴一批完整工具请求" aria-describedby="tool-json-status"></textarea>
+          <div class="tool-json-head">
+            <label for="tool-json-input">工具 JSON</label>
+            <button id="tool-json-cancel" type="button" class="ui-button ui-icon" title="关闭" aria-label="关闭工具 JSON 输入区"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8M12 4l-8 8"/></svg></button>
+          </div>
+          <p class="tool-json-hint">粘贴完整工具请求，执行后可复制结果。</p>
+          <div class="tool-json-input-wrap">
+            <textarea id="tool-json-input" maxlength="200000" rows="7" spellcheck="false" placeholder="粘贴一批完整工具请求" aria-describedby="tool-json-status"></textarea>
+            <button id="tool-json-execute" type="button" class="ui-button ui-icon primary" title="执行" aria-label="执行工具 JSON" aria-busy="false" disabled><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m5 3 8 5-8 5Z"/></svg></button>
+          </div>
           <p id="tool-json-status" class="tool-json-status" role="status" aria-live="polite"></p>
-          <div id="tool-json-preview" class="tool-json-preview" hidden>
-            <p id="tool-json-project"></p><p id="tool-json-batch"></p>
-            <pre id="tool-json-requests" aria-label="待执行请求参数"></pre>
-          </div>
-          <div class="tool-json-actions">
-            <button id="tool-json-validate" type="button" class="ui-button">校验并预览</button>
-            <button id="tool-json-execute" type="button" class="ui-button primary" disabled>确认执行</button>
-            <button id="tool-json-cancel" type="button" class="ui-button">取消</button>
-          </div>
         </section>
         <p id="tool-source-notice" class="tool-message" hidden>手动导入结果，仅供查看/复制</p>
         <p id="tool-message" class="tool-message" role="status" aria-live="polite" aria-atomic="true">正在读取工具状态…</p>
         <div id="tool-results" class="tool-results" aria-label="工具调用结果"></div>
       </div>
     </details>
-    <div class="tool-result-actions">
-      <button id="tool-view-changes" type="button" class="ui-icon" title="查看改动" aria-label="查看改动"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2h5l3 3v9H4z"/><path d="M9 2v3h3"/></svg></button>
-      <span class="tool-actions-sep" aria-hidden="true"></span>
-      <button id="tool-copy" type="button" class="ui-icon" title="复制本批结果到剪贴板" aria-label="复制本批结果到剪贴板" data-action="copy" disabled>
-        <svg class="tool-copy-icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="5" y="5" width="8" height="9" rx="1.5"/><path d="M3 11V3.5A1.5 1.5 0 0 1 4.5 2H11"/></svg>
-        <svg class="tool-send-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 8h12M8 2l6 6-6 6"/></svg>
-      </button>
-      <div id="tool-more-wrap" class="tool-more-wrap">
-        <button id="tool-more-toggle" type="button" class="ui-icon" aria-label="工具结果操作" title="工具结果操作（撤销）" aria-haspopup="dialog" aria-expanded="false" aria-controls="tool-more" hidden><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8a5 5 0 1 1 1.5 3.5"/><path d="M3 4v4h4"/></svg></button>
-        <div id="tool-more" class="tool-more" role="dialog" aria-label="工具结果操作" hidden>
-          <button id="tool-undo" type="button" disabled>撤销工具修改</button>
-        </div>
-      </div>
-    </div>
     </section>
       </section>
 

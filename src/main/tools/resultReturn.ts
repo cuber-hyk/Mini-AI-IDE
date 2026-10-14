@@ -40,8 +40,9 @@ export class ToolResultReturn {
     const scope = source.kind === 'batch' ? source.selection : source.diagnostic;
     if (root !== scope.root || session !== scope.session) return false;
     if (source.kind === 'diagnostic') {
+      if (source.diagnostic.source === 'manual') return false;
       const diagnostic = context.diagnostic;
-      return !!diagnostic && !diagnostic.cancelled && diagnostic.id === source.diagnostic.id &&
+      return !!diagnostic && diagnostic.source !== 'manual' && !diagnostic.cancelled && diagnostic.id === source.diagnostic.id &&
         diagnostic.root === root && diagnostic.session === session && diagnostic.sourceText === source.diagnostic.sourceText &&
         !state.completion && state.results.length === 0 && !!state.batchError &&
         state.batchError.status === diagnostic.error.status && state.batchError.error === diagnostic.error.error;

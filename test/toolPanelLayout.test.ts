@@ -9,12 +9,13 @@ function fixture() {
     const listeners = new Map<string, (event: any) => void>();
     return { style: {} as Record<string, string>, attrs: {} as Record<string, string>, hidden: false, focused: false,
       rect, children: [] as any[],
+      clicked: false, getClientRects() { return this.hidden || !this.rect.width ? [] : [this.rect]; },
       getBoundingClientRect() { return { ...this.rect, right: this.rect.left + this.rect.width, bottom: this.rect.top + this.rect.height }; },
       addEventListener(type: string, fn: (event: any) => void) { listeners.set(type, fn); },
       fire(type: string, extra = {}) { listeners.get(type)?.({ preventDefault() {}, ...extra }); },
       setAttribute(key: string, value: string) { this.attrs[key] = value; },
       contains(other: any): boolean { return this === other || this.children.some(child => child.contains(other)); },
-      querySelector() { return this.children[0]; }, focus() { this.focused = true; },
+      querySelectorAll() { return this.children.filter(child => !child.hidden); }, focus() { this.focused = true; }, click() { this.clicked = true; },
     };
   }
   const nodes = {
@@ -23,6 +24,8 @@ function fixture() {
     'tool-more-toggle': node({ left: 850, top: 41, width: 28, height: 28 }),
     'tool-more': node({ left: 0, top: 0, width: 180, height: 70 }),
     'tool-undo': node(),
+    'tool-menu-view-changes': node(),
+    'tool-view-changes': node(),
   };
   nodes['tool-more-wrap'].children = [nodes['tool-more-toggle'], nodes['tool-more']];
   nodes['tool-more'].children = [nodes['tool-undo']]; nodes['tool-more'].hidden = true;
@@ -39,10 +42,10 @@ it('工具操作浮层被限制在右侧工具页内部，不改变中间需求 
   assert.equal(nodes['tool-more'].hidden, false);
   assert.equal(nodes['tool-more-toggle'].attrs['aria-expanded'], 'true');
   assert.equal(nodes['tool-undo'].focused, true);
-  assert.deepEqual(nodes['tool-more'].style, { maxHeight: '484px', maxWidth: '284px', left: '698px', top: '44px' });
+  assert.deepEqual(nodes['tool-more'].style, { maxHeight: '484px', maxWidth: '284px', left: '698px', top: '77px' });
   nodes['tool-workspace'].rect = { left: 500, top: 36, width: 240, height: 100 };
   layout.refresh();
-  assert.deepEqual(nodes['tool-more'].style, { maxHeight: '84px', maxWidth: '224px', left: '552px', top: '44px' });
+  assert.deepEqual(nodes['tool-more'].style, { maxHeight: '84px', maxWidth: '224px', left: '552px', top: '58px' });
 });
 
 it('Esc 收起浮层并恢复触发按钮焦点，内部点击保留，外部点击和失焦不抢焦点', () => {
@@ -63,4 +66,18 @@ it('切换工具标签或隐藏操作按钮立即关闭浮层，避免浮层遗�
   assert.equal(nodes['tool-more'].hidden, true);
   nodes['tool-workspace'].hidden = false; trigger.fire('click'); trigger.hidden = true; layout.refresh();
   assert.equal(nodes['tool-more'].hidden, true); assert.equal(trigger.focused, false);
+});
+
+it('容器放宽后菜单触发器被样式隐藏也会关闭，窄列查看改动仍走原具名入口', () => {
+  const { nodes, layout } = fixture();
+  nodes['tool-more-toggle'].fire('click');
+  nodes['tool-more-toggle'].rect.width = 0;
+  layout.refresh();
+  assert.equal(nodes['tool-more'].hidden, true);
+  nodes['tool-more-toggle'].rect.width = 28;
+  nodes['tool-more-toggle'].fire('click');
+  nodes['tool-menu-view-changes'].fire('click');
+  assert.equal(nodes['tool-view-changes'].clicked, true);
+  assert.equal(nodes['tool-more'].hidden, true);
+  assert.equal(nodes['tool-more-toggle'].attrs['aria-expanded'], 'false');
 });

@@ -5,9 +5,20 @@ import * as vm from 'node:vm';
 import { it } from 'node:test';
 import type { ToolName, ToolResult } from '../src/shared/toolProtocol';
 
-const window = {} as { describeToolResult: (result: unknown) => { label: string; target: string; detail: string } };
+const window = {} as { describeToolResult: (result: unknown) => { label: string; target: string; detail: string; detailImportant: boolean } };
 vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../src/renderer/toolResultPresentation.js'), 'utf8'), { window });
 const describe = (tool: ToolName, data?: unknown, extra: Partial<ToolResult> = {}) => window.describeToolResult({ batch_id: 'b', request_id: 'r', tool, status: 'done', data, ...extra });
+
+it('窄列仅收起普通成功摘要，截断、后台、失败、部分写入与待发附件必须提示', () => {
+  assert.equal(describe('read_file', { start_line: 1, end_line: 10, total_lines: 10 }).detailImportant, false);
+  for (const summary of [
+    describe('read_file', { truncated: true }), describe('run_command', { status: 'running' }),
+    describe('get_process_output', { status: 'done', has_more: true }), describe('run_command', { cleanup_pending: true }),
+    describe('run_command', { exit_code: 1 }), describe('apply_changes', { outcomes: [{ ok: true }, { ok: false }] }),
+    describe('search_files', { skipped: ['private'] }), describe('attach_file', { name: 'report.pdf' }),
+    describe('read_file', undefined, { status: 'failed', error: '读取失败' }),
+  ]) assert.equal(summary.detailImportant, true, summary.detail);
+});
 
 it('附件工具展示真实名称和字节数，暂存结果不能声称已上传', () => {
   const summary = describe('attach_file', { id: 'private-id', name: '论文图1.png', size: 1024, mediaType: 'image/png' });

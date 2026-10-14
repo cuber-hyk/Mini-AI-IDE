@@ -8,6 +8,7 @@ interface HarnessOptions {
   session: () => string;
   execute: (root: string, request: ToolRequest, started: (data: unknown) => void, selection: ToolSelection) => Promise<unknown>;
   selected?: (selection: ToolSelection | null) => void;
+  current?: (selection: ToolSelection) => boolean;
   diagnosed?: (diagnostic: ToolDiagnostic) => void;
   stopped?: (selection: ToolSelection, error: string) => void;
   authorize: (root: string, request: ToolRequest) => Promise<'once' | 'remember' | 'deny'>;
@@ -26,6 +27,7 @@ export interface ToolSelection {
 }
 /** 仅主进程持有的本次解析事实；不是工具执行 completion，不进入复制正文。 */
 export interface ToolDiagnostic {
+  source?: 'manual';
   id: number;
   root: string | null;
   session: string;
@@ -74,10 +76,11 @@ export class ToolHarness {
     const results = this.getCopyResults();
     const storageError = this.options.store.getLoadError();
     const config = this.options.store.getConfig();
+    const source = this.selection?.source ?? this.diagnostic?.source;
     const message = storageError
       ? `工具记录加载失败，工具执行和自动继续已停用；原始记录与权限未重置。${storageError}。请使用匹配版本或恢复有效记录后重启。`
       : this.message;
-    return { ...(this.selection?.source ? { source: this.selection.source } : {}), config: storageError ? { ...config, automatic: false } : config, results, message, busy: this.waiting > 0, ...(this.selection?.userInterrupted ? { userInterrupted: true as const } : {}), ...(this.selection && !this.selection.executed ? { restored: true as const } : {}), ...(this.selection?.startId ? { batchStart: { id: this.selection.startId, batch_id: this.selection.batch.batch_id } } : {}), ...(storageError ? { storageError } : {}), ...(this.diagnostic ? { batchError: { ...this.diagnostic.error } } : {}), ...(this.completion ? { completion: { ...this.completion } } : {}) };
+    return { ...(source ? { source } : {}), config: storageError ? { ...config, automatic: false } : config, results, message, busy: this.waiting > 0, ...(this.selection?.userInterrupted ? { userInterrupted: true as const } : {}), ...(this.selection && !this.selection.executed ? { restored: true as const } : {}), ...(this.selection?.startId ? { batchStart: { id: this.selection.startId, batch_id: this.selection.batch.batch_id } } : {}), ...(storageError ? { storageError } : {}), ...(this.diagnostic ? { batchError: { ...this.diagnostic.error } } : {}), ...(this.completion ? { completion: { ...this.completion } } : {}) };
   }
   get state(): ToolState { return this.getState(); }
   getDiagnostic(): ToolDiagnostic | null {
@@ -138,13 +141,13 @@ export class ToolHarness {
     this.report('已停止尚未执行的请求；已启动工具的实际结果仍会保留');
   }
 
-  reportDiagnostic(sourceText: string, error: string, sourceKind: 'error' | 'repair' = 'error'): void {
+  reportDiagnostic(sourceText: string, error: string, sourceKind: 'error' | 'repair' = 'error', source?: 'manual'): void {
     if (this.options.store.getLoadError()) { this.publish(); return; }
     this.getCopyResults();
-    if (this.diagnostic?.sourceText === sourceText) { this.report('工具批次校验失败，未执行'); return; }
+    if (!source && this.diagnostic?.source !== 'manual' && this.diagnostic?.sourceText === sourceText) { this.report('工具批次校验失败，未执行'); return; }
     this.clearResults();
     this.diagnostic = { id: ++this.diagnosticId, root: this.options.root(), session: this.options.session(), sourceText,
-      sourceKind, error: { status: 'failed', error } };
+      sourceKind, ...(source ? { source } : {}), error: { status: 'failed', error } };
     this.options.diagnosed?.(this.getDiagnostic()!);
     this.report('工具批次校验失败，未执行');
   }
@@ -171,8 +174,19 @@ export class ToolHarness {
     return this.collectBatch(batch, origin);
   }
 
-  async collectManual(batch: ToolBatch): Promise<void> {
+  reportManualDiagnostic(sourceText: string, error: string): void {
+    this.checkManualEntry();
+    this.reportDiagnostic(sourceText, error, 'error', 'manual');
+  }
+
+  private checkManualEntry(): void {
     if (this.options.store.getLoadError()) throw new Error(this.options.store.getLoadError()!);
+    if (!this.options.root()) throw new Error('请先打开项目，再执行工具 JSON');
+    if (this.getState().busy) throw new Error('工具正在处理，请等待当前操作结束');
+  }
+
+  async collectManual(batch: ToolBatch): Promise<void> {
+    this.checkManualEntry();
     await this.collectBatch(batch, undefined, 'manual');
     if (!this.getState().results.length) throw new Error(this.getState().message || '手动工具批次未执行');
   }
@@ -205,7 +219,7 @@ export class ToolHarness {
 
   private async runBatch(root: string, session: string, generation: number, batch: ToolBatch, selection: BatchSelection): Promise<void> {
     await this.options.store.ready();
-    if (!this.current(root, session, generation)) { this.options.stopped?.(selection, '项目、会话已变化或批次已停止；未执行'); this.report('项目、会话已变化或批次已停止；未执行'); return; }
+    if (!this.current(root, session, generation, selection)) { this.options.stopped?.(selection, '项目、会话已变化或批次已停止；未执行'); this.report('项目、会话已变化或批次已停止；未执行'); return; }
     // 在任何副作用及权限对话框之前落盘；落盘失败则整个批次不执行。
     const reservation = await this.options.store.reserve(root, session, batch, selection.source);
     if (reservation.kind === 'conflict') {
@@ -225,6 +239,11 @@ export class ToolHarness {
     if (this.options.prepare) {
       try { await this.options.prepare(root, batch); }
       catch (error) {
+        if (!this.current(root, session, generation, selection)) {
+          selection.cancelled = true;
+          for (const request of batch.requests) await this.cancelRequest(entry, request);
+          return;
+        }
         for (const request of batch.requests) await this.record(entry, request, { status: 'failed', error: `全批次校验失败：${errorText(error)}` });
         selection.validationFailed = true;
         this.report('工具批次校验失败，所有请求均未执行');
@@ -233,7 +252,7 @@ export class ToolHarness {
     }
     const completed = new Map<string, ToolResult['status']>();
     for (const request of batch.requests) {
-      if (!this.current(root, session, generation)) {
+      if (!this.current(root, session, generation, selection)) {
         await this.record(entry, request, { status: 'cancelled', error: '项目、会话已变化或用户停止；未执行' });
         completed.set(request.id, 'cancelled');
         continue;
@@ -266,7 +285,11 @@ export class ToolHarness {
     for (let attempt = 0; attempt < 3; attempt++) {
       let description: { external: boolean; fingerprint: string };
       try { description = await this.options.describe(root, request); }
-      catch (error) { await this.record(entry, request, { status: 'failed', error: errorText(error) }); return 'failed'; }
+      catch (error) {
+        if (!this.current(root, session, generation, entry.selection)) return this.cancelRequest(entry, request);
+        await this.record(entry, request, { status: 'failed', error: errorText(error) }); return 'failed';
+      }
+      if (!this.current(root, session, generation, entry.selection)) return this.cancelRequest(entry, request);
       const decision = this.permission(root, request, description);
       if (decision === 'deny') {
         await this.record(entry, request, { status: 'permission_denied', error: '权限拒绝；工具未执行' });
@@ -277,15 +300,22 @@ export class ToolHarness {
         this.report(`等待批准：${request.tool} (${request.id})`);
         let authorization: 'once' | 'remember' | 'deny';
         try { authorization = await this.options.authorize(root, request); }
-        catch (error) { await this.record(entry, request, { status: 'failed', error: `权限请求失败：${errorText(error)}` }); return 'failed'; }
-        if (!this.current(root, session, generation)) return this.cancelRequest(entry, request);
+        catch (error) {
+          if (!this.current(root, session, generation, entry.selection)) return this.cancelRequest(entry, request);
+          await this.record(entry, request, { status: 'failed', error: `权限请求失败：${errorText(error)}` }); return 'failed';
+        }
+        if (!this.current(root, session, generation, entry.selection)) return this.cancelRequest(entry, request);
         if (authorization === 'deny') {
           await this.record(entry, request, { status: 'permission_denied', error: '权限拒绝；工具未执行' });
           return 'permission_denied';
         }
         let approvedDescription: typeof description;
         try { approvedDescription = await this.options.describe(root, request); }
-        catch (error) { await this.record(entry, request, { status: 'failed', error: errorText(error) }); return 'failed'; }
+        catch (error) {
+          if (!this.current(root, session, generation, entry.selection)) return this.cancelRequest(entry, request);
+          await this.record(entry, request, { status: 'failed', error: errorText(error) }); return 'failed';
+        }
+        if (!this.current(root, session, generation, entry.selection)) return this.cancelRequest(entry, request);
         if (approvedDescription.external !== description.external || approvedDescription.fingerprint !== description.fingerprint) {
           await this.record(entry, request, { status: 'permission_denied', error: '审批期间目标或脚本已变化，请由 AI 重新请求' });
           return 'permission_denied';
@@ -297,14 +327,17 @@ export class ToolHarness {
         authorized = { ...description };
         if (authorization === 'remember') await this.options.store.addRule(root, description.fingerprint, 'allow');
       }
-      if (!this.current(root, session, generation)) return this.cancelRequest(entry, request);
+      if (!this.current(root, session, generation, entry.selection)) return this.cancelRequest(entry, request);
       await this.record(entry, request, { status: 'running' });
-      if (!this.current(root, session, generation)) return this.cancelRequest(entry, request);
+      if (!this.current(root, session, generation, entry.selection)) return this.cancelRequest(entry, request);
       let finalDescription: typeof description;
       try { finalDescription = await this.options.describe(root, request); }
-      catch (error) { await this.record(entry, request, { status: 'failed', error: errorText(error) }); return 'failed'; }
+      catch (error) {
+        if (!this.current(root, session, generation, entry.selection)) return this.cancelRequest(entry, request);
+        await this.record(entry, request, { status: 'failed', error: errorText(error) }); return 'failed';
+      }
       const finalDecision = this.permission(root, request, finalDescription);
-      if (!this.current(root, session, generation)) return this.cancelRequest(entry, request);
+      if (!this.current(root, session, generation, entry.selection)) return this.cancelRequest(entry, request);
       if (finalDecision === 'deny') {
         await this.record(entry, request, { status: 'permission_denied', error: '启动前权限规则已拒绝；工具未执行' });
         return 'permission_denied';
@@ -316,7 +349,7 @@ export class ToolHarness {
       return 'permission_denied';
     }
     this.report(`正在执行：${request.tool} (${request.id})`);
-    if (!this.current(root, session, generation)) return this.cancelRequest(entry, request);
+    if (!this.current(root, session, generation, entry.selection)) return this.cancelRequest(entry, request);
     this.show(entry, request, { status: 'running', started_at: Date.now() });
     let data: unknown;
     try { data = await this.options.execute(root, request, started => this.show(entry, request, { status: 'running', data: started }), entry.selection); }
@@ -337,8 +370,8 @@ export class ToolHarness {
     return rules.some(r => r.action === 'allow') ? 'allow' : 'ask';
   }
 
-  private current(root: string, session: string, generation: number): boolean {
-    return this.generation === generation && this.options.root() === root && this.options.session() === session;
+  private current(root: string, session: string, generation: number, selection: ToolSelection): boolean {
+    return this.generation === generation && this.options.root() === root && this.options.session() === session && (!this.options.current || this.options.current(selection));
   }
   private async cancelRequest(entry: SelectedEntry, request: ToolRequest): Promise<'cancelled'> {
     await this.record(entry, request, { status: 'cancelled', error: '审批或启动期间项目、会话已变化或用户停止；未执行' });

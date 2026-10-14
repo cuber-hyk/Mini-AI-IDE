@@ -217,7 +217,8 @@ it('JSON格式错误归入批次失败卡片，复制统一结果；不伪造具
   const failure = JSON.parse(items[0].children[1].textContent);
   assert.equal(failure.batch_error.error, diagnostic);
   assert.equal(failure.batch_error.request_id, undefined);
-  assert.equal(ui.nodes['tool-count'].textContent, '1 项校验失败');
+  assert.equal(ui.nodes['tool-count'].textContent, '1 项');
+  assert.equal(ui.nodes['tool-count'].title, '1 项校验失败');
   ui.publish(state({ results: [result] }));
   assert.equal(ui.nodes['tool-results'].children.length, 1);
   assert.equal(ui.nodes['tool-results'].children[0].className, 'tool-result');
@@ -232,8 +233,12 @@ it('每条前后台命令有独立中断按钮，只发送被点击的批次和�
     { ...result, request_id: 'finished', tool: 'run_command', data: { process_id: 'proc-c', status: 'done' } },
   ] }));
   const buttons = ui.nodes['tool-results'].children.map((item: any) => item.children[0].children.find((node: any) => node.className === 'ui-button tool-command-stop'));
-  assert.equal(buttons[0].textContent, '中断'); assert.equal(buttons[1].disabled, false); assert.equal(buttons[2], undefined);
-  assert.equal(ui.nodes['tool-more-toggle'].hidden, true);
+  assert.equal(buttons[0].textContent, '', '中断仅显示图标');
+  assert.match(buttons[0].attrs['aria-label'], /中断此命令及其子进程/);
+  assert.equal(buttons[0].attrs['aria-busy'], 'false');
+  assert.equal(buttons[1].disabled, false); assert.equal(buttons[2], undefined);
+  assert.equal(ui.nodes['tool-more-toggle'].hidden, false, '窄列查看改动需要保留菜单入口');
+  assert.equal(ui.nodes['tool-panel'].classList.contains('has-undo'), false);
   await buttons[1].fire('click'); assert.deepEqual(ui.calls, ['get', { batch_id: 'inspect', request_id: 'background', process_id: 'proc-b' }]);
 });
 
@@ -244,8 +249,11 @@ it('旧进程中断尚未返回时，新作用域同批同请求的新进程仍�
   ui.publish(state({ results: [running] }));
   const button = () => ui.nodes['tool-results'].children[0].children[0].children.find((node: any) => node.className === 'ui-button tool-command-stop');
   const pending = button().fire('click'); await flush(); assert.equal(button().disabled, true);
+  assert.equal(button().attrs['aria-busy'], 'true');
+  assert.match(button().attrs['aria-label'], /正在中断/);
   ui.publish(state({ results: [{ ...running, data: { ...running.data, process_id: 'new-instance' } }] }));
   assert.equal(button().disabled, false);
+  assert.equal(button().attrs['aria-busy'], 'false');
   fail(new Error('old scope failure')); await pending;
   assert.equal(button().disabled, false); assert.doesNotMatch(ui.nodes['tool-message'].textContent, /old scope failure/);
 });
@@ -350,7 +358,8 @@ it('最新批次等待时清空旧详情并禁用复制，只在收到本批真�
   assert.equal(ui.nodes['tool-results'].children.length, 1);
   ui.publish(state({ busy: true, results: [], message: '等待新批次执行' }));
   assert.equal(ui.nodes['tool-results'].children.length, 0);
-  assert.equal(ui.nodes['tool-count'].textContent, '0 项 · 已返回 0');
+  assert.equal(ui.nodes['tool-count'].textContent, '0 项');
+  assert.equal(ui.nodes['tool-count'].title, '0 项 · 已返回 0');
   assert.equal(ui.nodes['tool-copy'].disabled, true);
   await ui.nodes['tool-copy'].fire('click');
   assert.deepEqual(ui.calls, ['get']);
@@ -365,7 +374,9 @@ it('停止只在用户点击且本批运行时触发，权限拒绝与未知结�
   const ui = setup(); await flush();
   ui.publish(state({ busy: true, results: [{ ...result, status: 'permission_denied', error: '权限拒绝' }, { ...result, request_id: 'cmd', status: 'unknown' }] }));
   assert.equal(ui.nodes['tool-results'].children[0].children[0].children.find((node: any) => node.className === 'tool-result-status').textContent, '权限拒绝');
-  assert.equal(ui.nodes['tool-results'].children[1].children[0].children.find((node: any) => node.className === 'tool-result-status').textContent, '执行结果未知');
+  const unknownStatus = ui.nodes['tool-results'].children[1].children[0].children.find((node: any) => node.className === 'tool-result-status');
+  assert.equal(unknownStatus.textContent, '结果未知');
+  assert.equal(unknownStatus.title, '执行结果未知');
   assert.equal(ui.nodes['tool-results'].children.some((item: any) => item.children[0].children.some((node: any) => node.className === 'ui-button tool-command-stop')), false);
   assert.deepEqual(ui.calls, ['get']);
 });
@@ -434,10 +445,34 @@ it('新批成功提供短暂摘要动画，保持面板折叠和实际状态，�
   assert.equal(ui.nodes['tool-panel'].open, false);
   assert.equal(ui.nodes['tool-results'].children[0].open, false);
   assert.equal(ui.nodes['tool-activity'].textContent, '已返回');
+  assert.equal(ui.nodes['tool-completion-notice'].classList.contains('is-visible'), true);
   assert.deepEqual(ui.calls, ['get']);
   ui.expireFeedback();
   assert.equal(ui.nodes['tool-panel'].classList.contains('has-completion'), false);
   assert.equal(ui.nodes['tool-completion-notice'].textContent, '');
+  assert.equal(ui.nodes['tool-completion-notice'].classList.contains('is-visible'), false, '反馈消失后必须恢复常规状态的可见性');
+  assert.equal(ui.nodes['tool-activity'].classList.contains('is-visible'), true);
+});
+
+it('旧自动复制成功提示不能盖住本次操作失败、授权等待或后台进程状态', async () => {
+  const ui = setup({ copyToolResults: async () => ({ ok: false, error: '剪贴板暂不可用' }) }); await flush();
+  ui.publish(state({ results: [result], clipboard: { ok: true } }));
+  assert.equal(ui.nodes['tool-copy-notice'].classList.contains('is-visible'), true);
+  await ui.nodes['tool-copy'].fire('click');
+  assert.equal(ui.nodes['tool-activity'].textContent, '操作失败');
+  assert.equal(ui.nodes['tool-activity'].classList.contains('is-visible'), true);
+  assert.equal(ui.nodes['tool-copy-notice'].classList.contains('is-visible'), false);
+  assert.match(ui.nodes['tool-activity'].title, /剪贴板暂不可用/);
+  assert.match(ui.nodes['tool-activity'].title, /已自动复制/);
+  for (const next of [
+    state({ busy: true, results: [{ ...result, status: 'pending_permission' }], clipboard: { ok: true } }),
+    state({ hasRunningProcesses: true, results: [result], clipboard: { ok: true } }),
+    state({ storageError: '记录不可用', results: [], clipboard: { ok: true } }),
+  ]) {
+    ui.publish(next);
+    assert.equal(ui.nodes['tool-activity'].classList.contains('is-visible'), true);
+    assert.equal(ui.nodes['tool-copy-notice'].classList.contains('is-visible'), false);
+  }
 });
 
 it('权限拒绝或失败完成提示明确，未完成及切会话清空不会假报成功', async () => {

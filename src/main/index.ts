@@ -1163,7 +1163,7 @@ async function loadLocalView(
 
   // 正常启动：右侧加载目标平台（**只读**，程序不向页面写入任何内容）
   // 两平台主frame加载状态统一由平台owner记录；错误页完成不能冒充官网加载成功。
-  await webView.webContents.loadURL(TARGET_URL).catch(() => {});
+  await platforms.loadInitialDeepSeek(TARGET_URL);
 
   // 分隔条由**编辑器渲染进程自身**的 DOM 承载（见 src/renderer 的 #resizer）。
   // 早期实现用一个独立 WebContentsView 覆盖在边界上，但它不接收拖动事件，

@@ -1,9 +1,9 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-13
+updated: 2026-10-14
 owner: 胡运宽
-source_of_truth: [src/main/webLoadingView.ts, src/renderer/webLoading.html, src/renderer/webLoading.css, tools/verify-web-loading.cjs, src/main/composerDraftBackup.ts, test/composerDraftBackup.test.ts, src/main/firstPromptSession.ts, src/main/tools/replyChangeWatcher.ts, test/chatgptReply.test.ts, test/replyChangeWatcher.test.ts, src/main/tools/replySource.ts, test/replySource.test.ts, src/shared/webPlatform.ts, src/main/webPlatformController.ts, src/main/webPlatformView.ts, src/main/index.ts, src/main/tools/integration.ts, src/main/localPromptController.ts, src/main/workspaceLayoutController.ts, src/renderer/webbar.js, src/renderer/promptComposer.js, src/renderer/toolHarness.js, test/webPlatformController.test.ts, test/toolPlatformActivity.test.ts, test/webPlatformUi.test.ts, src/main/chatgptPage.ts, src/shared/webConversation.ts, src/main/webComposerSender.ts, test/chatgptToolIntegration.test.ts, tools/verify-chatgpt-composer.cjs, tools/verify-chatgpt-tools.cjs, tools/verify-web-platform.cjs, docs/adr/2026-10-11-web-platform-switching.md]
+source_of_truth: [src/main/webLoadingView.ts, src/renderer/webLoading.html, src/renderer/webLoading.css, tools/verify-web-loading.cjs, tools/verify-deepseek-startup.cjs, src/main/composerDraftBackup.ts, test/composerDraftBackup.test.ts, src/main/firstPromptSession.ts, src/main/tools/replyChangeWatcher.ts, test/chatgptReply.test.ts, test/replyChangeWatcher.test.ts, src/main/tools/replySource.ts, test/replySource.test.ts, src/shared/webPlatform.ts, src/main/webPlatformController.ts, src/main/webPlatformView.ts, src/main/index.ts, src/main/tools/integration.ts, src/main/localPromptController.ts, src/main/workspaceLayoutController.ts, src/renderer/webbar.js, src/renderer/promptComposer.js, src/renderer/toolHarness.js, test/webPlatformController.test.ts, test/toolPlatformActivity.test.ts, test/webPlatformUi.test.ts, src/main/chatgptPage.ts, src/shared/webConversation.ts, src/main/webComposerSender.ts, test/chatgptToolIntegration.test.ts, tools/verify-chatgpt-composer.cjs, tools/verify-chatgpt-tools.cjs, tools/verify-web-platform.cjs, docs/adr/2026-10-11-web-platform-switching.md]
 ---
 
 # 官网平台
@@ -25,7 +25,11 @@ ChatGPT 首页首发可经过 `/c/local-chatgpt%3A<UUID>` 编码占位地址，�
 
 创建或本地切换失败恢复原平台。WebPlatformController统一监听两平台主frame导航、失败、完成及停止，加载失败保留固定平台名和有界错误码；本轮失败后的错误页did-finish-load不能清错，新的主frame导航成功后才恢复。子frame失败不改变平台状态，取消不替换已知网络错误；隐藏平台的失败仅在切回后显示，不污染当前平台。
 
+正常启动经 `WebPlatformController.loadInitialDeepSeek` 加载首页。本次启动首个官方 DeepSeek 首页主 frame 同时返回 `-100` 与 `ERR_CONNECTION_CLOSED` 时，约 1 秒后在原视图原分区中自动重载一次，复用原重载准备和工具/发送忙门禁。等待与重载期间保留真实错误、`reloading` 状态及本地加载提示，采集和本地发送不可用；成功后恢复，二次失败保留真实诊断与手动入口，不第三次请求。额度不授予后续导航、登录页重定向、手动重载、ChatGPT、证书、取消或未知错误。平台切换、任意新主 frame 导航（含同文档）、关闭和忙状态取消待恢复；异步准备后再核对导航修订及原官方首页，不刷新已变更的页面。启动自检/诊断/自定义目标不通过该默认首页恢复条件。
+
 顶栏仅失败时显示“重新加载”，零参数reloadWebPlatform入口只接受webbar主frame且复用工具/发送忙门禁；取消旧待回传与来源后浏览器reload当前视图，不接地址、不创建视图、不改登录资料。准备期有切换锁，网络等待释放切换锁且拒绝重复重载。恢复成功清提示；继续失败保留真实原因。失败/重载期间采集及本地主动发送禁用，需求草稿保留；正常平台切换不刷新。官网登录弹窗使用同分区与沙箱，仅允许明确的官方和登录提供商地址，主窗口关闭时释放。布局由WorkspaceLayoutController管理，文件区全屏隐藏活动官网，退出后恢复。
+
+加载失败、切换和重载提示只在顶栏 `collect-status` 显示一处，左侧工具摘要不重复平台原因；恢复后显示最新真实工具摘要。恢复中显示“正在重新加载官网…”，原错误保留在平台悬停诊断，终止恢复后显示真实失败。窄栏保留该提示和手动入口；切换、重载调用和状态读取错误仍按原优先级显示。
 
 验证入口：`pnpm run build`、`pnpm exec electron tools/verify-web-platform.cjs`（仅离线本地夹具，拦截公网请求）、相关 test 与应用 self-test。真实官网登录、对话和重启保持由用户手动验证，不能凭页面 loaded 事件推断。完整 IDE 隔离验收可运行 `pnpm exec electron tools/chatgpt-ide-preview.cjs`，其固定独立 userData 不共享安装版登录资料。
 
@@ -59,4 +63,6 @@ ChatGPT网页草稿备份owner为`composerDraftBackup.ts`，由index和工具int
 
 首次启动、平台首次创建及主 frame 实际导航期间，独立本地沙箱视图按当前主题展示平台名和“正在加载…”。无 preload、IPC 或官网 DOM 写入；布局与显隐仍由 WorkspaceLayoutController 管理，只覆盖官网区域，文件全屏时隐藏。正常已加载平台切换复用原页面，不刷新。
 
-WebPlatformController 在文档完成后用只读隔离世界核验是否已有可见内容；SPA 空壳继续显示，最长观察 10 秒后撤下提示，避免未知结构长期遮挡官网。加载失败或取消撤下提示，失败继续走顶栏错误及具名重新加载入口。后台平台事件不覆盖前台提示，导航修订使旧检测失效，关闭清理计时器。这仅管理加载提示，不代表 AI 回复完成或授予工具执行/发送资格。
+WebPlatformController 在文档完成后用只读隔离世界核验是否已有可见内容；SPA 空壳继续显示，最长观察 10 秒后撤下提示，避免未知结构长期遮挡官网。未进入首次自动恢复的加载失败或取消撤下提示，失败继续走顶栏错误及具名重新加载入口。后台平台事件不覆盖前台提示，导航修订使旧检测失效，关闭清理计时器。这仅管理加载提示，不代表 AI 回复完成或授予工具执行/发送资格。
+
+首次连接关闭的一次恢复等待也保持加载提示；其他失败和恢复终止撤下提示。离线原生验收为 `node tools/verify-deepseek-startup.cjs`（先构建），隔离资料目录、HTTPS 本地响应与失效本机代理确保不连接公网；覆盖真实连接关闭事件、一次重载、失败上限与取消。该验收证明恢复流程，不确定用户现场连接关闭的具体网络根因或成功率。

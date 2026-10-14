@@ -166,13 +166,20 @@ export async function createToolIntegration(options: Options) {
   let continuation: AutoContinuation | undefined;
   let resultReturn: ToolResultReturn | undefined;
   let activeSelection: ToolSelection | null = null;
-  let manualToolJson: ManualToolJson;
   const draftScope = () => JSON.stringify([options.files.getRoot(), sessionKeyOf(web.getURL()), webPlatformOf(web.getURL()), revision]);
   const recoveryValid = () => {
     const origin = activeSelection?.recovered;
     return !origin || jsonDraft.matchesRecovery(options.files.getRoot(), sessionKeyOf(web.getURL()), draftScope(), origin);
   };
   const selectionRevisions = new WeakMap<ToolSelection, number>();
+  const selectionNavigations = new WeakMap<ToolSelection, number>();
+  let navigationRevision = 0;
+  const navigating = (event: { isMainFrame: boolean }) => { if (event.isMainFrame) navigationRevision++; };
+  const inPage = (_event: unknown, _url: string, main: boolean) => { if (main) navigationRevision++; };
+  const destroyed = () => { navigationRevision++; };
+  const bindNavigationGuard = () => { web.on('did-start-navigation', navigating); web.on('did-navigate-in-page', inPage); web.on('destroyed', destroyed); };
+  const unbindNavigationGuard = () => { web.removeListener('did-start-navigation', navigating); web.removeListener('did-navigate-in-page', inPage); web.removeListener('destroyed', destroyed); };
+  bindNavigationGuard();
   const toolAttachments = new ToolAttachments();
   const draftBackup = new ComposerDraftBackup();
   const createSender = (target: typeof web) => new WebResultSender(target, { backupDraft: (text, session) => draftBackup.save(options.files.getRoot() ?? '', session, text) });
@@ -191,7 +198,7 @@ export async function createToolIntegration(options: Options) {
   };
   const broadcast = (state: ToolState) => {
     if (disposed) return;
-    const notification = clipboard.notification(state);
+    const notification = clipboard.notification(state, harness.getDiagnostic());
     const current: ToolState = { ...displayState(state), canUndo: changes.canUndo, hasRunningProcesses: processes.hasRunning,
       ...(notification ? { clipboard: notification } : {}), ...(continuation ? { continuation: continuation.getState() } : {}),
       ...(resultReturn ? { resultReturn: resultReturn.getState({ root: options.files.getRoot(), session: sessionKeyOf(web.getURL()), state, recoveryValid: recoveryValid() }) } : {}) };
@@ -284,17 +291,19 @@ export async function createToolIntegration(options: Options) {
   }, message => harness.report(message), session => continuation?.reset({ root: options.files.getRoot(), session }), readOptions);
   let watcher = createWatcher();
   harness = new ToolHarness({ store, root: () => options.files.getRoot(), session: () => sessionKeyOf(web.getURL()),
+    current: selection => webActive && !disposed && selectionRevisions.get(selection) === revision &&
+      (selection.source !== 'manual' || selectionNavigations.get(selection) === navigationRevision),
     selected: selection => {
       continuation?.reset({ root: options.files.getRoot(), session: sessionKeyOf(web.getURL()) });
-      activeSelection = selection; if (selection) retainedCopy = null; if (selection) selectionRevisions.set(selection, revision);
-      manualToolJson?.invalidate();
+      activeSelection = selection;
+      if (selection) { retainedCopy = null; selectionRevisions.set(selection, revision); selectionNavigations.set(selection, navigationRevision); }
       toolAttachments.begin(selection); resultReturn?.begin(selection ? { kind: 'batch', selection } : null);
       synchronizeChangeSession();
       if (!selection) { review.clear(); return; }
       reviewTokens.set(selection, review.begin({ root: selection.root, session: selection.session,
         batchId: selection.batch.batch_id, contentKey: hash(JSON.stringify(selection.batch)) }, selection.batch));
     },
-    diagnosed: diagnostic => { retainedCopy = null; resultReturn?.begin({ kind: 'diagnostic', diagnostic }); },
+    diagnosed: diagnostic => { retainedCopy = null; resultReturn?.begin({ kind: 'diagnostic', diagnostic }); clipboard.diagnose(harness.getState(), diagnostic); },
     stopped: (selection, error) => review.stop(reviewTokens.get(selection), error),
     describe: async (root, request) => {
       if (!webActive || disposed || activeSelection && selectionRevisions.get(activeSelection) !== revision) throw new Error('当前网页平台不可执行工具');
@@ -335,7 +344,7 @@ export async function createToolIntegration(options: Options) {
   const getState = (): ToolState => {
     synchronizeChangeSession();
     const state = harness.getState();
-    const notification = clipboard.notification(state);
+    const notification = clipboard.notification(state, harness.getDiagnostic());
     return { ...displayState(state), canUndo: changes.canUndo, hasRunningProcesses: processes.hasRunning, ...(notification ? { clipboard: notification } : {}), ...(continuation ? { continuation: continuation.getState() } : {}), ...(resultReturn ? { resultReturn: resultReturn.getState({ root: options.files.getRoot(), session: sessionKeyOf(web.getURL()), state, recoveryValid: recoveryValid() }) } : {}) };
   };
   resultReturn = new ToolResultReturn({
@@ -388,19 +397,23 @@ export async function createToolIntegration(options: Options) {
     },
   });
   const channels: string[] = [];
-  manualToolJson = new ManualToolJson(web, () => {
+  const manualToolJson = new ManualToolJson(() => {
     const state = harness.getState();
     const busy = state.busy || processes.hasRunning || !!localPromptTransport || options.interactionBusy?.() ||
       continuation?.getState().phase === 'sending' || continuation?.getState().phase === 'countdown' ||
       resultReturn?.getState({ root: options.files.getRoot(), session: sessionKeyOf(web.getURL()), state }).phase === 'sending';
-    return { project: options.files.getRoot(), scope: draftScope(),
-      ...(options.disabled ? { error: '当前运行模式不支持手动执行工具 JSON' } : disposed || !webActive ? { error: '当前上下文正在切换或已经关闭，请稍后校验' } :
+    return { project: options.files.getRoot(),
+      ...(options.disabled ? { error: '当前运行模式不支持手动执行工具 JSON' } : disposed || !webActive ? { error: '当前上下文正在切换或已经关闭，请稍后执行' } :
         store.getLoadError() ? { error: '工具记录不可用，未执行：' + store.getLoadError() } :
         busy ? { error: '工具、后台命令或发送正在处理，请等待当前操作结束' } : {}) };
   }, async batch => {
     jsonDraft.invalidate(); toolAttachments.reset(); resultReturn?.begin(null);
     continuation?.reset({ root: options.files.getRoot(), session: sessionKeyOf(web.getURL()) });
     await harness.collectManual(batch);
+  }, (sourceText, error) => {
+    jsonDraft.invalidate(); toolAttachments.reset(); resultReturn?.begin(null);
+    continuation?.reset({ root: options.files.getRoot(), session: sessionKeyOf(web.getURL()) });
+    harness.reportManualDiagnostic(sourceText, error);
   });
   const register = (channel: string, action: (...args: unknown[]) => unknown, count: number) => {
     options.ipc.handle(channel, (event, ...args: unknown[]) => {
@@ -410,8 +423,7 @@ export async function createToolIntegration(options: Options) {
     }); channels.push(channel);
   };
   register(CHANNELS.getToolState, getState, 0);
-  register(CHANNELS.previewToolJson, text => manualToolJson.preview(text), 1);
-  register(CHANNELS.executeToolJson, token => manualToolJson.run(token), 1);
+  register(CHANNELS.executeToolJson, text => manualToolJson.run(text), 1);
   register(CHANNELS.sendToolResults, () => resultReturn!.send('manual', () => webActive && !disposed && !options.disabled), 0);
   const configure = async (config: unknown) => {
     if (config && typeof config === 'object' && (config as { automatic?: unknown }).automatic === true && !harness.getState().config.automatic) await sender.cancel('results');
@@ -480,8 +492,7 @@ export async function createToolIntegration(options: Options) {
       await watcher.dispose();
       await sender.dispose();
       if (disposed) return;
-      web = next; sender = nextSender ?? createSender(web);
-      manualToolJson.bindWeb(web);
+      unbindNavigationGuard(); web = next; sender = nextSender ?? createSender(web); bindNavigationGuard();
       monitor = new ReplyMonitor(web, readOptions); watcher = createWatcher();
       auto.reset(true); changes.reset(); changeSession = sessionKeyOf(web.getURL());
       toolAttachments.reset(); resultReturn?.invalidate();
@@ -539,7 +550,7 @@ export async function createToolIntegration(options: Options) {
       auto.acknowledge(sessionKeyOf(web.getURL()), text);
       void collectReply(text, current, true); return true;
     },
-    reset(): void { manualToolJson.invalidate(); retainedCopy = null; revision++; jsonDraft.invalidate(); toolAttachments.reset(); resultReturn?.begin(null); continuation?.reset({ root: options.files.getRoot(), session: sessionKeyOf(web.getURL()) }); harness.cancel(); watcher.reset(); changes.reset(); },
-    async dispose(): Promise<void> { manualToolJson.dispose(); disposed = true; revision++; jsonDraft.invalidate(); toolAttachments.reset(); resultReturn?.begin(null); continuation?.dispose(); await sender.dispose(); auto.dispose(); await watcher.dispose(); harness.cancel(); await processes.dispose(); },
+    reset(): void { retainedCopy = null; revision++; jsonDraft.invalidate(); toolAttachments.reset(); resultReturn?.begin(null); continuation?.reset({ root: options.files.getRoot(), session: sessionKeyOf(web.getURL()) }); harness.cancel(); watcher.reset(); changes.reset(); },
+    async dispose(): Promise<void> { unbindNavigationGuard(); disposed = true; revision++; jsonDraft.invalidate(); toolAttachments.reset(); resultReturn?.begin(null); continuation?.dispose(); await sender.dispose(); auto.dispose(); await watcher.dispose(); harness.cancel(); await processes.dispose(); },
   };
 }

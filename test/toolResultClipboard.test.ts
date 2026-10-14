@@ -1,3 +1,4 @@
+import type { ToolDiagnostic } from '../src/main/tools/harness';
 import assert from 'node:assert/strict';
 import { it } from 'node:test';
 import { ResultClipboard } from '../src/main/tools/resultClipboard';
@@ -10,7 +11,7 @@ it('批次只复制一次，结果包含完整真实输出与失败信息，通�
   const copies: string[] = []; const clipboard = new ResultClipboard(value => copies.push(value));
   const current = state({ results: [command, { ...command, request_id: 'failed', status: 'failed', data: { status: 'failed', exit_code: 7, stderr: 'error' } }] });
   clipboard.complete(current); clipboard.complete(current);
-  assert.equal(copies.length, 1); assert.deepEqual(JSON.parse(copies[0]!).tool_results, current.results);
+  assert.equal(copies.length, 1); assert.deepEqual(JSON.parse(copies[0]!).tool_results, JSON.parse(JSON.stringify(current.results)));
   assert.equal(clipboard.notification(current)?.ok, true); assert.equal(copies.length, 1);
 });
 
@@ -87,4 +88,42 @@ it('复制失败明确通知但不改变工具结果，不能在任意状态广�
   clipboard.complete(state()); clipboard.complete(state());
   assert.deepEqual(clipboard.notification(state()), { id: 1, ok: false, error: 'clipboard unavailable' });
   assert.equal(calls, 1); assert.equal(state().results[0]?.status, 'done');
+});
+
+it('手动未执行的权限拒绝与静态校验失败仅在当前 completion 复制，历史和关闭设置不追补', () => {
+  for (const status of ['permission_denied', 'failed'] as const) {
+    const copies: string[] = []; const clipboard = new ResultClipboard(text => copies.push(text));
+    const current = state({ source: 'manual', results: [{ ...command, status, started_at: undefined, finished_at: undefined, data: undefined, error: '真实工具层拒绝' }] });
+    clipboard.complete(current); clipboard.complete(current);
+    assert.equal(copies.length, 1); assert.deepEqual(JSON.parse(copies[0]!).tool_results, JSON.parse(JSON.stringify(current.results)));
+    const history = new ResultClipboard(text => copies.push(text)); history.complete({ ...current, completion: undefined, restored: true });
+    assert.equal(copies.length, 1);
+    const off = new ResultClipboard(text => copies.push(text)); off.complete({ ...current, config: { ...current.config, autoCopyResults: false } }); off.complete(current);
+    assert.equal(copies.length, 1);
+  }
+});
+
+it('手动诊断按真实事件只复制一次，通知不混入官网或其他 scope，取消与关闭不重放', () => {
+  const diagnostic: ToolDiagnostic = { id: 1, source: 'manual', root: 'root', session: 'chat', sourceText: '{bad', error: { status: 'failed', error: 'bad json' } };
+  const current = state({ source: 'manual', completion: undefined, results: [], batchError: diagnostic.error });
+  const copies: string[] = []; const clipboard = new ResultClipboard(text => copies.push(text));
+  clipboard.diagnose(current, diagnostic); clipboard.complete(current); clipboard.diagnose(current, diagnostic);
+  assert.deepEqual(copies.map(text => JSON.parse(text)), [{ protocol_version: 1, tool_results: [], batch_error: diagnostic.error }]);
+  assert.equal(clipboard.notification(current, diagnostic)?.ok, true);
+  for (const altered of [{ ...diagnostic, root: 'other' }, { ...diagnostic, id: 2 }, { ...diagnostic, source: undefined }, { ...diagnostic, cancelled: true }])
+    assert.equal(clipboard.notification(current, altered), undefined);
+  assert.equal(clipboard.notification({ ...current, source: undefined }, diagnostic), undefined);
+  for (const blocked of [{ ...current, config: { ...current.config, autoCopyResults: false } }, { ...current, busy: true }]) {
+    const owner = new ResultClipboard(text => copies.push(text)); owner.diagnose(blocked, diagnostic); owner.diagnose(current, diagnostic);
+    assert.equal(owner.notification(current, diagnostic), undefined);
+  }
+  assert.equal(copies.length, 1);
+});
+
+it('手动解析诊断复制失败保留准确错误但不随状态查询重试', () => {
+  let attempts = 0; const clipboard = new ResultClipboard(() => { attempts++; throw new Error('clipboard unavailable'); });
+  const diagnostic: ToolDiagnostic = { id: 1, source: 'manual', root: 'root', session: 'chat', sourceText: '{bad', error: { status: 'failed', error: 'bad json' } };
+  const current = state({ source: 'manual', completion: undefined, results: [], batchError: diagnostic.error });
+  clipboard.diagnose(current, diagnostic); clipboard.complete(current); clipboard.diagnose(current, diagnostic);
+  assert.equal(clipboard.notification(current, diagnostic)?.error, 'clipboard unavailable'); assert.equal(attempts, 1);
 });

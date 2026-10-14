@@ -70,9 +70,15 @@ app.whenReady().then(async () => {
   await waitFor(() => Boolean(controller.state.error));
   check('网络失败后可切回，错误只含固定平台和有界错误码', /ChatGPT.*ERR_BLOCKED_BY_CLIENT.*-20/.test(controller.state.error) && !controller.state.switching);
   check('真实顶栏失败时提供重载并禁用采集', await read('document.getElementById("web-platform").value === "chatgpt" && document.getElementById("btn-collect").disabled && !document.getElementById("btn-reload-web-platform").hidden'));
+  check('平台加载错误只在采集状态区显示一次，工具入口仍可用', await read('document.getElementById("collect-status").textContent.includes("ERR_BLOCKED_BY_CLIENT") && document.getElementById("tool-workspace-status").textContent === "" && !document.getElementById("btn-tool-workspace").disabled'));
+  const wideBarBounds = bar.getBounds();
+  bar.setBounds({ ...wideBarBounds, width: 420 });
+  check('窄顶栏仍保留唯一加载错误区域', await read('document.getElementById("collect-status").classList.contains("load-notice") && getComputedStyle(document.getElementById("collect-status")).display !== "none" && document.getElementById("tool-workspace-status").textContent === ""'));
+  bar.setBounds(wideBarBounds);
   check('官网独立分区且隐藏旧视图', chatgpt.webContents.session !== deepseek.webContents.session && !deepseek.getVisible() && chatgpt.getVisible());
   await chatgpt.webContents.loadURL('data:text/html,<p>Offline sandbox fixture</p>');
   check('新的正常导航成功才清错误并隐藏重载', !controller.state.error && await read('document.getElementById("btn-reload-web-platform").hidden && !document.getElementById("btn-collect").disabled'));
+  check('官网恢复后回到真实工具摘要', await read('document.getElementById("tool-workspace-status").textContent === "正在读取工具状态" && document.getElementById("collect-status").textContent === ""'));
   const environment = await chatgpt.webContents.executeJavaScript('({ noNode: typeof require === "undefined" && typeof process === "undefined", noBridge: typeof editorBridge === "undefined" && typeof webbarBridge === "undefined", ua: navigator.userAgent })');
   const expected = stripSelfDeclarations(chatgpt.webContents.session.getUserAgent(), app.getName()).effective;
   check('官网无 Node 或本地桥，实际 UA 自洽', environment.noNode && environment.noBridge && environment.ua === expected && !/Electron\//.test(environment.ua));

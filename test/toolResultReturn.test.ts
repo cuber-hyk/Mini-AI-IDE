@@ -187,3 +187,16 @@ it('上传失败、发送未知及官网批次不匹配明确暂停，不从任�
     assert.equal((await f.owner.send('manual')).ok, false); assert.ok(f.sent.length <= 1);
   }
 });
+
+it('manual 诊断的来源或当前身份任何一侧为手动都不能授予官网发送资格', async () => {
+  for (const side of ['source', 'current'] as const) {
+    const f = fixture(true);
+    const diagnostic: ToolDiagnostic = { id: 1, root: 'root', session: 'chat', sourceText: '{bad', error: { status: 'failed', error: 'bad json' } };
+    f.context.state.results = []; delete f.context.state.completion; f.context.state.batchError = diagnostic.error;
+    f.context.diagnostic = { ...diagnostic, ...(side === 'current' ? { source: 'manual' as const } : {}) };
+    f.owner.begin({ kind: 'diagnostic', diagnostic: { ...diagnostic, ...(side === 'source' ? { source: 'manual' as const } : {}) } });
+    assert.equal((await f.owner.send('automatic')).ok, false);
+    f.context.state.config.automatic = false; assert.equal((await f.owner.send('manual')).ok, false);
+    assert.equal(f.sent.length, 0); assert.equal(f.resolved, 0);
+  }
+});

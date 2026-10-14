@@ -10,22 +10,22 @@ function deferred() { let resolve!: (value: any) => void; const promise = new Pr
 function node() {
   const listeners: Record<string, ((event: any) => any)[]> = {}; const classes = new Set<string>();
   return { disabled: false, value: '', hidden: false, title: '', textContent: '', attrs: {} as Record<string, string>, style: {}, clientWidth: 500, scrollHeight: 40,
-    classList: { toggle(name: string, on: boolean) { if (on) classes.add(name); else classes.delete(name); }, add(name: string) { classes.add(name); } },
+    classList: { toggle(name: string, on: boolean) { if (on) classes.add(name); else classes.delete(name); }, add(name: string) { classes.add(name); }, contains(name: string) { return classes.has(name); } },
     setAttribute(name: string, value: string) { this.attrs[name] = value; },
     addEventListener(name: string, fn: (event: any) => any) { (listeners[name] ||= []).push(fn); },
     fire(name: string) { return Promise.all((listeners[name] || []).map(fn => fn({}))); } };
 }
 function webbar(overrides: any = {}) {
   const ids = ['web-platform', 'web-platform-control', 'web-platform-hint', 'btn-reload-web-platform', 'btn-collect', 'collect-status', 'btn-file-restore', 'btn-workspace-toggle', 'tool-workspace-status', 'btn-tool-workspace'];
-  const nodes = Object.fromEntries(ids.map(id => [id, node()])); let listener!: (state: any) => void; let collectCount = 0; const switches: string[] = [];
+  const nodes = Object.fromEntries(ids.map(id => [id, node()])); let listener!: (state: any) => void; let toolListener!: (state: any) => void; let collectCount = 0; const switches: string[] = [];
   const bridge = { getWebPlatform: async () => deepseek, onWebPlatformState(fn: any) { listener = fn; },
     setWebPlatform: async (id: string) => { switches.push(id); return { platform: id, switching: false }; },
     collectReply: async () => { collectCount += 1; return { ok: true, noNewContent: true }; },
-    onToolWorkspaceStatus() {}, getToolWorkspaceStatus: async () => ({ phase: 'idle', message: '工具空闲', count: 0, automatic: false }),
+    onToolWorkspaceStatus(fn: any) { toolListener = fn; }, getToolWorkspaceStatus: async () => ({ phase: 'idle', message: '工具空闲', count: 0, automatic: false }),
     onChromeState() {}, toggleWorkspace: async () => {}, restoreFileWorkspace: async () => {}, openToolWorkspace: async () => {}, ...overrides };
   const timers=new Map<number,{fn:()=>void;delay:number}>();let timerId=0;
   vm.runInNewContext(fs.readFileSync('src/renderer/webbar.js', 'utf8'), { console:{error(){}}, window: { webbarBridge: bridge, setTimeout(fn:()=>void,delay:number) {timers.set(++timerId,{fn,delay});return timerId;}, clearTimeout(id:number) {timers.delete(id);} }, document: { getElementById: (id: string) => nodes[id] } });
-  return { nodes, switches, publish: (state: any) => listener(state), collected: () => collectCount,
+  return { nodes, switches, publish: (state: any) => listener(state), publishTool: (state: any) => toolListener(state), collected: () => collectCount,
     expire(delay:number){for(const [id,timer]of [...timers])if(timer.delay===delay){timers.delete(id);timer.fn();}} };
 }
 
@@ -118,6 +118,79 @@ it('主导航失败保留错误码并关闭采集，仅失败时展示恢复入�
   ui.publish(deepseek);
   assert.equal(ui.nodes['btn-reload-web-platform'].hidden, true); assert.equal(ui.nodes['btn-collect'].disabled, false);
   assert.equal(ui.nodes['collect-status'].textContent, '');
+});
+
+it('官网不可用时只显示一处平台诊断，工具入口保留且恢复后显示最新工具摘要', async () => {
+  let opened = 0;
+  const ui = webbar({ openToolWorkspace: async () => { opened += 1; } }); await flush();
+  ui.publishTool({ phase: 'running', message: '工具执行中', count: 2, automatic: true });
+  assert.equal(ui.nodes['tool-workspace-status'].classList.contains('running'), true);
+  const failed = { ...deepseek, error: 'DeepSeek 加载失败：ERR_CONNECTION_CLOSED (-100)' };
+  ui.publish(failed);
+  assert.equal(ui.nodes['collect-status'].textContent, failed.error);
+  assert.equal(ui.nodes['collect-status'].classList.contains('load-notice'), true, '窄栏也必须保留加载诊断');
+  assert.equal(ui.nodes['tool-workspace-status'].textContent, '');
+  assert.equal(ui.nodes['tool-workspace-status'].title, '');
+  assert.equal(ui.nodes['tool-workspace-status'].classList.contains('running'), false);
+  assert.equal(ui.nodes['tool-workspace-status'].classList.contains('warn'), false);
+  ui.publishTool({ phase: 'done', message: '工具批次已结束', count: 2, automatic: true });
+  assert.equal(ui.nodes['tool-workspace-status'].textContent, '', '工具广播不能重复平台错误或抢占诊断空间');
+  assert.equal(ui.nodes['btn-tool-workspace'].disabled, false);
+  await ui.nodes['btn-tool-workspace'].fire('click'); assert.equal(opened, 1);
+  ui.publish(deepseek);
+  assert.equal(ui.nodes['collect-status'].textContent, '');
+  assert.equal(ui.nodes['tool-workspace-status'].textContent, '工具批次已结束 · 2 项');
+});
+
+it('读取失败、切换和手动重载都不向左侧工具摘要复制平台状态', async () => {
+  const unavailable = webbar({ getWebPlatform: async () => { throw new Error('服务断开'); } }); await flush();
+  assert.match(unavailable.nodes['collect-status'].textContent, /读取平台状态失败/);
+  assert.equal(unavailable.nodes['tool-workspace-status'].textContent, '');
+  const change = deferred(); const reload = deferred();
+  const ui = webbar({ setWebPlatform: () => change.promise, reloadWebPlatform: () => reload.promise }); await flush();
+  ui.nodes['web-platform'].value = 'chatgpt'; const switching = ui.nodes['web-platform'].fire('change');
+  assert.equal(ui.nodes['collect-status'].textContent, '正在切换官网平台…');
+  assert.equal(ui.nodes['tool-workspace-status'].textContent, '');
+  change.resolve(chatgpt); await switching;
+  const failed = { ...chatgpt, error: 'ChatGPT 加载失败：ERR_CONNECTION_CLOSED (-100)' }; ui.publish(failed);
+  const reloading = ui.nodes['btn-reload-web-platform'].fire('click');
+  ui.publish({ ...failed, reloading: true });
+  assert.equal(ui.nodes['collect-status'].textContent, '正在重新加载官网…');
+  assert.equal(ui.nodes['collect-status'].classList.contains('load-notice'), true);
+  assert.equal(ui.nodes['web-platform'].title, failed.error, '重载中悬停仍可读取原始错误');
+  assert.equal(ui.nodes['tool-workspace-status'].textContent, '');
+  ui.publish(chatgpt); reload.resolve(failed); await reloading;
+  assert.equal(ui.nodes['tool-workspace-status'].textContent, '工具空闲');
+  assert.equal(ui.nodes['collect-status'].textContent, '');
+});
+
+it('自动恢复等待与重载时单处显示恢复状态，失败后显示原诊断并保持采集禁用', async () => {
+  const ui = webbar(); await flush();
+  const failed = { ...deepseek, error: 'DeepSeek 加载失败：ERR_CONNECTION_CLOSED (-100)' };
+  ui.publish({ ...failed, reloading: true });
+  assert.equal(ui.nodes['collect-status'].textContent, '正在重新加载官网…');
+  assert.equal(ui.nodes['collect-status'].classList.contains('warn'), false);
+  assert.equal(ui.nodes['collect-status'].classList.contains('load-notice'), true);
+  assert.equal(ui.nodes['web-platform-control'].title, failed.error);
+  assert.equal(ui.nodes['btn-collect'].disabled, true);
+  assert.equal(ui.nodes['btn-reload-web-platform'].disabled, true);
+  assert.equal(ui.nodes['tool-workspace-status'].textContent, '');
+  ui.publish(failed);
+  assert.equal(ui.nodes['collect-status'].textContent, failed.error);
+  assert.equal(ui.nodes['collect-status'].classList.contains('warn'), true);
+  assert.equal(ui.nodes['btn-collect'].disabled, true);
+  assert.equal(ui.nodes['btn-reload-web-platform'].disabled, false);
+  assert.equal(ui.nodes['tool-workspace-status'].textContent, '');
+});
+
+it('三秒切换提示在恢复中优先显示，到期后回到恢复状态而非旧加载错误', async () => {
+  const ui = webbar({ setWebPlatform: async () => { throw new Error('busy race'); } }); await flush();
+  ui.nodes['web-platform'].value = 'chatgpt'; await ui.nodes['web-platform'].fire('change');
+  ui.publish({ ...deepseek, error: 'DeepSeek 加载失败：ERR_CONNECTION_CLOSED (-100)', reloading: true });
+  assert.equal(ui.nodes['collect-status'].textContent, '暂时无法切换，请稍后重试');
+  ui.expire(3000);
+  assert.equal(ui.nodes['collect-status'].textContent, '正在重新加载官网…');
+  assert.equal(ui.nodes['tool-workspace-status'].textContent, '');
 });
 
 it('重载只请求一次零参数入口，网络等待期间可切换，迟到旧状态不覆盖新平台', async () => {

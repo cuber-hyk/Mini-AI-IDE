@@ -1,7 +1,7 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-13
+updated: 2026-10-14
 owner: 胡运宽
 source_of_truth: [src/main/tools/manualToolJson.ts, src/shared/manualToolJson.ts, src/renderer/toolJsonPanel.js, test/manualToolJson.test.ts, test/manualToolJsonIntegration.test.ts, test/toolJsonPanel.test.ts, src/main/tools/replySource.ts, test/replySource.test.ts, src/main/toolWorkspaceStatus.ts, src/renderer/toolAttention.js, src/renderer/fileWorkspace.js, src/renderer/editorTabs.js, test/toolWorkspaceStatus.test.ts, test/toolAttention.test.ts, test/fileWorkspace.test.ts, src/main/toolSettingsWindow.ts, src/main/toolSettingsIpc.ts, src/main/toolSettingsPreload.ts, src/shared/toolSettings.ts, src/renderer/toolSettings.html, src/renderer/toolSettings.js, src/renderer/toolSettings.css, src/renderer/toolCompletionSound.js, test/toolSettingsWindow.test.ts, test/toolSettingsIpc.test.ts, test/toolSettingsUi.test.ts, src/main/workspaceProbe.ts, docs/adr/2026-10-09-batch-error-auto-return.md, docs/adr/2026-10-09-tool-attachment-return.md, src/main/tools/attachments.ts, src/main/tools/resultReturn.ts, test/toolAttachmentIntegration.test.ts, test/toolAttachments.test.ts, test/toolResultReturn.test.ts, docs/capabilities/skills-and-local-prompt.md, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, src/renderer/workspaceLayout.js, src/main/workspaceLayoutController.ts, src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, tools/verify-web-result-sender.cjs, src/shared/toolJsonDiagnostic.ts, src/main/tools/resultClipboard.ts, src/renderer/toolExecutionClock.js, test/toolJsonDiagnostic.test.ts, test/toolResultClipboard.test.ts, test/toolExecutionClock.test.ts, test/toolExecutionIntegration.test.ts, src/shared/toolProtocol.ts, src/main/tools/harness.ts, src/main/tools/store.ts, src/main/tools/files.ts, src/main/tools/processes.ts, src/main/tools/changes.ts, src/main/tools/autoCollector.ts, src/main/tools/replyObservation.ts, src/main/tools/replyContinuation.ts, src/main/tools/replyChangeWatcher.ts, src/main/tools/integration.ts, src/renderer/toolHarness.js, src/renderer/toolHarness.css, src/renderer/toolPanelLayout.js, src/renderer/toolResultPresentation.js, test/toolProtocol.test.ts, test/toolHarness.test.ts, test/toolIntegration.test.ts, test/toolAutoCollector.test.ts, test/replyObservation.test.ts, test/replyChangeWatcher.test.ts, test/toolHarnessUi.test.ts, test/toolPanelLayout.test.ts, test/toolResultPresentation.test.ts, test/deepseekReplyState.test.ts, test/toolChanges.test.ts, test/toolProcesses.test.ts, src/main/tools/aiTempDirectory.ts, src/main/tools/jsonDraft.ts, test/aiTempDirectory.test.ts, test/jsonDraft.test.ts, test/toolAutoContinueIntegration.test.ts]
 ---
@@ -71,7 +71,15 @@ AI 输出规范请求，IDE 只读采集、校验、按权限执行并显示真�
 
 ## 修改与采集
 
-右侧“工具”标签中的结果面板默认展开，摘要固定两行：第一行标题、数量及结果操作，第二行执行/发送状态与完成、暂停、复制和附件反馈；短暂完成提示出现或消失不会改变摘要高度。长反馈单行省略，状态行显示优先级最高的反馈，悬停提示聚合同时存在的完整反馈。头部用一个自适应图标按钮处理复制与手动回传：没有可手动回传的附件时复制本批结果；automatic 开启时也只复制，避免重复回传；automatic 关闭且当前真实批次含可发送附件时，按钮复制结果并调用既有零参数入口发送当前批结果及附件。按钮图标按当前主动作切换，复制失败不阻断回传，官网回传失败仍保留剪贴板副本；附件上传不复制二进制。每条运行命令直接显示独立中断按钮。头部撤销图标菜单入口仅在有撤销项或正在撤销时显示，提供工具修改撤销；没有菜单项时隐藏入口并关闭浮层。“工具完成后自动复制”开关位于设置的完成反馈分组。列表显示中文工具动作、真实路径或进程 ID 及简短结果；参数未回传时不猜测命令或文件目标。异常、后台状态与截断如实保留，展开条目查看完整纯文本 JSON，复制数据不经过摘要转换。正文仅面板滚动，避免多层纵向滚动条。
+头部反馈统一比较实际状态与提示：当前操作失败、记录不可用及授权/运行/运输状态优先于成功复制、完成与音效等次要反馈，明确回传或复制错误仍按错误优先级显示；提示消失后恢复当前状态，完整原因与同时存在的反馈保留在悬停提示中。
+
+离线布局验证入口为 `node tools/verify-tool-panel.cjs`（先构建），使用真实本地标记与样式，在固定宽窗口中独立调整工具容器宽度，覆盖长目标、异常、JSON与菜单交互；使用内存桥替身，不连接官网或执行真实工具。
+
+右侧“工具”标签中的结果面板默认展开，摘要固定单行 38px：折叠入口、标题、数量、当前执行/发送状态、JSON 入口与具名操作同排；短暂完成提示出现或消失不会改变摘要高度。长反馈单行省略，显示优先级最高反馈，悬停提示聚合完整反馈。结果状态同时使用图形和文字：完成 ✓、执行中圆环、等待授权 ⏱、已停止 ■、依赖跳过 ⊘、失败/权限拒绝/未知 ✕，圆环在减少动态效果设置下不旋转。未知和依赖跳过显示短称，悬停保留完整提示；运行命令直接显示方块图标中断按钮，保留悬停说明和可访问名称；中断过程中显示圆环、aria-busy 并禁用按钮，仍只中断该命令及其子进程。
+
+`toolHarness.css` 通过 `.tool-dock` 的 `tool-panel` 命名容器按工具区实际宽度排布，不以整个窗口宽度判断。宽列结果单行，按动作、目标、耗时、结果摘要、执行状态排列；状态之后只保留中断与展开操作，耗时独立于状态文字仍由原执行时钟刷新；不超过 619px 时结果摘要另排一行；不超过 380px 时动作、状态与中断在首行，目标独占下一行，普通成功摘要仅在展开的原始 JSON 中查看，`describeToolResult.detailImportant` 标记的失败、错误、截断、跳过、后台、清理中、非零退出和附件待发送等重要反馈另行显示。不超过 280px 时耗时仅在原始 JSON 中查看，其余宽度以秒显示。目标使用实际回传路径、技能名、附件名或进程 ID，长目标保留完整提示；参数未回传时不猜测命令或文件目标。展开条目显示完整纯文本 JSON，复制数据不经过摘要转换。正文仅面板滚动，避免多层纵向滚动条。
+
+不超过 380px 时头部简写“工具”并保留数量，JSON 与复制/发送始终直接可用；“查看改动”收进既有更多菜单，复用原按钮入口。窄列有结果时即使没有撤销项也保留菜单；宽列独立显示查看改动，仅有撤销项或正在撤销时显示菜单。布局 owner 在入口失效时关闭浮层，宽度变化隐藏已聚焦菜单项时转移到可见项。头部复制/发送按钮仍沿用既有规则：没有可手动回传附件或 automatic 开启时只复制本批结果；automatic 关闭且当前真实批次含可发送附件时，复制结果并经既有零参数入口发送当前批结果及附件。复制失败不阻断回传，官网回传失败保留剪贴板副本，附件上传不复制二进制。“工具完成后自动复制”开关位于设置的完成反馈分组。
 
 工具标签与文件、改动标签共用右侧正文，工具正文占据可用高度并独立滚动，不提供纵向拖高入口。关闭工具标签只隐藏展示，保留执行、结果与阅读位置；通过官网顶栏“查看工具”重新打开。真实新批次开始由 harness 广播仅用于界面展示的递增 `batchStart.id`；仅右侧文件区已展开且工具页未显示才打开工具标签；右侧已折叠则保持折叠，工具页已显示时不重复打开或滚动。同批普通进度与成功完成不切换标签；新批准请求、执行失败或回传暂停自动恢复文件区、切换工具并展开相关内容，同一事件仅一次，新事件可再次打开。自动继续与运输 owner 先后进入暂停视为同一暂停过程，直到两者均退出暂停才可触发下一次；用户主动开始新需求使旧运输 `invalidated`，不作为暂停自动打开工具。初始化、历史恢复及重复状态不触发，也不主动聚焦批准按钮或重建 Monaco 模型。
 
@@ -109,7 +117,7 @@ DeepSeek 主回复使用当前回复页脚的原生复制、可用重新生成�
 
 工具 JSON 错误整批不执行、不预约批次；多个请求中一项校验失败也不部分执行。工具结果列表显示一个展开的“批次校验”失败卡片，包含原生 SyntaxError；有位置时给 JSON 正文行列、UTF-16 偏移与短片段，没有位置时不推测。不能解析的批次不伪造工具名或请求 ID，复制本批结果返回 {protocol_version:1,tool_results:[],batch_error:{status:"failed",error:诊断正文}}。不另铺全局长诊断，正文只保留最近轮内存，切换项目/会话清除，不联网或直接自动修复 JSON；只在上述严格范围内接纳下一轮明确的局部修复指令。
 
-当前新批次全部工具真正结束且至少一个工具实际执行后自动复制完整 tool_results 一次，覆盖读取、搜索、修改、进程查询和命令，默认开启，在设置浮层的“完成反馈”可关闭并保存；工具执行失败输出也复制。已结束、清理完成的超时或用户停止命令视为实际执行终态，真实部分输出可复制；权限拒绝但没有任何实际执行的批次不自动复制。后台启动、全部未执行、整批取消、未知、历史恢复及界面状态查询/设置不会写剪贴板；切换项目/会话作废旧轮。手动复制按钮保留，复制失败独立提示，automatic 开启时成功复制不误提示用户必须再粘贴。批次完成事件主进程单调编号，状态广播、界面初始化或重绘不重复复制，失败不暗中重试。
+网页来源当前新批次全部工具真正结束且至少一个工具实际执行后自动复制完整 tool_results 一次，覆盖读取、搜索、修改、进程查询和命令，默认开启，在设置浮层的“完成反馈”可关闭并保存；工具执行失败输出也复制。已结束、清理完成的超时或用户停止命令视为实际执行终态，真实部分输出可复制；权限拒绝但没有任何实际执行的批次不自动复制。后台启动、全部未执行、整批取消、未知、历史恢复及界面状态查询/设置不会写剪贴板；切换项目/会话作废旧轮。手动复制按钮保留，复制失败独立提示，automatic 开启时成功复制不误提示用户必须再粘贴。批次完成事件主进程单调编号，状态广播、界面初始化或重绘不重复复制，失败不暗中重试。
 
 ## 自动继续与结果发送
 
@@ -131,8 +139,8 @@ DeepSeek 主回复使用当前回复页脚的原生复制、可用重新生成�
 
 ## 用户手动粘贴工具 JSON
 
-工具面板展开正文提供“执行 JSON”。用户主动粘贴完整原始JSON或唯一mini-ai-tools正式围栏，点击校验预览，核对项目绝对路径、批次和请求参数，再明确确认执行。主进程ManualToolJson只接受最多200000个UTF-16字符，仍使用parseToolBatch做完整协议、参数和依赖校验；不修补语法，不接纳repair_draft、结果回执、普通说明或多个围栏。校验错误仅本地显示，不修改旧结果、不预约工具。
+工具面板正文的 JSON 输入区只有“执行”和“关闭”。用户主动粘贴完整原始JSON或唯一mini-ai-tools正式围栏后，executeToolJson原子提交原文。主进程ManualToolJson只接受最多200000个UTF-16字符，仍使用parseToolBatch做完整协议、参数和依赖校验；不修补语法，不接纳repair_draft、结果回执、普通说明或多个围栏。格式错误形成manual批次诊断，使用统一formatToolResults生成含batch_error及空tool_results的回执，不猜测请求ID、不预约或执行工具。
 
-previewToolJson返回主进程保留的单次令牌，有效期5分钟；executeToolJson只接令牌，不接受第二份正文。项目/平台/会话/修订改变或导航作废令牌，工具、后台命令、本地需求准备/运输、自动倒计时或发送忙时阻止操作。输入编辑（包括同文编辑）和取消撤销UI预览；同平台切会话时可能暂留旧预览，主进程在确认执行时拒绝过期令牌。此入口不依赖官网DOM采集成功，但不能绕过系统工具禁用或工具存储故障。
+工具、后台命令、本地需求准备/运输、自动倒计时或发送忙时阻止提交；无项目、平台切换、系统工具禁用或工具存储故障等入口拒绝保留输入且不覆盖正在执行的结果。提交后复用harness的项目/会话/修订守卫，审批期间上下文失效按取消处理。接纳确认ok不代表各工具成功，以工具层真实结果为准。此入口不依赖官网DOM采集成功，不自动重试。
 
-执行仍归harness、原有权限和持久去重。同ID同内容不重复执行，同ID不同内容拒绝。选择与ledger保留manual来源；手动或后来采集/恢复的同批结果只能查看/复制，automatic开关及发送间隔变化不能使其回传，附件手动回传入口也拒绝。手动attach_file请求明确失败且不读取/暂存/上传，不改变其他本地工具权限。新官网批次仍走原采集与回传流程。输入不从剪贴板自动读取，也不写入官网；结果沿原统一复制设置，用户自行粘贴给AI。
+执行仍归harness、原有权限和持久去重。同ID同内容不重复执行，同ID不同内容拒绝。选择、诊断与ledger保留manual来源；手动或后来采集/恢复的同批结果只能查看/复制，automatic开关及发送间隔变化不能使其回传，附件手动回传入口也拒绝。手动attach_file请求明确失败且不读取/暂存/上传，不改变其他本地工具权限。新官网批次仍走原采集与回传流程。输入不从剪贴板自动读取，也不写入官网；本次手动格式诊断、权限拒绝、执行前失败与执行结果按autoCopyResults设置各复制一次，后台命令等待真实结束与清理，历史恢复和状态查询不重放。用户也可使用统一手动复制入口粘贴给AI；网页来源的复制资格保持原规则。

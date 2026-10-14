@@ -43,6 +43,11 @@ export class WebPlatformController {
   private lastSwitchBlockedReason: WebPlatformSwitchBlock | undefined;
   private readonly loading = new Set<WebPlatform>(['deepseek']);
   private readonly resumeReadiness = new Map<WebPlatform, () => void>();
+  private deepseekStarted = false;
+  private initialRecoveryAvailable = false;
+  private initialNavigationSeen = false;
+  private initialRecoveryTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly navigationRevisions = new Map<WebPlatform, number>();
 
   constructor(private readonly options: Options) {
     this.watchLoads('deepseek', options.deepseek);
@@ -53,6 +58,23 @@ export class WebPlatformController {
     const switchBlockedReason = this.options.switchBlock?.();
     return { ...state, ...(this.loadErrors[state.platform] ? { error: this.loadErrors[state.platform] } : {}),
       ...(this.reloading.has(state.platform) ? { reloading: true as const } : {}), ...(switchBlockedReason ? { switchBlockedReason } : {}) };
+  }
+
+  async loadInitialDeepSeek(url: string): Promise<void> {
+    this.requireLive();
+    if (this.deepseekStarted) throw new Error('DeepSeek 启动加载已发起');
+    this.deepseekStarted = true;
+    this.initialRecoveryAvailable = url === WEB_PLATFORMS.deepseek.url && this.current.platform === 'deepseek';
+    await this.options.deepseek.webContents.loadURL(url).catch(() => { /* 主 frame 失败由统一导航监听记录。 */ });
+  }
+
+  private cancelInitialRecovery(): void {
+    this.initialRecoveryAvailable = false;
+    if (this.initialRecoveryTimer === undefined) return;
+    clearTimeout(this.initialRecoveryTimer); this.initialRecoveryTimer = undefined;
+    this.reloading.delete('deepseek');
+    if (this.failedLoads.has('deepseek')) this.loading.delete('deepseek');
+    if (!this.disposed && this.current.platform === 'deepseek') this.broadcast();
   }
 
   private watchLoads(platform: WebPlatform, view: WebContentsView): void {
@@ -85,24 +107,52 @@ export class WebPlatformController {
     };
     this.resumeReadiness.set(platform, () => { if (finishedDocument && !timer) void ready(generation); });
     const start = (_event: unknown, _url: string, inPlace: boolean, mainFrame: boolean) => {
-      if (!this.disposed && mainFrame && !inPlace) {
-        clear(); finishedDocument = false; this.failedLoads.delete(platform); this.loading.add(platform); present();
+      if (this.disposed || !mainFrame) return;
+      this.navigationRevisions.set(platform, (this.navigationRevisions.get(platform) ?? 0) + 1);
+      if (platform === 'deepseek') {
+        if (this.initialRecoveryTimer !== undefined) this.cancelInitialRecovery();
+        if (this.initialRecoveryAvailable) {
+          if (this.initialNavigationSeen || _url !== WEB_PLATFORMS.deepseek.url) this.initialRecoveryAvailable = false;
+          this.initialNavigationSeen = true;
+        }
+      }
+      if (!inPlace) {
+        clear();
+        finishedDocument = false; this.failedLoads.delete(platform); this.loading.add(platform); present();
       }
     };
-    const failed = (_event: unknown, code: number, description: string, _url: string, mainFrame: boolean) => {
+    const failed = (_event: unknown, code: number, description: string, url: string, mainFrame: boolean) => {
       if (this.disposed || !mainFrame) return;
+      const recoverInitial = platform === 'deepseek' && this.initialRecoveryAvailable && code === -100 && description === 'ERR_CONNECTION_CLOSED' &&
+        url === WEB_PLATFORMS.deepseek.url && this.current.platform === 'deepseek' && !this.current.switching && !this.options.switchBlock?.();
+      if (platform === 'deepseek') this.cancelInitialRecovery();
       this.failedLoads.add(platform);
-      clear(); this.loading.delete(platform); present();
+      clear(); this.loading.delete(platform); if (!recoverInitial) present();
       if (code === -3) return;
       const name = platform === 'deepseek' ? 'DeepSeek' : 'ChatGPT';
       const errorCode = /^ERR_[A-Z0-9_]{1,56}$/.test(description) ? description : 'ERR_FAILED';
       const numericCode = Number.isInteger(code) && code < 0 && code >= -1000 ? code : -2;
       this.loadErrors[platform] = `${name} 页面加载失败（${errorCode} / ${numericCode}），请重新加载`;
       process.stderr.write(`[web:${platform}] 加载失败 ${numericCode} ${errorCode}\n`);
+      if (recoverInitial) {
+        const revision = generation;
+        this.reloading.add(platform); this.loading.add(platform);
+        this.initialRecoveryTimer = setTimeout(() => {
+          if (this.disposed || web.isDestroyed() || revision !== generation || this.current.platform !== 'deepseek' ||
+            this.current.switching || this.options.switchBlock?.() || web.getURL() !== WEB_PLATFORMS.deepseek.url) {
+            this.cancelInitialRecovery(); return;
+          }
+          this.initialRecoveryTimer = undefined;
+          process.stdout.write('[web:deepseek] 首次连接关闭，自动恢复一次\n');
+          void this.reloadFailed(true).catch(() => { if (!this.disposed) process.stderr.write('[web:deepseek] 首次自动恢复已停止，保留手动重载\n'); });
+        }, 1000);
+        this.initialRecoveryTimer.unref?.();
+      }
       if (this.current.platform === platform) this.broadcast();
     };
     const finished = () => {
       if (this.disposed || this.failedLoads.has(platform)) return;
+      if (platform === 'deepseek') this.cancelInitialRecovery();
       const hadError = !!this.loadErrors[platform]; delete this.loadErrors[platform];
       clear(); finishedDocument = true; deadline = Date.now() + 10_000;
       deadlineTimer = setTimeout(() => { clear(); this.loading.delete(platform); present(); }, 10_000);
@@ -112,7 +162,7 @@ export class WebPlatformController {
       if (hadError && this.current.platform === platform) this.broadcast();
     };
     const stopped = () => {
-      if (!this.disposed && this.reloading.delete(platform) && this.current.platform === platform) this.broadcast();
+      if (!this.disposed && !(platform === 'deepseek' && this.initialRecoveryTimer !== undefined) && this.reloading.delete(platform) && this.current.platform === platform) this.broadcast();
     };
     web.on('did-start-navigation', start); web.on('did-fail-load', failed);
     web.on('did-finish-load', finished); web.on('did-stop-loading', stopped);
@@ -177,18 +227,20 @@ export class WebPlatformController {
 
   private requireLive(): void { if (this.disposed) throw new Error('平台入口已关闭'); }
 
-  private async reloadFailed(): Promise<WebPlatformState> {
+  private async reloadFailed(initialRecovery = false): Promise<WebPlatformState> {
     this.requireLive();
     const previous = this.state; const platform = previous.platform;
-    if (previous.switching || previous.reloading) throw new Error('正在重新加载，请稍候');
+    if (previous.switching || previous.reloading && !initialRecovery) throw new Error('正在重新加载，请稍候');
     if (previous.switchBlockedReason) throw new Error(previous.switchBlockedReason);
     if (!previous.error) throw new Error('当前官网没有加载失败，不需重新加载');
     const web = this.getView(platform).webContents;
+    const navigationRevision = this.navigationRevisions.get(platform);
     const officialPage = () => {
       if (web.isDestroyed()) return false;
       try {
         const url = new URL(web.getURL());
-        return url.origin === new URL(WEB_PLATFORMS[platform].url).origin && !url.username && !url.password;
+        return url.origin === new URL(WEB_PLATFORMS[platform].url).origin && !url.username && !url.password &&
+          (!initialRecovery || url.href === WEB_PLATFORMS.deepseek.url);
       } catch { return false; }
     };
     if (!officialPage()) throw new Error('当前页面不属于该官网，未重新加载');
@@ -197,12 +249,13 @@ export class WebPlatformController {
       await this.options.prepareSwitch(); this.requireLive();
       const blocked = this.options.switchBlock?.();
       if (blocked) throw new Error(blocked);
-      if (!officialPage() || !this.loadErrors[platform]) throw new Error('页面或加载状态已变化，未重新加载');
+      if (!officialPage() || !this.loadErrors[platform] || navigationRevision !== this.navigationRevisions.get(platform)) throw new Error('页面或加载状态已变化，未重新加载');
       this.reloading.add(platform);
       web.reload();
       await this.publish({ platform, switching: false });
     } catch (error) {
       this.reloading.delete(platform);
+      if (initialRecovery && this.failedLoads.has(platform)) this.loading.delete(platform);
       if (!this.disposed) await this.publish(previous);
       throw error;
     }
@@ -216,6 +269,7 @@ export class WebPlatformController {
     if (blocked) throw new Error(blocked);
     if (this.current.platform === platform) throw new Error('当前已是该平台');
     const previous = this.state;
+    this.cancelInitialRecovery();
     this.current = { ...previous, switching: true };
     // 先广播切换中，使调用者与其他 IPC 同步观察到门禁准备期。
     this.broadcast();
@@ -252,6 +306,7 @@ export class WebPlatformController {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.cancelInitialRecovery();
     if (this.registered) {
       this.options.ipc.removeHandler(CHANNELS.getWebPlatform);
       this.options.ipc.removeHandler(CHANNELS.setWebPlatform);

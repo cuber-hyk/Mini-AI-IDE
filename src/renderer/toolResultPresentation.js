@@ -75,6 +75,9 @@
       if (data.truncated === true) details.push('结果已截断');
       if (Array.isArray(data.skipped) && data.skipped.length) details.push('跳过 ' + data.skipped.length + ' 项');
     }
-    return { label, target, detail: details.join(' · ') };
+    const detailImportant = Boolean(error || dataError || result.status !== 'done' || data.truncated || data.has_more || data.cleanup_pending || data.timed_out ||
+      Array.isArray(data.skipped) && data.skipped.length || outcomes.some(function (outcome) { return object(outcome).ok === false; }) ||
+      ['running', 'failed', 'stopped'].includes(data.status) || typeof data.exit_code === 'number' && data.exit_code !== 0 || result.tool === 'attach_file');
+    return { label, target, detail: details.join(' · '), detailImportant };
   };
 })();

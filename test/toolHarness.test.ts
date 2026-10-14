@@ -700,3 +700,19 @@ test('changing session clears completion and old running work cannot notify or c
   f.setSession('chat');
   assert.equal(f.harness.state.completion, undefined);
 });
+
+test('手动解析诊断不创建预约或 completion，忙和存储/项目拒绝保持当前结果', async t => {
+  const f = await fixture(t);
+  f.harness.reportManualDiagnostic('{bad', 'bad json');
+  assert.equal(f.harness.state.source, 'manual'); assert.equal(f.harness.getDiagnostic()?.source, 'manual');
+  assert.equal(f.harness.state.completion, undefined); assert.deepEqual(f.harness.state.results, []); assert.deepEqual(f.store.getEntries(), []);
+  const first = f.harness.getDiagnostic()!.id; f.harness.reportManualDiagnostic('{bad', 'bad json');
+  assert.equal(f.harness.getDiagnostic()!.id, first + 1, '每次主动提交都是独立诊断事件');
+  f.setRoot(null); assert.throws(() => f.harness.reportManualDiagnostic('{bad', 'bad json'), /打开项目/);
+  f.setRoot(f.directory); const hold = deferred<unknown>(); f.setExecute(() => hold.promise);
+  const running = f.harness.collectManual({ protocol_version: 1, batch_id: 'busy-manual', requests: [read] });
+  assert.throws(() => f.harness.reportManualDiagnostic('{bad', 'bad json'), /正在处理/);
+  await assert.rejects(f.harness.collectManual({ protocol_version: 1, batch_id: 'busy-second', requests: [read] }), /正在处理/);
+  hold.resolve({ text: '真实输出' }); await running;
+  assert.deepEqual(f.executed, ['read']); assert.equal(f.harness.state.batchError, undefined);
+});

@@ -69,19 +69,20 @@
     }
 
     function renderStatusFeedback() {
+      const activeWork = state && (state.busy || state.hasRunningProcesses || state.continuation && ['sending', 'countdown', 'waiting_reply', 'waiting_user'].includes(state.continuation.phase));
       const notices = [
+        { element: activity, priority: localError || state && state.storageError ? -1 : activeWork || activity.classList.contains('is-error') ? 2.5 : 8 },
         { element: returnNotice, priority: returnError || returnNotice.classList.contains('is-error') ? 0 : 4 },
         { element: continueNotice, priority: continueNotice.classList.contains('is-error') ? 1 : 5 },
         { element: copyNotice, priority: copyNotice.classList.contains('is-error') ? 2 : 6 },
         { element: completionNotice, priority: 3 },
         { element: soundNotice, priority: 7 },
-      ].filter(function (item) { return item.element.textContent; });
-      notices.forEach(function (item) { item.element.classList.remove('is-visible'); });
+      ].filter(function (item) { item.element.classList.remove('is-visible'); return item.element.textContent; });
       if (!notices.length) return;
       notices.sort(function (left, right) { return left.priority - right.priority; });
       const active = notices[0].element;
       active.classList.add('is-visible');
-      active.title = notices.map(function (item) { return item.element.textContent; }).join(' · ');
+      active.title = [activity.dataset.reason].concat(notices.map(function (item) { return item.element.textContent; })).filter(Boolean).join(' · ');
     }
 
     function soundFailure() {
@@ -163,22 +164,27 @@
         const processStatus = result.tool === 'run_command' && result.status === 'done' && result.data && result.data.status;
         const displayedStatus = processStatus === 'stopped' ? (result.data.timed_out ? 'failed' : 'cancelled') : ['running', 'failed'].includes(processStatus) ? processStatus : result.status;
         status.dataset.status = displayedStatus;
-        status.textContent = statusLabels[displayedStatus] || displayedStatus;
+        const statusText = statusLabels[displayedStatus] || displayedStatus;
+        status.textContent = displayedStatus === 'skipped_dependency' ? '已跳过' : displayedStatus === 'unknown' ? '结果未知' : statusText;
+        status.title = statusText;
         const time = document.createElement('span'); time.className = 'tool-result-time';
-        status.appendChild(time); timedItems.push({ result: result, node: time });
+        timedItems.push({ result: result, node: time });
         const description = window.describeToolResult(result);
         const tool = document.createElement('span'); tool.className = 'tool-result-label';
         tool.textContent = description.label;
+        summary.title = [description.label, description.target, description.detail].filter(Boolean).join(' · ');
         const target = document.createElement('span'); target.className = 'tool-result-target';
         target.textContent = description.target; target.title = description.target;
         const detail = document.createElement('span'); detail.className = 'tool-result-detail';
-        detail.textContent = description.detail; detail.title = description.detail;
-        summary.appendChild(tool); summary.appendChild(target); summary.appendChild(status); summary.appendChild(detail);
+        detail.textContent = description.detail; detail.title = description.detail; detail.dataset.important = String(description.detailImportant);
+        summary.appendChild(tool); summary.appendChild(target); summary.appendChild(time); summary.appendChild(detail); summary.appendChild(status);
         if (result.tool === 'run_command' && result.data && result.data.process_id && (result.data.status === 'running' || result.data.cleanup_pending)) {
           const stop = document.createElement('button');
           stop.type = 'button'; stop.className = 'ui-button tool-command-stop';
-          stop.title = '强制中断此命令及其子进程';
-          stop.disabled = stopping.has(JSON.stringify([result.batch_id, result.request_id, result.data.process_id])); stop.textContent = stop.disabled ? '中断中…' : '中断';
+          stop.disabled = stopping.has(JSON.stringify([result.batch_id, result.request_id, result.data.process_id]));
+          stop.title = stop.disabled ? '正在中断此命令及其子进程…' : '强制中断此命令及其子进程';
+          stop.setAttribute('aria-label', stop.title);
+          stop.setAttribute('aria-busy', String(stop.disabled));
           stop.addEventListener('click', function (event) {
             event.preventDefault(); event.stopPropagation();
             return stopCommand(result);
@@ -211,7 +217,8 @@
       copy.disabled = copying || !state || (!state.results.length && !state.batchError);
       undo.disabled = undoing || !state || state.busy || !state.canUndo;
       undo.hidden = !state || (!state.canUndo && !undoing);
-      more.hidden = undo.hidden;
+      panel.classList.toggle('has-undo', !undo.hidden);
+      more.hidden = undo.hidden && !(state && (state.results.length || state.batchError));
       panel.classList.toggle('has-attachments', hasAttachments);
       returnNotice.textContent = hasAttachments ? returnMessage || returned.message : '';
       returnNotice.title = returnNotice.textContent;
@@ -258,12 +265,14 @@
         full: '在当前 Windows 账户权限内执行，可访问项目外文件并运行联网命令。',
       }[state.config.permission];
       const finished = state.results.filter(function (item) { return !['running', 'pending_permission'].includes(item.status); }).length;
-      count.textContent = state.batchError ? '1 项校验失败' : state.results.length + ' 项' + (state.busy ? ' · 已返回 ' + finished : '');
+      count.textContent = (state.batchError ? 1 : state.results.length) + ' 项';
+      count.title = state.batchError ? '1 项校验失败' : state.results.length + ' 项' + (state.busy ? ' · 已返回 ' + finished : '');
       if (!supported()) {
         activity.textContent = platform && platform.platform === 'chatgpt' && !platform.switching ? 'ChatGPT：请在官网手动对话' : platformReason();
         activity.title = platformReason(); automatic.checked = Boolean(state.config.automatic);
         continueNotice.textContent = platformReason(); continueNotice.title = continueNotice.textContent; continueNotice.classList.remove('is-error');
       }
+      activity.dataset.reason = activity.title;
       renderStatusFeedback();
       renderResults();
       layout.refresh();

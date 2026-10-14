@@ -50,7 +50,7 @@ export class AutoContinuation {
   }
   private eventOf({ root, session, state, diagnostic }: Context): Pending['event'] | undefined {
     if (state.batchError) {
-      return diagnostic && !diagnostic.cancelled && diagnostic.root === root && diagnostic.session === session &&
+      return diagnostic && diagnostic.source !== 'manual' && !diagnostic.cancelled && diagnostic.root === root && diagnostic.session === session &&
         !state.completion && !state.results.length && diagnostic.error.error === state.batchError.error && diagnostic.error.status === state.batchError.status
         ? { kind: 'diagnostic', id: diagnostic.id } : undefined;
     }
@@ -71,11 +71,11 @@ export class AutoContinuation {
       this.change({ phase: state.config.automatic ? 'waiting_user' : 'off', message: state.config.automatic ? '请先打开目录并发送需求' : '自动继续已关闭，本轮工具可继续完成' });
       return;
     }
-    if (this.blocked(state) || diagnostic?.cancelled) {
+    if (this.blocked(state) || diagnostic?.cancelled || diagnostic?.source === 'manual') {
       if (this.pending) this.cancel();
       this.observedCompletion = Math.max(this.observedCompletion, state.completion?.id ?? 0);
       this.observedDiagnostic = Math.max(this.observedDiagnostic, diagnostic?.id ?? 0);
-      this.change({ phase: 'paused', message: state.source === 'manual' ? '手动 JSON 批次仅供查看和复制，不自动回传官网' : state.userInterrupted ? '用户已中断，本批不再自动回传；工具结果仍可复制' : '工具被拒绝、中断或状态未知，等待你处理' }); return;
+      this.change({ phase: 'paused', message: state.source === 'manual' || diagnostic?.source === 'manual' ? '手动 JSON 批次仅供查看和复制，不自动回传官网' : state.userInterrupted ? '用户已中断，本批不再自动回传；工具结果仍可复制' : '工具被拒绝、中断或状态未知，等待你处理' }); return;
     }
     const event = this.eventOf(context);
     if (this.pending && (event?.kind !== this.pending.event.kind || event.id !== this.pending.event.id || this.bodyOf(state) !== this.pending.body)) this.cancel();
