@@ -1,11 +1,11 @@
 ---
 artifact_type: plan
-status: active
+status: archived
 created: 2026-10-14
 updated: 2026-10-14
 owner: agent
 plan_readiness: ready
-source_audit: docs/audits/2026-10-14-chatgpt-automatic-recovery-audit.md
+source_audit: docs/audits/archived/2026-10-14-chatgpt-automatic-recovery-audit.md
 covered_findings: [CGA-01, CGA-02, CGA-03, CGA-04, CGA-05, CGA-06, CGA-07]
 deferred_findings: []
 ---
@@ -61,7 +61,7 @@ dev-split 约束：replySource 拥有来源状态；replyChangeWatcher 拥有只
 | PLAN-4 | done | 接入采集健康状态及准确 UI，统一 JSON 草稿说明 | 集成/顶栏/工具面板/协议提示回归通过，采集暂停覆盖旧等待状态 |
 | PLAN-5 | done | 长链故障注入、构建与独立评审 | 全量1126/1126、0跳过；类型/构建通过；30轮60请求原生闭环；独立评审阻断已修 |
 | PLAN-6 | done | 更新 ADR、能力、变更记录和审计处置 | 恢复ADR、能力、AGENTS/路由及CHANGELOG已回填；文档/差异门禁记录下方 |
-| PLAN-7 | todo | 用户在实际 ChatGPT 官网连续协作验收 | 启动本分支构建后连续30轮以上，含历史切换/后台及真实草稿，确认暂停有原因且无重复执行；由用户反馈现场结果 |
+| PLAN-7 | done | 用户在实际 ChatGPT 官网连续协作验收 | 用户于2026-10-14明确反馈“验收通过”；具体轮数和场景未单独提供，不虚构逐项现场记录 |
 
 ## Acceptance Criteria
 
@@ -90,10 +90,10 @@ dev-split 约束：replySource 拥有来源状态；replyChangeWatcher 拥有只
 - 类型检查与构建退出0；构建裸标识符未绑定0处，116条既有参考语义诊断不作为失败。
 - 原生离线：ChatGPT工具30轮/60项实际创建与读取，2次监听恢复、2次同消息重挂载、同步/异步历史隔离，执行/复制/运输各一次；ChatGPT composer 57项、通用运输39项、工具面板235项通过。均独立临时profile，不连接官网。
 - 独立评审先发现附件超时重复清理及主动取消正文抢先结束两处P2，均补回归修复。复审运输66项、监听/集成106项通过，未发现新的确定阻断。另一来源审查的139项与上述测试有重叠，不累计为全量数量。
-- 最终门禁：mode=subagent；plan compliance、audit coverage、related changes only、verification evidence、changelog、distill、check 均pass。设计检查复用现有状态区域/主题/焦点，UI235项及提示优先回归通过；文档校验无问题，git差异检查通过。代码经用户批准纳入本次提交，现场验收单独保留PLAN-7。
+- 最终门禁：mode=subagent；plan compliance、audit coverage、related changes only、verification evidence、changelog、distill、check 均pass。设计检查复用现有状态区域/主题/焦点，UI235项及提示优先回归通过；文档校验无问题，git差异检查通过。代码经用户批准纳入本次提交，现场验收由用户确认通过，见PLAN-7。
 - 采集缺 key 的生产路径按失败关闭，4个网页测试替身改为明确来源与accepted，不引入测试专属生产fallback。
 - 视觉/交互复用现有状态区域、主题与焦点规则；UI布局未变。原运输夹具末尾仍按已移除的正文文字按钮判位置，现改为检查实际摘要图标按钮，与当前DESIGN一致。
-- 当前官网场景、真实模型输出错误率及安装版未验；不关闭真实中断/未知提交保护，不承诺所有未来DOM变化均自动恢复。
+- 用户已确认官网验收通过；真实模型输出错误率未量化，安装版未单独验证；不关闭真实中断/未知提交保护，不承诺所有未来DOM变化均自动恢复。
 
 ## Git Visibility
 
@@ -102,4 +102,6 @@ dev-split 约束：replySource 拥有来源状态；replyChangeWatcher 拥有只
 
 ## Closeout
 
-保持 active，唯一待执行步骤为 PLAN-7 真实官网验收，CGA-06 的现场部分由本计划承接。实现及离线门禁已完成，能力与决策已由 dev-distill 回填；用户现场确认后再归档计划和审计。用户已显式批准提交、合并及清理已完成分支；不推送远端。
+用户于2026-10-14明确反馈“验收通过”，PLAN-1至PLAN-7全部关闭，关联审计七项发现均verified。实现及离线门禁已完成，能力与决策已回填；修复提交c2ec0f5已合并master，三个已完成任务分支已清理，未推送。计划与审计归档，当前有效ADR及能力文档继续原位维护。
+
+现场验收依据为用户确认，未另行提供轮数、日志或安装版验证记录；不据此补写量化结果或认定原截图的唯一底层触发原因。

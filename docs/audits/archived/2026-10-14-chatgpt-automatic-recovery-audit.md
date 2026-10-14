@@ -1,6 +1,6 @@
 ---
 artifact_type: audit
-status: active
+status: archived
 created: 2026-10-14
 updated: 2026-10-14
 scope: "ChatGPT 多轮自动采集与回传停滞、恢复边界、工具 JSON 错误与协议改进"
@@ -50,17 +50,17 @@ source_of_truth: [src/main/tools/replyChangeWatcher.ts, src/main/tools/replySour
 
 ## Findings
 
-下表为当前实现的确定行为或缺口；截图已确认来源未知阻断、运输超时及状态展示失配，底层触发原因仍需诊断。发送不确定时不重试、错误回传上限等属于有效保护，不能直接当成待删除的错误。
+下表为当前实现的确定行为或缺口；截图已确认来源未知阻断、运输超时及状态展示失配，原截图的底层触发原因无法追溯，此项仅为证据限制，不再要求追加调查。发送不确定时不重试、错误回传上限等属于有效保护，不能直接当成待删除的错误。
 
 | ID | Severity | Status | Finding | Evidence | Owner Plan | Branch/Commit | Verification | Closeout |
 |---|---|---|---|---|---|---|---|
-| CGA-01 | P1 | verified | 监听失效后停止，enabled 保持 true，同值启用无法恢复；没有同页自动修复入口 | replyChangeWatcher 的 run/repair；监听回归 | docs/plans/2026-10-14-chatgpt-automatic-recovery.md | codex/20261014-chatgpt-automatic-recovery；本次修复提交（见 Git 历史） | 三次有界恢复、关闭撤销、30轮故障注入通过 | fixed：保留同文档来源恢复；丢失状态安全历史 |
-| CGA-02 | P1 | verified | 来源封存及尾部重挂载造成新回复遗漏 | replySource、replyObservation、chatgptPage、acknowledge；对应测试 | docs/plans/2026-10-14-chatgpt-automatic-recovery.md | 同上 | 稳定ID/同正文顺序恢复、实际接纳才seal、跨导航与缺key拒绝、同步历史后新轮通过 | fixed：旧历史与已执行正文仍不重放；无法确认来源仍暂停 |
-| CGA-03 | P2 | verified | 发送资格在只读预检之前即消费；未进入运输的短暂预检失败也使本批永久暂停 | resultReturn、autoContinuation、integration | docs/plans/2026-10-14-chatgpt-automatic-recovery.md | 同上 | 1/3/5秒有界复核、额度与取消竞争回归通过 | fixed：仅明确未运输预检可复核；运输开始不重试 |
-| CGA-04 | P2 | verified | 采集错误只有普通 message，顶栏和活动标签可能继续显示等待 AI 回复 | collection、toolWorkspaceStatus、toolHarness、toolAttention；用户图2/3 | docs/plans/2026-10-14-chatgpt-automatic-recovery.md | 同上 | 独立健康状态、旧等待/复制不覆盖错误、UI235项通过 | fixed：显示当前采集阻断或恢复原因 |
-| CGA-05 | P2 | verified | JSON 完整重写与草稿补丁指导冲突 | toolJsonDiagnostic、harness、jsonDraft、toolProtocol | docs/plans/2026-10-14-chatgpt-automatic-recovery.md | 同上 | 有草稿/无草稿互斥指导、畸形补丁沿用真实身份、默认提示与恢复集成通过 | fixed：解析事实与owner策略分开 |
-| CGA-06 | P2 | planned | 恢复性测试及真实官网长链证据不足 | tools/verify-chatgpt-tools.cjs；计划PLAN-7 | docs/plans/2026-10-14-chatgpt-automatic-recovery.md | 同上 | 离线30轮60请求、1126项单元、原生运输与UI通过；官网待用户验收 | 离线缺口已补；现场部分由PLAN-7承接，保留active |
-| CGA-07 | P2 | verified | 整体运输超时丢失最终取消/点击阶段结论 | webComposerSender 的 waitFor/cancel；运输测试 | docs/plans/2026-10-14-chatgpt-automatic-recovery.md | 同上 | 超时取消、附件重复清理、主动取消正文抢先结束三类竞争回归通过 | fixed：有界等待最终取消证据，未知不重发 |
+| CGA-01 | P1 | verified | 监听失效后停止，enabled 保持 true，同值启用无法恢复；没有同页自动修复入口 | replyChangeWatcher 的 run/repair；监听回归 | docs/plans/archived/2026-10-14-chatgpt-automatic-recovery.md | c2ec0f5（已合并master） | 三次有界恢复、关闭撤销、30轮故障注入通过 | fixed：保留同文档来源恢复；丢失状态安全历史 |
+| CGA-02 | P1 | verified | 来源封存及尾部重挂载造成新回复遗漏 | replySource、replyObservation、chatgptPage、acknowledge；对应测试 | docs/plans/archived/2026-10-14-chatgpt-automatic-recovery.md | 同上 | 稳定ID/同正文顺序恢复、实际接纳才seal、跨导航与缺key拒绝、同步历史后新轮通过 | fixed：旧历史与已执行正文仍不重放；无法确认来源仍暂停 |
+| CGA-03 | P2 | verified | 发送资格在只读预检之前即消费；未进入运输的短暂预检失败也使本批永久暂停 | resultReturn、autoContinuation、integration | docs/plans/archived/2026-10-14-chatgpt-automatic-recovery.md | 同上 | 1/3/5秒有界复核、额度与取消竞争回归通过 | fixed：仅明确未运输预检可复核；运输开始不重试 |
+| CGA-04 | P2 | verified | 采集错误只有普通 message，顶栏和活动标签可能继续显示等待 AI 回复 | collection、toolWorkspaceStatus、toolHarness、toolAttention；用户图2/3 | docs/plans/archived/2026-10-14-chatgpt-automatic-recovery.md | 同上 | 独立健康状态、旧等待/复制不覆盖错误、UI235项通过 | fixed：显示当前采集阻断或恢复原因 |
+| CGA-05 | P2 | verified | JSON 完整重写与草稿补丁指导冲突 | toolJsonDiagnostic、harness、jsonDraft、toolProtocol | docs/plans/archived/2026-10-14-chatgpt-automatic-recovery.md | 同上 | 有草稿/无草稿互斥指导、畸形补丁沿用真实身份、默认提示与恢复集成通过 | fixed：解析事实与owner策略分开 |
+| CGA-06 | P2 | verified | 恢复性测试及真实官网长链证据不足 | tools/verify-chatgpt-tools.cjs；计划PLAN-7 | docs/plans/archived/2026-10-14-chatgpt-automatic-recovery.md | 同上 | 离线30轮60请求、1126项单元、原生运输与UI通过；用户于2026-10-14确认官网验收通过 | fixed：离线与用户现场验收均已关闭 |
+| CGA-07 | P2 | verified | 整体运输超时丢失最终取消/点击阶段结论 | webComposerSender 的 waitFor/cancel；运输测试 | docs/plans/archived/2026-10-14-chatgpt-automatic-recovery.md | 同上 | 超时取消、附件重复清理、主动取消正文抢先结束三类竞争回归通过 | fixed：有界等待最终取消证据，未知不重发 |
 
 ### CGA-01：开关开启不代表监听存活
 
@@ -122,8 +122,8 @@ JSON 推荐先做最小修复：有有效草稿时只指导短补丁，无草稿
 - 并行审查执行：replyChangeWatcher、toolWorkspaceStatus：46/46 通过；toolProtocol、toolJsonDiagnostic、jsonDraft、formatSpec：25/25 通过；toolAutoContinueIntegration 与 autoContinuation：40/40 通过。各组有重复文件，不合计为不同测试数量。
 - 内存复现：监听 wait 失效后同值开启不恢复；原尾部重挂载后新回复被记历史；未进入运输的预检失败后永久暂停。没有执行真实命令、上传或发送官网消息。
 - 文档校验：写入后执行 Dev Flow validate-docs，结果见本轮交付。
-- Not verified：截图对应的现场 DOM、事件时序及底层触发原因；正在运行程序的源码提交；真实模型输出的错误分布；官网几十轮运行与恢复后的稳定性。
-- 后续验收应覆盖至少几十轮的离线故障注入，包括监听丢失、wait 异常、尾部重挂载、瞬时完成、预检暂失、真实用户接管、旧会话迟到事件及未知发送；对每个工具实际启动和每批运输计数，证明不漏合格新批且不重放历史/已执行/已提交内容。真实官网再人工验证，不能将本地通过等同官网稳定。
+- 证据边界：原截图的现场DOM、事件时序及唯一底层触发原因无法追溯；真实模型输出错误率未量化。用户已确认官网验收通过，未单独提供现场轮数、日志或安装版记录；这些限制不构成本任务待办。
+- 故障注入与执行/运输计数已由下述原生离线验证覆盖；官网验收依据为用户于2026-10-14明确反馈“验收通过”，不将离线轮数当成官网轮数。
 
 ### 修复验证（2026-10-14）
 
@@ -135,8 +135,8 @@ JSON 推荐先做最小修复：有有效草稿时只指导短补丁，无草稿
 ## Git Visibility
 
 - 本文件、关联计划及修复属于当前任务；不处理既有 `.mini-ai-ide/` 和 `docs/tool-panel-ui-prototype.html` 未跟踪内容。
-- 创建后检查 `git status --short --branch --untracked-files=all`，确认审计文件可见；无提交、合并或推送。
+- 创建后检查 `git status --short --branch --untracked-files=all`，确认审计文件可见；修复提交c2ec0f5已合并master，已清理完成分支，未推送。
 
 ## Closeout
 
-保持 active：CGA-01/02/03/04/05/07 已通过实现与离线验证，CGA-06 的官网现场部分由活跃计划 PLAN-7 承接。原截图底层事件时序仍不可还原，不能宣称唯一根因已获现场证明。用户完成真实连续使用验收后再由 dev-distill 关闭或归档，不将离线结果冒充官网确认。
+七项发现均verified，用户于2026-10-14确认官网验收通过，CGA-06现场验收已关闭。当前行为已沉淀到能力文档、accepted ADR及回归测试；计划与审计归档，无待跟进发现。原截图无法还原唯一底层触发原因的证据限制继续保留，不影响修复验收结论。
