@@ -441,6 +441,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
       if (id === 'workspace-add') return !navigationJs.includes("getElementById('workspace-add').addEventListener('click'");
       if (id === 'tool-view-changes') return !fileWorkspaceJs.includes("getElementById('tool-view-changes').addEventListener('click'");
       if (id === 'btn-copy-context') return !/trigger\.addEventListener\('click'/.test(toolbarJs);
+      if (id === 'tool-menu-view-changes') return !/getElementById\('tool-menu-view-changes'\)\.addEventListener\('click'/.test(toolLayoutJs);
       const updateKeys: Record<string, string> = { 'btn-update': 'trigger', 'update-action': 'action', 'update-notes-toggle': 'notesToggle' };
       if (updateKeys[id]) return !new RegExp(`${updateKeys[id]}\\.addEventListener\\('click'`).test(updateJs);
       if (id === 'update-close') return !/getElementById\('update-close'\)\.addEventListener\('click'/.test(updateJs);
