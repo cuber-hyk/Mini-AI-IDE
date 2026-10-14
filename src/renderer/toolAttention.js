@@ -16,6 +16,9 @@
       });
       if (state.batchError) items.push({ id: 'validation:' + state.batchError.error, key: 'batch-error' });
       if (state.storageError) items.push({ id: 'storage:' + state.storageError });
+      if (state.config && state.config.automatic && state.collection && state.collection.phase === 'paused') {
+        items.push({ id: 'collection:' + JSON.stringify([state.collection.reason, state.collection.message]) });
+      }
       // 一次回传失败会先后由两个 owner 广播暂停；在都离开暂停前只视为同一事件。
       if (['continuation', 'resultReturn'].some(function (name) { return state[name] && state[name].phase === 'paused'; })) {
         items.push({ id: JSON.stringify(['paused', state.completion && state.completion.id,

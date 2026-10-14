@@ -12,6 +12,8 @@
 
 ## 按任务类型路由
 
+自动流程停滞与有限恢复先读 `docs/adr/2026-10-14-automatic-recovery.md`、`docs/capabilities/tool-harness.md` 与 `docs/capabilities/human-machine-boundary.md`。来源/实际接纳归 replySource、replyChangeWatcher、replyObservation/chatgptPage 与 integration；监听/读取恢复归 replyChangeWatcher/autoCollector，未运输预检复核归 resultReturn/autoContinuation，运输阶段与取消归 webComposerSender。collection 健康由 integration 投影，顶栏/工具摘要归 toolWorkspaceStatus/toolHarness。回归使用对应 owner 测试及 `tools/verify-chatgpt-tools.cjs` 的30轮离线故障注入；真实官网另验。
+
 官网切回白页/网络加载失败先读`docs/capabilities/web-platforms.md`及平台切换ADR。两平台主frame失败与手动重载owner为`webPlatformController.ts`，顶栏恢复入口为`webbar.js/html`及`webbarPreload.ts`，本地需求可用性为`promptComposer.js`与index的webAvailable。回归为`test/webPlatformController.test.ts`、`test/webPlatformUi.test.ts`及离线`tools/verify-web-platform.cjs`；chrome-error完成不是官网成功，不改CSP或TLS来猜测网络原因。
 
 ChatGPT工具回传前纯文本草稿备份读 `docs/capabilities/human-machine-boundary.md`、`docs/adr/2026-10-13-chatgpt-composer-draft-backup.md`；主进程留底 owner 为 `src/main/composerDraftBackup.ts`，唯一网页运输为 `webComposerSender.ts`，当前项目注入由 index/tools-integration 管理，路径反馈归 resultReturn。验证为 `test/composerDraftBackup.test.ts`、`test/chatgptComposerSender.test.ts`、`tools/verify-chatgpt-composer.cjs`。

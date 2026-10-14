@@ -1,7 +1,7 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-13
+updated: 2026-10-14
 owner: 胡运宽
 source_of_truth: [src/main/tools/replySource.ts, test/replySource.test.ts, docs/adr/2026-10-09-batch-error-auto-return.md, docs/adr/2026-10-09-tool-attachment-return.md, src/main/tools/attachments.ts, src/main/tools/resultReturn.ts, test/toolAttachmentIntegration.test.ts, test/toolAttachments.test.ts, test/toolResultReturn.test.ts, docs/capabilities/skills-and-local-prompt.md, docs/adr/2026-10-08-local-prompt-attachments.md, src/main/localPromptAttachments.ts, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, docs/adr/2026-10-07-automatic-result-return-boundary.md, src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, src/main/tools/integration.ts, src/main/tools/autoCollector.ts, src/main/tools/replyChangeWatcher.ts, src/main/preload.ts, src/shared/toolProtocol.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, src/main/composerDraftBackup.ts, test/composerDraftBackup.test.ts, tools/verify-web-result-sender.cjs]
 ---
@@ -22,7 +22,7 @@ source_of_truth: [src/main/tools/replySource.ts, test/replySource.test.ts, docs/
 | 校验与执行正式工具 | IDE 按预选权限 | 需要授权时询问，拒绝不执行 |
 | 查看实际修改 | IDE | 本批执行快照只读展示，不提供第二条应用链路 |
 | 发送本批工具结果 | automatic 开启时 IDE；关闭时用户点击自适应按钮手动发送含附件的本批 | 当前项目/会话/批次真实完成，ChatGPT已有纯文本草稿先备份后复核替换，其他输入仍须为空；已授权附件，发送一次；同一点击复制文本结果 |
-| 暂停后修正、续写、回答 AI | 用户 | 不自动点击继续生成或重试不确定发送 |
+| 暂停后修正、续写、回答 AI | 用户；明确暂时性只读故障由 IDE 有限恢复 | 不自动点击继续生成或重试不确定发送 |
 | 处理未保存内容 | 用户或已保存策略 | 继续采用 AI 结果，停止保留草稿 |
 
 ## 自动继续与取消
@@ -36,6 +36,8 @@ source_of_truth: [src/main/tools/replySource.ts, test/replySource.test.ts, docs/
 用户中断入口先核验项目、会话、批次、请求与进程身份，再由 Harness 在停止进程前发布当前选择的 `userInterrupted` 标记。`AutoContinuation` 立即取消待发送并暂停，`ToolResultReturn` 在自动发送前及异步复核后检查该标记；停止失败、自然退出、批次结束或关闭再开启 automatic 都不恢复本批自动回传。标记不写入执行账本、不等同整批取消，不阻止同批其他工具，也不影响自动复制设置及手动复制；新批次不继承。
 
 关闭开关在配置写盘前先取消计时及待发送，不中断当前本地工具。用户新发送、项目/会话切换或导航作废旧发送资格。发送前再次读取最新回复及结束状态，复核其正式批次与当前工具结果，不能发送旧批输出。`AutoContinuation` 管理状态、计时与完成事件去重；`integration.ts` 联结批次、作用域和网页 sender。
+
+只读监听与读取暂时失败时保留来源和进度有限恢复，collection 健康与 automatic 用户意愿分开显示。结果回传仅在明确未读取附件、未进入 sender 的临时完成预检失败时按 1/3/5 秒最多额外复核三次；复用原批完成事件，不重复执行工具，不消耗纯预检的错误回传额度。进入运输后仍只尝试一次。整体超时先等待有界取消结论，记录是否已点击及清理状态；已清理附件不重复清理。未知提交、来源失配、用户接管和中断仍停，详见 `../adr/2026-10-14-automatic-recovery.md`。
 
 ## 网页接触面
 

@@ -136,3 +136,59 @@ it('需求与已授权工具结果共用官方附件运输，均先上传再发�
     assert.equal(f.scripts.length, 7);
   } finally { await f.sender.dispose(); }
 });
+
+it('附件运输整体超时且取消已确认清理时立即收敛，不再进入第二次无界清理', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  const f = fixture(); let settled = false;
+  const attachment = { id: 'one', name: 'one.txt', size: 1, mediaType: 'text/plain', async *stream() { yield new Uint8Array([65]); } };
+  try {
+    f.web.executeJavaScriptInIsolatedWorld = async (_world: number, entries: { code: string }[]) => {
+      const code = entries[0]!.code; f.scripts.push(code);
+      if (code.includes('input[type="file"]') && code.includes('globalThis["__miniAIComposerAttachments"] =')) return { ok: true };
+      if (code.includes('s.parts.length || s.name') || code.includes('atob(') || code.includes('s.files.push(new File')) return true;
+      if (code.includes('s.input.files = transfer.files')) return { ok: true };
+      if (code.includes('const represented = expected.every')) return { ready: true };
+      if (code.includes('state.cancel();')) return { ok: false, error: '自动发送已取消', stage: 'waiting_button', cancellation: 'not_clicked' };
+      return new Promise(() => {});
+    };
+    const sending = f.sender.send('结果和附件', 'https://chat.deepseek.com/a/chat/one', 'results', () => true, [attachment]);
+    void sending.then(() => { settled = true; });
+    for (let i = 0; i < 80; i++) await Promise.resolve();
+    assert.equal(f.scripts.length, 7, '附件准备后正文运输等待真实网页完成');
+    t.mock.timers.tick(31000);
+    for (let i = 0; i < 80; i++) await Promise.resolve();
+    assert.equal(settled, true, '取消已确认清理，整体超时必须结束并释放运输互斥');
+    const result = await sending;
+    assert.equal(result.cancellation, 'not_clicked'); assert.equal(result.uncertain, undefined);
+    assert.equal(result.retryable, undefined); assert.equal(f.scripts.length, 8, '不重试运输，不重复清理');
+    assert.match(result.error!, /等待超时/);
+  } finally { await f.sender.dispose(); }
+});
+
+it('主动取消附件运输必须等待最终清理结论，正文先结束的未点击不能掩盖清理未知', async () => {
+  const f = fixture(); let finishBody!: (value: unknown) => void;
+  const attachment = { id: 'one', name: 'one.txt', size: 1, mediaType: 'text/plain', async *stream() { yield new Uint8Array([65]); } };
+  try {
+    f.web.executeJavaScriptInIsolatedWorld = async (_world: number, entries: { code: string }[]) => {
+      const code = entries[0]!.code; f.scripts.push(code);
+      if (code.includes('input[type="file"]') && code.includes('globalThis["__miniAIComposerAttachments"] =')) return { ok: true };
+      if (code.includes('s.parts.length || s.name') || code.includes('atob(') || code.includes('s.files.push(new File')) return true;
+      if (code.includes('s.input.files = transfer.files')) return { ok: true };
+      if (code.includes('const represented = expected.every')) return { ready: true };
+      if (code.includes('state.cancel();')) {
+        finishBody({ ok: false, error: '正文已取消', stage: 'waiting_button', cancellation: 'not_clicked' });
+        await Promise.resolve();
+        return { ok: false, error: '附件清理未确认', stage: 'waiting_button', cancellation: 'unknown', uncertain: true };
+      }
+      return new Promise(resolve => { finishBody = resolve; });
+    };
+    const sending = f.sender.send('结果和附件', 'https://chat.deepseek.com/a/chat/one', 'results', () => true, [attachment]);
+    for (let i = 0; i < 80; i++) await Promise.resolve();
+    assert.ok(finishBody); await f.sender.cancel();
+    const result = await sending;
+    assert.equal(result.cancellation, 'unknown'); assert.equal(result.uncertain, true);
+    assert.equal(result.retryable, undefined); assert.equal(f.scripts.length, 8);
+    assert.equal((await f.sender.send('下一批', 'https://chat.deepseek.com/a/chat/one')).ok, false, '未确认附件清理前不能开始下一次运输');
+    assert.equal(f.scripts.length, 8, '清理未知必须阻止后续网页动作');
+  } finally { await f.sender.dispose(); }
+});

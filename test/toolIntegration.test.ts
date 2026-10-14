@@ -22,10 +22,11 @@ it('新完成输出独立于发送动作和回执，已有会话与首发生成�
       const files=new FileService();files.setRoot(root);
       const url='https://chat.deepseek.com/a/chat/current';let reply='history';let completion='complete';
       const web:any=Object.assign(new EventEmitter(),{getURL:()=>url,isDestroyed:()=>false,
-        executeJavaScript:async()=>({replies:[reply],completion}),
+        executeJavaScript:async()=>({replies:[reply],completion,source:'new',sourceKey:'fixture|'+reply}),
         executeJavaScriptInIsolatedWorld:async(_world:number,entries:{code:string}[])=>{
           const code=entries[0]!.code;
-          if(code.includes('const completion ='))return {replies:[reply],completion};
+          if(code.includes('const completion ='))return {replies:[reply],completion,source:'new',sourceKey:'fixture|'+reply};
+          if(code.includes('const accepted = expected'))return {turn:0,accepted:true};
           if(code.includes('previous.waiter = resolve'))return new Promise(resolve=>{waiter=resolve;});
           if(code.includes('previous.dispose();')){waiter?.(false);waiter=undefined;return true;}
           return true;

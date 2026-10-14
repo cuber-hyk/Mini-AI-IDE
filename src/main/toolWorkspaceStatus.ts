@@ -20,6 +20,19 @@ export function projectToolWorkspaceStatus(state: ToolState): ToolWorkspaceStatu
   if (state.resultReturn?.phase === 'paused' || state.continuation?.phase === 'paused')
     return { ...base, phase: 'paused', message: pauseReason(state.resultReturn?.phase === 'paused' ? state.resultReturn.message : state.continuation!.message) };
   if (state.storageError) return { ...base, phase: 'failed', message: '工具记录加载失败，工具已停用' };
+  if (state.config.automatic && state.collection?.phase === 'paused') {
+    const reason = state.collection.reason;
+    const message = reason === 'source_unknown' || reason === 'source_changed' ? '采集暂停：无法确认当前回复来源'
+      : reason === 'reply_interrupted' ? '采集暂停：等待 AI 继续生成'
+      : reason === 'completion_unknown' ? '采集暂停：等待确认回复结束'
+      : reason === 'read_failed' ? '采集暂停：网页回复读取失败'
+      : '采集暂停：网页监听不可用，请查看工具详情';
+    return { ...base, phase: 'paused', message };
+  }
+  if (state.config.automatic && state.collection?.phase === 'recovering')
+    return { ...base, phase: 'waiting_reply', message: state.collection.reason === 'read_failed' ? '正在重新读取网页回复' : '正在恢复网页采集监听' };
+  if (state.config.automatic && state.collection?.reason === 'source-state-lost')
+    return { ...base, phase: 'waiting_user', message: '采集来源已重建，已有回复需手动采集' };
   if (state.batchError || state.results.some(result => {
     const process = result.tool === 'run_command' && result.data as { status?: string; timed_out?: boolean } | undefined;
     return result.status === 'failed' || process && (process.status === 'failed' || process.status === 'stopped' && process.timed_out);

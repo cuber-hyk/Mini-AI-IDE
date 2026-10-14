@@ -186,3 +186,56 @@ it('历史见证上限不淘汰旧指纹或重新授权，达到上限后明确�
   assert.equal(tracker.source(next), 'unknown');
   assert.equal(tracker.source(nodes[0]), 'unknown');
 });
+
+it('同会话唯一消息 ID 和原正文确认重挂载后，只让下一条新回复推进', () => {
+  const withId = (id: string, textContent: string) => ({ id, textContent });
+  const readId = (node: object) => 'id' in node ? String(node.id) : undefined;
+  const baseline = withId('baseline', 'history'), accepted = withId('accepted', 'accepted tools');
+  const tracker = createReplySourceTracker([baseline], 'session-one', undefined, readId);
+  tracker.observe([baseline, accepted]); tracker.seal(accepted, tracker.key(accepted));
+  const remounted = withId('accepted', 'accepted tools');
+  tracker.observe([remounted]);
+  assert.equal(tracker.source(remounted), 'history', '重挂载不得重放已执行请求');
+  const next = withId('next', 'new completed tools'); tracker.observe([remounted, next]);
+  assert.equal(tracker.source(next), 'new', '恢复尾部连续性后不要求碰巧观察到生成过程');
+  const otherSession = createReplySourceTracker([next], 'session-two', undefined, readId);
+  assert.equal(otherSession.source(next), 'history', '另一会话必须独立建立历史基线');
+});
+
+it('同消息重挂载身份重复、缺失或正文不同均不能修复尾部资格', () => {
+  for (const kind of ['duplicate', 'missing', 'different-id', 'different-body']) {
+    const original = { id: 'accepted', textContent: 'accepted tools' };
+    const readId = (node: object) => 'id' in node ? String(node.id) : undefined;
+    const tracker = createReplySourceTracker([original], kind, undefined, readId);
+    const replacement = { id: kind === 'missing' ? '' : kind === 'different-id' ? 'other' : 'accepted', textContent: kind === 'different-body' ? 'unseen old tools' : original.textContent };
+    const nodes = kind === 'duplicate' ? [replacement, { ...replacement }] : [replacement];
+    const next = { id: 'next', textContent: 'not witnessed output' };
+    tracker.observe(nodes); tracker.observe([...nodes, next]);
+    assert.notEqual(tracker.source(next), 'new', kind);
+  }
+});
+
+it('尚未接纳的 DOM 节点被换成另一消息 ID 时不能继承新增资格', () => {
+  const tail = { id: 'history', textContent: 'history tools' }, next = { id: 'new', textContent: 'unaccepted tools' };
+  const readId = (node: object) => 'id' in node ? String(node.id) : undefined;
+  const tracker = createReplySourceTracker([tail], 'session', undefined, readId);
+  tracker.observe([tail, next]); assert.equal(tracker.source(next), 'new');
+  next.id = 'another-history'; next.textContent = 'never mounted historical tools';
+  tracker.observe([next]);
+  assert.equal(tracker.source(next), 'unknown', '只有同条尚未接纳回复的补全可保留资格');
+});
+
+it('连续六十轮含尾部重挂载不重放旧批次且下一批仍获得新资格', () => {
+  const readId = (node: object) => 'id' in node ? String(node.id) : undefined;
+  let tail = { id: 'initial', textContent: 'initial history' };
+  const tracker = createReplySourceTracker([tail], 'long-session', undefined, readId);
+  for (let round = 1; round <= 60; round++) {
+    if (round % 5 === 0) {
+      tail = { ...tail }; tracker.observe([tail]);
+      assert.equal(tracker.source(tail), 'history');
+    }
+    const next = { id: `message-${round}`, textContent: `completed tools ${round}` };
+    tracker.observe([tail, next]); assert.equal(tracker.source(next), 'new');
+    tracker.seal(next, tracker.key(next)); tail = next;
+  }
+});

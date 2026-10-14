@@ -15,7 +15,9 @@ export const COMPOSER_SEND_WORLD = 1005;
 const KEY = '__miniAIComposerSend';
 const ATTACHMENT_KEY = '__miniAIComposerAttachments';
 type SendWeb = Pick<WebContents, 'getURL' | 'isDestroyed' | 'executeJavaScriptInIsolatedWorld' | 'on' | 'removeListener'>;
-export type WebSendResult = { ok: boolean; error?: string; uncertain?: boolean; session?: string; draftBackupPath?: string };
+export type WebSendStage = 'preflight' | 'preparing' | 'draft_backup' | 'waiting_button' | 'clicked' | 'confirmed' | 'unknown';
+export type WebSendResult = { ok: boolean; error?: string; uncertain?: boolean; session?: string; draftBackupPath?: string;
+  retryable?: true; transportStarted?: boolean; stage?: WebSendStage; cancellation?: 'not_clicked' | 'clicked' | 'unknown' };
 type SendOptions = { allowLocalFixture?: boolean; backupDraft?: (text: string, session: string) => Promise<string>; draftSaved?: (path: string) => void };
 
 function attachmentStartScript(token: string, scope: string, fixture: boolean): string {
@@ -236,7 +238,7 @@ function sendScript(token: string, text: string, scope: string, fixture: boolean
     };
     return new Promise(resolve => {
       let complete = resolve;
-      const state = { token, clicked: false, done: false, takenOver: false, written: false, timer: null, cancel: null, resume: null };
+      const state = { token, stage: 'preparing', clicked: false, done: false, takenOver: false, written: false, timer: null, cancel: null, resume: null };
       const owns = () => state.written && !state.takenOver && input.isConnected && ownedText() === payload;
       const clearOwned = () => {
         if (!state.clicked && owns()) write('');
@@ -247,7 +249,9 @@ function sendScript(token: string, text: string, scope: string, fixture: boolean
         if (chatgpt) editEvents.forEach(name => document.removeEventListener(name, takeOver, true));
         try { if (!result.ok && !state.clicked) clearOwned(); } catch { result = { ok: false, error: '未发送结果的清理失败，请检查网页输入框', uncertain: true }; }
         if (globalThis[key] === state) delete globalThis[key];
-        complete(result);
+        const outcome = { ...result, transportStarted: true, stage: result.ok ? 'confirmed' : state.stage };
+        complete(outcome);
+        return outcome;
       };
       const editEvents = ['beforeinput', 'input', 'paste', 'drop', 'compositionstart'];
       const takeOver = event => {
@@ -256,7 +260,7 @@ function sendScript(token: string, text: string, scope: string, fixture: boolean
         finish({ ok: false, error: '用户正在编辑网页输入，自动发送暂停' });
       };
       if (chatgpt) editEvents.forEach(name => document.addEventListener(name, takeOver, true));
-      state.cancel = () => finish({ ok: false, error: '自动发送已取消', ...(state.clicked ? { uncertain: true } : {}) });
+      state.cancel = () => finish({ ok: false, error: '自动发送已取消', cancellation: state.clicked ? 'clicked' : 'not_clicked', ...(state.clicked ? { uncertain: true } : {}) });
       globalThis[key] = state;
       let started = 0, clickedAt = 0;
       const poll = () => {
@@ -299,7 +303,7 @@ function sendScript(token: string, text: string, scope: string, fixture: boolean
           if (chatgpt && hasAttachments()) return finish({ ok: false, error: '官网附件区已变化，已停止纯文本发送' });
           if (input.maxLength >= 0 && payload.length > input.maxLength) return finish({ ok: false, error: '发送内容超过网页输入框长度限制' });
           if (send && enabled(send)) {
-            state.clicked = true; clickedAt = Date.now();
+            state.clicked = true; state.stage = 'clicked'; clickedAt = Date.now();
             // 点击前所有检查在同一同步任务完成；点击之后绝不重试或清理可能已提交内容。
             HTMLElement.prototype.click.call(send);
           } else if (Date.now() - started >= 3000) return finish({ ok: false, error: '网页发送按钮未就绪，请手动发送' });
@@ -311,11 +315,13 @@ function sendScript(token: string, text: string, scope: string, fixture: boolean
         state.written = true;
         try { write(payload); }
         catch { return finish({ ok: false, error: '网页输入失败，已停止发送' }); }
+        state.stage = 'waiting_button';
         started = Date.now();
         // 留出一轮事件循环，使关闭开关、用户输入和导航可在点击前取消。
         state.timer = setTimeout(poll, 25);
       };
       if (draftText !== null) {
+        state.stage = 'draft_backup';
         state.resume = () => new Promise(next => {
           complete = next; state.resume = null;
           const current = controls(true);
@@ -335,7 +341,7 @@ function resumeDraftScript(token: string): string {
 }
 
 function cancelScript(token: string): string {
-  return `(() => { const state = globalThis[${JSON.stringify(KEY)}]; const attachment = globalThis[${JSON.stringify(ATTACHMENT_KEY)}]; if (state?.token === ${JSON.stringify(token)} && !state.clicked) { const result = { ok: false, error: '自动发送已取消' }; state.cancel(); ${attachmentCleanupScript(token)}; return result; } if (state?.token === ${JSON.stringify(token)}) { const result = { ok: false, error: '自动发送已取消', uncertain: true }; state.cancel(); return result; } if (attachment?.token === ${JSON.stringify(token)}) { const cleanupOk = ${attachmentCleanupScript(token)}; return { ok: false, error: '自动发送已取消', ...(cleanupOk ? {} : { uncertain: true }) }; } return false; })()`;
+  return `(() => { const state = globalThis[${JSON.stringify(KEY)}]; const attachment = globalThis[${JSON.stringify(ATTACHMENT_KEY)}]; if (state?.token === ${JSON.stringify(token)}) { const clicked = state.clicked, result = state.cancel(); if (clicked) return result; const cleaned = ${attachmentCleanupScript(token)}; return cleaned ? result : { ...result, uncertain: true, cancellation: 'unknown' }; } if (attachment?.token === ${JSON.stringify(token)}) { const cleanupOk = ${attachmentCleanupScript(token)}; return { ok: false, error: '自动发送已取消', transportStarted: true, stage: 'preparing', cancellation: cleanupOk ? 'not_clicked' : 'unknown', ...(cleanupOk ? {} : { uncertain: true }) }; } return false; })()`;
 }
 
 export class WebComposerSender {
@@ -346,6 +352,7 @@ export class WebComposerSender {
   private cancellationFailed = false;
   private abort: ((result: WebSendResult) => void) | undefined;
   private cleanup: Promise<unknown> = Promise.resolve();
+  private cancellation: { token: string; result: WebSendResult } | undefined;
   private kind: 'results' | 'prompt' | undefined;
   private scope = '';
   constructor(private readonly web: SendWeb, private readonly options: SendOptions = {}) {
@@ -446,14 +453,43 @@ export class WebComposerSender {
     if (!current()) { this.token = undefined; return { ok: false, error: '发送资格已失效' }; }
     const cancelled = new Promise<WebSendResult>(resolve => { this.abort = resolve; });
     let timeout: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
+    let cancellationSettled = false;
+    let stage: WebSendStage = 'preparing';
     const bounded = new Promise<WebSendResult>(resolve => { timeout = setTimeout(() => {
-      void this.cancel(); resolve({ ok: false, error: '网页发送等待超时，已停止且不会重试', uncertain: true });
+      timedOut = true;
+      void this.cancel().then(() => {
+        cancellationSettled = true;
+        const cancelled = this.cancellation?.token === token ? this.cancellation.result : undefined;
+        const notClicked = cancelled?.cancellation === 'not_clicked' && !cancelled.uncertain;
+        const cancellation = cancelled?.cancellation ?? 'unknown';
+        traceCollection('composer.send-timeout', { stage: cancelled?.stage ?? stage, cancellation });
+        resolve({ ok: false, error: '网页发送等待超时，' + (notClicked ? '已确认取消且未点击发送，本批不会重试' : cancellation === 'clicked' ? '已触发发送但接收未确认，不会重试' : '取消状态未确认，已停止且不会重试'),
+          ...(!notClicked ? { uncertain: true } : {}), transportStarted: true, stage: cancelled?.stage ?? stage, cancellation });
+      });
     }, attachments.length ? Math.min(300_000, Math.max(30_000, 30_000 + Math.ceil(attachments.reduce((sum, file) => sum + file.size, 0) / (1024 * 1024)) * 1000)) : 7500); });
+    // 超时后的取消会使页面原 Promise 一并结束；仍等待有界清理结论，不能丢失点击证据。
+    const settledCancellation = async (): Promise<WebSendResult> => {
+      await this.cleanup;
+      cancellationSettled = true;
+      return this.cancellation?.token === token ? this.cancellation.result
+        : { ok: false, error: '网页取消状态未确认，已停止且不会重试', uncertain: true, transportStarted: true, stage: 'unknown', cancellation: 'unknown' };
+    };
+    const waitFor = async <T>(task: Promise<T>): Promise<T | WebSendResult> => {
+      try {
+        const result = await Promise.race([task, cancelled, bounded]);
+        return timedOut ? bounded : generation !== this.generation ? settledCancellation() : result;
+      } catch (error) {
+        if (timedOut) return bounded;
+        if (generation !== this.generation) return settledCancellation();
+        throw error;
+      }
+    };
     let draftBackupPath: string | undefined;
     try {
       if (attachments.length) {
-        const staged = await Promise.race([this.stageAttachments(token, expectedSession, this.options.allowLocalFixture === true, attachments, generation, current), cancelled, bounded]);
-        if (staged) return staged;
+        const staged = await waitFor(this.stageAttachments(token, expectedSession, this.options.allowLocalFixture === true, attachments, generation, current));
+        if (staged) return { stage: 'preparing', ...staged, transportStarted: true };
       }
       if (generation !== this.generation || !current()) {
         if (attachments.length) {
@@ -463,13 +499,14 @@ export class WebComposerSender {
         return { ok: false, error: '需求、项目或会话已变化，未发送' };
       }
       const canBackup = platform === 'chatgpt' && this.kind === 'results' && !!this.options.backupDraft;
-      let result: unknown = await Promise.race([this.web.executeJavaScriptInIsolatedWorld(COMPOSER_SEND_WORLD, [{ code: sendScript(token, text, expectedSession, this.options.allowLocalFixture === true, this.kind === 'prompt', attachments, platform, canBackup) }]), cancelled, bounded]);
+      let result: unknown = await waitFor(this.web.executeJavaScriptInIsolatedWorld(COMPOSER_SEND_WORLD, [{ code: sendScript(token, text, expectedSession, this.options.allowLocalFixture === true, this.kind === 'prompt', attachments, platform, canBackup) }]));
       if (canBackup && result && typeof result === 'object' && 'draftText' in result && typeof result.draftText === 'string') {
         if (generation !== this.generation || !current() || sessionKeyOf(this.web.getURL()) !== expectedSession) {
           await this.cancel('results'); return { ok: false, error: '草稿备份前发送资格已失效，未覆盖' };
         }
         try {
-          const saved = await Promise.race([this.options.backupDraft!(result.draftText, expectedSession), cancelled, bounded]);
+          stage = 'draft_backup';
+          const saved = await waitFor(this.options.backupDraft!(result.draftText, expectedSession));
           if (typeof saved !== 'string') return saved;
           if (!saved) throw new Error('无法确认草稿备份路径');
           draftBackupPath = saved;
@@ -485,21 +522,24 @@ export class WebComposerSender {
         if (generation !== this.generation || !current() || sessionKeyOf(this.web.getURL()) !== expectedSession) {
           await this.cancel('results'); return { ok: false, error: '草稿已备份，但发送资格已失效，未覆盖', draftBackupPath };
         }
-        result = await Promise.race([this.web.executeJavaScriptInIsolatedWorld(COMPOSER_SEND_WORLD, [{ code: resumeDraftScript(token) }]), cancelled, bounded]);
+        result = await waitFor(this.web.executeJavaScriptInIsolatedWorld(COMPOSER_SEND_WORLD, [{ code: resumeDraftScript(token) }]));
       }
       traceCollection('composer.send-result', { kind: this.kind, attachmentCount: attachments.length,
         ok: Boolean(result && typeof result === 'object' && 'ok' in result && result.ok === true),
         error: result && typeof result === 'object' && 'error' in result ? String(result.error) : null,
-        controlState: result && typeof result === 'object' && 'controlState' in result ? result.controlState : undefined });
-      if (result && typeof result === 'object' && 'ok' in result && result.ok === false && !('uncertain' in result) && attachments.length) {
+        controlState: result && typeof result === 'object' && 'controlState' in result ? result.controlState : undefined,
+        stage: result && typeof result === 'object' && 'stage' in result ? result.stage : stage,
+        cancellation: result && typeof result === 'object' && 'cancellation' in result ? result.cancellation : undefined });
+      if (result && typeof result === 'object' && 'ok' in result && result.ok === false && !('uncertain' in result) && attachments.length
+        && !(cancellationSettled && 'cancellation' in result && result.cancellation === 'not_clicked')) {
         const cleaned = await this.web.executeJavaScriptInIsolatedWorld(COMPOSER_SEND_WORLD, [{ code: attachmentCleanupScript(token) }]).catch(() => false);
         if (cleaned !== true) return { ok: false, error: '发送未完成，官网附件清理状态未确认，请检查页面', uncertain: true };
       }
-      if (result && typeof result === 'object' && 'ok' in result && typeof result.ok === 'boolean') return { ...result as WebSendResult, ...(draftBackupPath ? { draftBackupPath } : {}) };
-      return { ok: false, error: '网页发送状态不可识别，已停止且不会重试', uncertain: true };
+      if (result && typeof result === 'object' && 'ok' in result && typeof result.ok === 'boolean') return { stage, ...result as WebSendResult, transportStarted: true, ...(draftBackupPath ? { draftBackupPath } : {}) };
+      return { ok: false, error: '网页发送状态不可识别，已停止且不会重试', uncertain: true, transportStarted: true, stage: 'unknown' };
     } catch {
       // 渲染进程异常可能发生在点击后，不能推断为未发送。
-      return { ok: false, error: '网页发送检查失败，已停止且不会重试', uncertain: true, ...(draftBackupPath ? { draftBackupPath } : {}) };
+      return { ok: false, error: '网页发送检查失败，已停止且不会重试', uncertain: true, transportStarted: true, stage: 'unknown', ...(draftBackupPath ? { draftBackupPath } : {}) };
     } finally {
       clearTimeout(timeout);
       if (this.token === token) { this.token = undefined; this.kind = undefined; this.abort = undefined; }
@@ -517,11 +557,15 @@ export class WebComposerSender {
       let timeout: ReturnType<typeof setTimeout> | undefined;
       const unconfirmed = new Promise<WebSendResult>(resolve => { timeout = setTimeout(() => {
         this.cancellationFailed = true;
-        resolve({ ok: false, error: '网页取消状态未确认，自动发送已停止', uncertain: true });
+        resolve({ ok: false, error: '网页取消状态未确认，自动发送已停止', uncertain: true, transportStarted: true, stage: 'unknown', cancellation: 'unknown' });
       }, 1000); });
       this.cleanup = Promise.race([Promise.resolve().then(() => this.web.executeJavaScriptInIsolatedWorld(COMPOSER_SEND_WORLD, [{ code: cancelScript(token) }])), unconfirmed]).then(result => {
-        abort?.(result && typeof result === 'object' && 'ok' in result ? result as WebSendResult : { ok: false, error: '网页已变化，自动发送已取消', uncertain: true });
-      }).catch(() => { this.cancellationFailed = true; abort?.({ ok: false, error: '网页检查失败，自动发送已取消', uncertain: true }); }).finally(() => clearTimeout(timeout));
+        const outcome = result && typeof result === 'object' && 'ok' in result ? result as WebSendResult : { ok: false, error: '网页已变化，自动发送已取消', uncertain: true, transportStarted: true, stage: 'unknown' as const, cancellation: 'unknown' as const };
+        if (outcome.cancellation === 'unknown') this.cancellationFailed = true;
+        this.cancellation = { token, result: outcome };
+        traceCollection('composer.cancel-result', { stage: outcome.stage, cancellation: outcome.cancellation ?? 'unknown', uncertain: outcome.uncertain === true });
+        abort?.(outcome);
+      }).catch(() => { this.cancellationFailed = true; const result: WebSendResult = { ok: false, error: '网页检查失败，自动发送已取消', uncertain: true, transportStarted: true, stage: 'unknown', cancellation: 'unknown' }; this.cancellation = { token, result }; abort?.(result); }).finally(() => clearTimeout(timeout));
     }
     else abort?.({ ok: false, error: '网页已关闭，自动发送已取消', uncertain: true });
     await this.cleanup;

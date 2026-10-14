@@ -68,7 +68,6 @@ export const OBSERVATION_SCRIPT = `(() => {
   globalThis.__miniAIReplyChanges?.updateSources?.();
   const replySource = globalThis.__miniAIReplyChanges?.sources?.source(reply);
   const sourceKey = globalThis.__miniAIReplyChanges?.sources?.key(reply);
-  if (completion === 'complete') globalThis.__miniAIReplyChanges?.sources?.seal(reply);
   const content = source ? String(source.innerHTML || source.textContent || '') : '';
   let first = 2166136261, second = 5381;
   for (let i = 0; i < content.length; i++) {

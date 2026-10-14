@@ -8,16 +8,27 @@ import { CONTINUATION_BUTTON } from './replyContinuation';
 import { traceCollection, traceScope } from './collectionTrace';
 import { webPlatformOf } from '../../shared/webConversation';
 import type { WebPlatform } from '../../shared/webPlatform';
-import { CHATGPT_REPLY_NODES, CHATGPT_SEND_SELECTOR, CHATGPT_REPLY_SELECTOR, CHATGPT_TURN_SELECTOR, CHATGPT_CODE_SURFACE_SELECTOR, CHATGPT_GENERATING_SCRIPT, CHATGPT_SOURCE_TEXT_READER } from '../chatgptPage';
+import type { ToolCollectionState } from '../../shared/toolProtocol';
+import { CHATGPT_REPLY_NODES, CHATGPT_SEND_SELECTOR, CHATGPT_REPLY_SELECTOR, CHATGPT_TURN_SELECTOR, CHATGPT_CODE_SURFACE_SELECTOR, CHATGPT_GENERATING_SCRIPT, CHATGPT_COMPLETION_SCRIPT, CHATGPT_SOURCE_TEXT_READER } from '../chatgptPage';
 import { createReplySourceTracker } from './replySource';
 
 export const REPLY_WATCH_WORLD = 1004;
 const KEY = '__miniAIReplyChanges';
 const EPOCH_KEY = '__miniAIReplyWatchEpoch';
 let nextRegistration = 0;
-export function replyWatchScript(action: 'install' | 'wait' | 'stop' | 'navigation' | 'acknowledge' | 'local-submit', token: string, platform: WebPlatform = 'deepseek', sourceKey?: string, registration = 0): string {
+type WatchAction = 'install' | 'repair' | 'wait' | 'stop' | 'navigation' | 'acknowledge' | 'local-submit';
+export interface ReplyWatchOptions extends ReplyReadOptions { health?: (state: ToolCollectionState) => void }
+const RECOVERY_DELAYS = [250, 1000, 3000] as const;
+export function replyWatchScript(action: WatchAction, token: string, platform: WebPlatform = 'deepseek', sourceKey?: string, registration = 0): string {
   const header = `const key = ${JSON.stringify(KEY)}, token = ${JSON.stringify(token)}; const previous = globalThis[key];${platform === 'chatgpt' && action !== 'stop' ? ` const platformOf = ${webPlatformOf.toString()}, pendingSession = ${isPendingFirstPromptSession.toString()}; if (platformOf(location.href) !== 'chatgpt' && !(${action === 'navigation' || action === 'wait'} && previous?.token === token && pendingSession(previous.scope, location.href)${action === 'wait' ? ' && previous.submitAt > 0 && !previous.handoffCancelled && Date.now() - previous.submitAt < 8000' : ''})) return false;` : ''}`;
   if (action === 'stop') return `(() => { ${header} const epochKey = ${JSON.stringify(EPOCH_KEY)}; globalThis[epochKey] = Math.max(globalThis[epochKey] || 0, ${registration}); if (previous?.token !== token) return false; previous.dispose(); delete globalThis[key]; return true; })()`;
+  if (action === 'repair') return `(() => { ${header}
+    const page = new URL(location.href), scope = (page.protocol === 'file:' ? 'null' : page.origin) + page.pathname;
+    if (previous?.token !== token || previous.scope !== scope || previous.documentRoot !== document.documentElement || !previous.sources || !previous.resume) return false;
+    previous.observer.disconnect(); previous.waiter?.(false); previous.waiter = null;
+    previous.resume();
+    return { preserved: true, turn: previous.turn };
+  })()`;
   if (action === 'local-submit') return `(() => { ${header} if (previous?.token !== token) return false; previous.submitAt = Date.now(); previous.pendingSession = null; previous.handoffCancelled = false; previous.lastAction = 'send'; previous.stopWasIdle = false; return true; })()`;
   if (action === 'navigation') return `(() => { ${header}
     if (previous?.token !== token) return false;
@@ -31,6 +42,7 @@ export function replyWatchScript(action: 'install' | 'wait' | 'stop' | 'navigati
       return { pending, preserve: false, from, to: next };
     }` : ''}
     const reply = previous.replyNodes().at(-1);
+    const mountedHistory = !!reply && previous.sources.hasObserved?.(reply) === false;
     const firstSession = ${isFirstPromptSession.toString()};
     // 官网真实发送与本地主动发送共用一次首页交接记录；它只证明地址连续性，回复仍须独立核验结束。
     const marked = previous.submitAt > 0 && Date.now() - previous.submitAt < 8000;
@@ -45,14 +57,23 @@ export function replyWatchScript(action: 'install' | 'wait' | 'stop' | 'navigati
     previous.pendingSession = null;
     previous.handoffCancelled = false;
     clearTimeout(previous.history?.timer);
-    previous.history = preserve ? null : { reply, generating: previous.generating(), ready: false, timer: null };
-    if (!preserve) previous.sources = previous.createSources(previous.sourceNodes(), token + ':' + (++previous.sourceEpoch), previous.readSourceText);
-    previous.sourceHistory = false; previous.sourceGeneratingReply = null;
-    previous.dirty = false; previous.historyReady = false; previous.generated = false; clearTimeout(previous.timer); previous.timer = null;
+    previous.history = preserve ? null : { reply, generating: previous.generating(), ready: mountedHistory, timer: null };
+    if (previous.history && mountedHistory) previous.history.timer = setTimeout(() => { previous.history = null; }, 500);
+    if (!preserve) previous.sources = previous.createSources(previous.sourceNodes(), token + ':' + (++previous.sourceEpoch), previous.readSourceText, previous.readSourceIdentity);
+    previous.sourceHistory = !preserve && mountedHistory; previous.sourceGeneratingReply = null;
+    previous.dirty = false; previous.historyReady = !preserve && mountedHistory; previous.generated = false; clearTimeout(previous.timer); previous.timer = null;
     previous.lastAction = 'none';
+    if (!preserve && mountedHistory) previous.notify();
     return { preserve, turn: previous.turn, marked, generating, handoffCancelled, action, replyCount: previous.replyNodes().length, from, to: next };
   })()`;
-  if (action === 'acknowledge') return `(() => { ${header} if (previous?.token !== token) return false; previous.sources.seal(previous.replyNodes().at(-1), ${JSON.stringify(sourceKey)}); previous.updateSources(); return { turn: previous.turn }; })()`;
+  if (action === 'acknowledge') return `(() => { ${header} if (previous?.token !== token) return false;
+    previous.updateSources();
+    const reply = previous.replyNodes().at(-1), expected = ${JSON.stringify(sourceKey)};
+    const accepted = expected === undefined || previous.sources.key(reply) === expected && previous.sources.source(reply) === 'new'
+      && !previous.generating() && ${platform === 'chatgpt' ? `(${CHATGPT_COMPLETION_SCRIPT}) === 'complete'` : 'true'};
+    previous.sources.seal(reply, expected); previous.updateSources();
+    return { turn: previous.turn, accepted };
+  })()`;
   if (action === 'wait') return `(() => { ${header} if (previous?.token !== token) return false; if (previous.dirty) { previous.dirty = false; const historyReady = previous.historyReady, generated = previous.generated; previous.historyReady = false; previous.generated = false; return { turn: previous.turn, historyReady, generated, scope: previous.scope }; } return new Promise(resolve => { previous.waiter = resolve; }); })()`;
   return `(() => {
     ${header}
@@ -76,15 +97,25 @@ export function replyWatchScript(action: 'install' | 'wait' | 'stop' | 'navigati
     })` : 'replyNodes'};
     const createSources = ${createReplySourceTracker.toString()};
     const page = new URL(location.href);
-    const state = { token, scope: (page.protocol === 'file:' ? 'null' : page.origin) + page.pathname, replyNodes, initialReplies: replyNodes(), generating: null, history: null, historyReady: false, generated: false, turn: 0, dirty: false, waiter: null, timer: null, observer: null, dispose: null, submitAt: 0, handoffCancelled: false, lastAction: 'none', stopWasIdle: false };
+    const state = { token, scope: (page.protocol === 'file:' ? 'null' : page.origin) + page.pathname, documentRoot: document.documentElement, replyNodes, initialReplies: replyNodes(), generating: null, history: null, historyReady: false, generated: false, turn: 0, dirty: false, waiter: null, timer: null, observer: null, dispose: null, resume: null, notify: null, submitAt: 0, handoffCancelled: false, lastAction: 'none', stopWasIdle: false };
     state.sourceEpoch = 0;
     state.readSourceText = ${platform === 'chatgpt' ? CHATGPT_SOURCE_TEXT_READER : 'undefined'};
-    state.createSources = createSources; state.sourceNodes = sourceNodes; state.sources = createSources(sourceNodes(), token + ':' + state.sourceEpoch, state.readSourceText);
+    state.readSourceIdentity = ${platform === 'chatgpt' ? `(node => node.getAttribute('data-dil-message-id') || undefined)` : 'undefined'};
+    state.createSources = createSources; state.sourceNodes = sourceNodes; state.sources = createSources(sourceNodes(), token + ':' + state.sourceEpoch, state.readSourceText, state.readSourceIdentity);
     state.sourceHistory = false; state.sourceGeneratingReply = null;
     state.updateSources = () => {
       const latest = state.replyNodes().at(-1);
       state.sources.observe(state.sourceNodes(), state.sourceHistory, !!latest && state.sourceGeneratingReply === latest);
       state.sourceHistory = false; state.sourceGeneratingReply = null;
+    };
+    state.notify = () => {
+      if (state.timer !== null || state.dirty) return;
+      state.timer = setTimeout(() => {
+        state.timer = null;
+        state.updateSources();
+        state.dirty = true;
+        if (state.waiter) { const resolve = state.waiter; state.waiter = null; state.dirty = false; const historyReady = state.historyReady, generated = state.generated; state.historyReady = false; state.generated = false; resolve({ turn: state.turn, historyReady, generated, scope: state.scope }); }
+      }, 150);
     };
     state.generating = ${platform === 'chatgpt' ? `() => ${CHATGPT_GENERATING_SCRIPT}` : `() => {
       const visible = element => !!element && element.getClientRects().length > 0;
@@ -129,8 +160,6 @@ export function replyWatchScript(action: 'install' | 'wait' | 'stop' | 'navigati
       if (send || enter) state.submitAt = Date.now();
       // 只记动作，不读输入内容、不触发采集；后续 DOM 变化才通知主进程。
     };
-    document.addEventListener('click', userAction, true);
-    document.addEventListener('keydown', userAction, true);
     state.dispose = () => { state.observer.disconnect(); clearTimeout(state.timer); clearTimeout(state.history?.timer); state.waiter?.(false); document.removeEventListener('click', userAction, true); document.removeEventListener('keydown', userAction, true); };
     state.observer = new MutationObserver(records => {
       if (!records.some(record => inside(record.target) || (record.type === 'childList' && [...record.addedNodes, ...record.removedNodes].some(includes)) || (record.type === 'attributes' && includes(record.target)))) return;
@@ -160,17 +189,16 @@ export function replyWatchScript(action: 'install' | 'wait' | 'stop' | 'navigati
       state.sourceHistory ||= state.historyReady;
       if (state.generating() && bodyChanged) state.sourceGeneratingReply = latest;
       // 只在变化后安排一次合并通知；空闲没有定时器，流式变化不会不断推迟通知。
-      if (state.timer !== null || state.dirty) return;
-      state.timer = setTimeout(() => {
-        state.timer = null;
-        state.updateSources();
-        state.dirty = true;
-        if (state.waiter) { const resolve = state.waiter; state.waiter = null; state.dirty = false; const historyReady = state.historyReady, generated = state.generated; state.historyReady = false; state.generated = false; resolve({ turn: state.turn, historyReady, generated, scope: state.scope }); }
-      }, 150);
+      state.notify();
     });
     globalThis[key] = state;
-    state.observer.observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true,
-      attributeFilter: ['class', 'aria-label', 'title', 'aria-disabled', 'aria-busy', 'data-is-streaming', 'data-testid', 'data-message-author-role', 'data-talvt-turn-state', 'data-conversation-role', 'data-dil-message-id', 'data-tooltip', 'data-tooltip-content', 'data-icon', 'd', 'style', 'hidden'] });
+    state.resume = () => {
+      document.addEventListener('click', userAction, true);
+      document.addEventListener('keydown', userAction, true);
+      state.observer.observe(document.documentElement, { subtree: true, childList: true, characterData: true, attributes: true,
+        attributeFilter: ['class', 'aria-label', 'title', 'aria-disabled', 'aria-busy', 'data-is-streaming', 'data-testid', 'data-message-author-role', 'data-talvt-turn-state', 'data-conversation-role', 'data-dil-message-id', 'data-tooltip', 'data-tooltip-content', 'data-icon', 'd', 'style', 'hidden'] });
+    };
+    state.resume();
     return { hasReplies: state.initialReplies.length > 0, awaitingHistory };
   })()`;
 }
@@ -188,9 +216,11 @@ export class ReplyChangeWatcher {
   private navigationHistory = false;
   private navigation: Promise<unknown> = Promise.resolve();
   private cleanup: Promise<unknown> = Promise.resolve();
+  private recoveryTimer: ReturnType<typeof setTimeout> | undefined;
+  private recoveryWake: (() => void) | undefined;
   constructor(private readonly web: ChangeWeb, private readonly change: (userTurn: boolean) => Promise<void>,
     private readonly resetBaseline: (preserve?: boolean, awaitHistory?: boolean, generated?: boolean) => void, private readonly report: (message: string) => void,
-    private readonly scopeChanged: (session: string) => void = () => {}, private readonly options: ReplyReadOptions = {}) {
+    private readonly scopeChanged: (session: string) => void = () => {}, private readonly options: ReplyWatchOptions = {}) {
     web.on('dom-ready', this.ready);
     web.on('did-start-navigation', this.navigating);
     web.on('did-navigate-in-page', this.inPage);
@@ -204,6 +234,7 @@ export class ReplyChangeWatcher {
     if (!main || sessionKeyOf(url) === this.scope) return;
     const previousScope = this.scope;
     this.scope = sessionKeyOf(url);
+    this.cancelRecovery();
     const pendingFrom = this.pendingFirstScope ?? previousScope;
     this.pendingFirstScope = isPendingFirstPromptSession(pendingFrom, url) ? pendingFrom : undefined;
     // 计数与待发送必须观察每次真实切换，不能被后面的异步导航元数据合并吞掉。
@@ -230,17 +261,21 @@ export class ReplyChangeWatcher {
     this.enabled = value;
     traceCollection('watcher.enabled', { value });
     this.navigationHistory = false;
-    if (value) this.restart(); else this.stop();
+    if (value) this.restart(); else { this.stop(); this.options.health?.({ phase: 'off', message: '自动采集已关闭' }); }
   }
   reset(): void { if (this.enabled) this.restart(); else this.resetBaseline(); }
   async settleNavigation(): Promise<void> { let pending; do { pending = this.navigation; await pending; } while (pending !== this.navigation); }
   /** 手动采集消费已通知的动作；动作只取消待回传结果，不授予采集资格。 */
-  async acknowledge(manual = false, sourceKey?: string): Promise<void> {
+  async acknowledge(manual = false, sourceKey?: string): Promise<boolean> {
+    if (!manual && !sourceKey) return false;
     const token = this.token; const version = this.version;
-    if (!token || this.web.isDestroyed()) return;
+    if (!token || this.web.isDestroyed()) return manual && sourceKey === undefined && !this.disposed && !this.web.isDestroyed();
+    const scope = this.scope; const session = sessionKeyOf(this.web.getURL());
     const metadata = await this.execute('acknowledge', token, sourceKey);
-    if (manual && this.version === version && metadata && typeof metadata === 'object' && 'turn' in metadata)
+    if (this.disposed || this.web.isDestroyed() || this.version !== version || this.token !== token || this.scope !== scope || sessionKeyOf(this.web.getURL()) !== session) return false;
+    if (manual && metadata && typeof metadata === 'object' && 'turn' in metadata)
       this.consumedTurn = Math.max(this.consumedTurn, Number(metadata.turn));
+    return manual && sourceKey === undefined || !!metadata && typeof metadata === 'object' && 'accepted' in metadata && metadata.accepted === true;
   }
   /** 本地主动提交即将发送：保存短期标记，首页交接在回复与生成态都不可观测时仍保留新轮基线。 */
   async markLocalSubmit(): Promise<void> {
@@ -260,7 +295,7 @@ export class ReplyChangeWatcher {
     const cancelled = new Promise<boolean>(resolve => { this.abort = () => resolve(false); });
     void this.run(version, token, cancelled);
   }
-  private execute(action: 'install' | 'wait' | 'stop' | 'navigation' | 'acknowledge' | 'local-submit', token: string, sourceKey?: string): Promise<unknown> {
+  private execute(action: WatchAction, token: string, sourceKey?: string): Promise<unknown> {
     const raw = this.web.getURL();
     const platform = webPlatformOf(raw) ?? ((action === 'navigation' || action === 'wait') && this.pendingFirstScope && isPendingFirstPromptSession(this.pendingFirstScope, raw) ? 'chatgpt' : this.options.allowLocalFixture === true && raw.startsWith('file://') ? 'deepseek' : null);
     if (!platform && action !== 'stop') return Promise.resolve(false);
@@ -268,26 +303,56 @@ export class ReplyChangeWatcher {
   }
   private async run(version: number, token: string, cancelled: Promise<boolean>): Promise<void> {
     const current = () => !this.disposed && this.enabled && this.version === version && !this.web.isDestroyed();
+    let failure: string | undefined;
+    let attempts = 0;
     try {
       const installed = await this.execute('install', token);
       if (!current()) return;
-      if (!installed) {
-        this.stop();
-        if (webPlatformOf(this.web.getURL())) this.report('页面变化监听未建立，请手动采集或关闭再开启自动继续');
-        return;
-      }
+      if (!installed) throw new Error('页面变化监听未建立');
       traceCollection('watcher.installed', { scope: traceScope(this.scope), hasReplies: !!(installed && typeof installed === 'object' && 'hasReplies' in installed && installed.hasReplies === true) });
       if (typeof installed === 'object' && ('hasReplies' in installed && installed.hasReplies === true || 'awaitingHistory' in installed && installed.awaitingHistory === true)) this.resetBaseline(false, true);
       // 监听先安装，再建立历史基线；期间的变化保留为一次待通知。
+      this.options.health?.({ phase: 'watching', message: '自动采集监听中' });
       await this.change(false);
-      while (current()) {
+    } catch (error) { failure = error instanceof Error ? error.message : String(error); }
+    while (current()) {
+      if (failure !== undefined) {
+        if (!webPlatformOf(this.web.getURL()) && !(this.options.allowLocalFixture && this.web.getURL().startsWith('file://'))) { this.stop(); return; }
+        if (attempts >= RECOVERY_DELAYS.length) {
+          const message = '页面变化监听恢复失败，自动采集已暂停；请手动采集或关闭再开启自动继续：' + failure;
+          this.stop(); this.options.health?.({ phase: 'paused', message, reason: 'watcher-recovery-exhausted', attempt: attempts }); this.report(message); return;
+        }
+        const recoveryScope = this.scope;
+        const delay = RECOVERY_DELAYS[attempts++]!;
+        this.options.health?.({ phase: 'recovering', message: `页面变化监听暂时失效，正在恢复（${attempts}/${RECOVERY_DELAYS.length}）`, reason: 'watcher-unavailable', attempt: attempts });
+        await new Promise<void>(resolve => { this.recoveryWake = resolve; this.recoveryTimer = setTimeout(() => { this.recoveryTimer = undefined; this.recoveryWake = undefined; resolve(); }, delay); });
+        if (!current()) return;
+        if (this.scope !== recoveryScope) { failure = undefined; attempts = 0; continue; }
+        try {
+          const repaired = await this.execute('repair', token);
+          if (!current()) return;
+          if (this.scope !== recoveryScope) { failure = undefined; attempts = 0; continue; }
+          const preserved = !!repaired && typeof repaired === 'object' && 'preserved' in repaired && repaired.preserved === true;
+          if (!preserved) {
+            const installed = await this.execute('install', token);
+            if (!current()) return;
+            if (this.scope !== recoveryScope) { failure = undefined; attempts = 0; continue; }
+            if (!installed) throw new Error('页面变化监听未建立');
+            // 隔离世界状态已丢失，不能凭未执行记录补发历史。
+            this.resetBaseline(false, true);
+          }
+          this.options.health?.({ phase: 'watching', message: preserved ? '页面变化监听已恢复，正在复核当前回复' : '页面监听已重建；来源状态丢失，已有回复作为历史保留', ...(preserved ? {} : { reason: 'source-state-lost' }) });
+          const next = preserved && repaired && typeof repaired === 'object' && 'turn' in repaired ? Number(repaired.turn) : this.consumedTurn;
+          const userTurn = next > this.consumedTurn; this.consumedTurn = Math.max(next, this.consumedTurn);
+          await this.change(userTurn);
+          failure = undefined;
+        } catch (error) { failure = error instanceof Error ? error.message : String(error); }
+        continue;
+      }
+      try {
         const changed = await Promise.race([this.execute('wait', token), cancelled]);
         if (!current()) return;
-        if (!changed) {
-          this.stop();
-          this.report('页面变化监听已失效，请手动采集或关闭再开启自动继续');
-          return;
-        }
+        if (!changed) throw new Error('页面变化监听已失效');
         let navigation;
         do { navigation = this.navigation; await navigation; } while (navigation !== this.navigation);
         if (!current()) return;
@@ -300,12 +365,16 @@ export class ReplyChangeWatcher {
         const userTurn = next > this.consumedTurn; this.consumedTurn = Math.max(next, this.consumedTurn);
         traceCollection('watcher.dispatch', { userTurn, turn: next, historyReady: typeof changed === 'object' && changed !== null && 'historyReady' in changed ? changed.historyReady : null, generated: typeof changed === 'object' && changed !== null && 'generated' in changed ? changed.generated : null });
         await this.change(userTurn);
-      }
-    } catch (error) {
-      if (current()) { this.stop(); this.report('页面变化监听失败，请手动采集或重新开启自动采集：' + (error instanceof Error ? error.message : String(error))); }
+        attempts = 0;
+      } catch (error) { failure = error instanceof Error ? error.message : String(error); }
     }
   }
+  private cancelRecovery(): void {
+    if (this.recoveryTimer !== undefined) clearTimeout(this.recoveryTimer);
+    this.recoveryTimer = undefined; const wake = this.recoveryWake; this.recoveryWake = undefined; wake?.();
+  }
   private stop(): void {
+    this.cancelRecovery();
     this.version++; this.abort?.(); this.abort = undefined;
     this.registration = ++nextRegistration;
     const token = this.token; this.token = undefined;

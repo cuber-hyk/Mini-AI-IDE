@@ -2,7 +2,7 @@
 artifact_type: adr
 status: accepted
 created: 2026-10-07
-updated: 2026-10-13
+updated: 2026-10-14
 owner: 胡运宽
 source_of_truth: [src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, src/main/tools/integration.ts, src/main/tools/autoCollector.ts, src/shared/toolProtocol.ts, src/main/tools/store.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, tools/verify-web-result-sender.cjs]
 ---
@@ -25,6 +25,7 @@ source_of_truth: [src/main/tools/autoContinuation.ts, src/main/tools/webResultSe
 6. 点击前取消或失败只清理本程序仍拥有的文本；用户改写后不清理。点击后无法确认、超时或异常不重试，也不清理可能已提交的内容。清理状态无法确认时阻止后续自动发送，提示用户处理。
 7. 回程仍由只读隔离世界 1004 的变化监听、动作识别及同步快照负责。DOM 新完成输出驱动采集，合成发送不冒充真实用户动作；真实动作只用于取消旧结果发送，自由输入和继续生成按钮由用户操作。
 8. 网页主世界不得获得 IPC、文件桥或本地工具接口。保留工具权限、正式协议、去重和草稿守卫；不代理 AI HTTP、不读凭据、不暴露 CDP、不引入浏览器驱动、不伪造身份或指纹，不使用 OS 键盘注入或任意网页自动化。
+9. 只读预检的暂缺生成结束证据仅在明确未读取附件、未调用 sender 时可有限复核，仍复用原批及所有取消/来源守卫；开始运输后本批不重试。整体超时先有界收敛最终取消结论，正文先结束不代表附件清理成功。阶段、错误额度与恢复规则见 `2026-10-14-automatic-recovery.md`。
 
 ## Alternatives Considered
 

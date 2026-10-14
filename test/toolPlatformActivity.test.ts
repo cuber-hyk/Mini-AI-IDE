@@ -21,10 +21,11 @@ async function fixture(t: any, disabled = false) {
   let marks = 0; const sent: string[] = []; const copies: string[] = []; const cancelled: string[] = [];
   const handlers = new Map<string, any>(); const editor: any = { mainFrame: {}, isDestroyed: () => false, send() {} };
   const web: any = Object.assign(new EventEmitter(), { getURL: () => 'https://chat.deepseek.com/a/chat/platform', isDestroyed: () => false,
-    executeJavaScript: async () => { reads++; await beforeRead(); return { replies: [reply], completion: 'complete' }; },
+    executeJavaScript: async () => { reads++; await beforeRead(); return { replies: [reply], completion: 'complete', source: 'new', sourceKey: 'fixture|' + reply }; },
     executeJavaScriptInIsolatedWorld: async (_world: number, scripts: { code: string }[]) => {
       const code = scripts[0]!.code;
       if (code.includes('const completion =')) return web.executeJavaScript(code);
+      if (code.includes('const accepted = expected')) return { turn: 0, accepted: true };
       if (code.includes('previous.waiter = resolve')) return new Promise(resolve => { waiter = resolve; });
       if (code.includes('previous.dispose();')) { waiter?.(false); waiter = undefined; return true; }
       if (code.includes('previous.submitAt = Date.now();')) { marks++; await beforeMark(); return true; }

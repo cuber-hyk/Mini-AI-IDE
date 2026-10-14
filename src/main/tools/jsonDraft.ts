@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { parseToolBatch, type ToolBatch, type ToolDraftPatch } from '../../shared/toolProtocol';
+import { TOOL_JSON_RESEND_INSTRUCTION } from '../../shared/toolJsonDiagnostic';
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 const MAX_SOURCE = 200_000;
@@ -65,22 +66,23 @@ export class JsonDraft {
   }
 
   static instruction(metadata: { draft_id: string; version: number }): string {
-    return `草稿 ${metadata.draft_id}；修订稿版本 ${metadata.version}。原始回复保持不变。可用单个完整 mini-ai-tools 围栏发送 {"repair_draft":{"draft_id":"${metadata.draft_id}","version":${metadata.version},"old_string":"当前修订稿中的唯一原文","new_string":"替换内容"}}。只能更改当前修订稿中的唯一片段；本指令尚未执行任何工具。`;
+    return `草稿 ${metadata.draft_id}；修订稿版本 ${metadata.version}。当前草稿仅保存在 IDE 内存中，本批工具未执行，原始回复保持不变。请用单个完整 mini-ai-tools 围栏发送 {"repair_draft":{"draft_id":"${metadata.draft_id}","version":${metadata.version},"old_string":"当前修订稿中的唯一原文","new_string":"替换内容"}}，只返回这一条草稿补丁。沿用以上真实 draft_id 和 version，只能更改当前修订稿中的唯一片段；修复后的完整批次仍须通过协议校验和原工具权限检查。`;
   }
 
   apply(root: string | null, session: string, scope: string, sourceText: string, patch: ToolDraftPatch): DraftPatchOutcome {
     const draft = this.value;
     if (!draft || !root || draft.root !== root || draft.session !== session || draft.scope !== scope || draft.completed)
-      return { kind: 'rejected', error: '没有当前项目和会话中可恢复的未执行 JSON 草稿；补丁未应用' };
+      return { kind: 'rejected', error: `没有当前项目和会话中可恢复的未执行 JSON 草稿；补丁未应用。\n${TOOL_JSON_RESEND_INSTRUCTION}` };
+    const rejected = (error: string): DraftPatchOutcome => ({ kind: 'rejected', error: `${error}\n${JsonDraft.instruction({ draft_id: draft.id, version: draft.version })}` });
     if (draft.id !== patch.draft_id || draft.version !== patch.version)
-      return { kind: 'rejected', error: `草稿 ID 或版本不匹配，当前修订版本为 ${draft.version}；补丁未应用` };
+      return rejected(`草稿 ID 或版本不匹配，当前修订版本为 ${draft.version}；补丁未应用`);
     if (!patch.old_string || patch.old_string === patch.new_string || patch.new_string.length > MAX_SOURCE || sourceText.length > MAX_SOURCE)
-      return { kind: 'rejected', error: '修复片段无效或超过限制；补丁未应用' };
+      return rejected('修复片段无效或超过限制；补丁未应用');
     const offset = draft.revisedBody.indexOf(patch.old_string);
     if (offset < 0 || draft.revisedBody.indexOf(patch.old_string, offset + 1) !== -1)
-      return { kind: 'rejected', error: 'old_string 在当前修订稿中不存在或不唯一；补丁未应用' };
+      return rejected('old_string 在当前修订稿中不存在或不唯一；补丁未应用');
     const revised = draft.revisedBody.slice(0, offset) + patch.new_string + draft.revisedBody.slice(offset + patch.old_string.length);
-    if (revised.length > MAX_SOURCE) return { kind: 'rejected', error: '修订稿超过 200000 字符；补丁未应用' };
+    if (revised.length > MAX_SOURCE) return rejected('修订稿超过 200000 字符；补丁未应用');
     draft.revisedBody = revised;
     draft.version++;
     const parsed = parseToolBatch('```mini-ai-tools\n' + revised + '\n```');
@@ -88,7 +90,7 @@ export class JsonDraft {
       const detail = parsed.kind === 'error' ? parsed.error : '修订稿未形成合法的完整工具批次';
       if (parsed.kind !== 'error' || parsed.jsonBody === undefined) {
         this.invalidate();
-        return { kind: 'rejected', error: `修订稿已不属于可继续局部修复的 JSON 语法错误：${detail}；草稿已失效，未执行工具。请重新提交新的完整合法批次。` };
+        return { kind: 'rejected', error: `修订稿已不属于可继续局部修复的 JSON 语法错误：${detail}；草稿已失效，未执行工具。\n${TOOL_JSON_RESEND_INSTRUCTION}` };
       }
       return { kind: 'diagnostic', error: `${detail}\n${JsonDraft.instruction({ draft_id: draft.id, version: draft.version })}`, draft_id: draft.id, version: draft.version };
     }

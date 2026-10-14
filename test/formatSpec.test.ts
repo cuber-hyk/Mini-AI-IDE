@@ -90,6 +90,18 @@ test('唯一内置模板包含全部示例，自定义为空时不缺失协议',
   assert.equal(getFormatSpec(), FORMAT_SPEC);
   for (const custom of [null, undefined, '', '   ', '\n\t  \r\n']) assert.equal(resolveFormatSpec(custom), FORMAT_SPEC);
 });
+
+test('默认和自定义提示提前说明草稿修复只能使用 IDE 真实回执且不绕过权限', () => {
+  for (const prompt of [FORMAT_SPEC, resolveFormatSpec('回答保持简洁')]) {
+    assert.match(prompt, /repair_draft/);
+    assert.match(prompt, /真实 draft_id 和当前 version/);
+    assert.match(prompt, /不得凭空编造 ID 或版本/);
+    assert.match(prompt, /未执行内存草稿/);
+    assert.match(prompt, /修复完整合法后仍走原工具权限检查/);
+    assert.match(prompt, /草稿失效时，修正错误后重发完整合法批次/);
+  }
+  assert.equal(parseToolBatch(FORMAT_SPEC).kind, 'none', '修复说明与示例不能产生实际调用');
+});
 test('唯一自定义内容逐字保留为强制协议后的补充', () => {
   const custom = '\n\n【表达风格】\n说明保持简洁\n\n';
   assert.equal(resolveFormatSpec(custom), TOOL_PROTOCOL_PROMPT + '\n\n' + custom);

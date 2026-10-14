@@ -295,6 +295,7 @@ it('监听来源seal后复制与朗读控件变化保持新资格，正文变化
   document.children.push(current.frame); current.frame.parentElement = document;
   const first = vm.runInContext(CHATGPT_OBSERVATION_SCRIPT, context);
   assert.equal(first.source, 'new');
+  assert.equal(vm.runInContext(replyWatchScript('acknowledge', 'source-reader', 'chatgpt', first.sourceKey), context).accepted, true);
   const copyParent = current.bar.children[1]!;
   const translated = el('button', { 'aria-label': 'copy' }, [], 'copy');
   copyParent.children[0] = translated; translated.parentElement = copyParent;
@@ -318,6 +319,7 @@ it('同轮追加最新消息仍保留来源见证，旧消息及其控件变化�
   parent.children.push(current.assistant);
   const first = vm.runInContext(CHATGPT_OBSERVATION_SCRIPT, context);
   assert.equal(first.completion, 'complete'); assert.equal(first.source, 'new');
+  assert.equal(vm.runInContext(replyWatchScript('acknowledge', 'multi-source', 'chatgpt', first.sourceKey), context).accepted, true);
   earlier.footer.children[0]!.attrs['aria-label'] = 'copy';
   const unchanged = vm.runInContext(CHATGPT_OBSERVATION_SCRIPT, context);
   assert.equal(unchanged.sourceKey, first.sourceKey);
@@ -498,6 +500,7 @@ it('role控件包裹代码及代码内子节点不能隐藏真正JSON变化的�
     document.children.push(current.frame);current.frame.parentElement=document;
     const before=vm.runInContext(CHATGPT_COLLECT_SCRIPT,context)[0];
     const first=vm.runInContext(CHATGPT_OBSERVATION_SCRIPT,context);assert.equal(first.source,'new');
+    assert.equal(vm.runInContext(replyWatchScript('acknowledge','source-body','chatgpt',first.sourceKey),context).accepted,true);
     content=batch.replace('gpt-batch','different-batch');
     const after=vm.runInContext(CHATGPT_COLLECT_SCRIPT,context)[0];assert.notEqual(after,before);
     const changed=vm.runInContext(CHATGPT_OBSERVATION_SCRIPT,context);assert.notEqual(changed.source,'new',area);assert.notEqual(changed.sourceKey,first.sourceKey,area);
@@ -530,4 +533,58 @@ it('无固定样式类的多个正文、用户和思考区仍不能扩大采集�
     parent.children[index]=owner;owner.parentElement=parent;owner.children.push(current.root);current.root.parentElement=owner;
     assert.equal(run(CHATGPT_COLLECT_SCRIPT,el('body',{},[current.frame])).length,0);
   }
+});
+
+it('完成探测尚未接纳时正文续补保持新资格，实际接纳后改写仍暂停', () => {
+  const current = turn(batch); let content = batch;
+  Object.defineProperty(current.content, 'textContent', { get: () => content });
+  const document: any = el('body'); document.documentElement = document;
+  document.addEventListener = () => {}; document.removeEventListener = () => {};
+  const context = vm.createContext({ document, URL, Date, location: { href: 'https://chatgpt.com/c/one' }, setTimeout, clearTimeout, MutationObserver: class { observe() {} disconnect() {} } });
+  vm.runInContext(replyWatchScript('install', 'unfinished-snapshot', 'chatgpt'), context);
+  document.children.push(current.frame); current.frame.parentElement = document;
+  const observed = vm.runInContext(CHATGPT_OBSERVATION_SCRIPT, context);
+  assert.equal(observed.source, 'new');
+  content = batch.replace('gpt-batch', 'completed-batch');
+  const completed = vm.runInContext(CHATGPT_OBSERVATION_SCRIPT, context);
+  assert.equal(completed.source, 'new', '轻量探测不能冻结尚未实际采集的正文');
+  assert.notEqual(completed.sourceKey, observed.sourceKey);
+  assert.equal(vm.runInContext(replyWatchScript('acknowledge', 'unfinished-snapshot', 'chatgpt', completed.sourceKey), context).accepted, true);
+  content = batch.replace('gpt-batch', 'unknown-replacement');
+  assert.equal(vm.runInContext(CHATGPT_OBSERVATION_SCRIPT, context).source, 'unknown', '已接纳正文不得把资格转给无生成见证的替换内容');
+  vm.runInContext(replyWatchScript('stop', 'unfinished-snapshot', 'chatgpt'), context);
+});
+
+it('快照读取到接纳之间正文变动必须拒绝执行旧快照', () => {
+  const current = turn(batch); let content = batch;
+  Object.defineProperty(current.content, 'textContent', { get: () => content });
+  const document: any = el('body'); document.documentElement = document;
+  document.addEventListener = () => {}; document.removeEventListener = () => {};
+  const context = vm.createContext({ document, URL, Date, location: { href: 'https://chatgpt.com/c/one' }, setTimeout, clearTimeout, MutationObserver: class { observe() {} disconnect() {} } });
+  vm.runInContext(replyWatchScript('install', 'stale-snapshot', 'chatgpt'), context);
+  document.children.push(current.frame); current.frame.parentElement = document;
+  const observed = vm.runInContext(CHATGPT_OBSERVATION_SCRIPT, context);
+  content = batch.replace('gpt-batch', 'different-batch');
+  const accepted = vm.runInContext(replyWatchScript('acknowledge', 'stale-snapshot', 'chatgpt', observed.sourceKey), context);
+  assert.equal(accepted.accepted, false);
+  assert.notEqual(vm.runInContext(CHATGPT_OBSERVATION_SCRIPT, context).source, 'new');
+  vm.runInContext(replyWatchScript('stop', 'stale-snapshot', 'chatgpt'), context);
+});
+
+it('ChatGPT 稳定消息 ID 重挂载保留下一轮追加连续性且不重放原批', () => {
+  const current = turn(batch); current.root.attrs['data-dil-message-id'] = 'first';
+  const document: any = el('body'); document.documentElement = document;
+  document.addEventListener = () => {}; document.removeEventListener = () => {};
+  const context = vm.createContext({ document, URL, Date, location: { href: 'https://chatgpt.com/c/one' }, setTimeout, clearTimeout, MutationObserver: class { observe() {} disconnect() {} } });
+  vm.runInContext(replyWatchScript('install', 'remounted-source', 'chatgpt'), context);
+  document.children.push(current.frame); current.frame.parentElement = document;
+  const first = vm.runInContext(CHATGPT_OBSERVATION_SCRIPT, context);
+  assert.equal(vm.runInContext(replyWatchScript('acknowledge', 'remounted-source', 'chatgpt', first.sourceKey), context).accepted, true);
+  const remounted = turn(batch); remounted.root.attrs['data-dil-message-id'] = 'first';
+  document.children[0] = remounted.frame; remounted.frame.parentElement = document;
+  assert.equal(vm.runInContext(CHATGPT_OBSERVATION_SCRIPT, context).source, 'history');
+  const next = turn(batch.replace('gpt-batch', 'second-batch')); next.root.attrs['data-dil-message-id'] = 'second';
+  document.children.push(next.frame); next.frame.parentElement = document;
+  assert.equal(vm.runInContext(CHATGPT_OBSERVATION_SCRIPT, context).source, 'new');
+  vm.runInContext(replyWatchScript('stop', 'remounted-source', 'chatgpt'), context);
 });

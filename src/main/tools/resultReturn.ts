@@ -76,14 +76,25 @@ export class ToolResultReturn {
     };
     this.attempted = true; this.phase = 'sending'; this.message = '正在发送本批结果与附件'; this.options.changed();
     let result: WebSendResult;
+    let transportStarted = false;
     try {
       result = await this.options.verify(text, context.session, current, source);
+      // 只有明确的临时预检失败可再次核验；此时尚未读取附件或调用唯一运输 owner。
+      if (automatic && !result.ok && result.retryable === true && result.transportStarted === false && result.stage === 'preflight' && !result.uncertain && current()) {
+        this.attempted = false; this.phase = 'ready'; this.message = (result.error ?? '网页回复暂未就绪') + '；等待有限复核';
+        this.options.changed();
+        return result;
+      }
+      if (result.retryable) { const { retryable: _retryable, ...terminal } = result; result = terminal; }
       if (result.ok && !current()) result = { ok: false, error: '项目、会话、批次或发送选项已变化，未发送' };
       if (result.ok) {
+        transportStarted = true;
         const attachments = source.kind === 'diagnostic' || isBatchValidationFailure(context.state) || isPermissionDenialReceipt(context.state) ? [] : await this.options.attachments(context.state);
         result = current() ? await this.options.send(text, context.session, current, attachments) : { ok: false, error: '项目、会话、批次或发送选项已变化，未发送' };
+        if (result.retryable) { const { retryable: _retryable, ...terminal } = result; result = { ...terminal, transportStarted: true }; }
       }
     } catch (error) { result = { ok: false, error: error instanceof Error ? error.message : String(error) }; }
+    result = { ...result, transportStarted, ...(!transportStarted ? { stage: 'preflight' as const } : {}) };
     if (generation === this.generation) {
       this.phase = result.ok ? 'sent' : 'paused';
       this.message = result.ok ? '本批结果与附件已发送' : `${result.error ?? '发送失败'}；本批不重复上传，请在官网处理或发起新批次`;

@@ -255,6 +255,15 @@
         if (continuing.phase === 'paused') continueNotice.textContent = continuing.message;
         continueNotice.classList.toggle('is-error', continuing.phase === 'paused');
       }
+      const collecting = state.collection;
+      if (supported() && state.config.automatic && collecting && (['paused', 'recovering'].includes(collecting.phase) || collecting.reason === 'source-state-lost')
+        && !unavailable && !localError && (!continuing || continuing.phase !== 'paused') && (!returned || returned.phase !== 'paused')) {
+        activity.textContent = collecting.reason === 'source-state-lost' ? '等待新回复或手动采集' : collecting.phase === 'recovering' ? '正在恢复采集' : '采集已暂停';
+        activity.title = collecting.message;
+        activity.classList.toggle('is-error', collecting.phase === 'paused');
+        continueNotice.textContent = collecting.message;
+        continueNotice.classList.toggle('is-error', collecting.phase === 'paused');
+      }
       continueNotice.title = continueNotice.textContent;
       copyNotice.textContent = !state.clipboard || state.config.automatic && state.clipboard.ok ? '' : state.clipboard.ok ? '已自动复制本批结果，可粘贴给 AI' : '自动复制失败，请手动重试：' + state.clipboard.error;
       copyNotice.title = copyNotice.textContent;

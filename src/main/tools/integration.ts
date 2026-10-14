@@ -4,7 +4,8 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type { App, IpcMain, WebContents } from 'electron';
 import { CHANNELS } from '../../shared/contract';
-import { parseToolBatch, type ToolRequest, type ToolState } from '../../shared/toolProtocol';
+import { parseToolBatch, type ToolRequest, type ToolState, type ToolCollectionState } from '../../shared/toolProtocol';
+import { TOOL_JSON_RESEND_INSTRUCTION } from '../../shared/toolJsonDiagnostic';
 import { sessionKeyOf } from '../consumptionStore';
 import { ComposerDraftBackup } from '../composerDraftBackup';
 import type { FileService } from '../fileService';
@@ -165,6 +166,9 @@ export async function createToolIntegration(options: Options) {
   let harness: ToolHarness;
   let continuation: AutoContinuation | undefined;
   let resultReturn: ToolResultReturn | undefined;
+  let watcherHealth: ToolCollectionState = { phase: 'off', message: '自动采集已关闭' };
+  let collectorHealth: ToolCollectionState = { phase: 'watching', reason: 'baseline', message: '自动采集等待新回复' };
+  const collectionState = (): ToolCollectionState => ({ ...(watcherHealth.phase === 'watching' && !(watcherHealth.reason === 'source-state-lost' && collectorHealth.reason === 'baseline') ? collectorHealth : watcherHealth) });
   let activeSelection: ToolSelection | null = null;
   const draftScope = () => JSON.stringify([options.files.getRoot(), sessionKeyOf(web.getURL()), webPlatformOf(web.getURL()), revision]);
   const recoveryValid = () => {
@@ -201,7 +205,7 @@ export async function createToolIntegration(options: Options) {
     const notification = clipboard.notification(state, harness.getDiagnostic());
     const current: ToolState = { ...displayState(state), canUndo: changes.canUndo, hasRunningProcesses: processes.hasRunning,
       ...(notification ? { clipboard: notification } : {}), ...(continuation ? { continuation: continuation.getState() } : {}),
-      ...(resultReturn ? { resultReturn: resultReturn.getState({ root: options.files.getRoot(), session: sessionKeyOf(web.getURL()), state, recoveryValid: recoveryValid() }) } : {}) };
+      ...(resultReturn ? { resultReturn: resultReturn.getState({ root: options.files.getRoot(), session: sessionKeyOf(web.getURL()), state, recoveryValid: recoveryValid() }) } : {}), collection: collectionState() };
     if (!options.editor.isDestroyed()) options.editor.send(CHANNELS.toolState, current);
     options.notifyState?.(current);
   };
@@ -258,25 +262,42 @@ export async function createToolIntegration(options: Options) {
     if (!current()) return;
     if (parsed.kind === 'error' && parsed.jsonBody !== undefined) {
       const metadata = jsonDraft.capture(root, session, draftScope(), text, parsed.jsonBody);
-      await harness.collect(text, metadata ? JsonDraft.instruction(metadata) : '草稿超过内存限制或当前无项目，无法局部修复');
+      await harness.collect(text, metadata ? JsonDraft.instruction(metadata) : `草稿超过内存限制或当前无项目，无法局部修复。${TOOL_JSON_RESEND_INSTRUCTION}`);
       return;
     }
-    if (!(parsed.kind === 'error' && parsed.repairAttempt)) jsonDraft.invalidate();
+    if (parsed.kind === 'error' && parsed.repairAttempt) {
+      const metadata = jsonDraft.current(root, session, draftScope());
+      await harness.collect(text, metadata ? JsonDraft.instruction(metadata) : undefined);
+      return;
+    }
+    jsonDraft.invalidate();
     await harness.collect(text);
   };
-  const auto = new AutoCollector(() => monitor.read(), async (text, current, sourceKey) => {
+  const auto = new AutoCollector(() => monitor.read(), async (text, current, sourceKey, sourceSession) => {
     // 封存实际接纳的完成正文（包括已见生成后的 idle），节点复用不能继承执行资格。
     if (!webActive || disposed || !current()) return;
     const collectionRevision = revision;
-    await watcher.acknowledge(false, sourceKey);
+    const collectionNavigation = navigationRevision;
     const root = options.files.getRoot(); const session = sessionKeyOf(web.getURL());
-    const allowed = webActive && !disposed && current() && revision === collectionRevision && root === options.files.getRoot() && session === sessionKeyOf(web.getURL());
+    if (sourceSession !== session) return;
+    if (!sourceKey) { auto.sourceChanged(); return; }
+    const accepted = await watcher.acknowledge(false, sourceKey);
+    const allowed = webActive && !disposed && current() && revision === collectionRevision && navigationRevision === collectionNavigation && root === options.files.getRoot() && session === sessionKeyOf(web.getURL());
+    if (!allowed) return;
+    if (!accepted) {
+      auto.sourceChanged();
+      return;
+    }
     traceCollection('integration.collect-check', { allowed, root: root ? traceText(root) : null, session: traceScope(session), text: traceText(text) });
     if (allowed) {
       await collectReply(text, current);
       traceCollection('integration.collect-returned', { root: root ? traceText(root) : null, session: traceScope(session), text: traceText(text) });
     }
-  }, message => harness.report(message));
+  }, message => harness.report(message), health => {
+    collectorHealth = health;
+    traceCollection('integration.collection-health', { ...health });
+    if (!disposed) broadcast(harness.getState());
+  });
   const createWatcher = () => new ReplyChangeWatcher(web, userTurn => {
     if (!webActive || disposed) return Promise.resolve();
     traceCollection('integration.watcher-change', { userTurn, session: traceScope(web.getURL()) });
@@ -288,7 +309,13 @@ export async function createToolIntegration(options: Options) {
     if (generated) auto.observeGeneration(sessionKeyOf(web.getURL()));
     else if (preserve) auto.continueAt(sessionKeyOf(web.getURL())); else auto.reset(awaitHistory);
     synchronizeChangeSession(); harness.getState();
-  }, message => harness.report(message), session => continuation?.reset({ root: options.files.getRoot(), session }), readOptions);
+  }, message => harness.report(message), session => continuation?.reset({ root: options.files.getRoot(), session }), {
+    ...readOptions, health: health => {
+      watcherHealth = health;
+      traceCollection('integration.watch-health', { ...health });
+      if (!disposed) broadcast(harness.getState());
+    },
+  });
   let watcher = createWatcher();
   harness = new ToolHarness({ store, root: () => options.files.getRoot(), session: () => sessionKeyOf(web.getURL()),
     current: selection => webActive && !disposed && selectionRevisions.get(selection) === revision &&
@@ -345,7 +372,7 @@ export async function createToolIntegration(options: Options) {
     synchronizeChangeSession();
     const state = harness.getState();
     const notification = clipboard.notification(state, harness.getDiagnostic());
-    return { ...displayState(state), canUndo: changes.canUndo, hasRunningProcesses: processes.hasRunning, ...(notification ? { clipboard: notification } : {}), ...(continuation ? { continuation: continuation.getState() } : {}), ...(resultReturn ? { resultReturn: resultReturn.getState({ root: options.files.getRoot(), session: sessionKeyOf(web.getURL()), state, recoveryValid: recoveryValid() }) } : {}) };
+    return { ...displayState(state), canUndo: changes.canUndo, hasRunningProcesses: processes.hasRunning, ...(notification ? { clipboard: notification } : {}), ...(continuation ? { continuation: continuation.getState() } : {}), ...(resultReturn ? { resultReturn: resultReturn.getState({ root: options.files.getRoot(), session: sessionKeyOf(web.getURL()), state, recoveryValid: recoveryValid() }) } : {}), collection: collectionState() };
   };
   resultReturn = new ToolResultReturn({
     current: () => ({ root: options.files.getRoot(), session: sessionKeyOf(web.getURL()), state: harness.getState(), diagnostic: harness.getDiagnostic(), recoveryValid: recoveryValid() }),
@@ -363,7 +390,9 @@ export async function createToolIntegration(options: Options) {
       const reply = await readAutoReply(web, readOptions);
       if (!webActive || disposed || !current()) return { ok: false, error: '本批发送已取消' };
       if (reply.url !== session) return { ok: false, error: '网页会话已变化，未发送旧工具结果' };
-      if (reply.completion !== 'complete') return { ok: false, error: reply.completion === 'generating' ? '网页仍在生成，未发送工具结果' : reply.completion === 'interrupted' ? '网页生成已中断，未发送工具结果' : '无法确认网页回复结束，未发送工具结果' };
+      if (reply.completion !== 'complete') return { ok: false,
+        error: reply.completion === 'generating' ? '网页仍在生成，未发送工具结果' : reply.completion === 'interrupted' ? '网页生成已中断，未发送工具结果' : '无法确认网页回复结束，未发送工具结果',
+        ...(reply.completion !== 'interrupted' ? { retryable: true as const, transportStarted: false, stage: 'preflight' as const } : {}) };
       const parsed = parseToolBatch(reply.text);
       if (source.kind === 'diagnostic') {
         const matchesSource = reply.text === source.diagnostic.sourceText;

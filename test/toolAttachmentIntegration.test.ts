@@ -142,10 +142,18 @@ it('诊断回传复核要求官网原文匹配且回复完成，不能借相同�
       if (scenario === 'same-error') f.setReply(badReply(2));
       else if (scenario === 'normal-reply') f.setReply(f.batch('different'));
       else f.setCompletion(scenario);
-      await f.wait(() => f.system.getState().continuation?.phase === 'paused');
-      assert.equal(f.sent.length, 0, scenario);
-      await f.invoke(CHANNELS.setToolConfig, { sendIntervalSeconds: 0 });
-      assert.equal(f.system.getState().continuation?.phase, 'paused');
+      if (scenario === 'generating' || scenario === 'unknown') {
+        await f.wait(() => f.system.getState().continuation?.phase === 'countdown' && f.system.getState().continuation!.message.includes('预检'));
+        assert.equal(f.sent.length, 0, scenario);
+        f.setReply(badReply(2)); f.setCompletion('complete');
+        await f.wait(() => f.system.getState().continuation?.phase === 'paused');
+        assert.equal(f.sent.length, 0, '预检恢复后仍须核对诊断原文，不能发送旧回执');
+      } else {
+        await f.wait(() => f.system.getState().continuation?.phase === 'paused');
+        assert.equal(f.sent.length, 0, scenario);
+        await f.invoke(CHANNELS.setToolConfig, { sendIntervalSeconds: 0 });
+        assert.equal(f.system.getState().continuation?.phase, 'paused');
+      }
     } finally { await f.dispose(); }
   }
 });

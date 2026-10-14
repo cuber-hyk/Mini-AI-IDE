@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import * as vm from 'node:vm';
 import { it } from 'node:test';
-import { ReplyChangeWatcher, REPLY_WATCH_WORLD } from '../src/main/tools/replyChangeWatcher';
+import { ReplyChangeWatcher, REPLY_WATCH_WORLD, type ReplyWatchOptions } from '../src/main/tools/replyChangeWatcher';
+import type { ToolCollectionState } from '../src/shared/toolProtocol';
 import { AutoCollector, type AutoReply } from '../src/main/tools/autoCollector';
 import { DEEPSEEK_SEND_ICON } from '../src/main/tools/replyObservation';
 
@@ -15,7 +16,7 @@ function continuationControl() {
 }
 
 async function flush() { for (let i = 0; i < 20; i++) await Promise.resolve(); }
-function fixture(change?: (userTurn: boolean) => Promise<void>, reset?: (preserve?: boolean, awaitHistory?: boolean, generated?: boolean) => void) {
+function fixture(change?: (userTurn: boolean) => Promise<void>, reset?: (preserve?: boolean, awaitHistory?: boolean, generated?: boolean) => void, options: ReplyWatchOptions = {}) {
   let now = 10000;
   const timers = new Map<number, () => void>(); const delays = new Map<number, number>(); let timerId = 0; let checks = 0; let resets = 0; let executions = 0;
   let observer: any; let url = 'https://chat.deepseek.com/a/chat/s/one';
@@ -46,9 +47,10 @@ function fixture(change?: (userTurn: boolean) => Promise<void>, reset?: (preserv
   web.executeJavaScriptInIsolatedWorld = async (world: number, scripts: any[]) => {
     assert.equal(world, REPLY_WATCH_WORLD); executions++; return vm.runInContext(scripts[0].code, context);
   };
-  const watcher = new ReplyChangeWatcher(web, async userTurn => { checks++; await change?.(userTurn); }, (preserve, awaitHistory, generated) => { resets++; reset?.(preserve, awaitHistory, generated); }, text => messages.push(text));
+  const health: ToolCollectionState[] = [];
+  const watcher = new ReplyChangeWatcher(web, async userTurn => { checks++; await change?.(userTurn); }, (preserve, awaitHistory, generated) => { resets++; reset?.(preserve, awaitHistory, generated); }, text => messages.push(text), () => {}, { ...options, health: state => { health.push(state); options.health?.(state); } });
   const node = (relevant: boolean) => ({ nodeType: 1, closest: () => relevant ? {} : null, querySelector: () => null });
-  return { watcher, web, messages, timers, context, listeners,
+  return { watcher, web, messages, health, timers, context, listeners,
     advanceTime(milliseconds: number) { now += milliseconds; },
     userAction(extra: Record<string, unknown> = {}) { const type = String(extra.type ?? 'click'); listeners.get(type)?.({ type, isTrusted: true, target: composer, ...extra }); },
     hasRoot(value: boolean) { root = value; },
@@ -56,6 +58,7 @@ function fixture(change?: (userTurn: boolean) => Promise<void>, reset?: (preserv
     tooltipGenerating(value: boolean) { tooltipGeneration = value; },
     text(value: string) { currentReply.textContent = value; },
     replaceReply(value: string) { currentReply = { ...currentReply, textContent: value }; messagesFrames[messagesFrames.length - 1] = currentReply; root = true; },
+    appendReply(value: string) { currentReply = { ...currentReply, textContent: value }; messagesFrames.push(currentReply); root = true; },
     historyFooter(button: unknown) { messagesFrames.unshift({ parentElement: null, closest: (selector: string) => selector === 'pre,code' ? null : ({ parentElement: { contains: (node: unknown) => node === button } }) }); },
     latestFooter(button: unknown) { currentFooter.push(button); },
     counts: () => ({ checks, resets, executions }),
@@ -105,16 +108,22 @@ it('关闭自动采集后才执行的旧初始化不得留下监听', async () =
   } finally { await f.watcher.dispose(); }
 });
 
-it('仍开启时变化等待失效须明确报告并清理观察者，不能静默丢失后续通知', async () => {
+it('仍开启时变化等待失效有限恢复，连续三次仍失败须清理并明确暂停', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const f = fixture(); const execute = f.web.executeJavaScriptInIsolatedWorld;
   f.web.executeJavaScriptInIsolatedWorld = (world: number, scripts: { code: string }[]) => scripts[0]!.code.includes('previous.waiter = resolve')
     ? Promise.resolve(false) : execute(world, scripts);
   try {
     f.watcher.setEnabled(true); await flush();
+    assert.equal(f.health.at(-1)?.phase, 'recovering');
+    const resets = f.counts().resets;
+    for (const delay of [250, 1000, 3000]) { t.mock.timers.tick(delay); await flush(); }
     assert.equal(f.active(), false);
     assert.equal(f.messages.length, 1);
-    assert.match(f.messages[0]!, /监听已失效/);
-    assert.equal(f.counts().checks, 1);
+    assert.match(f.messages[0]!, /恢复失败.*监听已失效/);
+    assert.equal(f.health.at(-1)?.phase, 'paused');
+    assert.equal(f.counts().checks, 4);
+    assert.equal(f.counts().resets, resets, '修复已有订阅不能重置自动采集历史基线');
   } finally { await f.watcher.dispose(); }
 });
 
@@ -166,10 +175,28 @@ it('自动接纳 idle 后的 acknowledge 同样封存正文，节点复用不能
   f.generating(true); f.text('new generated body'); f.bodyMutation(); f.deliver(150); await flush();
   f.generating(false); f.text('completed idle body'); f.bodyMutation(); f.deliver(150); await flush();
   assert.equal(f.source(), 'new');
-  await f.watcher.acknowledge();
+  await f.watcher.acknowledge(false, f.sourceKey());
   f.text('never mounted historical command'); f.bodyMutation(); f.deliver(150); await flush();
   assert.notEqual(f.source(), 'new');
   await f.watcher.dispose();
+});
+
+it('自动接纳缺失来源 key 时明确拒绝且不封存，手动采集仍可按用户确认封存', async () => {
+  const f = fixture();
+  try {
+    assert.equal(await f.watcher.acknowledge(false), false, '未建立监听不代表自动来源已确认');
+    f.watcher.setEnabled(true); await flush();
+    f.appendReply('new unaccepted tools'); f.mutation(); f.deliver(150); await flush();
+    assert.equal(f.source(), 'new');
+    const before = f.counts().executions;
+    assert.equal(await f.watcher.acknowledge(false), false);
+    assert.equal(f.counts().executions, before, '缺失 key 不得触发网页封存脚本');
+    f.text('new body still completing'); f.mutation(); f.deliver(150); await flush();
+    assert.equal(f.source(), 'new', '被拒绝的无 key 接纳不能冻结正文');
+    assert.equal(await f.watcher.acknowledge(true), true, '手动入口已有独立用户确认，不要求自动来源 key');
+    f.text('unwitnessed replacement'); f.mutation(); f.deliver(150); await flush();
+    assert.notEqual(f.source(), 'new');
+  } finally { await f.watcher.dispose(); }
 });
 
 it('idle 快照读取与 acknowledge 之间同节点被换成旧正文，必须按原快照身份封存', async () => {
@@ -181,6 +208,30 @@ it('idle 快照读取与 acknowledge 之间同节点被换成旧正文，必须�
   assert.notEqual(f.source(), 'new');
   f.deliver(150); await flush(); assert.notEqual(f.source(), 'new');
   await f.watcher.dispose();
+});
+
+it('官网已确认接纳但主进程尚未收到回执时导航、关闭或销毁仍作废旧快照', async () => {
+  for (const action of ['navigate', 'disable', 'dispose']) {
+    const f = fixture(); const execute = f.web.executeJavaScriptInIsolatedWorld;
+    let release: (() => void) | undefined;
+    f.web.executeJavaScriptInIsolatedWorld = async (world: number, scripts: { code: string }[]) => {
+      const metadata = await execute(world, scripts);
+      if (scripts[0]!.code.includes('const accepted = expected')) return new Promise(resolve => { release = () => resolve(metadata); });
+      return metadata;
+    };
+    try {
+      f.watcher.setEnabled(true); await flush();
+      f.generating(true); f.text('actual new tools'); f.bodyMutation(); f.deliver(150); await flush();
+      f.generating(false);
+      const accepted = f.watcher.acknowledge(false, f.sourceKey()); await flush();
+      assert.ok(release);
+      if (action === 'navigate') { f.navigate('https://chat.deepseek.com/a/chat/s/other'); await f.watcher.settleNavigation(); }
+      else if (action === 'disable') f.watcher.setEnabled(false);
+      else await f.watcher.dispose();
+      release!();
+      assert.equal(await accepted, false, action);
+    } finally { await f.watcher.dispose(); }
+  }
 });
 
 it('已有会话在空加载帧启用时等待迟到历史，不能执行第一个历史命令', async () => {
@@ -213,12 +264,94 @@ it('关闭、页面导航和销毁使旧通知失效，重新启用或新会话�
   assert.equal(f.active(), false); f.web.emit('dom-ready'); await flush(); assert.equal(f.counts().checks, 4);
   await f.watcher.dispose(); assert.equal(f.web.listenerCount('dom-ready'), 0); assert.equal(f.active(), false);
 });
-it('监听失败明确提示，不自动退回轮询或静默重试', async () => {
+it('监听连续执行异常仅退避三次，到上限明确提示且停止重试', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
   const f = fixture(); f.web.executeJavaScriptInIsolatedWorld = async () => { throw new Error('renderer failed'); };
   f.watcher.setEnabled(true); await flush();
-  assert.match(f.messages.join('\n'), /监听失败.*renderer failed/); assert.equal(f.counts().checks, 0);
+  assert.equal(f.health.at(-1)?.phase, 'recovering');
+  for (const delay of [250, 1000, 3000]) { t.mock.timers.tick(delay); await flush(); }
+  assert.match(f.messages.join('\n'), /监听恢复失败.*renderer failed/); assert.equal(f.counts().checks, 0);
   const count = f.messages.length; await flush(); assert.equal(f.messages.length, count);
   await f.watcher.dispose();
+});
+
+it('同文档订阅短暂失败后复用来源并补采恢复期间的新输出一次', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const collected: string[] = [];
+  let f: ReturnType<typeof fixture>;
+  const auto = new AutoCollector(async () => { const state = (f.context as any).__miniAIReplyChanges; state.updateSources(); return { url: f.web.getURL(), text: state.replyNodes().at(-1)?.textContent ?? '', completion: 'complete', source: f.source(), sourceKey: f.sourceKey() }; }, async (text, _current, sourceKey) => {
+    if (await f.watcher.acknowledge(false, sourceKey)) collected.push(text);
+  }, () => {});
+  f = fixture(() => auto.tick(), (_preserve, history) => auto.reset(history));
+  const execute = f.web.executeJavaScriptInIsolatedWorld; let fail = true; let oldWaitResolved = false;
+  f.web.executeJavaScriptInIsolatedWorld = (world: number, scripts: { code: string }[]) => {
+    if (fail && scripts[0]!.code.includes('previous.waiter = resolve')) {
+      fail = false;
+      void execute(world, scripts).then(() => { oldWaitResolved = true; });
+      return Promise.reject(new Error('temporary wait transport failure'));
+    }
+    return execute(world, scripts);
+  };
+  try {
+    auto.setEnabled(true); f.watcher.setEnabled(true); await flush();
+    const sources = (f.context as any).__miniAIReplyChanges.sources; const resets = f.counts().resets;
+    f.generating(true); f.text('new partial tools'); f.bodyMutation();
+    f.generating(false); f.text('new completed tools'); f.bodyMutation();
+    t.mock.timers.tick(250); await flush();
+    assert.equal(oldWaitResolved, true, '修复先撤销遗留wait，不能产生两个消费者');
+    assert.equal((f.context as any).__miniAIReplyChanges.sources, sources);
+    assert.equal(f.counts().resets, resets);
+    assert.equal(f.active(), true);
+    assert.deepEqual(collected, ['new completed tools']);
+    f.deliver(150); await flush();
+    assert.deepEqual(collected, ['new completed tools'], '后续遗留变化不能重复执行');
+    assert.equal(f.health.at(-1)?.phase, 'watching');
+  } finally { await f.watcher.dispose(); auto.dispose(); }
+});
+
+it('来源状态丢失时恢复仅重建历史，并明确报告未补采旧内容', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fixture(); const execute = f.web.executeJavaScriptInIsolatedWorld; let fail = true;
+  f.web.executeJavaScriptInIsolatedWorld = (world: number, scripts: { code: string }[]) => {
+    if (fail && scripts[0]!.code.includes('previous.waiter = resolve')) { fail = false; return Promise.resolve(false); }
+    return execute(world, scripts);
+  };
+  try {
+    f.watcher.setEnabled(true); await flush();
+    assert.equal(f.health.at(-1)?.phase, 'recovering');
+    const resets = f.counts().resets;
+    vm.runInContext('globalThis.__miniAIReplyChanges.dispose(); delete globalThis.__miniAIReplyChanges;', f.context);
+    f.text('never executed historical tools');
+    t.mock.timers.tick(250); await flush();
+    assert.equal(f.active(), true);
+    assert.ok((f.context as any).__miniAIReplyChanges, JSON.stringify({ counts: f.counts(), health: f.health, messages: f.messages }));
+    assert.equal(f.source(), 'history');
+    assert.equal(f.counts().resets, resets + 1);
+    assert.equal(f.health.at(-1)?.reason, 'source-state-lost');
+    assert.match(f.health.at(-1)!.message, /已有回复作为历史/);
+  } finally { await f.watcher.dispose(); }
+});
+
+it('关闭、会话导航或销毁撤销尚未开始的监听恢复', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  for (const action of ['disable', 'navigate', 'dispose']) {
+    const f = fixture(); const execute = f.web.executeJavaScriptInIsolatedWorld; let fail = true; let repairs = 0;
+    f.web.executeJavaScriptInIsolatedWorld = (world: number, scripts: { code: string }[]) => {
+      if (scripts[0]!.code.includes('return { preserved: true, turn:')) repairs++;
+      if (fail && scripts[0]!.code.includes('previous.waiter = resolve')) { fail = false; return Promise.resolve(false); }
+      return execute(world, scripts);
+    };
+    try {
+      f.watcher.setEnabled(true); await flush(); assert.equal(f.health.at(-1)?.phase, 'recovering');
+      if (action === 'disable') f.watcher.setEnabled(false);
+      else if (action === 'navigate') f.navigate('https://chat.deepseek.com/a/chat/s/other');
+      else await f.watcher.dispose();
+      await flush(); t.mock.timers.tick(5000); await flush();
+      assert.equal(repairs, 0, action);
+      if (action === 'navigate') assert.notEqual(f.source(), 'new');
+      else assert.equal(f.active(), false, action);
+    } finally { await f.watcher.dispose(); }
+  }
 });
 
 it('真实发送动作只通知取消待回传；合成事件、Shift+Enter和输入法回车不通知发送动作', async () => {
@@ -283,6 +416,47 @@ it('历史回复分批挂载期间持续更新基线，500ms历史安静后新�
   f.deliver(500); await flush();
   reply.text = 'new output'; f.replaceReply(reply.text); f.mutation(); f.deliver(150); await flush();
   assert.deepEqual(output, ['new output']); await f.watcher.dispose(); auto.dispose();
+});
+
+it('SPA 导航时已同步挂载完整历史则落定历史基线，下一新增回复执行一次', async () => {
+  let f: ReturnType<typeof fixture>;
+  const output: string[] = [];
+  const auto = new AutoCollector(async () => {
+    const state = (f.context as any).__miniAIReplyChanges; state.updateSources();
+    return { url: f.web.getURL(), text: state.replyNodes().at(-1)?.textContent ?? '', completion: 'complete', source: f.source(), sourceKey: f.sourceKey() };
+  }, async (text, _current, sourceKey) => { if (await f.watcher.acknowledge(false, sourceKey)) output.push(text); }, () => {});
+  f = fixture(() => auto.tick(), (_preserve, history) => auto.reset(history));
+  try {
+    auto.setEnabled(true); f.watcher.setEnabled(true); await flush();
+    f.replaceReply('synchronously mounted historical tools');
+    f.navigate('https://chat.deepseek.com/a/chat/s/synchronous-history');
+    await f.watcher.settleNavigation(); await flush();
+    assert.equal((f.context as any).__miniAIReplyChanges.history.ready, true);
+    f.deliver(150); await flush();
+    assert.deepEqual(output, [], '同步挂载的未执行历史也只能成为基线');
+    f.deliver(500); await flush();
+    assert.equal((f.context as any).__miniAIReplyChanges.history, null);
+    f.appendReply('actual new tools after mounted history'); f.mutation(); f.deliver(150); await flush();
+    f.mutation(); f.deliver(150); await flush();
+    assert.deepEqual(output, ['actual new tools after mounted history']);
+  } finally { await f.watcher.dispose(); auto.dispose(); }
+});
+
+it('导航仍是原旧 DOM 或空加载帧时不启动历史安静窗口，迟到历史仍受保护', async () => {
+  const f = fixture();
+  try {
+    f.watcher.setEnabled(true); await flush();
+    f.navigate('https://chat.deepseek.com/a/chat/s/old-dom-target'); await f.watcher.settleNavigation();
+    assert.equal((f.context as any).__miniAIReplyChanges.history.timer, null);
+    f.deliver(500); await flush();
+    assert.equal((f.context as any).__miniAIReplyChanges.history.ready, false);
+    f.hasRoot(false); f.navigate('https://chat.deepseek.com/a/chat/s/empty-target'); await f.watcher.settleNavigation();
+    f.deliver(500); await flush();
+    assert.equal((f.context as any).__miniAIReplyChanges.history.timer, null);
+    f.replaceReply('late mounted history'); f.mutation(); f.deliver(150); await flush();
+    assert.equal(f.source(), 'history');
+    assert.equal((f.context as any).__miniAIReplyChanges.history.ready, true);
+  } finally { await f.watcher.dispose(); }
 });
 
 it('启用时已有未知结束状态回复，原生结束控件后挂不执行历史', async () => {

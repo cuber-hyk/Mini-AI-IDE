@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { it } from 'node:test';
-import { WebComposerSender, COMPOSER_SEND_WORLD } from '../src/main/webComposerSender';
+import { WebComposerSender, COMPOSER_SEND_WORLD, type WebSendResult } from '../src/main/webComposerSender';
+
+async function flush() { for (let index = 0; index < 20; index++) await Promise.resolve(); }
 
 function fixture(url = 'https://chatgpt.com/c/current', backupDraft?: (text: string, session: string) => Promise<string>, draftSaved?: (path: string) => void) {
   const web = new EventEmitter() as any;
@@ -142,4 +144,60 @@ it('ChatGPT 取消与发送同一时刻发生时不安装写入脚本', async ()
     await f.sender.cancel();
     assert.equal((await sending).ok, false); assert.equal(f.scripts.length, 0);
   } finally { await f.sender.dispose(); }
+});
+
+it('整体超时先收敛取消证据，页面取消先返回也保留未点击或已点击阶段', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  for (const clicked of [false, true]) for (const rejects of [false, true]) {
+    const f = fixture(); let finish!: (result: WebSendResult) => void; let fail!: (error: Error) => void;
+    f.web.executeJavaScriptInIsolatedWorld = async (_world: number, entries: { code: string }[]) => {
+      const code = entries[0]!.code; f.scripts.push(code);
+      if (code.includes('state.cancel();')) {
+        const result: WebSendResult = { ok: false, error: '自动发送已取消', transportStarted: true,
+          stage: clicked ? 'clicked' : 'waiting_button', cancellation: clicked ? 'clicked' : 'not_clicked', ...(clicked ? { uncertain: true } : {}) };
+        if (rejects) fail(new Error('取消期间执行脚本失效')); else finish(result);
+        return result;
+      }
+      return new Promise<WebSendResult>((resolve, reject) => { finish = resolve; fail = reject; });
+    };
+    const sending = f.sender.send('result', 'https://chatgpt.com/c/current'); await flush();
+    t.mock.timers.tick(7500); await flush();
+    const result = await sending;
+    assert.equal(result.ok, false); assert.equal(result.transportStarted, true); assert.equal(result.retryable, undefined);
+    assert.equal(result.stage, clicked ? 'clicked' : 'waiting_button');
+    assert.equal(result.cancellation, clicked ? 'clicked' : 'not_clicked'); assert.equal(result.uncertain === true, clicked);
+    assert.match(result.error!, /等待超时/); assert.equal(f.scripts.length, 2, '只安装一次运输和一次取消，不重发');
+    await f.sender.dispose();
+  }
+});
+
+it('整体超时后的取消无响应仍在一秒内停止，并阻止后续运输', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] }); const f = fixture();
+  f.web.executeJavaScriptInIsolatedWorld = async (_world: number, entries: { code: string }[]) => {
+    f.scripts.push(entries[0]!.code); return new Promise(() => {});
+  };
+  const sending = f.sender.send('result', 'https://chatgpt.com/c/current'); let done = false;
+  void sending.then(() => { done = true; }); await flush();
+  t.mock.timers.tick(7500); await flush(); assert.equal(done, false, '超时先等待取消收敛');
+  t.mock.timers.tick(999); await flush(); assert.equal(done, false);
+  t.mock.timers.tick(1); await flush(); const result = await sending;
+  assert.equal(result.cancellation, 'unknown'); assert.equal(result.uncertain, true); assert.equal(result.transportStarted, true);
+  assert.match(result.error!, /取消状态未确认/);
+  assert.equal((await f.sender.send('next', 'https://chatgpt.com/c/current')).ok, false);
+  assert.equal(f.scripts.length, 2); await f.sender.dispose();
+});
+
+it('整体期限包含草稿备份，备份超时取消不覆盖或启动迟到发送', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  let saved!: (path: string) => void;
+  const f = fixture(undefined, () => new Promise(resolve => { saved = resolve; }));
+  f.web.executeJavaScriptInIsolatedWorld = async (_world: number, entries: { code: string }[]) => {
+    const code = entries[0]!.code; f.scripts.push(code);
+    assert.ok(!code.includes('return state.resume();'));
+    return code.includes('state.cancel();') ? { ok: false, error: '自动发送已取消', stage: 'draft_backup', cancellation: 'not_clicked' } : { ok: true, draftText: 'draft' };
+  };
+  const sending = f.sender.send('result', 'https://chatgpt.com/c/current'); await flush();
+  t.mock.timers.tick(7500); await flush(); const result = await sending;
+  assert.equal(result.stage, 'draft_backup'); assert.equal(result.cancellation, 'not_clicked'); assert.equal(result.retryable, undefined);
+  saved('/late.txt'); await flush(); assert.equal(f.scripts.length, 2); await f.sender.dispose();
 });

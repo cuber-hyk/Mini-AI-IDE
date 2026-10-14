@@ -9,6 +9,7 @@ import { createToolIntegration } from '../src/main/tools/integration';
 import { FileService } from '../src/main/fileService';
 import { ReturnPathService } from '../src/main/returnPathService';
 import { CHANNELS } from '../src/shared/contract';
+import { TOOL_JSON_RESEND_INSTRUCTION } from '../src/shared/toolJsonDiagnostic';
 
 const batch = (id: string, tool: string, args: unknown) => '```mini-ai-tools\n' + JSON.stringify({ protocol_version: 1, batch_id: id, requests: [{ id: 'request', tool, args }] }) + '\n```';
 async function until(check: () => boolean) { const deadline = Date.now() + 5000; while (!check()) { assert.ok(Date.now() < deadline, '协作链路应完成'); await delay(5); } }
@@ -17,12 +18,16 @@ async function fixture(t: { after(fn: () => Promise<void>): void }) {
   const handlers = new Map<string, any>(); const editor: any = { mainFrame: {}, isDestroyed: () => false, send() {} };
   let reply = ''; let completion = 'complete'; let session = 'https://chat.deepseek.com/a/chat/continue';
   let wait: ((value: unknown) => void) | undefined;
-  let read: () => Promise<unknown> = async () => ({ replies: [reply], completion });
+  let read: () => Promise<unknown> = async () => ({ replies: [reply], completion, source: 'new', sourceKey: 'fixture|' + completion + ':' + reply });
+  let acknowledge = async (): Promise<unknown> => ({ turn: 0, accepted: true });
+  let navigation = async (): Promise<unknown> => ({ preserve: false, turn: 0 });
   const web: any = Object.assign(new EventEmitter(), { getURL: () => session, isDestroyed: () => false,
     executeJavaScript: () => read(),
     executeJavaScriptInIsolatedWorld: async (_world: number, scripts: { code: string }[]) => {
       const script = scripts[0]!.code;
       if (script.includes('const completion =')) return read();
+      if (script.includes('const accepted = expected')) return acknowledge();
+      if (script.includes('const from = previous.scope')) return navigation();
       if (script.includes('new Promise(resolve')) return new Promise(resolve => { wait = resolve; });
       if (script.includes('preserve')) return { preserve: false, turn: 0 };
       if (script.includes('return { turn:')) return { turn: 0 };
@@ -43,10 +48,41 @@ async function fixture(t: { after(fn: () => Promise<void>): void }) {
     setAction(fn: typeof action) { action = fn; },
     setReply(text: string, phase = 'complete') { reply = text; completion = phase; },
     setRead(fn: typeof read) { read = fn; },
+    setAcknowledge(fn: typeof acknowledge) { acknowledge = fn; },
+    setNavigation(fn: typeof navigation) { navigation = fn; },
+    async ready() { await until(() => !!wait); },
     async notify(text: string, turn = 0) { reply = text; await until(() => !!wait); const next = wait; wait = undefined; next!({ turn }); },
     switchSession() { session += '-new'; web.emit('did-navigate-in-page', {}, session, true); },
+    navigateTo(url: string) { session = url; web.emit('did-navigate-in-page', {}, session, true); },
   };
 }
+
+it('旧回复已确认接纳后迟到的回执不能跨会话或导航往返执行命令，也不污染新会话采集状态', async t => {
+  for (const roundTrip of [false, true]) {
+    const f = await fixture(t); await f.call(CHANNELS.setToolConfig, { permission: 'full', automatic: true, sendIntervalSeconds: 0 });
+    await f.ready();
+    let releaseAck: (() => void) | undefined; const navigationReplies: Array<() => void> = [];
+    f.setAcknowledge(() => new Promise(resolve => { releaseAck = () => resolve({ turn: 0, accepted: true }); }));
+    f.setNavigation(() => new Promise(resolve => { navigationReplies.push(() => resolve({ preserve: false, turn: 0 })); }));
+    const old = batch('old-navigation-' + roundTrip, 'apply_changes', { changes: [{ path: 'old-must-not-run.txt', operation: 'create', content: 'not authorized in later scope' }] });
+    await f.notify(old); await until(() => !!releaseAck);
+    f.switchSession();
+    if (roundTrip) f.navigateTo('https://chat.deepseek.com/a/chat/continue');
+    await until(() => navigationReplies.length === (roundTrip ? 2 : 1));
+    releaseAck!(); await delay(20);
+    await assert.rejects(fs.access(path.join(f.root, 'old-must-not-run.txt')), { code: 'ENOENT' });
+    assert.equal(f.sent.length, 0, '已跨导航的快照不能在新作用域获得执行或发送资格');
+    assert.notEqual(f.system.getState().collection?.reason, 'source_changed', '旧回执不能把新作用域标记为来源暂停');
+    navigationReplies.forEach(release => release()); await delay(20);
+    f.setNavigation(async () => ({ preserve: false, turn: 0 }));
+    f.setAcknowledge(async () => ({ turn: 0, accepted: true }));
+    f.setReply('新会话历史基线'); await f.notify('新会话历史基线'); await delay(20);
+    const fresh = batch('fresh-navigation-' + roundTrip, 'apply_changes', { changes: [{ path: 'fresh.txt', operation: 'create', content: 'fresh request' }] });
+    await f.notify(fresh); await until(() => f.sent.length === 1);
+    assert.equal(await fs.readFile(path.join(f.root, 'fresh.txt'), 'utf8'), 'fresh request');
+    assert.equal(JSON.parse(f.sent[0]!).tool_results[0].batch_id, 'fresh-navigation-' + roundTrip);
+  }
+});
 it('自动发回读取和修改工具结果，下一轮由变化监听采集，普通对话等待用户', async t => {
   const f = await fixture(t); await fs.writeFile(path.join(f.root, 'a.txt'), 'A');
   await f.call(CHANNELS.setToolConfig, { permission: 'full', automatic: true, sendIntervalSeconds: 0 });
@@ -131,7 +167,10 @@ it('补丁漏冒号只报告错误，保留原草稿 ID 和版本，随后正确
   const goodPatch = repairFor(f.system.getState(), 1, ',}', '}');
   const badPatch = goodPatch.replace('"repair_draft":', '"repair_draft" ');
   await f.notify(badPatch); await until(() => f.sent.length === 2);
-  assert.doesNotMatch(f.system.getState().batchError!.error, /草稿 [0-9a-f-]{36}/, '畸形补丁不获得新的草稿标识');
+  const diagnostic = f.system.getState().batchError!.error;
+  const originalId = JSON.parse(goodPatch.split('\n')[1]!).repair_draft.draft_id;
+  assert.ok(diagnostic.includes(`草稿 ${originalId}；修订稿版本 1`), '畸形补丁沿用原真实草稿，不创建新的草稿标识或版本');
+  assert.ok(!diagnostic.includes(TOOL_JSON_RESEND_INSTRUCTION), '有效草稿的回执不能同时要求完整重发');
   assert.equal(f.system.getState().results.length, 0);
   await assert.rejects(fs.access(path.join(f.root, 'original.txt')));
   await f.notify(goodPatch); await until(() => f.sent.length === 3 && !f.system.getState().busy);
@@ -145,6 +184,8 @@ it('恢复的完整批次走原工具执行、持久去重及官网补丁来源�
   f.setReply(original); await f.system.accept(original, 'complete');
   await until(() => f.sent.length === 1);
   assert.ok(JSON.parse(f.sent[0]!).batch_error);
+  assert.match(JSON.parse(f.sent[0]!).batch_error.error, /只返回这一条草稿补丁/);
+  assert.ok(!f.sent[0]!.includes('不要只返回补丁或残片'), '发给 AI 的同一回执不能禁止其唯一推荐的补丁');
   await assert.rejects(fs.access(path.join(f.root, 'recovered.txt')), { code: 'ENOENT' });
   const patch = repairFor(f.system.getState(), 1, ',}', '}');
   await f.notify(patch);
@@ -156,6 +197,22 @@ it('恢复的完整批次走原工具执行、持久去重及官网补丁来源�
   assert.equal(f.sent.length, 2, '重放相同官网补丁不得再次执行或回传');
 });
 
+it('无法保留内存草稿时只指导完整重发，重新提交合法批次后才执行', async t => {
+  const f = await fixture(t); await f.call(CHANNELS.setToolConfig, { permission: 'full', automatic: true, sendIntervalSeconds: 0 });
+  const args = { changes: [{ path: 'no-draft.txt', operation: 'create', content: 'complete retry' }] };
+  const original = invalidBatch('too-long-for-draft', 'apply_changes', args) + '\n' + ' '.repeat(200001);
+  f.setReply(original); await f.system.accept(original, 'complete'); await until(() => f.sent.length === 1);
+  const diagnostic = JSON.parse(f.sent[0]!).batch_error.error as string;
+  assert.ok(diagnostic.endsWith(TOOL_JSON_RESEND_INSTRUCTION));
+  assert.doesNotMatch(diagnostic, /repair_draft|草稿 [0-9a-f-]{36}/, '无法建立草稿时不能推荐带虚构身份的补丁');
+  assert.equal(f.system.getState().results.length, 0);
+  await assert.rejects(fs.access(path.join(f.root, 'no-draft.txt')), { code: 'ENOENT' });
+  await f.notify(batch('complete-retry', 'apply_changes', args));
+  await until(() => f.sent.length === 2 && !f.system.getState().busy);
+  assert.equal(JSON.parse(f.sent[1]!).tool_results[0].batch_id, 'complete-retry');
+  assert.equal(await fs.readFile(path.join(f.root, 'no-draft.txt'), 'utf8'), 'complete retry');
+});
+
 it('修复后的 JSON 仍非法时版本递增，再次修复才执行，所有中间诊断都未创建文件', async t => {
   const f = await fixture(t); await f.call(CHANNELS.setToolConfig, { permission: 'full', automatic: true, sendIntervalSeconds: 0 });
   const original = invalidBatch('recover-twice', 'apply_changes', { changes: [{ path: 'twice.txt', operation: 'create', content: 'after two patches' }] });
@@ -164,6 +221,7 @@ it('修复后的 JSON 仍非法时版本递增，再次修复才执行，所有�
   await f.notify(first); await until(() => f.sent.length === 2);
   assert.ok(JSON.parse(f.sent[1]!).batch_error);
   assert.match(f.system.getState().batchError!.error, /版本 2/);
+  assert.ok(!f.system.getState().batchError!.error.includes(TOOL_JSON_RESEND_INSTRUCTION));
   await assert.rejects(fs.access(path.join(f.root, 'twice.txt')), { code: 'ENOENT' });
   const second = repairFor(f.system.getState(), 2, ', ]}', '}');
   await f.notify(second); await until(() => f.sent.length === 3);
@@ -265,12 +323,22 @@ for (const invalidation of ['platform', 'session', 'reset'] as const) {
   });
 }
 
-it('发送前复核区分真实生成、中断与未知完成，拒绝原因不混称会话变化', async t => {
+it('发送预检暂缺完成证据可恢复同批一次回传，真实中断仍立即暂停', async t => {
   for (const [phase, reason] of [['generating','网页仍在生成'],['interrupted','网页生成已中断'],['unknown','无法确认网页回复结束']]) {
     const f = await fixture(t); await f.call(CHANNELS.setToolConfig, { permission: 'full', automatic: true, sendIntervalSeconds: 0 });
     const body = batch('verify-'+phase, 'get_project_info', {}); f.setReply(body, phase); await f.system.accept(body, 'complete');
-    await until(() => f.system.getState().continuation?.phase === 'paused');
-    assert.equal(f.sent.length, 0); assert.ok(f.system.getState().continuation?.message.includes(reason!));
+    if (phase === 'interrupted') {
+      await until(() => f.system.getState().continuation?.phase === 'paused');
+      assert.equal(f.sent.length, 0); assert.ok(f.system.getState().continuation?.message.includes(reason!));
+    } else {
+      await until(() => f.system.getState().continuation?.phase === 'countdown' && f.system.getState().continuation!.message.includes(reason!));
+      assert.equal(f.sent.length, 0, '缺结束证据时不开始运输');
+      const original = f.system.getState().completion!.id;
+      f.setReply(body, 'complete'); await until(() => f.sent.length === 1);
+      assert.equal(f.system.getState().completion!.id, original, '只复核原结果，不能重新执行工具');
+      assert.equal(JSON.parse(f.sent[0]!).tool_results[0].batch_id, 'verify-' + phase);
+      await delay(30); assert.equal(f.sent.length, 1);
+    }
   }
 });
 

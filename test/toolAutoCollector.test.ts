@@ -2,6 +2,38 @@ import assert from 'node:assert/strict';
 import { it } from 'node:test';
 import * as vm from 'node:vm';
 import { AutoCollector, COMPLETION_SCRIPT, type AutoReply } from '../src/main/tools/autoCollector';
+import type { ToolCollectionState } from '../src/shared/toolProtocol';
+
+it('回复读取暂时失败可保留基线恢复，重复通知不会重放已接纳的新批', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let reply: AutoReply = { url: 'one', text: 'history', completion: 'complete' }; let failing = false;
+  const output: string[] = []; const health: ToolCollectionState[] = [];
+  const owner = new AutoCollector(async () => { if (failing) throw Error('temporary renderer read'); return reply; }, async text => { output.push(text); }, () => {}, state => health.push(state));
+  t.after(() => owner.dispose()); owner.setEnabled(true); await owner.tick();
+  reply = { ...reply, text: 'new', source: 'new' }; failing = true; await owner.tick();
+  assert.equal(health.at(-1)?.phase, 'recovering'); assert.deepEqual(output, []);
+  failing = false; t.mock.timers.tick(250); for (let i = 0; i < 12; i++) await Promise.resolve();
+  assert.deepEqual(output, ['new']); assert.equal(health.at(-1)?.phase, 'watching');
+  await owner.tick(); assert.deepEqual(output, ['new']);
+});
+
+it('读取恢复有次数上限，关闭或导航重置撤销旧重试，未知来源不会自行解除', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] }); let reads = 0;
+  const health: ToolCollectionState[] = [];
+  const owner = new AutoCollector(async () => { reads++; throw Error('failed'); }, async () => assert.fail('不得执行'), () => {}, state => health.push(state));
+  t.after(() => owner.dispose()); owner.setEnabled(true); await owner.tick();
+  for (const delay of [250, 1000, 3000]) { t.mock.timers.tick(delay); for (let i = 0; i < 12; i++) await Promise.resolve(); }
+  assert.equal(reads, 4); assert.equal(health.at(-1)?.phase, 'paused');
+  t.mock.timers.tick(10000); assert.equal(reads, 4);
+  owner.reset(); await owner.tick(); owner.setEnabled(false); t.mock.timers.tick(10000); assert.equal(reads, 5);
+  owner.setEnabled(true); await owner.tick(); owner.reset(true); t.mock.timers.tick(10000); assert.equal(reads, 6);
+  let reply: AutoReply = { url: 'one', text: 'old', completion: 'complete' }; let collections = 0;
+  const source = new AutoCollector(async () => reply, async () => { collections++; }, () => {}, value => health.push(value));
+  t.after(() => source.dispose()); source.setEnabled(true); await source.tick();
+  reply = { ...reply, text: 'unknown command', source: 'unknown' }; await source.tick();
+  assert.equal(health.at(-1)?.reason, 'source_unknown'); t.mock.timers.tick(10000);
+  assert.equal(collections, 0); assert.equal(health.at(-1)?.phase, 'paused');
+});
 
 it('回复内部复制代码按钮与历史回复复制按钮不能证明最新回复结束', () => {
   const button: any = { textContent: '复制', getAttribute: () => null, getClientRects: () => [{}], closest: () => null };

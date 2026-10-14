@@ -4,6 +4,7 @@ import type { ToolState, ToolResult } from '../src/shared/toolProtocol';
 import { AutoContinuation } from '../src/main/tools/autoContinuation';
 import { formatToolResults } from '../src/main/tools/resultClipboard';
 import type { ToolDiagnostic } from '../src/main/tools/harness';
+import type { WebSendResult } from '../src/main/webComposerSender';
 
 const config = { permission: 'full' as const, automatic: true, dirtyPolicy: 'ask' as const, completionSound: false, autoCopyResults: true, sendIntervalSeconds: 3 };
 const completed = (id = 1, tool: ToolResult['tool'] = 'read_file', status: ToolResult['status'] = 'done'): ToolState => ({
@@ -15,7 +16,7 @@ function fixture() {
   let context = { root: 'root' as string | null, session: 'chat', state: { config: { ...config }, busy: false, results: [], message: '' } as ToolState, diagnostic: null as ToolDiagnostic | null };
   let diagnosticId = 0; const diagnostics = new WeakMap<ToolState, ToolDiagnostic>();
   const sent: Array<{ text: string; session: string }> = []; let cancelled = 0;
-  let send: (text: string, session: string) => Promise<{ ok: boolean; error?: string; uncertain?: boolean }> = async (text, session) => { sent.push({ text, session }); return { ok: true }; };
+  let send: (text: string, session: string) => Promise<WebSendResult> = async (text, session) => { sent.push({ text, session }); return { ok: true }; };
   const owner = new AutoContinuation({ current: () => context, send: (text, session) => send(text, session), cancelSend: async () => { cancelled++; }, changed() {} });
   owner.observe(context);
   return { owner, sent, get cancellations() { return cancelled; }, setSend(fn: typeof send) { send = fn; },
@@ -34,6 +35,114 @@ function fixture() {
     replaceScope(session: string) { context = { ...context, session }; },
   };
 }
+const pendingPreflight = (): WebSendResult => ({ ok: false, error: '网页回复暂未确认结束', retryable: true, transportStarted: false, stage: 'preflight' });
+
+it('无运输的临时预检按退避复核同批，恢复后只运输一次', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] }); const f = fixture(); t.after(() => f.owner.dispose());
+  let checked = 0; const bodies: string[] = [];
+  f.setSend(async (text, session) => {
+    bodies.push(text); checked++;
+    if (checked < 3) return pendingPreflight();
+    f.sent.push({ text, session }); return { ok: true, transportStarted: true };
+  });
+  const state = completed(); f.update(state);
+  t.mock.timers.tick(3000); await flush(); assert.equal(checked, 1); assert.equal(f.sent.length, 0);
+  t.mock.timers.tick(999); await flush(); assert.equal(checked, 1);
+  t.mock.timers.tick(1); await flush(); assert.equal(checked, 2);
+  f.update(state); t.mock.timers.tick(2999); await flush(); assert.equal(checked, 2, '重复广播不提前重试');
+  t.mock.timers.tick(1); await flush(); assert.equal(checked, 3); assert.equal(f.sent.length, 1);
+  assert.equal(f.owner.getState().phase, 'waiting_reply');
+  assert.deepEqual([...new Set(bodies)], [formatToolResults(state.results)]);
+  f.update(state); t.mock.timers.tick(10000); await flush(); assert.equal(checked, 3);
+});
+
+it('预检最多额外复核三次，达到上限后重复广播及重开不复活旧批', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] }); const f = fixture(); t.after(() => f.owner.dispose());
+  let checked = 0; f.setSend(async () => { checked++; return pendingPreflight(); });
+  const state = completed(); f.update(state);
+  for (const delay of [3000, 1000, 3000, 5000]) { t.mock.timers.tick(delay); await flush(); }
+  assert.equal(checked, 4); assert.equal(f.owner.getState().phase, 'paused'); assert.match(f.owner.getState().message, /复核已达上限/);
+  f.update(state); f.update({ ...state, config: { ...config, automatic: false } }); f.update(state);
+  t.mock.timers.tick(100000); await flush(); assert.equal(checked, 4); assert.equal(f.sent.length, 0);
+});
+
+it('退避期间关闭、用户中断、新轮、会话或正文变化均撤销旧批复核', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  for (const scenario of ['off', 'interrupted', 'turn', 'session', 'body'] as const) {
+    const f = fixture(); let checked = 0; f.setSend(async () => { checked++; return pendingPreflight(); });
+    const state = completed(); f.update(state); t.mock.timers.tick(3000); await flush(); assert.equal(checked, 1);
+    if (scenario === 'off') f.update({ ...state, config: { ...config, automatic: false } });
+    if (scenario === 'interrupted') { state.userInterrupted = true; f.update(state); }
+    if (scenario === 'turn') f.owner.userTurn();
+    if (scenario === 'session') f.update(state, { root: 'root', session: 'other' });
+    if (scenario === 'body') { state.results[0]!.data = 'changed'; f.update(state); }
+    t.mock.timers.tick(10000); await flush(); assert.equal(checked, 1, scenario); assert.equal(f.sent.length, 0);
+    f.owner.dispose();
+  }
+});
+
+it('预检复核不消耗也不重置连续五次诊断运输额度', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] }); const f = fixture(); t.after(() => f.owner.dispose());
+  let checked = 0; f.setSend(async (text, session) => {
+    checked++;
+    if (checked % 2) return pendingPreflight();
+    f.sent.push({ text, session }); return { ok: true, transportStarted: true };
+  });
+  for (let index = 0; index < 6; index++) {
+    f.update({ config, busy: false, results: [], message: '', batchError: { status: 'failed', error: 'invalid-' + index } });
+    t.mock.timers.tick(3000); await flush(); t.mock.timers.tick(1000); await flush();
+  }
+  assert.equal(checked, 10); assert.equal(f.sent.length, 5); assert.equal(f.owner.getState().phase, 'paused');
+  assert.match(f.owner.getState().message, /连续 5 次/);
+});
+
+it('终止于预检且尚未运输的诊断失败同样不占用回传额度', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] }); const f = fixture(); t.after(() => f.owner.dispose());
+  let checked = 0;
+  f.setSend(async (text, session) => {
+    checked++;
+    if (checked === 5) return { ok: false, error: '当前来源已失效', transportStarted: false, stage: 'preflight' };
+    f.sent.push({ text, session }); return { ok: true, transportStarted: true };
+  });
+  for (let index = 0; index < 7; index++) {
+    f.update({ config, busy: false, results: [], message: '', batchError: { status: 'failed', error: 'invalid-' + index } });
+    t.mock.timers.tick(3000); await flush();
+  }
+  assert.equal(checked, 6); assert.equal(f.sent.length, 5); assert.match(f.owner.getState().message, /连续 5 次/);
+});
+
+it('正常结果清零后迟到的旧预检不倒扣额度，后续仍严格限制五次', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] }); const f = fixture(); t.after(() => f.owner.dispose());
+  let finish!: (result: WebSendResult) => void; let first = true;
+  f.setSend(async (text, session) => {
+    if (first) { first = false; return new Promise(resolve => { finish = resolve; }); }
+    f.sent.push({ text, session }); return { ok: true, transportStarted: true };
+  });
+  f.update({ config, busy: false, results: [], message: '', batchError: { status: 'failed', error: 'old' } });
+  t.mock.timers.tick(3000); await flush();
+  f.update(completed()); t.mock.timers.tick(3000); await flush(); assert.equal(f.sent.length, 1);
+  finish(pendingPreflight()); await flush();
+  for (let index = 0; index < 6; index++) {
+    f.update({ config, busy: false, results: [], message: '', batchError: { status: 'failed', error: 'invalid-' + index } });
+    t.mock.timers.tick(3000); await flush();
+  }
+  assert.equal(f.sent.length, 6, '一个正常结果与五次诊断；旧预检不能制造第六次额度');
+  assert.match(f.owner.getState().message, /连续 5 次/);
+});
+
+it('已开始运输或未知状态即使携带retryable也绝不重新发送', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] });
+  for (const result of [
+    { ...pendingPreflight(), transportStarted: true },
+    { ...pendingPreflight(), uncertain: true },
+    { ...pendingPreflight(), stage: 'clicked' as const },
+  ]) {
+    const f = fixture(); let checked = 0; f.setSend(async () => { checked++; return result; });
+    const state = completed(); f.update(state); t.mock.timers.tick(3000); await flush();
+    f.update(state); t.mock.timers.tick(100000); await flush(); assert.equal(checked, 1); assert.equal(f.owner.getState().phase, 'paused');
+    f.owner.dispose();
+  }
+});
 it('所有正式工具完成后按间隔发送当前整批，重复状态不发送第二次，下一轮继续', async t => {
   t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 }); const f = fixture(); t.after(() => f.owner.dispose());
   const first = completed(); f.update(first); assert.equal(f.owner.getState().phase, 'countdown');

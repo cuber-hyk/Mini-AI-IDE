@@ -3,12 +3,13 @@ import type { ToolContinuationState, ToolState } from '../../shared/toolProtocol
 import { isBatchValidationFailure, isCompletedStoppedCommand, isPermissionDenialReceipt } from '../../shared/toolProtocol';
 import type { ToolDiagnostic } from './harness';
 import { formatToolResults } from './resultClipboard';
+import type { WebSendResult } from '../webComposerSender';
 
 interface Context { root: string | null; session: string; state: ToolState; diagnostic?: ToolDiagnostic | null }
-interface Pending { scope: string; event: { kind: 'completion' | 'diagnostic'; id: number }; corrective: boolean; body: string; interval: number }
+interface Pending { scope: string; event: { kind: 'completion' | 'diagnostic'; id: number }; corrective: boolean; body: string; interval: number; preflightRetries: number }
 interface Options {
   current: () => Context;
-  send: (text: string, session: string, current: () => boolean) => Promise<{ ok: boolean; error?: string; uncertain?: boolean }>;
+  send: (text: string, session: string, current: () => boolean) => Promise<WebSendResult>;
   cancelSend: () => Promise<void>;
   changed: (state: ToolContinuationState) => void;
 }
@@ -24,7 +25,9 @@ export class AutoContinuation {
   private initialized = false;
   // 解析与执行前整批校验错误共用额度；正常执行结果发送成功或切换 scope 时归零。
   private consecutiveBatchErrors = 0;
+  private correctiveReservations = new Set<symbol>();
   private static readonly MAX_CONSECUTIVE_BATCH_ERRORS = 5;
+  private static readonly PREFLIGHT_RETRY_DELAYS = [1000, 3000, 5000];
   constructor(private readonly options: Options) {}
   getState(): ToolContinuationState { return { ...this.value }; }
   private change(value: ToolContinuationState): void {
@@ -63,7 +66,7 @@ export class AutoContinuation {
       this.initialized = true; this.observedCompletion = state.completion?.id ?? 0; this.observedDiagnostic = diagnostic?.id ?? 0;
     }
     const scope = JSON.stringify([root, session]);
-    if (scope !== this.scope) { this.cancel(); this.scope = scope; this.consecutiveBatchErrors = 0; }
+    if (scope !== this.scope) { this.cancel(); this.scope = scope; this.consecutiveBatchErrors = 0; this.correctiveReservations.clear(); }
     if (!state.config.automatic || !root) {
       if (this.pending || this.value.phase !== 'off') this.cancel();
       this.observedCompletion = Math.max(this.observedCompletion, state.completion?.id ?? 0);
@@ -85,7 +88,7 @@ export class AutoContinuation {
     }
     if (!event) { this.change({ phase: 'waiting_user', message: '等待你发送需求或回答 AI' }); return; }
     if (this.pending) {
-      if (this.value.phase === 'countdown' && this.pending.interval !== state.config.sendIntervalSeconds) {
+      if (this.value.phase === 'countdown' && this.pending.preflightRetries === 0 && this.pending.interval !== state.config.sendIntervalSeconds) {
         this.pending.interval = state.config.sendIntervalSeconds; this.schedule(this.pending);
       }
       return;
@@ -105,7 +108,7 @@ export class AutoContinuation {
         this.change({ phase: 'paused', message: '连续 5 次批次校验失败，已停止自动发送，等待你处理' }); return;
       }
     }
-    const pending = { scope, event, corrective, body: this.bodyOf(state), interval: state.config.sendIntervalSeconds };
+    const pending = { scope, event, corrective, body: this.bodyOf(state), interval: state.config.sendIntervalSeconds, preflightRetries: 0 };
     this.pending = pending; this.schedule(pending);
   }
   private schedule(pending: Pending): void {
@@ -122,14 +125,30 @@ export class AutoContinuation {
       this.cancel(); this.change({ phase: 'paused', message: '当前项目、会话或结果已变化，自动发送取消' }); return;
     }
     this.change({ phase: 'sending', message: '正在发送工具结果…' });
-    if (pending.corrective) this.consecutiveBatchErrors++;
+    const reservation = pending.corrective ? Symbol() : undefined;
+    if (reservation) { this.consecutiveBatchErrors++; this.correctiveReservations.add(reservation); }
     try {
       const result = await this.options.send(pending.body, context.session, () => !this.disposed && generation === this.generation && this.pending === pending);
+      if (reservation && this.correctiveReservations.delete(reservation) && result.transportStarted === false) this.consecutiveBatchErrors--;
       if (this.disposed || generation !== this.generation || this.pending !== pending) return;
+      if (!result.ok && result.retryable === true && result.transportStarted === false && result.stage === 'preflight' && !result.uncertain) {
+        // 纯预检尚未尝试运输，不消耗校验错误回传额度；重试仍复用同一批与所有取消守卫。
+        const delay = AutoContinuation.PREFLIGHT_RETRY_DELAYS[pending.preflightRetries];
+        if (delay !== undefined) {
+          pending.preflightRetries++;
+          this.change({ phase: 'countdown', message: `自动回传预检暂未就绪，${delay / 1000} 秒后复核（${pending.preflightRetries}/3）：${result.error ?? '等待网页回复完成'}`, dueAt: Date.now() + delay });
+          this.timer = setTimeout(() => { this.timer = undefined; void this.send(pending, generation); }, delay);
+          return;
+        }
+        this.pending = undefined;
+        this.change({ phase: 'paused', message: '自动回传预检复核已达上限，等待你处理：' + (result.error ?? '网页回复仍未就绪') });
+        return;
+      }
       this.pending = undefined;
-      if (result.ok && !pending.corrective) this.consecutiveBatchErrors = 0;
+      if (result.ok && !pending.corrective) { this.consecutiveBatchErrors = 0; this.correctiveReservations.clear(); }
       this.change(result.ok ? { phase: 'waiting_reply', message: '结果已发送，等待 AI 回复' } : { phase: 'paused', message: (result.uncertain ? '发送结果无法确认，不会重复发送：' : '自动发送暂停：') + (result.error || '请检查网页') });
     } catch (error) {
+      if (reservation) this.correctiveReservations.delete(reservation);
       if (this.disposed || generation !== this.generation || this.pending !== pending) return;
       this.pending = undefined;
       this.change({ phase: 'paused', message: '自动发送失败，不会重试：' + (error instanceof Error ? error.message : String(error)) });
@@ -141,7 +160,7 @@ export class AutoContinuation {
   reset(context: Pick<Context, 'root' | 'session'>): void {
     this.cancel();
     const scope = JSON.stringify([context.root, context.session]);
-    if (scope !== this.scope) { this.scope = scope; this.consecutiveBatchErrors = 0; }
+    if (scope !== this.scope) { this.scope = scope; this.consecutiveBatchErrors = 0; this.correctiveReservations.clear(); }
     if (this.value.phase !== 'off') this.change({ phase: 'waiting_user', message: '当前回执已变化，等待新的工具结果' });
   }
   dispose(): void { this.disposed = true; this.cancel(); }

@@ -100,7 +100,6 @@ export const CHATGPT_OBSERVATION_SCRIPT = `(() => {
   globalThis.__miniAIReplyChanges?.updateSources?.();
   const source = globalThis.__miniAIReplyChanges?.sources?.source(reply);
   const sourceKey = globalThis.__miniAIReplyChanges?.sources?.key(reply);
-  globalThis.__miniAIReplyChanges?.sources?.seal(reply);
   let first = 2166136261, second = 5381;
   for (let i = 0; i < content.length; i++) { first = Math.imul(first ^ content.charCodeAt(i), 16777619); second = Math.imul(second, 33) ^ content.charCodeAt(i); }
   return { completion, source, sourceKey, signature: [messages.length, reply.querySelectorAll(${JSON.stringify(CHATGPT_CODE_SELECTOR)}).length, content.length, first >>> 0, second >>> 0, completion, source || '', sourceKey || ''].join(':') };

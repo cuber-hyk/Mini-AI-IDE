@@ -464,7 +464,7 @@ app.whenReady().then(async () => {
     } finally { await system.dispose(); ToolFiles.prototype.execute=executeFile; }
   });
   previousWindow.destroy();
-  await test('本地附件动作行在窄列换行，不遮住状态或产生水平溢出，发送按钮保留可读名称', async () => {
+  await test('本地附件操作沿用摘要图标按钮，窄列不溢出且发送操作保留可读名称', async () => {
     const localHtml = fs.readFileSync(path.join(root, 'src/renderer/index.html'), 'utf8');
     const dock = localHtml.match(/<section id="tool-dock"[\s\S]*?<\/section>/)[0];
     const styles = ['ui-tokens.css', 'ui.css', 'toolHarness.css'].map(name => fs.readFileSync(path.join(root, 'dist/renderer', name), 'utf8')).join('\n');
@@ -474,12 +474,12 @@ app.whenReady().then(async () => {
       const measured = await window.webContents.executeJavaScript(`(() => {
         const dock = document.getElementById('tool-dock'), panel = document.getElementById('tool-panel');
         dock.style.width = '${width}px'; panel.classList.add('has-attachments');
-        const send = document.getElementById('tool-copy'); send.hidden = false; send.disabled = false; send.textContent = '发送结果与附件'; send.dataset.action = 'send';
+        const send = document.getElementById('tool-copy'); send.hidden = false; send.disabled = false; send.setAttribute('aria-label','发送本批结果与附件，并复制结果到剪贴板'); send.dataset.action = 'send';
         document.getElementById('tool-return-notice').textContent = '附件已暂存，等待本批结果发送';
         const area = dock.getBoundingClientRect(), summary = panel.querySelector('summary').getBoundingClientRect();
         const buttons = Array.from(dock.querySelector('.tool-result-actions').querySelectorAll('button')).filter(item => !item.hidden && item.offsetWidth);
         return { overflow: dock.scrollWidth > dock.clientWidth, name: send.getAttribute('aria-label'), label: send.textContent, area: { left: area.left, right: area.right }, summaryBottom: summary.bottom, rects: buttons.map(item => ({name:item.id, left:item.getBoundingClientRect().left, right:item.getBoundingClientRect().right, top:item.getBoundingClientRect().top})),
-          fits: buttons.every(item => { const r = item.getBoundingClientRect(); return r.left >= area.left - .5 && r.right <= area.right + .5 && r.top >= summary.bottom - .5; }) };
+          fits: buttons.every(item => { const r = item.getBoundingClientRect(); return r.left >= area.left - .5 && r.right <= area.right + .5 && r.top >= summary.top - .5 && r.bottom <= summary.bottom + .5; }) };
       })()`);
       assert.equal(measured.overflow, false, '宽度 ' + width); assert.equal(measured.fits, true, '按钮宽度 ' + width + ': ' + JSON.stringify(measured));
       assert.ok(measured.name || measured.label.trim(), '发送操作需要可读名称');

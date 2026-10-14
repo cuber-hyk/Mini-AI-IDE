@@ -85,12 +85,12 @@ app.whenReady().then(async()=>{
  await run("appendReply('history','get_project_info',{})");
  const root=path.join(temporary,'project');await fs.mkdir(root);await fs.writeFile(path.join(root,'input.txt'),'真实磁盘内容');
  const files=new FileService();files.setRoot(root);
- const handlers=new Map(), copies=[], states=[];
+ const handlers=new Map(), copies=[], states=[], changedFiles=[];
  const editor={mainFrame:{},isDestroyed:()=>false,send(_channel,state){states.push(state)}};
  sender=new WebComposerSender(window.webContents);
  system=await createToolIntegration({ipc:{handle:(channel,fn)=>handlers.set(channel,fn)},editor,web:window.webContents,files,
   returnPath:new ReturnPathService(files),workspace:{editor:{isDirty:()=>false,current:{documents:[]}},run:fn=>fn()},sender,
-  storePath:path.join(temporary,'tools.json'),disabled:false,ask:async()=>({response:0,checkboxChecked:false}),notifyFile(){},copy:text=>copies.push(text)});
+  storePath:path.join(temporary,'tools.json'),disabled:false,ask:async()=>({response:0,checkboxChecked:false}),notifyFile(relative,change){changedFiles.push({relative,change})},copy:text=>copies.push(text)});
  await handlers.get(CHANNELS.setToolConfig)({sender:editor,senderFrame:editor.mainFrame},{permission:'full',automatic:true,sendIntervalSeconds:0});
  await until(()=>window.webContents.executeJavaScriptInIsolatedWorld(1004,[{code:'Boolean(globalThis.__miniAIReplyChanges)'}]),'监听必须建立');
  await wait(700);assert.equal(system.getState().results.length,0,'历史基线不得执行');assert.equal(await run('received.length'),0);
@@ -151,11 +151,100 @@ app.whenReady().then(async()=>{
  await until(async()=>(await readAutoReply(window.webContents)).completion==='complete','恢复结果回传后的生成结束');
  await appendBody('native-repeat-repair',patchBody);await wait(400);
  assert.equal(await run('received.length'),beforeRecovery+2,'重复恢复补丁不能重新执行或回传');
- console.log('ChatGPT 原生离线闭环：原7项、解析诊断与草稿恢复、临时目录与真实文件创建、恢复复制回传一致及补丁不重放，共11项通过；官网验收仍待实际对话。');
+ const chainStart=await run('received.length'),chainCopies=copies.length;
+ const rounds=30,recoveries=[],remounts=[];
+ for(let round=1;round<=rounds;round++){
+  const suffix=String(round).padStart(2,'0'),id='long-chain-'+suffix,file=id+'.txt',content='真实长链第 '+round+' 轮';
+  const before=chainStart+round-1;
+  if(round===8||round===19){
+   await until(()=>window.webContents.executeJavaScriptInIsolatedWorld(1004,[{code:'Boolean(globalThis.__miniAIReplyChanges?.waiter)'}]),'故障注入前必须处于真实等待');
+   const stateIndex=states.length;
+   const preserved=await window.webContents.executeJavaScriptInIsolatedWorld(1004,[{code:`(()=>{const state=globalThis.__miniAIReplyChanges;if(!state?.waiter)return null;const waiter=state.waiter;state.waiter=null;state.observer.disconnect();waiter(false);return {token:state.token,sourceEpoch:state.sourceEpoch}})()`}]);
+   assert.ok(preserved,'可控故障必须实际释放原监听等待');
+   await until(()=>states.slice(stateIndex).some(state=>state.collection?.phase==='recovering'),'监听失效须显示恢复阶段');
+   recoveries.push({round,stateIndex,preserved});
+  }
+  const body=JSON.stringify({protocol_version:1,batch_id:id,requests:[
+   {id:'create',tool:'apply_changes',args:{changes:[{path:file,operation:'create',content}]}},
+   {id:'read',tool:'read_file',args:{path:file},depends_on:['create']}
+  ]});
+  // 故障轮在观察者已断开时挂载新回复，恢复必须保留来源并主动复核这一条。
+  await appendBody(id,body);
+  await until(async()=>await run('received.length')===before+1&&!system.getState().busy,'第 '+round+' 轮真实执行并回传');
+  const receiptText=await run('received.at(-1)'),receipt=JSON.parse(receiptText);
+  assert.equal(receipt.tool_results.length,2,'每轮只回传当前两项真实工具结果');
+  assert.ok(receipt.tool_results.every(result=>result.batch_id===id&&result.status==='done'),'创建与读取均实际成功');
+  assert.deepEqual(receipt.tool_results.map(result=>result.request_id),['create','read']);
+  assert.ok(JSON.stringify(receipt.tool_results[1].data).includes(content),'读回内容来自真实临时项目文件');
+  assert.equal(await fs.readFile(path.join(root,file),'utf8'),content);
+  assert.equal(changedFiles.filter(item=>item.relative===file&&item.change==='created').length,1,'每个文件只创建一次');
+  assert.equal(copies.length,chainCopies+round,'每轮只自动复制一次');
+  assert.equal(copies.at(-1),receiptText,'逐轮复制与原生回传字节一致');
+  assert.equal(system.getState().config.automatic,true,'整个长链不重开自动继续');
+  await until(async()=>(await readAutoReply(window.webContents)).completion==='complete','第 '+round+' 轮运输后的生成状态结束');
+  if(round===8||round===19){
+   const recovery=recoveries.at(-1);
+   assert.ok(states.slice(recovery.stateIndex).some(state=>state.collection?.phase==='watching'&&!state.collection.reason),'保留来源修复后恢复监听');
+   assert.deepEqual(await window.webContents.executeJavaScriptInIsolatedWorld(1004,[{code:'({token:globalThis.__miniAIReplyChanges.token,sourceEpoch:globalThis.__miniAIReplyChanges.sourceEpoch})'}]),recovery.preserved,'恢复不得更换监听身份或清空来源状态');
+  }
+  if(round===12||round===25){
+   await run("(()=>{const latest=[...document.querySelectorAll('[data-dil-message-id]')].at(-1);latest.replaceWith(latest.cloneNode(true))})()");
+   await wait(400);
+   assert.equal(await run('received.length'),before+1,'同 ID 同正文重挂载不得重复执行回传');
+   assert.equal(copies.length,chainCopies+round,'重挂载不得重复复制');
+   remounts.push(round);
+  }
+  if(round===15){
+   await run("(()=>{const unrelated=document.createElement('aside');unrelated.textContent='普通界面变化';document.body.append(unrelated);unrelated.className='changed';unrelated.remove();const latest=[...document.querySelectorAll('[data-dil-message-id]')].at(-1);latest.append(document.createElement('span'))})()");
+   await wait(400);
+   assert.equal(await run('received.length'),before+1,'普通 DOM 和同文变化不能创建新批次');
+   assert.equal(copies.length,chainCopies+round);
+  }
+  if(round===21){
+   await run("window.savedChainPath=location.pathname;window.savedChainTurns=[...document.getElementById('turns').children];history.pushState({},'', '/c/long-chain-history');document.getElementById('turns').replaceChildren()");
+   await until(()=>window.webContents.executeJavaScriptInIsolatedWorld(1004,[{code:"globalThis.__miniAIReplyChanges?.scope === 'https://chatgpt.com/c/long-chain-history' && globalThis.__miniAIReplyChanges.history?.reply === undefined"}]),'历史会话先进入空加载帧');
+   await run("appendReply('unexecuted-history-tool','apply_changes',{changes:[{path:'history-must-not-run.txt',operation:'create',content:'must not execute'}]})");
+   await until(()=>window.webContents.executeJavaScriptInIsolatedWorld(1004,[{code:'globalThis.__miniAIReplyChanges?.history === null'}]),'历史正文挂载并结束历史安静窗');
+   assert.equal(await run('received.length'),before+1,'打开未执行历史工具回复不能授权执行');
+   assert.equal(copies.length,chainCopies+round,'历史回看不能复制旧工具结果');
+   await assert.rejects(fs.access(path.join(root,'history-must-not-run.txt')),{code:'ENOENT'});
+   await run("history.pushState({},'',savedChainPath);document.getElementById('turns').replaceChildren()");
+   await until(()=>window.webContents.executeJavaScriptInIsolatedWorld(1004,[{code:'globalThis.__miniAIReplyChanges?.scope === location.origin + location.pathname && globalThis.__miniAIReplyChanges.history?.reply === undefined'}]),'返回原会话先进入空加载帧');
+   await run("document.getElementById('turns').replaceChildren(...savedChainTurns);delete window.savedChainTurns");
+   await until(()=>window.webContents.executeJavaScriptInIsolatedWorld(1004,[{code:'globalThis.__miniAIReplyChanges?.history === null'}]),'返回后历史正文挂载并结束历史安静窗');
+   assert.equal(await run('received.length'),before+1,'返回后已有正文不能重复执行');
+   assert.equal(copies.length,chainCopies+round);
+  }
+  if(round===27){
+   // SPA 在一个任务内完成导航和历史 DOM 替换，无额外挂载变化来启动基线。
+   await run("window.savedSyncPath=location.pathname;window.savedSyncTurns=[...document.getElementById('turns').children];history.pushState({},'', '/c/long-chain-sync-history');document.getElementById('turns').replaceChildren();appendReply('unexecuted-sync-history-tool','apply_changes',{changes:[{path:'sync-history-must-not-run.txt',operation:'create',content:'must not execute'}]})");
+   await until(()=>window.webContents.executeJavaScriptInIsolatedWorld(1004,[{code:"globalThis.__miniAIReplyChanges?.scope === 'https://chatgpt.com/c/long-chain-sync-history' && globalThis.__miniAIReplyChanges.history === null"}]),'同步完整历史 DOM 无额外变化也必须落定基线');
+   const historical=await readAutoReply(window.webContents);
+   assert.equal(historical.completion,'complete');
+   assert.equal(historical.source,'history','同步挂载的未执行历史请求仍是历史');
+   assert.equal(system.getState().collection?.phase,'watching','历史基线通知已完成且监听保持开启');
+   assert.equal(await run('received.length'),before+1,'同步挂载历史命令不得执行回传');
+   assert.equal(copies.length,chainCopies+round,'同步历史回看不得复制');
+   await assert.rejects(fs.access(path.join(root,'sync-history-must-not-run.txt')),{code:'ENOENT'});
+   await run("history.pushState({},'',savedSyncPath);document.getElementById('turns').replaceChildren(...savedSyncTurns);delete window.savedSyncTurns");
+   await until(()=>window.webContents.executeJavaScriptInIsolatedWorld(1004,[{code:'globalThis.__miniAIReplyChanges?.scope === location.origin + location.pathname && globalThis.__miniAIReplyChanges.history === null'}]),'同步恢复原会话完整 DOM 后也必须落定历史基线');
+   assert.equal((await readAutoReply(window.webContents)).source,'history','返回后已执行的尾部不能恢复新请求资格');
+   assert.equal(await run('received.length'),before+1,'同步返回原会话不重放旧批次');
+   assert.equal(copies.length,chainCopies+round);
+  }
+ }
+ const chainReceipts=(await run('received')).slice(chainStart);
+ assert.equal(chainReceipts.length,rounds,'长链恰好回传三十批');
+ assert.equal(new Set(chainReceipts.map(text=>JSON.parse(text).tool_results[0].batch_id)).size,rounds,'没有重复批次');
+ assert.deepEqual(chainReceipts,copies.slice(chainCopies),'全链复制与回传同源');
+ assert.equal(changedFiles.filter(item=>/^long-chain-\d{2}\.txt$/.test(item.relative)&&item.change==='created').length,rounds,'三十个文件恰好各创建一次');
+ assert.equal((await fs.readdir(root)).filter(name=>/^long-chain-\d{2}\.txt$/.test(name)).length,rounds);
+ assert.equal(await run("typeof editorBridge === 'undefined' && typeof require === 'undefined' && typeof globalThis.__miniAIReplyChanges === 'undefined'"),true,'长链后网页主世界仍无本地能力');
+ console.log(JSON.stringify({fixture:'ChatGPT 原生离线闭环',baselineChecks:11,rounds,executedRequests:rounds*2,watcherRecoveries:recoveries.map(item=>item.round),sameMessageRemounts:remounts,ordinaryDomChange:true,historyMounts:['asynchronous','synchronous'],historyReplayBlocked:true,exactlyOnce:true,clipboardMatches:true,officialSiteVerified:false}));
 }).catch(async error=>{
  failed=true;
  console.error(error.stack||error);
- if(system) {const s=system.getState();console.error(JSON.stringify({message:s.message,busy:s.busy,resultStatuses:s.results.map(r=>r.status),return:s.resultReturn?.phase,returnMessage:s.resultReturn?.message,continuation:s.continuation?.phase,continuationMessage:s.continuation?.message}));}
+ if(system) {const s=system.getState();console.error(JSON.stringify({message:s.message,busy:s.busy,resultStatuses:s.results.map(r=>r.status),return:s.resultReturn?.phase,returnMessage:s.resultReturn?.message,continuation:s.continuation?.phase,continuationMessage:s.continuation?.message,collection:s.collection}));}
  if(window&&!window.isDestroyed()) {
   const snapshot=await readAutoReply(window.webContents).catch(()=>null);
   console.error(JSON.stringify({completion:snapshot?.completion,source:snapshot?.source,length:snapshot?.text.length}));

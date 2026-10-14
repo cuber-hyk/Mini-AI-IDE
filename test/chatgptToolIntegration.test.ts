@@ -20,14 +20,17 @@ async function until(check: () => boolean | Promise<boolean>) {
 
 function page(url: string) {
   let reply = ''; let completion = 'complete'; let waiter: ((value: unknown) => void) | undefined;
+  let sourceAvailable = true;
   let beforeRead = async () => {}; let reads = 0;
-  const read = async () => { reads++; const snapshot = { replies: [reply], completion, signature: completion + ':' + reply }; await beforeRead(); return snapshot; };
+  const read = async () => { reads++; const snapshot = { replies: [reply], completion, signature: completion + ':' + reply + ':' + sourceAvailable,
+    ...(sourceAvailable ? { source: 'new', sourceKey: 'fixture|' + completion + ':' + reply } : {}) }; await beforeRead(); return snapshot; };
   const web: any = Object.assign(new EventEmitter(), {
     getURL: () => url, isDestroyed: () => false,
     executeJavaScript: read,
     async executeJavaScriptInIsolatedWorld(world: number, scripts: { code: string }[]) {
       const code = scripts[0]!.code;
       if (code.includes(CHATGPT_OBSERVATION_SCRIPT) || code.includes('const replies =')) { assert.equal(world, 1004); return read(); }
+      if (code.includes('const accepted = expected')) return sourceAvailable ? { turn: 0, accepted: true } : false;
       if (code.includes('previous.waiter = resolve')) return new Promise(resolve => { waiter = resolve; });
       if (code.includes('previous.dispose();')) { waiter?.(false); waiter = undefined; return true; }
       if (code.includes('return { turn:')) return { turn: 0 };
@@ -35,6 +38,7 @@ function page(url: string) {
     },
   });
   return { web, get reads() { return reads; }, setReply(text: string) { reply = text; }, setCompletion(value: string) { completion = value; },
+    setSourceAvailable(value: boolean) { sourceAvailable = value; },
     setRead(fn: typeof beforeRead) { beforeRead = fn; }, async ready() { await until(() => Boolean(waiter)); },
     async notify(text: string) { reply = text; await until(() => Boolean(waiter)); const notify = waiter!; waiter = undefined; notify({ turn: 0 }); },
   };
@@ -65,6 +69,24 @@ async function fixture(t: TestContext, initial = 'chatgpt') {
     async switchTo(next: ReturnType<typeof page>) { await system.setWebActive(false); await system.bindWeb(next.web, sender()); await system.setWebActive(true); await next.ready(); },
   };
 }
+
+it('同文档来源状态丢失的完整回复不能自动执行，恢复后只接纳明确的新来源', async t => {
+  const f = await fixture(t);
+  await f.call(CHANNELS.setToolConfig, { permission: 'full', automatic: true, sendIntervalSeconds: 0 }); await f.gpt.ready();
+  f.gpt.setSourceAvailable(false);
+  await f.gpt.notify(batch('source-lost-history', 'apply_changes', { changes: [{ path: 'history-must-not-run.txt', operation: 'create', content: 'unwitnessed history' }] }));
+  await until(() => f.system.getState().collection?.reason === 'source_changed');
+  assert.equal(f.system.getState().collection?.phase, 'paused');
+  assert.deepEqual(f.system.getState().results, []); assert.equal(f.approvals, 0);
+  assert.deepEqual(f.sent, []); assert.deepEqual(f.copies, []);
+  await assert.rejects(fs.access(path.join(f.root, 'history-must-not-run.txt')), { code: 'ENOENT' });
+  f.gpt.setSourceAvailable(true);
+  await f.gpt.notify(batch('after-source-recovery', 'apply_changes', { changes: [{ path: 'fresh-after-recovery.txt', operation: 'create', content: 'new witnessed reply' }] }));
+  await until(() => f.sent.length === 1);
+  assert.equal(await fs.readFile(path.join(f.root, 'fresh-after-recovery.txt'), 'utf8'), 'new witnessed reply');
+  await assert.rejects(fs.access(path.join(f.root, 'history-must-not-run.txt')), { code: 'ENOENT' });
+  assert.equal(JSON.parse(f.sent[0]!.text).tool_results[0].batch_id, 'after-source-recovery');
+});
 
 it('ChatGPT 新完成回复按权限修改本地文件，整批结果只回传一次且与复制一致', async t => {
   const f = await fixture(t);

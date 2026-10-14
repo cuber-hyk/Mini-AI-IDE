@@ -182,7 +182,7 @@ it('上传失败、发送未知及官网批次不匹配明确暂停，不从任�
   for (const result of [{ ok: false, error: '官网批次已变化' }, { ok: false, uncertain: true, error: '点击结果未知' }] as WebSendResult[]) {
     const f = fixture();
     if (result.uncertain) f.setTransport(async () => result); else f.setVerify(async () => result);
-    assert.deepEqual(await f.owner.send('manual'), result);
+    assert.deepEqual(await f.owner.send('manual'), { ...result, transportStarted: !!result.uncertain, ...(!result.uncertain ? { stage: 'preflight' } : {}) });
     assert.equal(f.owner.getState(f.context).phase, 'paused'); assert.match(f.owner.getState(f.context).message, /不重复上传/);
     assert.equal((await f.owner.send('manual')).ok, false); assert.ok(f.sent.length <= 1);
   }
@@ -198,5 +198,57 @@ it('manual 诊断的来源或当前身份任何一侧为手动都不能授予官
     assert.equal((await f.owner.send('automatic')).ok, false);
     f.context.state.config.automatic = false; assert.equal((await f.owner.send('manual')).ok, false);
     assert.equal(f.sent.length, 0); assert.equal(f.resolved, 0);
+  }
+});
+
+it('明确的临时预检失败只重新核验同批，成功前不读取附件或进入运输', async () => {
+  const f = fixture(true); let checked = 0;
+  f.setVerify(async () => ++checked < 3
+    ? { ok: false, error: '网页暂未完成', retryable: true, transportStarted: false, stage: 'preflight' }
+    : { ok: true });
+  for (let index = 0; index < 2; index++) {
+    const result = await f.owner.send('automatic'); assert.equal(result.retryable, true);
+    assert.equal(f.sent.length, 0); assert.equal(f.resolved, 0); assert.equal(f.owner.getState(f.context).phase, 'ready');
+  }
+  assert.equal((await f.owner.send('automatic')).ok, true);
+  assert.equal(checked, 3); assert.equal(f.resolved, 1); assert.equal(f.sent.length, 1);
+  assert.equal((await f.owner.send('automatic')).ok, false); assert.equal(checked, 3);
+});
+
+it('缺少明确无运输证据、点击未知、手动或运输阶段的失败均不能释放一次资格', async () => {
+  const candidates: WebSendResult[] = [
+    { ok: false, error: 'unknown', retryable: true, stage: 'preflight' },
+    { ok: false, error: 'started', retryable: true, transportStarted: true, stage: 'preflight' },
+    { ok: false, error: 'uncertain', retryable: true, transportStarted: false, stage: 'preflight', uncertain: true },
+    { ok: false, error: 'clicked', retryable: true, transportStarted: false, stage: 'clicked' },
+  ];
+  for (const candidate of candidates) {
+    const f = fixture(true); f.setVerify(async () => candidate);
+    assert.equal((await f.owner.send('automatic')).retryable, undefined);
+    assert.equal((await f.owner.send('automatic')).ok, false); assert.equal(f.resolved, 0);
+  }
+  for (const automatic of [false, true]) {
+    const f = fixture(automatic);
+    const candidate: WebSendResult = { ok: false, retryable: true, transportStarted: false, stage: 'preflight' };
+    if (automatic) f.setTransport(async () => candidate); else f.setVerify(async () => candidate);
+    assert.equal((await f.owner.send(automatic ? 'automatic' : 'manual')).retryable, undefined);
+    assert.equal((await f.owner.send(automatic ? 'automatic' : 'manual')).ok, false);
+    assert.equal(f.sent.length, automatic ? 1 : 0);
+  }
+});
+
+it('临时预检结束时关闭或用户接管仍取消旧资格，重开不能复活', async () => {
+  for (const scenario of ['off', 'interrupted', 'new-turn'] as const) {
+    const f = fixture(true);
+    f.setVerify(async () => {
+      if (scenario === 'off') f.context.state.config.automatic = false;
+      if (scenario === 'interrupted') f.context.state.userInterrupted = true;
+      if (scenario === 'new-turn') f.owner.invalidate();
+      return { ok: false, retryable: true, transportStarted: false, stage: 'preflight' };
+    });
+    assert.equal((await f.owner.send('automatic')).retryable, undefined);
+    f.context.state.config.automatic = true;
+    assert.equal((await f.owner.send('automatic')).ok, false);
+    assert.equal(f.resolved, 0); assert.equal(f.sent.length, 0);
   }
 });

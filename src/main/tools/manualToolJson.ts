@@ -1,5 +1,6 @@
 import { MAX_MANUAL_TOOL_JSON_LENGTH, type ManualToolJsonExecution } from '../../shared/manualToolJson';
 import { parseToolBatch, type ToolBatch } from '../../shared/toolProtocol';
+import { TOOL_JSON_RESEND_INSTRUCTION } from '../../shared/toolJsonDiagnostic';
 
 interface Context { project: string | null; error?: string }
 
@@ -32,7 +33,7 @@ export class ManualToolJson {
       source = text;
     }
     const parsed = parseToolBatch(source);
-    if (parsed.kind === 'error') return invalid(parsed.error);
+    if (parsed.kind === 'error') return invalid(`${parsed.error}\n${TOOL_JSON_RESEND_INSTRUCTION}`);
     if (parsed.kind !== 'batch') return invalid('只接受完整工具请求批次，不接受 repair_draft、结果回执或普通说明');
     try { await this.execute(parsed.batch); return { ok: true }; }
     catch (error) { return { ok: false, error: error instanceof Error ? error.message : String(error) }; }

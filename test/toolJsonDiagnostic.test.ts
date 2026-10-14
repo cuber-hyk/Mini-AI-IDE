@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { it } from 'node:test';
-import { formatToolJsonDiagnostic } from '../src/shared/toolJsonDiagnostic';
+import { formatToolJsonDiagnostic, TOOL_JSON_RESEND_INSTRUCTION } from '../src/shared/toolJsonDiagnostic';
 import { parseToolBatch } from '../src/shared/toolProtocol';
 
 const parseError = (source: string): Error => {
@@ -17,7 +17,13 @@ it('保留真实解析错误和位置，非法工具批次不能产生请求', (
   assert.ok(result.error.includes(error.message));
   assert.match(result.error, /本批工具未执行/);
   assert.match(result.error, /第 1 行，第 55 列；偏移 54/);
-  assert.match(result.error, /完整、合法的 mini-ai-tools/);
+  assert.doesNotMatch(result.error, /重新输出|repair_draft|补丁/, '解析器不知道当前是否有草稿，不能选择修复策略');
+});
+
+it('无可用草稿的独立指导要求完整重发，不创建补丁或猜测草稿身份', () => {
+  assert.match(TOOL_JSON_RESEND_INSTRUCTION, /完整、合法的 mini-ai-tools JSON 围栏/);
+  assert.match(TOOL_JSON_RESEND_INSTRUCTION, /不要只返回补丁或残片/);
+  assert.doesNotMatch(TOOL_JSON_RESEND_INSTRUCTION, /repair_draft|draft_id|version/);
 });
 
 it('多行 Unicode 文本的坐标使用 UTF-16；预览标记不拆开代理对', () => {

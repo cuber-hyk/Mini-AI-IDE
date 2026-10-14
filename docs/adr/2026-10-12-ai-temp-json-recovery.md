@@ -2,7 +2,7 @@
 artifact_type: adr
 status: accepted
 created: 2026-10-12
-updated: 2026-10-12
+updated: 2026-10-14
 owner: 胡运宽
 source_of_truth: [src/main/tools/aiTempDirectory.ts, src/main/tools/jsonDraft.ts, src/shared/toolProtocol.ts, src/main/tools/harness.ts, src/main/tools/integration.ts, src/main/tools/resultReturn.ts, src/main/tools/autoContinuation.ts, test/aiTempDirectory.test.ts, test/aiTempIntegration.test.ts, test/jsonDraft.test.ts, test/toolAutoContinueIntegration.test.ts]
 ---
@@ -20,6 +20,7 @@ AI 处理工具任务时需要稳定的临时目录，避免把生成的中间�
 3. 后续正式完整回复允许唯一 `repair_draft` 对当前修订稿按 old_string 唯一匹配执行一次内存替换；核对 draft_id、version、当前项目、会话、平台及采集代次。成功替换递增版本，若仍为 JSON.parse 错误则报告下一版本；若已成为合法 JSON 但协议校验失败，草稿失效，需重新提交完整合法批次。原始官网回复及历史正文从不改写；过期、错误、重复、歧义补丁不执行工具。
 4. 修复为完整合法批次后，只通过既有 ToolHarness、ToolStore、权限和文件安全 owner 执行，不增加第二条工具入口。恢复来源关联原始回复、修订稿及补丁的摘要、版本、完整解析批次的摘要与当前作用域。ToolResultReturn 在自动发送前重新只读获取官网最新已完成回复，核验仍是该补丁、该版本和该执行批次；任何失配均暂停旧结果发送，绝不重放或猜测最新正文。
 5. 取消、新无关回复、项目、会话、平台及生命周期代次变化使草稿或已恢复结果的发送资格失效。保留既有连续最多 5 次解析或批次校验错误回传规则，第 6 次暂停；正式工具运行失败仍返回真实结果，不把它伪装成 JSON 修复过程。唯一官网写入仍归 WebComposerSender，采集仍只读。
+6. 默认执行提示提前介绍 repair_draft，但草稿 ID/版本只能来自 IDE 当前回执。解析诊断仅提供错误事实；有有效草稿时由 owner 给唯一补丁指导，无草稿或已失效时才要求完整重发。畸形补丁不建立新草稿，原有效草稿仍可用真实身份修补，不能同时给禁止补丁与推荐补丁的指令。
 
 ## Alternatives Considered
 

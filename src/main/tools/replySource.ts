@@ -2,7 +2,7 @@
 export type ReplySource = 'new' | 'history' | 'unknown';
 interface ReplyNode { textContent: string | null }
 
-export function createReplySourceTracker(initial: readonly ReplyNode[] = [], epoch = '', readText?: (node: ReplyNode) => string) {
+export function createReplySourceTracker(initial: readonly ReplyNode[] = [], epoch = '', readText?: (node: ReplyNode) => string, readIdentity?: (node: ReplyNode) => string | undefined) {
   const known = new Set<string>();
   const remembered = new WeakSet<ReplyNode>();
   const identities = new WeakMap<ReplyNode, number>(); let nextIdentity = 0;
@@ -18,6 +18,9 @@ export function createReplySourceTracker(initial: readonly ReplyNode[] = [], epo
       second = Math.imul(second, 33) ^ text.charCodeAt(i);
     }
     return [text.length, first >>> 0, second >>> 0].join(':');
+  }, uniqueIdentity(node: ReplyNode, nodes: readonly ReplyNode[]): string | undefined {
+    const id = readIdentity?.(node);
+    return id && nodes.filter(candidate => readIdentity?.(candidate) === id).length === 1 ? id : undefined;
   }, remember(nodes: readonly ReplyNode[]): void {
     for (const node of nodes) {
       if (remembered.has(node)) continue;
@@ -29,6 +32,7 @@ export function createReplySourceTracker(initial: readonly ReplyNode[] = [], epo
   } };
   let frontier = initial.at(-1);
   let frontierKey = frontier ? keys.fingerprint(frontier) : '';
+  let frontierIdentity = frontier ? keys.uniqueIdentity(frontier, initial) : undefined;
   let fresh = false;
   let sealed = false;
   let exhausted = false;
@@ -37,11 +41,25 @@ export function createReplySourceTracker(initial: readonly ReplyNode[] = [], epo
     observe(nodes: readonly ReplyNode[], history = false, generatingChanged = false): void {
       const latest = nodes.at(-1);
       if (!latest) return;
+      // 仅同一消息的唯一稳定 ID 与已确认正文同时匹配，才修复卸载后的顺序锚。
+      // 已接纳消息仍是历史；不能凭正文相同把任意历史节点变成新尾部。
+      if (frontier && !nodes.includes(frontier) && frontierIdentity) {
+        const matches = nodes.filter(node => readIdentity?.(node) === frontierIdentity);
+        const replacement = matches.length === 1 ? matches[0] : undefined;
+        if (replacement && keys.fingerprint(replacement) === frontierKey) {
+          identities.set(replacement, keys.identity(frontier));
+          frontier = replacement; fresh &&= !sealed;
+        }
+      }
       const key = keys.fingerprint(latest);
       if (history) {
-        keys.remember(nodes); frontier = latest; frontierKey = key; fresh = false; sealed = true; return;
+        keys.remember(nodes); frontier = latest; frontierKey = key; frontierIdentity = keys.uniqueIdentity(latest, nodes); fresh = false; sealed = true; return;
       }
       if (latest === frontier) {
+        if (frontierIdentity && readIdentity?.(latest) !== frontierIdentity) {
+          if (!generatingChanged) { fresh = false; sealed = true; return; }
+          frontierIdentity = keys.uniqueIdentity(latest, nodes);
+        }
         if (key !== frontierKey && known.has(key)) { fresh = false; frontierKey = key; return; }
         if (key !== frontierKey && sealed && !generatingChanged) { fresh = false; keys.remember([latest]); return; }
         if (generatingChanged && key !== frontierKey && !known.has(key)) { fresh = true; sealed = false; }
@@ -52,7 +70,7 @@ export function createReplySourceTracker(initial: readonly ReplyNode[] = [], epo
       // 只有保留旧尾部的顺序追加，或真实生成中的正文变化，才能推进消息尾部。
       const appended = frontier ? anchor >= 0 && anchor < nodes.length - 1 : known.size === 0;
       if (!known.has(key) && (appended || generatingChanged)) {
-        keys.remember(nodes); frontier = latest; frontierKey = key; fresh = true; sealed = false;
+        keys.remember(nodes); frontier = latest; frontierKey = key; frontierIdentity = keys.uniqueIdentity(latest, nodes); fresh = true; sealed = false;
       } else {
         keys.remember(nodes);
       }
@@ -62,6 +80,7 @@ export function createReplySourceTracker(initial: readonly ReplyNode[] = [], epo
       if (node === frontier && fresh && keys.fingerprint(node) === frontierKey) return 'new';
       return known.has(keys.fingerprint(node)) ? 'history' : 'unknown';
     },
+    hasObserved(node: ReplyNode): boolean { return remembered.has(node); },
     key(node: ReplyNode | undefined): string | undefined { return node ? epoch + '|' + keys.identity(node) + ':' + keys.fingerprint(node) : undefined; },
     seal(node: ReplyNode | undefined, expected?: string): void {
       if (expected !== undefined) {

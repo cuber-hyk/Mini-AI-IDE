@@ -559,3 +559,22 @@ it('等待继续生成显示续写状态和原因，保持面板收起且不产�
   assert.equal(ui.nodes['tool-panel'].open, false); assert.equal(ui.nodes['tool-completion-notice'].textContent, '');
   assert.equal(audio.plays.length, 0);
 });
+
+it('采集来源暂停覆盖旧等待AI回复与成功复制反馈，重复广播只提示一次', async () => {
+  const ui = setup(); await flush();
+  const paused = state({ config: { automatic: true }, results: [result], continuation: { phase: 'waiting_reply', message: '结果已发送' },
+    collection: { phase: 'paused', reason: 'source_unknown', message: '无法确认回复是新增输出，请手动采集' } });
+  ui.publish(paused);
+  assert.equal(ui.nodes['tool-activity'].textContent, '采集已暂停');
+  assert.match(ui.nodes['tool-continue-notice'].textContent, /无法确认回复/);
+  assert.equal(ui.nodes['tool-continue-notice'].classList.contains('is-visible'), true);
+  const notifications = ui.attentionEvents.length;
+  ui.publish(paused); assert.equal(ui.attentionEvents.length, notifications);
+  await ui.nodes['tool-copy'].fire('click');
+  assert.equal(ui.nodes['tool-activity'].textContent, '采集已暂停');
+  assert.equal(ui.nodes['tool-continue-notice'].classList.contains('is-visible'), true);
+  ui.publish({ ...paused, collection: { phase: 'recovering', message: '正在恢复网页采集' } });
+  assert.equal(ui.nodes['tool-activity'].textContent, '正在恢复采集');
+  ui.publish({ ...paused, collection: { phase: 'watching', message: '监听正常' } });
+  assert.equal(ui.nodes['tool-activity'].textContent, '等待 AI 回复');
+});

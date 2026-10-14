@@ -45,6 +45,21 @@ it('真实倒计时和运输状态同步到顶栏，工具失败仍保留可见�
   assert.equal(projectToolWorkspaceStatus(state({ batchError: { status: 'failed', error: 'secret' } })).phase, 'failed');
 });
 
+it('新增来源无法确认时优先显示采集暂停，旧等待回复及私有诊断不会掩盖真实阻断', () => {
+  const summary = projectToolWorkspaceStatus(state({
+    config: { ...state().config, automatic: true },
+    continuation: { phase: 'waiting_reply', message: '结果已发送' },
+    collection: { phase: 'paused', reason: 'source_unknown', message: 'private C:\\secret\\reply.txt' },
+  }));
+  assert.equal(summary.phase, 'paused'); assert.equal(summary.message, '采集暂停：无法确认当前回复来源');
+  assert.doesNotMatch(JSON.stringify(summary), /private|secret/);
+  const recovering = projectToolWorkspaceStatus(state({ config: { ...state().config, automatic: true },
+    collection: { phase: 'recovering', reason: 'read_failed', message: 'retry' } }));
+  assert.equal(recovering.message, '正在重新读取网页回复');
+  const off = projectToolWorkspaceStatus(state({ collection: { phase: 'paused', reason: 'source_unknown', message: '旧暂停' } }));
+  assert.equal(off.phase, 'idle', '关闭自动继续后不显示旧采集暂停');
+});
+
 it('查询与恢复仅供顶栏主 frame 零参数使用，初始加载和销毁不泄漏执行能力', () => {
   const handlers = new Map<string, (...args: any[]) => any>();
   const sent: any[] = []; let destroyed = false; let opened = 0;
@@ -93,6 +108,7 @@ it('真实工具批次与自动回传的状态变化同步广播顶栏，即使�
       getURL: () => 'https://chat.deepseek.com/a/chat/status', isDestroyed: () => false,
       executeJavaScript: async () => ({ replies: [reply], completion: 'complete' }),
       executeJavaScriptInIsolatedWorld: async (_world: number, entries: { code: string }[]) => {
+        if (entries[0]!.code.includes('const completion =')) return { replies: [reply], completion: 'complete' };
         if (entries[0]!.code.includes('previous.waiter = resolve')) return new Promise(resolve => { finishWatcher = resolve; });
         if (entries[0]!.code.includes('previous.dispose();')) { finishWatcher?.(false); finishWatcher = undefined; }
         return true;

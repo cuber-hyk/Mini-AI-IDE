@@ -1,6 +1,7 @@
 import { parseToolBatch, ToolBatch, ToolBatchError, ToolRequest, ToolResult, ToolState } from '../../shared/toolProtocol';
 import { LedgerEntry, ToolStore } from './store';
 import type { RecoveredToolOrigin } from './jsonDraft';
+import { TOOL_JSON_RESEND_INSTRUCTION } from '../../shared/toolJsonDiagnostic';
 
 interface HarnessOptions {
   store: ToolStore;
@@ -156,7 +157,7 @@ export class ToolHarness {
     if (this.options.store.getLoadError()) { this.publish(); return Promise.resolve(); }
     const parsed = parseToolBatch(text);
     if (parsed.kind === 'error') {
-      this.reportDiagnostic(text, diagnosticHint ? `${parsed.error}\n${diagnosticHint}` : parsed.error);
+      this.reportDiagnostic(text, `${parsed.error}\n${diagnosticHint ?? TOOL_JSON_RESEND_INSTRUCTION}`);
       return Promise.resolve();
     }
     if (parsed.kind === 'repair') {

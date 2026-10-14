@@ -1,4 +1,6 @@
-/** 本地解析诊断；不修复原文，不保留完整回复。 */
+export const TOOL_JSON_RESEND_INSTRUCTION = '请修正以上错误，并重新输出一个完整、合法的 mini-ai-tools JSON 围栏；不要只返回补丁或残片。';
+
+/** 只提供解析事实；草稿 owner 决定修补或完整重发，不修复原文。 */
 export function formatToolJsonDiagnostic(source: string, error: unknown): string {
   const reason = error instanceof Error ? `${error.name}: ${error.message}` : 'JSON 解析失败（未提供详细原因）';
   const parts = ['工具 JSON 无效，本批工具未执行。', reason.slice(0, 600)];
@@ -22,6 +24,5 @@ export function formatToolJsonDiagnostic(source: string, error: unknown): string
     const caret = ' '.repeat(Array.from(prefix + visible(source.slice(start, position))).length) + '^';
     parts.push(`位置：JSON 正文第 ${breaks.length + 1} 行，第 ${position - lineStart + 1} 列；偏移 ${position}（从 0 开始，UTF-16）。`, snippet, caret);
   }
-  parts.push('请修正以上错误，并重新输出一个完整、合法的 mini-ai-tools JSON 围栏；不要只返回补丁或残片。');
   return parts.join('\n');
 }

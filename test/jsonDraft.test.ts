@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { JsonDraft } from '../src/main/tools/jsonDraft';
 import { parseToolBatch } from '../src/shared/toolProtocol';
+import { TOOL_JSON_RESEND_INSTRUCTION } from '../src/shared/toolJsonDiagnostic';
 
 const initial = '{"protocol_version":1,"batch_id":"example","requests":[{"id":"one","tool":"get_project_info","args":{}}],}';
 const wrapped = (body: string) => '```mini-ai-tools\n' + body + '\n```';
@@ -88,6 +89,12 @@ test('修正后仍非法可继续修复；旧版本与歧义、错项目、无�
   const owner = new JsonDraft(); const first = owner.capture('root', 'chat', scope, wrapped(initial), initial)!;
   const invalid = owner.apply('root', 'chat', scope, 'patch-1', { ...first, old_string: ',}', new_string: ', ]}' });
   assert.equal(invalid.kind, 'diagnostic');
+  if (invalid.kind === 'diagnostic') {
+    assert.ok(invalid.error.includes(first.draft_id));
+    assert.match(invalid.error, /版本 2/);
+    assert.match(invalid.error, /只返回这一条草稿补丁/);
+    assert.ok(!invalid.error.includes(TOOL_JSON_RESEND_INSTRUCTION), '仍可修复的真实草稿只能得到补丁指导');
+  }
   assert.equal(owner.current('root', 'chat', scope)?.version, 2);
   assert.equal(owner.apply('root', 'chat', scope, 'patch-old', { ...first, old_string: ', ]}', new_string: '}' }).kind, 'rejected');
   assert.equal(owner.apply('other-root', 'chat', scope, 'patch-wrong-project', { ...first, version: 2, old_string: ', ]}', new_string: '}' }).kind, 'rejected');
@@ -97,6 +104,26 @@ test('修正后仍非法可继续修复；旧版本与歧义、错项目、无�
   assert.equal(valid.kind, 'batch');
   owner.invalidate();
   assert.equal(owner.current('root', 'chat', scope), null);
+});
+
+test('有效草稿的拒绝沿用当前身份和版本，无草稿时只要求完整重发', () => {
+  const owner = new JsonDraft();
+  const current = owner.capture('root', 'chat', scope, wrapped(initial), initial)!;
+  const outcome = owner.apply('root', 'chat', scope, 'stale-patch', { ...current, version: 99, old_string: ',}', new_string: '}' });
+  assert.equal(outcome.kind, 'rejected');
+  if (outcome.kind === 'rejected') {
+    assert.match(outcome.error, /版本不匹配/);
+    assert.ok(outcome.error.includes(JsonDraft.instruction(current)), '重试只使用仍有效的真实 ID 和版本');
+    assert.ok(!outcome.error.includes(TOOL_JSON_RESEND_INSTRUCTION));
+  }
+  assert.deepEqual(owner.current('root', 'chat', scope), current);
+  owner.invalidate();
+  const missing = owner.apply('root', 'chat', scope, 'missing-patch', { ...current, old_string: ',}', new_string: '}' });
+  assert.equal(missing.kind, 'rejected');
+  if (missing.kind === 'rejected') {
+    assert.ok(missing.error.endsWith(TOOL_JSON_RESEND_INSTRUCTION));
+    assert.doesNotMatch(missing.error, /repair_draft|草稿 [0-9a-f-]{36}/, '失效草稿不得继续授予补丁身份');
+  }
 });
 
 test('结构错误、非法字段、无效版本和普通工具批次不能伪装成修复', () => {
@@ -125,7 +152,11 @@ test('修补消除了 JSON 语法错误却留下非法协议时必须终止该�
   const patch = { ...current, old_string: ',}', new_string: '}' };
   const outcome = owner.apply('root', 'chat', scope, wrapped(JSON.stringify({ repair_draft: patch })), patch);
   assert.equal(outcome.kind, 'rejected');
-  if (outcome.kind === 'rejected') assert.match(outcome.error, /草稿已失效.*未执行工具/);
+  if (outcome.kind === 'rejected') {
+    assert.match(outcome.error, /草稿已失效.*未执行工具/);
+    assert.ok(outcome.error.endsWith(TOOL_JSON_RESEND_INSTRUCTION));
+    assert.doesNotMatch(outcome.error, /只返回这一条草稿补丁/);
+  }
   assert.equal(owner.current('root', 'chat', scope), null);
   assert.equal(owner.apply('root', 'chat', scope, 'retry', { ...patch, version: 2 }).kind, 'rejected');
   assert.equal(owner.matchesRecovery('root', 'chat', scope, {} as never), false);

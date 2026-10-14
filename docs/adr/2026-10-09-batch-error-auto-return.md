@@ -2,7 +2,7 @@
 artifact_type: adr
 status: accepted
 created: 2026-10-09
-updated: 2026-10-09
+updated: 2026-10-14
 owner: 胡运宽
 source_of_truth: [src/shared/toolProtocol.ts, src/main/tools/harness.ts, src/main/tools/autoContinuation.ts, src/main/tools/resultReturn.ts, src/main/tools/integration.ts, src/main/tools/replyChangeWatcher.ts, src/main/tools/resultClipboard.ts, test/toolHarness.test.ts, test/autoContinuation.test.ts, test/toolResultReturn.test.ts, test/toolAttachmentIntegration.test.ts, test/replyChangeWatcher.test.ts, docs/adr/2026-10-07-automatic-result-return-boundary.md]
 ---
@@ -19,7 +19,7 @@ source_of_truth: [src/shared/toolProtocol.ts, src/main/tools/harness.ts, src/mai
 2. 执行前 prepare 全批校验失败仍逐项保存真实 failed 回执。全部保存成功后由 Harness 标记当前 selection.validationFailed，再将 validation_failed:true 放入唯一内存 completion；不持久化该标记，不允许历史恢复获得自动发送资格。
 3. isBatchValidationFailure 要求当前 completion 为明确标记的 error、未取消、非 busy、无 batchError，且非空整批结果均属于该批、failed、包含真实错误、没有 started_at/finished_at/data。ToolResultReturn 同时核对当前项目/会话/selection、完整请求数量与官网最新正式批次。不能从错误文案或普通 failed 状态推断资格。
 4. 两类校验错误的自动回传都不读取或上传附件，正文使用 formatToolResults，与手动复制字节一致。解析错误保留 batch_error；prepare 错误保留完整 tool_results。执行权限、整批拒绝与去重规则不变，不自动复制全部未执行的回执。
-5. AutoContinuation 按诊断 ID 或当前 completion ID 去重，两类错误共享连续 5 次额度，进入发送时计数加一。第 6 次暂停，提示“连续 5 次批次校验失败，已停止自动发送，等待你处理”。取消倒计时不占额度；发送失败或未知暂停且不重试。
+5. AutoContinuation 按诊断 ID 或当前 completion ID 去重，两类错误共享连续 5 次额度，实际进入运输或无法排除运输时计数加一。第 6 次暂停，提示“连续 5 次批次校验失败，已停止自动发送，等待你处理”。取消倒计时和明确未运输的只读预检不占额度；临时预检按有限恢复 ADR 复核，运输失败或未知暂停且不重试。预检预占/退还绑定单次调用，旧 scope 迟到回执不得倒扣新额度。
 6. 计数仅在正常实际执行结果成功发送或实际项目/会话 scope 变化时归零。校验回传成功、新批次、用户新轮、关闭再开启、正常结果倒计时及发送失败均不清零。导航通知沿用只读 watcher；同会话 query/hash 变化不清零。
 7. permission_denied、cancelled、unknown、停止进程、存储故障、无实际执行的普通请求失败仍不能自动发送。唯一网页写运输仍为 WebComposerSender，空输入框、生成结束、当前会话及一次发送边界不变。
 
