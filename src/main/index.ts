@@ -205,7 +205,8 @@ async function bootstrap(): Promise<void> {
   };
   const webView = new WebContentsView({ webPreferences: webPagePreferences });
   const webLoading = new WebLoadingView();
-  const webLoadingReady = webLoading.load();
+  const webLoadingReady = webLoading.load().then(
+    () => ({ ok: true as const }), error => ({ ok: false as const, error }));
   // UA 处理：会话级 setUserAgent 对 WebContentsView **不生效**（P0b 实测教训，见 P0B-7），
   // 因此对视图的 webContents 再显式设置一次，并在自检中验证生效。
   webView.webContents.setUserAgent(uaPlan.effective);
@@ -331,7 +332,14 @@ async function bootstrap(): Promise<void> {
     }
   }
 
-  function showPromptPanel(): void {
+  let promptPanelRevision = 0;
+  let resolvePromptReady!: (ready: boolean) => void;
+  const promptReady = new Promise<boolean>(resolve => { resolvePromptReady = resolve; });
+
+  async function showPromptPanel(): Promise<{ ok: boolean }> {
+    const revision = ++promptPanelRevision;
+    if (!await promptReady || revision !== promptPanelRevision || win.isDestroyed()
+      || closePending || closeApproved || promptView.webContents.isDestroyed()) return { ok: false };
     promptView.setBounds(promptPanelBounds());
     promptView.setVisible(true);
     promptView.webContents.focus();
@@ -339,9 +347,11 @@ async function bootstrap(): Promise<void> {
     if (!editorView.webContents.isDestroyed()) {
       editorView.webContents.send(CHANNELS.openPromptPanel);
     }
+    return { ok: true };
   }
 
   function hidePromptPanel(): void {
+    promptPanelRevision += 1;
     promptView.setVisible(false);
     // 移出可见区域：只 setVisible(false) 在某些平台仍可能保留最后帧
     promptView.setBounds(PROMPT_HIDDEN_BOUNDS);
@@ -407,14 +417,16 @@ async function loadLocalView(
   view: WebContentsView,
   fileName: string,
   attempts = 4
-): Promise<void> {
+): Promise<boolean> {
   const target = path.join(__dirname, '..', 'renderer', fileName);
   let lastErr: unknown = null;
   for (let i = 1; i <= attempts; i += 1) {
+    if (win.isDestroyed() || view.webContents.isDestroyed()) return false;
     try {
       await view.webContents.loadFile(target);
-      return;
+      return !win.isDestroyed() && !view.webContents.isDestroyed();
     } catch (err) {
+      if (win.isDestroyed() || view.webContents.isDestroyed()) return false;
       lastErr = err;
       const detail = err instanceof Error ? err.message : String(err);
       process.stderr.write(`[load] ${fileName} 第 ${i}/${attempts} 次加载失败：${detail}\n`);
@@ -445,10 +457,7 @@ async function loadLocalView(
   ipcMain.handle(CHANNELS.promptPanelState, (): PromptPanelState => promptPanelState());
 
   /** 编辑器工具栏的齿轮 / 快捷键：只负责"把面板显示出来"（三个入口汇聚到这里） */
-  ipcMain.handle(CHANNELS.openPromptPanel, () => {
-    showPromptPanel();
-    return { ok: true };
-  });
+  ipcMain.handle(CHANNELS.openPromptPanel, () => showPromptPanel());
 
   /** 空白或默认原文恢复内置；设置保存失败通过 IPC 拒绝向面板显式报告。 */
   ipcMain.handle(CHANNELS.savePromptSpec, (_e, spec: unknown): SavePromptSpecResult => {
@@ -474,16 +483,8 @@ async function loadLocalView(
     return { ok: true };
   });
 
-/* ---------------- 加载本地界面视图 ----------------
- * 顺序：预览面板 → 网页区工具条 → 提示词面板 →（下方）编辑器页面。
- * 顺序本身不是根因（换顺序失败对象会飘移），但先加载几个小页面、
- * 让它们与编辑器页面错开，可以减少并发创建渲染进程的压力。
- */
   const toolWorkspaceStatus = registerToolWorkspaceStatus({ ipc: ipcMain, webbar: webBarView.webContents,
     open: () => layoutController.update({ toolsVisible: true, previewVisible: false, fileVisible: true }) });
-  // 提示词面板：同样是本地页面。它的 handler 已在上方注册完毕（见那段注释）。
-  await loadLocalView(promptView, 'prompt.html');
-  startupMark('prompt-loaded');
 
   /* ---------------- IPC ---------------- */
 
@@ -611,12 +612,6 @@ async function loadLocalView(
     busy: () => { const state = tools.getState(); return state.busy || state.resultReturn?.phase === 'sending' || ['countdown', 'sending', 'waiting_tools'].includes(state.continuation?.phase ?? ''); },
     disabled: SELF_TEST || (UI_PROBE && !WORKSPACE_PROBE) || DIAGNOSE });
   const localPromptChannels = localPrompt.register();
-  await webLoadingReady;
-  await loadLocalView(webBarView, 'webbar.html');
-  startupMark('webbar-loaded');
-  // 先注册只读变更桥，再加载会立即请求初始状态的面板。
-  await loadLocalView(previewView, 'preview.html');
-  startupMark('preview-loaded');
   const updateWindow = new ApplicationUpdateWindow(win, () => updater!.getState(), () => {
     if (!editorView.webContents.isDestroyed()) { editorView.webContents.focus(); editorView.webContents.send(CHANNELS.closeUpdatePanel); }
   });
@@ -925,6 +920,7 @@ async function loadLocalView(
     else process.stdout.write(restoredRoot ? `[fs] 已恢复上次打开的目录：${restoredRoot}\n` : '[fs] 无历史目录记录\n');
   }
   announcedRevision = workspace.getState().revision;
+  const startupWorkspaceRevision = announcedRevision;
   startupMark('workspace-restored');
   buildApplicationMenu();
 
@@ -963,15 +959,83 @@ async function loadLocalView(
     if (isMainFrame) process.stderr.write(`[editor] 加载失败 ${code} ${desc} ${url}\n`);
   });
 
+  // 编辑器可交互前安装退出保护，辅助页面失败也必须经过未保存检查。
+  registerToolShutdown(app, () => workspaceController.run(async () => {
+    promptPanelRevision += 1;
+    if (!closeApproved && !updater?.installing && !await workspaceController.editor.canLeave()) return false;
+    try { layoutController.flushPendingLayout(); }
+    catch (error) {
+      void dialog.showMessageBox(win, { type: 'error', message: '分栏布局保存失败，请重试退出', detail: String(error) });
+      return false;
+    }
+    closeApproved = true;
+    // 菜单退出也先关闭窗口，停止清理期间新增编辑或工具请求。
+    if (!win.isDestroyed()) win.close(); return true;
+  }), () => tools.dispose(), error => process.stderr.write(`[tools] 退出时停止命令失败：${String(error)}\n`));
+  win.on('close', (event) => {
+    promptPanelRevision += 1;
+    // 仅安装进行中复用更新器的离开批准；安装失败恢复普通退出保护。
+    if (closeApproved || updater?.installing || SELF_TEST || UI_PROBE || DIAGNOSE) {
+      try { layoutController.flushPendingLayout(); }
+      catch (error) {
+        event.preventDefault(); closeApproved = false;
+        void dialog.showMessageBox(win, { type: 'error', message: '分栏布局保存失败，请重试关闭', detail: String(error) });
+      }
+      return;
+    }
+    event.preventDefault();
+    if (closePending) return;
+    closePending = true;
+    void workspaceController.run(async () => {
+      try { if (await workspaceController.editor.canLeave()) { layoutController.flushPendingLayout(); closeApproved = true; win.close(); } }
+      catch (error) { void dialog.showMessageBox(win, { type: 'error', message: '关闭前保存失败，请重试关闭', detail: String(error) }); }
+      finally { closePending = false; }
+    });
+  });
+  win.on('closed', () => {
+    platforms.dispose();
+    webLoading.dispose();
+    toolSettingsWindow?.dispose();
+    updateWindow.dispose();
+    updater?.dispose();
+    workspaceController.editor.reset();
+    app.quit();
+  });
   startupMark('editor-load-start');
-  await loadLocalView(editorView, 'index.html');
-  startupMark('editor-loaded');
-  relayout();
+  try {
+    if (!await loadLocalView(editorView, 'index.html')) return;
+    startupMark('editor-loaded');
+    relayout();
 
-  // 告知渲染进程：记忆的目录已失效（让界面明确提示，而不是"看似有目录、实际读不了"）
-  if ((staleRoot || restorationError) && !editorView.webContents.isDestroyed()) {
-    editorView.webContents.send(CHANNELS.rootStale, { root: null, stale: true,
-      ...(restorationError ? { error: restorationError } : {}) } satisfies RootInfo);
+    // 告知渲染进程：记忆的目录已失效（让界面明确提示，而不是"看似有目录、实际读不了"）
+    if ((staleRoot || restorationError) && workspace.getState().revision === startupWorkspaceRevision
+        && !editorView.webContents.isDestroyed()) {
+      editorView.webContents.send(CHANNELS.rootStale, { root: null, stale: true,
+        ...(restorationError ? { error: restorationError } : {}) } satisfies RootInfo);
+    }
+
+    // 必需状态和 IPC 已就绪；辅助页面继续串行加载，但不再阻塞编辑器。
+    const loading = await webLoadingReady;
+    if (win.isDestroyed()) return;
+    if (!loading.ok) throw loading.error;
+    if (!await loadLocalView(promptView, 'prompt.html')) return;
+    startupMark('prompt-loaded');
+    resolvePromptReady(true);
+    if (!await loadLocalView(webBarView, 'webbar.html')) return;
+    startupMark('webbar-loaded');
+    if (!await loadLocalView(previewView, 'preview.html')) return;
+    startupMark('preview-loaded');
+    // webbar / preview 订阅布局广播，加载完成后补发当前初态。
+    relayout();
+  } catch (error) {
+    if (win.isDestroyed()) return;
+    if (SELF_TEST || UI_PROBE || DIAGNOSE) throw error;
+    process.stderr.write(`[load] 本地界面启动失败：${String(error)}\n`);
+    await dialog.showMessageBox(win, { type: 'error', message: '本地界面加载失败，请保存文件后重新打开应用', detail: String(error) });
+    if (!win.isDestroyed()) win.close();
+    return;
+  } finally {
+    resolvePromptReady(false);
   }
 
   if (SELF_TEST) {
@@ -1134,46 +1198,6 @@ async function loadLocalView(
     return;
   }
 
-  // 退出保护和软件更新不等待 AI 网页联网成功。
-  registerToolShutdown(app, () => workspaceController.run(async () => {
-    if (!closeApproved && !updater?.installing && !await workspaceController.editor.canLeave()) return false;
-    try { layoutController.flushPendingLayout(); }
-    catch (error) {
-      void dialog.showMessageBox(win, { type: 'error', message: '分栏布局保存失败，请重试退出', detail: String(error) });
-      return false;
-    }
-    closeApproved = true;
-    // 菜单退出也先关闭窗口，停止清理期间新增编辑或工具请求。
-    if (!win.isDestroyed()) win.close(); return true;
-  }), () => tools.dispose(), error => process.stderr.write(`[tools] 退出时停止命令失败：${String(error)}\n`));
-  win.on('close', (event) => {
-    // 仅安装进行中复用更新器的离开批准；安装失败恢复普通退出保护。
-    if (closeApproved || updater?.installing || SELF_TEST || UI_PROBE || DIAGNOSE) {
-      try { layoutController.flushPendingLayout(); }
-      catch (error) {
-        event.preventDefault(); closeApproved = false;
-        void dialog.showMessageBox(win, { type: 'error', message: '分栏布局保存失败，请重试关闭', detail: String(error) });
-      }
-      return;
-    }
-    event.preventDefault();
-    if (closePending) return;
-    closePending = true;
-    void workspaceController.run(async () => {
-      try { if (await workspaceController.editor.canLeave()) { layoutController.flushPendingLayout(); closeApproved = true; win.close(); } }
-      catch (error) { void dialog.showMessageBox(win, { type: 'error', message: '关闭前保存失败，请重试关闭', detail: String(error) }); }
-      finally { closePending = false; }
-    });
-  });
-  win.on('closed', () => {
-    platforms.dispose();
-    webLoading.dispose();
-    toolSettingsWindow?.dispose();
-    updateWindow.dispose();
-    updater?.dispose();
-    workspaceController.editor.reset();
-    app.quit();
-  });
   updater.start();
 
   // 正常启动：右侧加载目标平台（**只读**，程序不向页面写入任何内容）

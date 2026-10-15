@@ -62,9 +62,11 @@ export class ToolStore {
     if ('autoCopyResults' in patch && typeof patch.autoCopyResults !== 'boolean') throw new Error('自动复制设置必须为布尔值');
     if ('sendIntervalSeconds' in patch && (typeof patch.sendIntervalSeconds !== 'number' || !Number.isInteger(patch.sendIntervalSeconds) || patch.sendIntervalSeconds < 0 || patch.sendIntervalSeconds > 300)) throw new Error('自动发送间隔必须是 0–300 秒的整数');
     if ('dirtyPolicy' in patch && !['ask', 'continue', 'stop'].includes(String(patch.dirtyPolicy))) throw new Error('未保存内容策略无效');
+    const changes = { ...patch };
     return this.mutate(data => {
-      data.config = { ...data.config, ...patch } as ToolConfig;
-      return { ...data.config };
+      const config = { ...data.config, ...changes } as ToolConfig;
+      const unchanged = (Object.keys(config) as Array<keyof ToolConfig>).every(key => config[key] === data.config[key]);
+      return { next: unchanged ? data : { ...data, config }, result: { ...config } };
     });
   }
 
@@ -72,25 +74,34 @@ export class ToolStore {
     if (!fingerprint || fingerprint.length > 1000 || !['allow', 'ask', 'deny'].includes(action)) throw new Error('权限规则无效');
     await this.mutate(data => {
       const key = rootKey(root);
-      data.rules = data.rules.filter(r => r.root !== key || r.fingerprint !== fingerprint);
-      data.rules.push({ root: key, fingerprint, action });
-      if (data.rules.length > 5000) throw new Error('权限规则达到上限，请清除旧规则');
+      const rules = data.rules.filter(r => r.root !== key || r.fingerprint !== fingerprint);
+      rules.push({ root: key, fingerprint, action });
+      if (rules.length > 5000) throw new Error('权限规则达到上限，请清除旧规则');
+      return { next: { ...data, rules }, result: undefined };
     });
   }
 
   async clearRules(root?: string): Promise<void> {
-    await this.mutate(data => { data.rules = root === undefined ? [] : data.rules.filter(rule => rule.root !== rootKey(root)); });
+    await this.mutate(data => {
+      const rules = root === undefined ? [] : data.rules.filter(rule => rule.root !== rootKey(root));
+      return { next: rules.length === data.rules.length ? data : { ...data, rules }, result: undefined };
+    });
   }
 
   async reserve(root: string, session: string, batch: ToolBatch, source?: 'manual'): Promise<Reservation> {
     const scope = scopeKey(root, session);
     const contentHash = hash(JSON.stringify(batch));
-    return this.mutate(data => {
-      const existing = data.ledger.find(e => e.scope === scope && e.batch_id === batch.batch_id);
+    return this.mutate<Reservation>(data => {
+      const index = data.ledger.findIndex(e => e.scope === scope && e.batch_id === batch.batch_id);
+      const existing = data.ledger[index];
       if (existing) {
-        if (existing.hash !== contentHash) return { kind: 'conflict' };
-        if (source === 'manual') existing.source = 'manual';
-        return { kind: 'duplicate', entry: clone(existing) };
+        if (existing.hash !== contentHash) return { next: data, result: { kind: 'conflict' } };
+        if (source === 'manual' && existing.source !== 'manual') {
+          const entry: LedgerEntry = { ...existing, source: 'manual' };
+          const ledger = data.ledger.slice(); ledger[index] = entry;
+          return { next: { ...data, ledger }, result: { kind: 'duplicate', entry: clone(entry) } };
+        }
+        return { next: data, result: { kind: 'duplicate', entry: clone(existing) } };
       }
       // 不淘汰去重记录，否则旧网页回复在重启后可能再次产生副作用。
       if (data.ledger.length >= 10_000) throw new Error('工具去重记录达到上限，需要人工归档记录；本次未执行');
@@ -99,26 +110,33 @@ export class ToolStore {
         ...(source === 'manual' ? { source } : {}),
         requests: batch.requests.map(r => ({ request_id: r.id, tool: r.tool, status: 'unknown' })),
       };
-      data.ledger.push(entry);
-      return { kind: 'new', entry: clone(entry) };
+      return { next: { ...data, ledger: [...data.ledger, entry] }, result: { kind: 'new', entry: clone(entry) } };
     });
   }
 
   async updateResult(scope: string, batchId: string, requestId: string, status: ToolResult['status']): Promise<void> {
     await this.mutate(data => {
-      const request = data.ledger.find(e => e.scope === scope && e.batch_id === batchId)?.requests.find(r => r.request_id === requestId);
-      if (!request) throw new Error('执行记录不存在，无法确认工具状态');
-      request.status = status;
+      const index = data.ledger.findIndex(e => e.scope === scope && e.batch_id === batchId);
+      const entry = data.ledger[index];
+      const requestIndex = entry?.requests.findIndex(r => r.request_id === requestId) ?? -1;
+      const request = entry?.requests[requestIndex];
+      if (!entry || !request) throw new Error('执行记录不存在，无法确认工具状态');
+      if (request.status === status) return { next: data, result: undefined };
+      const requests = entry.requests.slice(); requests[requestIndex] = { ...request, status };
+      const ledger = data.ledger.slice(); ledger[index] = { ...entry, requests };
+      return { next: { ...data, ledger }, result: undefined };
     });
   }
 
-  private async mutate<T>(change: (data: StoreData) => T): Promise<T> {
+  // change 只构建变化路径的新快照；未保存的对象不能改写已发布的共享记录。
+  private async mutate<T>(change: (data: StoreData) => { next: StoreData; result: T }): Promise<T> {
     const run = this.queue.then(async () => {
       await this.ready();
-      const next = clone(this.data);
-      const result = change(next);
-      await this.save(next);
-      this.data = next;
+      const { next, result } = change(this.data);
+      if (next !== this.data) {
+        await this.save(next);
+        this.data = next;
+      }
       return result;
     });
     this.queue = run.catch(() => undefined);

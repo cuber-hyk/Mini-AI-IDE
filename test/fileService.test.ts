@@ -172,6 +172,137 @@ async function creationFixture(t: any, limit = 200_000) {
   return { root: directory, files };
 }
 
+describe('目录列举调度与安全边界', () => {
+  it('完整校验各条目且限制在途数量，完成先后不改变排序', async t => {
+    const f = await creationFixture(t);
+    const names = Array.from({ length: 16 }, (_, index) => 'item-' + String(index).padStart(2, '0') + '.txt');
+    for (const name of names) fs.writeFileSync(path.join(f.root, name), 'test');
+    const resolve = f.files.resolveSafePath.bind(f.files);
+    let active = 0; let peak = 0; let checked = 0;
+    f.files.resolveSafePath = async (rel, missing) => {
+      if (rel === '') return resolve(rel, missing);
+      active++; peak = Math.max(peak, active); checked++;
+      try {
+        const result = await resolve(rel, missing);
+        await new Promise(done => setTimeout(done, 20 - Number(path.basename(rel).slice(5, 7))));
+        return result;
+      } finally { active--; }
+    };
+    const listed = await f.files.listDir('');
+    assert.equal(listed.ok, true); assert.deepEqual(listed.entries.map(entry => entry.name), names);
+    assert.equal(checked, names.length, '不能通过省略安全校验来减少等待');
+    assert.ok(peak > 1 && peak <= 4, '应有界重叠，不能启动整目录全部检查');
+    assert.equal(active, 0, '返回前等待所有在途检查完成');
+  });
+
+  for (const switchBack of [false, true]) {
+    it('检查期间切换目录' + (switchBack ? '再切回' : '') + '，丢弃整批旧条目且不继续领取', async t => {
+      const f = await creationFixture(t); const other = await creationFixture(t);
+      for (let index = 0; index < 20; index++) fs.writeFileSync(path.join(f.root, 'item-' + index + '.txt'), 'old');
+      let release!: () => void; let entered!: () => void;
+      const gate = new Promise<void>(resolve => { release = resolve; });
+      const first = new Promise<void>(resolve => { entered = resolve; });
+      const resolve = f.files.resolveSafePath.bind(f.files); let started = 0; let active = 0;
+      f.files.resolveSafePath = async (rel, missing) => {
+        if (rel === '') return resolve(rel, missing);
+        started++; active++;
+        try { const result = await resolve(rel, missing); entered(); await gate; return result; }
+        finally { active--; }
+      };
+      const pending = f.files.listDir(''); await first;
+      f.files.setRoot(other.root); if (switchBack) f.files.setRoot(f.root);
+      const atSwitch = started; release(); const listed = await pending;
+      assert.equal(listed.ok, false); assert.match(listed.error ?? '', /目录已切换/);
+      assert.deepEqual(listed.entries, []); assert.equal(started, atSwitch);
+      assert.ok(started <= 4); assert.equal(active, 0);
+    });
+  }
+
+  it('根校验后切换项目，不启动旧目录的任何子项检查', async t => {
+    const f = await creationFixture(t); const other = await creationFixture(t);
+    fs.writeFileSync(path.join(f.root, 'old.txt'), 'old');
+    const resolve = f.files.resolveSafePath.bind(f.files); let children = 0;
+    f.files.resolveSafePath = async (rel, missing) => {
+      if (rel !== '') children++;
+      const result = await resolve(rel, missing);
+      if (rel === '') f.files.setRoot(other.root);
+      return result;
+    };
+    const listed = await f.files.listDir('');
+    assert.equal(listed.ok, false); assert.deepEqual(listed.entries, []); assert.equal(children, 0);
+  });
+
+  it('项目失效后仍等最后一项在途检查汇合，再返回失败空列表', { timeout: 5000 }, async t => {
+    const f = await creationFixture(t); const other = await creationFixture(t);
+    for (let index = 0; index < 8; index++) fs.writeFileSync(path.join(f.root, index + '.txt'), 'old');
+    const release: Array<() => void> = []; let waveReady!: () => void;
+    const wave = new Promise<void>(resolve => { waveReady = resolve; });
+    const resolve = f.files.resolveSafePath.bind(f.files);
+    t.after(() => { release.forEach(done => done()); });
+    f.files.resolveSafePath = async (rel, missing) => {
+      const result = await resolve(rel, missing);
+      if (rel !== '') await new Promise<void>(done => { release.push(done); if (release.length === 4) waveReady(); });
+      return result;
+    };
+    let settled = false;
+    const pending = f.files.listDir(''); void pending.then(() => { settled = true; });
+    await wave; f.files.setRoot(other.root);
+    release.slice(0, 3).forEach(done => done());
+    await new Promise<void>(done => setImmediate(done));
+    assert.equal(settled, false); release[3]!();
+    const listed = await pending;
+    assert.equal(listed.ok, false); assert.deepEqual(listed.entries, []); assert.equal(release.length, 4);
+  });
+
+  it('用户打开的合法junction根仍可列举，不缓存真实路径而放宽外部子链接', async t => {
+    const f = await creationFixture(t); const alias = await creationFixture(t); const external = await creationFixture(t);
+    fs.writeFileSync(path.join(f.root, 'inside.txt'), 'inside');
+    await fs.promises.symlink(f.root, path.join(alias.root, 'root'), process.platform === 'win32' ? 'junction' : 'dir');
+    await fs.promises.symlink(external.root, path.join(f.root, 'outside'), process.platform === 'win32' ? 'junction' : 'dir');
+    f.files.setRoot(path.join(alias.root, 'root'));
+    const listed = await f.files.listDir('');
+    assert.equal(listed.ok, true); assert.deepEqual(listed.entries.map(entry => entry.name), ['inside.txt']);
+  });
+
+  it('外部和悬空junction仍跳过，合法点文件与排序不变，单项消失不破坏其余条目', async t => {
+    const f = await creationFixture(t); const external = await creationFixture(t);
+    fs.writeFileSync(path.join(external.root, 'outside.txt'), 'outside');
+    fs.mkdirSync(path.join(external.root, 'sub'));
+    fs.writeFileSync(path.join(f.root, '.gitignore'), '*.tmp'); fs.writeFileSync(path.join(f.root, 'keep.txt'), 'keep');
+    fs.writeFileSync(path.join(f.root, 'vanish.txt'), 'gone'); fs.mkdirSync(path.join(f.root, 'folder'));
+    fs.mkdirSync(path.join(f.root, '.git')); fs.mkdirSync(path.join(f.root, 'node_modules'));
+    await fs.promises.symlink(external.root, path.join(f.root, 'outside'), process.platform === 'win32' ? 'junction' : 'dir');
+    const gone = path.join(external.root, 'gone'); fs.mkdirSync(gone);
+    await fs.promises.symlink(gone, path.join(f.root, 'dangling'), process.platform === 'win32' ? 'junction' : 'dir');
+    fs.rmdirSync(gone);
+    const resolve = f.files.resolveSafePath.bind(f.files);
+    f.files.resolveSafePath = async (rel, missing) => {
+      if (path.basename(rel) === 'vanish.txt') fs.rmSync(path.join(f.root, 'vanish.txt'), { force: true });
+      return resolve(rel, missing);
+    };
+    const listed = await f.files.listDir('');
+    assert.equal(listed.ok, true); assert.deepEqual(listed.entries.map(entry => entry.name), ['folder', '.gitignore', 'keep.txt']);
+    assert.equal(fs.readFileSync(path.join(external.root, 'outside.txt'), 'utf8'), 'outside');
+    assert.equal((await f.files.listDir('outside')).ok, false);
+    assert.equal((await f.files.listDir('outside/sub')).ok, false);
+    assert.equal((await f.files.listDir('dangling/sub')).ok, false);
+  });
+
+  it('最多校验已截断的500项，不为跳过路径补齐后续文件', async t => {
+    const f = await creationFixture(t);
+    for (let index = 0; index < 510; index++) fs.writeFileSync(path.join(f.root, 'item-' + String(index).padStart(3, '0') + '.txt'), 'x');
+    const resolve = f.files.resolveSafePath.bind(f.files); let checked = 0;
+    f.files.resolveSafePath = async (rel, missing) => {
+      if (rel !== '') checked++;
+      if (path.basename(rel) === 'item-000.txt') fs.rmSync(path.join(f.root, 'item-000.txt'), { force: true });
+      return resolve(rel, missing);
+    };
+    const listed = await f.files.listDir('');
+    assert.equal(listed.ok, true); assert.equal(listed.truncated, true); assert.equal(checked, 500);
+    assert.equal(listed.entries.length, 499); assert.equal(listed.entries.at(-1)?.name, 'item-499.txt');
+  });
+});
+
 describe('AI 新增文件及撤销', () => {
   it('多级缺失路径可预览为空原文，预览不创建目录或文件', async (t) => {
     const f = await creationFixture(t);

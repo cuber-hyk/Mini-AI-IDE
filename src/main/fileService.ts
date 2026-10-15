@@ -137,23 +137,31 @@ export class FileService {
     const treePolicy = { ...DEFAULT_LIST_POLICY, hideDotfiles: false, skipDirs: [...DEFAULT_LIST_POLICY.skipDirs, '.git'] };
     const { shown, truncated } = filterAndSortEntries(like, treePolicy);
 
-    const entries: DirEntry[] = [];
-    for (const e of shown) {
-      const childAbs = path.join(verdict.absolute, e.name);
-      const childVerdict = await this.resolveSafePath(childAbs);
-      if (!childVerdict.ok) continue;
-      if (childVerdict.rootRevision !== verdict.rootRevision) return { ok: false, entries: [], truncated: false, error: '目录已切换，请重新操作' };
-      entries.push({
-        name: e.name,
-        relPath: childVerdict.relative.split(path.sep).join('/'),
-        isDirectory: e.isDirectory,
-        textLike: e.isDirectory ? null : isProbablyTextFile(e.name),
-      });
-    }
+    const entries: Array<DirEntry | undefined> = new Array(shown.length);
+    let cursor = 0;
+    let stale = false;
+    const checkEntries = async () => {
+      while (cursor < shown.length && !stale && this.isCurrentRoot(verdict.rootRevision)) {
+        const index = cursor++;
+        const e = shown[index]!;
+        const childAbs = path.join(verdict.absolute, e.name);
+        const childVerdict = await this.resolveSafePath(childAbs);
+        if (!childVerdict.ok) continue;
+        if (childVerdict.rootRevision !== verdict.rootRevision) { stale = true; return; }
+        entries[index] = {
+          name: e.name,
+          relPath: childVerdict.relative.split(path.sep).join('/'),
+          isDirectory: e.isDirectory,
+          textLike: e.isDirectory ? null : isProbablyTextFile(e.name),
+        };
+      }
+    };
+    // 每项保留完整路径检查；只重叠少量等待，并按原排序索引交付结果。
+    await Promise.all(Array.from({ length: Math.min(4, shown.length) }, () => checkEntries()));
 
-    if (!this.isCurrentRoot(verdict.rootRevision)) return { ok: false, entries: [], truncated: false, error: '目录已切换，请重新操作' };
+    if (stale || !this.isCurrentRoot(verdict.rootRevision)) return { ok: false, entries: [], truncated: false, error: '目录已切换，请重新操作' };
 
-    return { ok: true, entries, truncated };
+    return { ok: true, entries: entries.filter((entry): entry is DirEntry => entry !== undefined), truncated };
   }
 
   async readFile(relPath: string): Promise<ReadFileResult> {

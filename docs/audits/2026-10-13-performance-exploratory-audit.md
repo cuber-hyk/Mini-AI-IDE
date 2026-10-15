@@ -58,18 +58,18 @@ source_of_truth: code
 
 ## Findings
 
-以下发现使用稳定 ID，供后续 `/dev-plan` 的 `covered_findings` 引用。`Status` 遵循 `open`、`planned`、`resolved`、`verified`；原始审查时均为 `open`；当前PERF-01/02已完成离线与用户现场验收，标记verified，其他项仍为 `open`。原有 P0/P1/P2 表示建议处理优先级，非已测量的故障严重度。
+以下发现使用稳定 ID，供后续 `/dev-plan` 的 `covered_findings` 引用。`Status` 遵循 `open`、`planned`、`resolved`、`verified`；原始审查时均为 `open`；当前PERF-01/02/04/05/06已验证；PERF-07局部已验收而整体仍open，PERF-08列举调度局部已验收、计划归档而整体仍open；PERF-03/09为open。原有 P0/P1/P2 表示建议处理优先级，非已测量的故障严重度。
 
 | ID | Severity | Status | Finding | Evidence | Owner Plan | Branch/Commit | Verification | Closeout |
 |---|---|---|---|---|---|---|---|---|
 | PERF-01 | P0 | verified | 拖动分栏时重复触发布局、同步设置写盘和原生菜单重建 | `workspaceLayout.js:55-71`；`workspaceLayoutController.ts:40-83`；`settings.ts:209-218`；`index.ts:252-254,755-857` | docs/plans/archived/2026-10-13-interaction-performance.md | 3b210aa；已包含于v0.4.0 | 夹具600移动/60帧：写盘600→1、菜单600→0、布局600→61；回归通过 | 用户确认拖拽、重启宽度恢复通过；已验证 |
 | PERF-02 | P0 | verified | Monaco 输入变化执行全文取值、脏状态检查及标签状态上报 | `renderer.js:496-501,575-581`；`editorWorkspace.js:13-26`；`workspaceController.ts:121-127` | docs/plans/archived/2026-10-13-interaction-performance.md | 3b210aa；已包含于v0.4.0 | 真实Monaco百万字符/20标签/100次追加：全文读取100→0、报告100→1；草稿回归通过 | 用户确认编辑/撤销/保存/切换通过；未声称输入P95 |
 | PERF-03 | P1 | open | 源码启动入口先执行完整构建 | `package.json:9-12`；`scripts/copy-static.mjs:22-47,63-73` | none；待 `/dev-plan` | none | 启动脚本确认；冷/热启动时间待测 | 未关闭；生产安装版影响未确认 |
-| PERF-04 | P1 | open | 编辑器页面加载前存在辅助页面与工具初始化串行等待 | `index.ts:449,500-522,572-574,859-883,920` | none；待 `/dev-plan` | none | 调用顺序确认；首次可编辑时间与竞态回归待测 | 未关闭；须保留 IPC 注册和加载重试 |
+| PERF-04 | P1 | verified | 编辑器页面加载前存在辅助页面与工具初始化串行等待 | `src/main/index.ts`；`tools/verify-startup-sequence.cjs` | docs/plans/archived/2026-10-15-editor-startup-order.md | codex/20261015-editor-startup-order；本阶段收尾提交 | 专项76、单测1161、自检159、工作区功能119通过；三次同口径Monaco就绪中位2512.3→1596.5ms；原生缩放5/10与master同失败 | 用户知悉master同样的布局5/10限制后验收通过；保留失败证据，不声称安装版收益 |
 | PERF-05 | P1 | verified | PDF 资源表与 Word 依赖提前进入编辑器启动脚本链 | `index.html:170-176`；`filePreview.js:5-7`；只读构建产物大小记录 | docs/plans/archived/2026-10-15-preview-tool-performance.md | codex/20261015-preview-tool-performance；用户批准合并 | AMD预览22项与原生预览最终64项通过；首屏延期4,020,854字节专用脚本，真实加载故障后重开与Monaco共存通过 | 实现及原生验证闭合，用户批准当前分支合并；未新增真人实测，不声称启动提速比例 |
 | PERF-06 | P1 | verified | 工具结果变化时重新序列化结果并重建整个结果 DOM | `toolHarness.js:135-191,268-279,386` | docs/plans/archived/2026-10-15-preview-tool-performance.md | codex/20261015-preview-tool-performance；用户批准合并 | UI42项、原生240项通过；50次克隆整批序列化50→0，20次其他行进度节点创建3200→0，焦点/选区保持 | 实现及原生验证闭合，用户批准当前分支合并；原IPC与逐字段比较仍存在 |
-| PERF-07 | P2 | open | 工具历史数据变更采用全量克隆及 JSON 重写 | `tools/store.ts:84-119,163-169` | none；待 `/dev-plan` | none | 静态持久化机制确认；不同历史规模的耗时待测 | 未关闭；禁止破坏持久化去重 |
-| PERF-08 | P2 | open | 文件树刷新与单目录逐项安全路径校验可能累积等待时间 | `fileExplorer.js:34-99`；`fileService.ts:121-156`；`test/fileService.test.ts:72-80` | none；待 `/dev-plan` | none | 按需展开及串行校验已确认；大型目录性能待测 | 未关闭；必须保留符号链接与越界保护 |
+| PERF-07 | P2 | open | 工具历史数据变更采用全量克隆及 JSON 重写 | `src/main/tools/store.ts`；`tools/measure-tool-store.ts` | docs/plans/archived/2026-10-15-tool-store-performance.md | codex/20261015-editor-startup-order；本阶段收尾提交 | 前后100/1000/10000批各3样本，18重启去重校验及17针对性回归通过；全套并发4条件1167/1167、无跳过；实际变更不全量clone、无变化0写盘 | 局部改动用户已验收，计划归档；全量JSON写盘成本保留，整体仍open |
+| PERF-08 | P2 | open | 文件树刷新与单目录逐项安全路径校验可能累积等待时间 | `src/main/fileService.ts`；`tools/measure-directory-list.ts` | docs/plans/archived/2026-10-15-directory-list-performance.md | codex/20261015-editor-startup-order；本阶段收尾提交 | 前后各24真实磁盘样本输出全等、完整校验次数不变；最大在途1→4；针对性50、全套并发4条件1175、自检159通过，独立评审通过 | 列举调度用户批准收尾，计划归档；前端整树刷新未改、整体仍open |
 | PERF-09 | P2 | open | 官网大量 DOM 变化时的监听开销需通过采样判断 | `tools/replyChangeWatcher.ts:135-173,269-303`；`tools/autoCollector.ts:37-82` | none；待性能证据后决定 | none | 已确认事件驱动和 150ms 合并；未证明空闲高 CPU | 未关闭；仅性能采样支持后才考虑改动 |
 
 下列各节保存原始审查的完整代码证据、优化建议与回归边界；本表是唯一的生命周期状态登记入口。
@@ -190,7 +190,7 @@ source_of_truth: code
 
 ## Closeout
 
-本审计保持 `status: active`：PERF-01/02已完成原先现场验收；PERF-05/06经实现、原生与自动化验证及用户批准当前分支合并，均为 `verified`，对应计划已归档。PERF-03/04/07/08/09保持 `open`，后续按用户授权与测量决定；启动计时不是PERF-04已优化的证据。本次未发布。
+本审计保持 `status: active`：PERF-01/02已完成原先现场验收；PERF-05/06经实现、原生与自动化验证及用户批准当前分支合并，均为 `verified`，对应计划已归档。PERF-04已验收归档；PERF-07局部验收、计划归档，完整JSON成本仍open；PERF-08列举调度局部优化已验收归档，整树刷新成本仍open；PERF-03/09保持 `open`，后续按用户授权与测量决定。本次未发布。
 
 ## 已批准实施范围（2026-10-13）
 
@@ -223,3 +223,26 @@ PERF-01、PERF-02已实施并完成自动化、原生离线验证与独立评审
 ## 后续实施跟踪（2026-10-15）
 
 用户同意开始预览资源按需加载与工具结果增量渲染，PERF-05/06由docs/plans/archived/2026-10-15-preview-tool-performance.md承接，最终实现、原生验证和独立评审通过。2026-10-15用户批准当前分支提交合并，未补充真人现场测试，两项按现有验证证据标记verified、计划归档；先前“七项无计划”为实施前快照。PERF-04仅增加离线启动计时，不调整顺序或认定已优化。PERF-03/07/08/09尚未实施，整体审计继续active。
+
+
+## 编辑器首屏实施跟踪（2026-10-15）
+
+PERF-04由docs/plans/archived/2026-10-15-editor-startup-order.md承接，编辑器优先加载、必要工具/IPC/工作区先就绪，辅助页保留重试并补布局，早期提示词及退出保护完成。三次同口径离线测量中位提前约915.8ms；Monaco自身导航初始化未变快，不推广到安装版或总体性能比例。独立评审通过，类型、构建、全量单测及专项原生验证通过。正式完整工作区功能119/119，但附带缩放布局仅5/10；master原入口同条件对照相同，根因未确定，计划ES-4保持blocked，不把全部原生回归记为通过。PERF-04为resolved待验证/验收，未提交、未合并、未发布，整体审计继续active。
+
+PERF-04验收补充：用户知悉上列缩放检查限制后明确“通过, 可以继续后续优化”；该项按专项证据验收为verified，计划归档，原布局失败仍未解决。PERF-07下一阶段先测量，再在既有存储格式内消除无效写入与全量深拷贝。
+
+PERF-07局部优化：真实状态更新按变化路径构建下一快照，普通重复/冲突/相同状态/相同配置跳过写盘；手动来源提升及启动中断状态恢复仍持久化。10000批合成元数据真实状态中位130.362→34.931ms，但旧版大样本负载波动，不推算现场比例；真实更新每次仍写约8.30MB完整JSON，线性查找与全量磁盘成本尚存，未声称完成增量存储。结果及测量限制由活跃计划承接。
+
+PERF-07验证补充：类型/构建/文档校验及独立评审通过。默认并发全套两轮存在协作等待/进程耗时限制失败；单文件协作21/21，限制并发4后的相同全部1167项通过，无跳过，未改断言/阈值/配置。此项仍planned（局部实现待验收且完整JSON重写成本未消除），不把测量收益误作整个历史存储架构优化完成。
+
+PERF-07验收：用户已接受局部优化及验证条件，计划归档；完整JSON写盘与线性查找成本保持open，后续独立设计，不能用局部通过关闭整体发现。下一轮推进PERF-08的目录列举测量与安全校验调度。
+
+PERF-08实施：仅listDir采用最多4项完整安全检查的调度，保留索引顺序及截断，项目修订失效时汇合并丢弃结果；resolveSafePath及renderer整树刷新未修改。根/五层10/100/500/600条前后各24样本输出完全一致、逐项调用数一致。500条根目录中位308.87→124.36ms，五层2716.00→301.92ms；机器/磁盘有显著波动，不推导现场倍数。活跃计划承接最终回归、验证范围与遗留整树刷新成本。
+
+PERF-08验证收尾：全套并发4条件1175/1175、0失败/取消/跳过，原生自检159/159；类型/构建/文档校验及独立评审通过。正式before/after共48真实磁盘样本，未跳过链接回归。活跃计划待本轮验收，整树刷新残余保持明确，不提交/合并。
+
+## 本阶段提交收尾（2026-10-15）
+
+用户批准已完成改动先提交合并，后续优化单独开展。PERF-04、PERF-07局部、PERF-08局部的三个实施计划均已归档；本阶段没有扩展新实现，也没有创建新会话或推送。原审计保持active：PERF-01/02/04/05/06为verified；PERF-03/09未实施，PERF-07的完整JSON写盘和PERF-08的前端整树刷新仍open，后续立项时以这些稳定ID承接，不新建重复发现。
+
+最终验证沿用最近同一生产快照：类型/构建/1175项完整测试（并发4、无跳过）/159项原生自检及专项测量、独立评审通过。默认并发的既有超时和原GUI缩放5/10限制仍保留历史记录，不宣称全部环境通过。本阶段不处理拒绝清理的旧测量临时目录、不包含两个既有未跟踪用户路径。

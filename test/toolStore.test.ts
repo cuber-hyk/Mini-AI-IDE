@@ -148,3 +148,118 @@ test('failed atomic persistence does not mutate in-memory configuration', async 
   const names = await fs.readdir(directory);
   assert.deepEqual(names, ['tools.json']);
 });
+
+test('重复、冲突和相同状态只读取已持久化快照，不写盘或深拷贝整份账本', async t => {
+  const { directory, store } = await fixture(t);
+  const reserved = await store.reserve(directory, 'chat', batch);
+  assert.equal(reserved.kind, 'new');
+  if (reserved.kind !== 'new') return;
+  let writes = 0; let ledgerCopies = 0;
+  const originalWrite = fs.writeFile.bind(fs); const originalClone = structuredClone;
+  t.mock.method(fs, 'writeFile', (...args: Parameters<typeof fs.writeFile>) => { writes++; return originalWrite(...args); });
+  t.mock.method(globalThis, 'structuredClone', (value: unknown) => {
+    if (value && typeof value === 'object' && 'ledger' in value) ledgerCopies++;
+    return originalClone(value);
+  });
+  assert.equal((await store.reserve(directory, 'chat', batch)).kind, 'duplicate');
+  assert.equal((await store.reserve(directory, 'chat', { ...batch, requests: [{ ...batch.requests[0]!, args: { command: 'different', shell: 'powershell' } }] })).kind, 'conflict');
+  await store.updateResult(reserved.entry.scope, batch.batch_id, 'run', 'unknown');
+  await store.configure(store.getConfig());
+  await store.clearRules(directory);
+  assert.equal(writes, 0);
+  assert.equal(ledgerCopies, 0);
+  await store.updateResult(reserved.entry.scope, batch.batch_id, 'run', 'done');
+  assert.equal(writes, 1, '真实状态仍在返回前持久保存');
+  assert.equal(ledgerCopies, 0, '一个请求变更不复制全部历史正文');
+});
+
+test('并发重复采集只持久化一次；手动来源提升须落盘并跨重启保留', async t => {
+  const { directory, filePath, store } = await fixture(t);
+  let writes = 0; const originalWrite = fs.writeFile.bind(fs);
+  t.mock.method(fs, 'writeFile', (...args: Parameters<typeof fs.writeFile>) => { writes++; return originalWrite(...args); });
+  const reservations = await Promise.all(Array.from({ length: 12 }, () => store.reserve(directory, 'chat', batch)));
+  assert.equal(reservations.filter(value => value.kind === 'new').length, 1);
+  assert.equal(writes, 1);
+  const promoted = await store.reserve(directory, 'chat', batch, 'manual');
+  assert.ok(promoted.kind === 'duplicate');
+  assert.equal(promoted.entry.source, 'manual');
+  await store.reserve(directory, 'chat', batch, 'manual');
+  assert.equal(writes, 2, '来源只在首次提升时写盘');
+  const reopened = new ToolStore(filePath); await reopened.ready();
+  const duplicate = await reopened.reserve(directory, 'chat', batch);
+  assert.ok(duplicate.kind === 'duplicate'); assert.equal(duplicate.entry.source, 'manual');
+});
+
+test('状态与来源保存失败不能修改共享历史，事务队列之后仍可保存', async t => {
+  const { directory, filePath, store } = await fixture(t);
+  const reserved = await store.reserve(directory, 'chat', batch);
+  assert.ok(reserved.kind === 'new');
+  const before = store.getEntries(); const persisted = await fs.readFile(filePath, 'utf8');
+  const originalRename = fs.rename.bind(fs); let rejectRename = true;
+  t.mock.method(fs, 'rename', (...args: Parameters<typeof fs.rename>) => {
+    if (rejectRename) return Promise.reject(new Error('fixture atomic rename failure'));
+    return originalRename(...args);
+  });
+  await assert.rejects(store.updateResult(reserved.entry.scope, batch.batch_id, 'run', 'done'), /atomic rename failure/);
+  await assert.rejects(store.reserve(directory, 'chat', batch, 'manual'), /atomic rename failure/);
+  await assert.rejects(store.reserve(directory, 'chat', { ...batch, batch_id: 'not-persisted' }), /atomic rename failure/);
+  await assert.rejects(store.addRule(directory, 'not-persisted', 'allow'), /atomic rename failure/);
+  assert.deepEqual(store.getEntries(), before);
+  assert.deepEqual(store.getRules(directory), []);
+  assert.equal(await fs.readFile(filePath, 'utf8'), persisted);
+  assert.deepEqual(await fs.readdir(directory), ['tools.json']);
+  rejectRename = false;
+  await store.updateResult(reserved.entry.scope, batch.batch_id, 'run', 'done');
+  const reopened = new ToolStore(filePath); await reopened.ready();
+  assert.equal(reopened.getHistory()[0]?.status, 'done');
+  assert.equal(reopened.getEntries()[0]?.source, undefined);
+});
+
+test('保存等待期间读取旧快照，调用方改写返回值不能污染后续去重与状态', async t => {
+  const { directory, filePath, store } = await fixture(t);
+  const reserved = await store.reserve(directory, 'chat', batch);
+  assert.ok(reserved.kind === 'new');
+  let release!: () => void; let entered!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const saving = new Promise<void>(resolve => { entered = resolve; });
+  const originalRename = fs.rename.bind(fs);
+  t.mock.method(fs, 'rename', async (...args: Parameters<typeof fs.rename>) => { entered(); await gate; return originalRename(...args); });
+  const update = store.updateResult(reserved.entry.scope, batch.batch_id, 'run', 'done');
+  await saving;
+  assert.equal(store.getHistory()[0]?.status, 'unknown');
+  release(); await update;
+  reserved.entry.requests[0]!.status = 'failed';
+  const snapshot = store.getEntries(); snapshot[0]!.requests[0]!.status = 'failed'; snapshot[0]!.hash = '0'.repeat(64);
+  const duplicate = await store.reserve(directory, 'chat', batch);
+  assert.ok(duplicate.kind === 'duplicate'); assert.equal(duplicate.entry.requests[0]?.status, 'done');
+  const reopened = new ToolStore(filePath); await reopened.ready(); assert.equal(reopened.getHistory()[0]?.status, 'done');
+});
+
+test('并发修改不同请求、配置和权限规则不会覆盖其他已提交事务', async t => {
+  const { directory, filePath, store } = await fixture(t);
+  const multiple: ToolBatch = { ...batch, requests: [...batch.requests, { id: 'second', tool: 'read_file', args: { path: 'example.txt' } }] };
+  const reserved = await store.reserve(directory, 'chat', multiple); assert.ok(reserved.kind === 'new');
+  await Promise.all([
+    store.updateResult(reserved.entry.scope, batch.batch_id, 'run', 'done'),
+    store.updateResult(reserved.entry.scope, batch.batch_id, 'second', 'failed'),
+    store.configure({ permission: 'rules' }), store.addRule(directory, 'specific-command', 'deny'),
+  ]);
+  const reopened = new ToolStore(filePath); await reopened.ready();
+  assert.deepEqual(reopened.getHistory().map(value => value.status), ['done', 'failed']);
+  assert.equal(reopened.getConfig().permission, 'rules');
+  assert.deepEqual(reopened.getRules(directory), [{ fingerprint: 'specific-command', action: 'deny' }]);
+});
+
+test('账本满额仍识别最旧批次且拒绝新请求，不淘汰旧记录或写盘', async t => {
+  const { directory, filePath, store } = await fixture(t);
+  await store.reserve(directory, 'chat', batch);
+  const data = JSON.parse(await fs.readFile(filePath, 'utf8'));
+  const seed = data.ledger[0];
+  data.ledger = [seed, ...Array.from({ length: 9999 }, (_, index) => ({ ...seed, batch_id: 'history-' + index }))];
+  const full = JSON.stringify(data); await fs.writeFile(filePath, full);
+  const reopened = new ToolStore(filePath); await reopened.ready();
+  assert.equal((await reopened.reserve(directory, 'chat', batch)).kind, 'duplicate');
+  await assert.rejects(reopened.reserve(directory, 'chat', { ...batch, batch_id: 'over-capacity' }), /达到上限/);
+  assert.equal(reopened.getEntries().length, 10_000);
+  assert.equal(await fs.readFile(filePath, 'utf8'), full);
+});

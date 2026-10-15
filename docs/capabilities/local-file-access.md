@@ -3,7 +3,7 @@ artifact_type: capability
 status: current
 updated: 2026-10-15
 owner: 胡运宽
-source_of_truth: [src/renderer/workspaceNavigation.js, docs/adr/2026-10-07-workspace-ui-shell-layout.md, docs/adr/2026-10-02-filesystem-permission-model.md, src/main/fileService.ts, src/main/fileManagement.ts, src/main/workspaceService.ts, src/main/workspaceController.ts, src/main/editorSession.ts, src/main/settings.ts, src/shared/contract.ts, src/main/preload.ts, src/renderer/editorWorkspace.js, src/renderer/editorTabs.js, src/renderer/fileExplorer.js, src/renderer/fileIcons.js, src/renderer/fileExplorer.css, test/workspaceService.test.ts, test/fileManagement.test.ts, test/workspaceController.test.ts, test/fileExplorer.test.ts, test/fileIcons.test.ts, test/editorSession.test.ts, test/editorWorkspace.test.ts, test/fileService.test.ts, src/main/filePreview.ts, src/main/filePreviewZoom.ts, src/main/workspaceFileDrag.ts, docs/adr/2026-10-11-native-workspace-file-drag.md, test/workspaceFileDrag.test.ts, tools/verify-workspace-file-drag.cjs, src/main/filePreviewIpc.ts, src/main/docxArchive.ts, src/shared/filePreview.ts, src/shared/imageDimensions.ts, src/renderer/filePreview.js, src/renderer/filePreview.css, test/filePreview.test.ts, test/filePreviewZoom.test.ts, test/filePreviewIpc.test.ts, test/filePreviewRenderer.test.ts, test/imageDimensions.test.ts, tools/verify-file-preview.cjs, src/main/tools/aiTempDirectory.ts, test/aiTempDirectory.test.ts]
+source_of_truth: [src/renderer/workspaceNavigation.js, docs/adr/2026-10-07-workspace-ui-shell-layout.md, docs/adr/2026-10-02-filesystem-permission-model.md, src/main/fileService.ts, src/main/fileManagement.ts, src/main/workspaceService.ts, src/main/workspaceController.ts, src/main/editorSession.ts, src/main/settings.ts, src/shared/contract.ts, src/main/preload.ts, src/renderer/editorWorkspace.js, src/renderer/editorTabs.js, src/renderer/fileExplorer.js, src/renderer/fileIcons.js, src/renderer/fileExplorer.css, test/workspaceService.test.ts, test/fileManagement.test.ts, test/workspaceController.test.ts, test/fileExplorer.test.ts, test/fileIcons.test.ts, test/editorSession.test.ts, test/editorWorkspace.test.ts, test/fileService.test.ts, src/main/filePreview.ts, src/main/filePreviewZoom.ts, src/main/workspaceFileDrag.ts, docs/adr/2026-10-11-native-workspace-file-drag.md, test/workspaceFileDrag.test.ts, tools/verify-workspace-file-drag.cjs, src/main/filePreviewIpc.ts, src/main/docxArchive.ts, src/shared/filePreview.ts, src/shared/imageDimensions.ts, src/renderer/filePreview.js, src/renderer/filePreview.css, test/filePreview.test.ts, test/filePreviewZoom.test.ts, test/filePreviewIpc.test.ts, test/filePreviewRenderer.test.ts, test/imageDimensions.test.ts, tools/verify-file-preview.cjs, src/main/tools/aiTempDirectory.ts, test/aiTempDirectory.test.ts, tools/measure-directory-list.ts]
 ---
 
 # 能力：本地文件访问
@@ -38,6 +38,7 @@ source_of_truth: [src/renderer/workspaceNavigation.js, docs/adr/2026-10-07-works
 - 文件系统访问**仅限主进程**（见 ADR-0002）。
 - 编辑器渲染进程通过 `contextBridge` 暴露的窄接口请求**纯文本结果**。
 - 主进程对每个请求做 `path.resolve` 归一化，同时用 `realpath` 校验目标与根目录的真实路径；缺失目标逐级校验最近存在的祖先，阻止链接／junction 指向根目录外。AI 新增还拒绝根目录下的链接父级；根目录本身可以是合法 junction。
+- 单次`listDir`在过滤/排序/截断后，最多同时校验4个条目；每项仍调用完整`resolveSafePath`，不缓存或共享父路径校验。结果按原排序交付，不按完成先后排列；单个消失或越界项跳过，不用第501项补齐。根目录修订变化后停止领取后续条目，等已在途检查结束再返回失败与空列表，切换后再切回同一路径也不能恢复旧结果。这是单次列举的限制，不新增全局IPC并发策略。
 - 网页视图**没有任何**文件 IPC 通道。
 - 新目录通过系统选择对话框取得；最近目录仅按主进程已有历史的索引打开，渲染进程不能自行指定任意根目录。
   `fs:set-root-internal` 仅供主进程内部/自检使用，**不暴露给 preload**（自检 D3 专门验证它被拒绝）。
@@ -108,7 +109,7 @@ source_of_truth: [src/renderer/workspaceNavigation.js, docs/adr/2026-10-07-works
 | 二进制 | 含 NUL 字节即判定为二进制并拒绝，返回原因 |
 | 大小 | 单次读取上限 **200,000 字符**；超限只返回元信息（字符数 / 行数）并要求用户显式确认后分片读取 |
 | 分片 | 按行切片（1 起、闭区间、越界自动收敛） |
-| 目录列表 | 隐藏点文件、跳过 `node_modules`/`.git`/`dist` 等；目录在前按名称排序；单目录上限 500 条并标记 `truncated` |
+| 目录列表 | 文件树显示点文件，跳过 `node_modules`/`.git`/`dist` 等目录；目录在前按名称排序；单目录上限 500 条并标记 `truncated` |
 | 写入 | 仅 `write-file` 通道；同样过白名单与大小上限；**只由用户在编辑器里明确保存时触发** |
 | 新建 | 文件树顶部或右键入口；选中文件夹内创建、选中文件的父目录内创建、无选中或空白处右键则根目录内创建；排他创建，不覆盖已有目标 |
 | AI 新增 | `apply_changes` 在预选权限与草稿校验通过后直接执行；目标必须不存在，排他创建文件及缺失父目录，失败回滚本次空目录；撤销核对创建时文件身份（dev/ino/birthtimeMs）和内容，只删除本次文件及空目录，同名同内容外部替换也拒绝，保留记录供重试 |
@@ -155,3 +156,7 @@ source_of_truth: [src/renderer/workspaceNavigation.js, docs/adr/2026-10-07-works
 ## 编辑输入与真实正文快照
 
 editorWorkspace 持有模型对应的按需全文快照：追加等长度变化只需长度即可立即确定未保存状态，等长修改仍精确比较实际全文，支持撤销及手动恢复原文。相同标签状态不重复报告或渲染；这不延迟首次未保存反馈。state.currentText 仍在读取时返回最新真实全文，保存、切换及离开确认先同步快照；保存期间继续编辑保留最新草稿，不以旧保存回执覆盖。只读附件不生成编辑脏状态。
+
+## 目录列举测量
+
+`pnpm exec tsx tools/measure-directory-list.ts --output=报告路径`只在自身临时目录测量普通条目/点文件/过滤目录、根及五层路径、10/100/500/600条各3样本。记录真实磁盘耗时、完整校验调用数、峰值在途及排序/截断的完整结果；不覆盖已有报告，不读取用户项目或执行工具。目录数据集不等于GUI刷新/FPS测量；前端仍会刷新整个已展开树。
