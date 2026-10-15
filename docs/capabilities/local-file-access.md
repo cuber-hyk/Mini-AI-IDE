@@ -3,10 +3,12 @@ artifact_type: capability
 status: current
 updated: 2026-10-15
 owner: 胡运宽
-source_of_truth: [src/renderer/workspaceNavigation.js, docs/adr/2026-10-07-workspace-ui-shell-layout.md, docs/adr/2026-10-02-filesystem-permission-model.md, src/main/fileService.ts, src/main/fileManagement.ts, src/main/workspaceService.ts, src/main/workspaceController.ts, src/main/editorSession.ts, src/main/settings.ts, src/shared/contract.ts, src/main/preload.ts, src/renderer/editorWorkspace.js, src/renderer/editorTabs.js, src/renderer/fileExplorer.js, src/renderer/fileIcons.js, src/renderer/fileExplorer.css, test/workspaceService.test.ts, test/fileManagement.test.ts, test/workspaceController.test.ts, test/fileExplorer.test.ts, test/fileIcons.test.ts, test/editorSession.test.ts, test/editorWorkspace.test.ts, test/fileService.test.ts, src/main/filePreview.ts, src/main/filePreviewZoom.ts, src/main/workspaceFileDrag.ts, docs/adr/2026-10-11-native-workspace-file-drag.md, test/workspaceFileDrag.test.ts, tools/verify-workspace-file-drag.cjs, src/main/filePreviewIpc.ts, src/main/docxArchive.ts, src/shared/filePreview.ts, src/shared/imageDimensions.ts, src/renderer/filePreview.js, src/renderer/filePreview.css, test/filePreview.test.ts, test/filePreviewZoom.test.ts, test/filePreviewIpc.test.ts, test/filePreviewRenderer.test.ts, test/imageDimensions.test.ts, tools/verify-file-preview.cjs, src/main/tools/aiTempDirectory.ts, test/aiTempDirectory.test.ts, tools/measure-directory-list.ts]
+source_of_truth: [src/renderer/workspaceNavigation.js, docs/adr/2026-10-07-workspace-ui-shell-layout.md, docs/adr/2026-10-02-filesystem-permission-model.md, src/main/fileService.ts, src/main/fileManagement.ts, src/main/workspaceService.ts, src/main/workspaceController.ts, src/main/editorSession.ts, src/main/settings.ts, src/shared/contract.ts, src/main/preload.ts, src/renderer/editorWorkspace.js, src/renderer/editorTabs.js, src/renderer/fileExplorer.js, src/renderer/fileIcons.js, src/renderer/fileExplorer.css, test/workspaceService.test.ts, test/fileManagement.test.ts, test/workspaceController.test.ts, test/fileExplorer.test.ts, test/fileIcons.test.ts, test/editorSession.test.ts, test/editorWorkspace.test.ts, test/fileService.test.ts, src/main/filePreview.ts, src/main/filePreviewZoom.ts, src/main/workspaceFileDrag.ts, docs/adr/2026-10-11-native-workspace-file-drag.md, test/workspaceFileDrag.test.ts, tools/verify-workspace-file-drag.cjs, src/main/filePreviewIpc.ts, src/main/docxArchive.ts, src/shared/filePreview.ts, src/shared/imageDimensions.ts, src/renderer/filePreview.js, src/renderer/filePreview.css, test/filePreview.test.ts, test/filePreviewZoom.test.ts, test/filePreviewIpc.test.ts, test/filePreviewRenderer.test.ts, test/imageDimensions.test.ts, tools/verify-file-preview.cjs, src/main/tools/aiTempDirectory.ts, test/aiTempDirectory.test.ts, tools/measure-directory-list.ts, tools/verify-file-tree-refresh.cjs]
 ---
 
 # 能力：本地文件访问
+
+文件树F2和右键重命名共用原位名称编辑：保留目标行图标、缩进和顺序，文件默认选中最后一个扩展名前的主体，文件夹全选；Enter提交，Esc或失焦取消，名称未变不调用磁盘。输入事件不触发行打开/展开，中文组字确认不提交。重名和非法名称沿用主进程校验、不覆盖目标，错误留在原位供修改；提交中只读、防重复，成功沿用改名事件迁移路径与未保存缓冲。项目重置撤回旧输入，失焦不抢回编辑器焦点。
 
 目录树单个文件行通过系统原生拖拽可交给官网附件输入区、本地需求框或其他系统接收方，包含 TXT/Markdown/代码等普通文本以及图片、PDF、Word；不转换扩展名或字节，拖出磁盘版本，目录不可拖出。`workspaceFileDrag.ts` 只允许编辑器主 frame 请求当前项目相对路径，校验根代次、真实路径、普通文件与非文件链接，取得非空系统图标后复核身份再 `startDrag`。用户直接拖入官网仅添加附件，实际格式/大小/接收由官网处理，不自动发送；网页无新增桥或 DOM 写入。原生操作返回不表示上传成功，错误显示本地。规则见原生文件拖拽 ADR；本地需求框统一 Files 入口仍受原有附件限制。
 右侧文件标签支持本地只读附件预览：PNG/JPEG/WebP/GIF 可缩放和适应窗口；PDF 可翻页、缩放；新版 Word `.docx` 展示文字、表格和图片，复杂排版可能与 Word 不同。旧版 `.doc` 显示系统应用打开入口。文本继续由 Monaco 编辑，附件不产生脏状态或保存写入，切换文件保留文本草稿；关闭、删除或切项目释放预览资源。
@@ -120,7 +122,7 @@ source_of_truth: [src/renderer/workspaceNavigation.js, docs/adr/2026-10-07-works
 | 永久删除 | 独立“永久删除…”入口；先处理目标及文件夹后代草稿，原生确认展示路径、文件夹全部内容范围及不进回收站后果；取消不删，确认后复核目标身份与目录版本，失败可见 |
 | 管理边界 | 不允许改名／删除工作区根目录；永久删除、定位和复制拒绝根目录下链接及链接祖先；用户选择的根目录自身可为合法 junction。删除普通目录内链接仅移除链接，不递归到外部目标 |
 | 图标与菜单 | 本地 SVG 按特殊文件名与扩展名区分常见类型，未知类型通用，文件夹区分开合；菜单按创建、定位／默认应用打开／路径复制和改名／两种删除分组，键盘导航跳过分隔线 |
-| 刷新 | 手动刷新文件树，保留仍有效的展开、选中及焦点；无自动监听 |
+| 刷新 | 手动重读全部展开目录；已知创建、删除、改名只重读最近可见父目录，未显示的新多级路径从已显示祖先核查。复用未变化节点，保留有效展开、选中、焦点与自然滚动锚点；不覆盖等待期间用户转移的焦点或滚动，没有持续文件系统监听 |
 
 **实现说明**：GBK 解码使用 Node 自带的 `TextDecoder('gbk')`（本机 ICU 为 full），**不引入 iconv-lite** 等第三方依赖。
 
@@ -159,4 +161,8 @@ editorWorkspace 持有模型对应的按需全文快照：追加等长度变化�
 
 ## 目录列举测量
 
-`pnpm exec tsx tools/measure-directory-list.ts --output=报告路径`只在自身临时目录测量普通条目/点文件/过滤目录、根及五层路径、10/100/500/600条各3样本。记录真实磁盘耗时、完整校验调用数、峰值在途及排序/截断的完整结果；不覆盖已有报告，不读取用户项目或执行工具。目录数据集不等于GUI刷新/FPS测量；前端仍会刷新整个已展开树。
+`pnpm exec tsx tools/measure-directory-list.ts --output=报告路径`只在自身临时目录测量普通条目/点文件/过滤目录、根及五层路径、10/100/500/600条各3样本。记录真实磁盘耗时、完整校验调用数、峰值在途及排序/截断的完整结果；不覆盖已有报告，不读取用户项目或执行工具。目录数据集不等于GUI刷新/FPS测量。
+
+树状态由`fileExplorer.js`统一持有。`refresh(reset, changedPath)`在项目reset时清理旧记录与请求身份；省略变化路径时重读全部展开目录，给定文件/目录变化路径时只重读最近已显示且展开的父目录。行按路径和类型复用，已删除/变类型子树移除，改名迁移展开及选择路径；本地创建成功主动刷新，改名/删除以主进程事件刷新一次，AI创建/删除经renderer已有项目修订核验后进入同一owner。主进程仍是排序、500项截断和安全校验的唯一事实来源，不由树界面推算磁盘条目。
+
+目录请求身份拒绝同目录迟到结果，不同父目录互不取消；已折叠/移除的容器、旧项目及切回同名项目均不能接纳旧结果。被新请求取代的递归刷新停止后续读取；单目录读取失败保留原内容并显示原因，手动刷新继续检查其他展开分支。复用事件复核当前节点归属，不以最初渲染时的代次操作。`node tools/verify-file-tree-refresh.cjs`使用真实Chromium DOM、生产脚本与样式、内存目录桥离线检查读取/节点创建次数和交互，不接触官网或用户项目，也不等同真实磁盘/IPC耗时或FPS。

@@ -58,7 +58,7 @@ source_of_truth: code
 
 ## Findings
 
-以下发现使用稳定 ID，供后续 `/dev-plan` 的 `covered_findings` 引用。`Status` 遵循 `open`、`planned`、`resolved`、`verified`；原始审查时均为 `open`；当前PERF-01/02/04/05/06已验证；PERF-07局部已验收而整体仍open，PERF-08列举调度局部已验收、计划归档而整体仍open；PERF-03/09为open。原有 P0/P1/P2 表示建议处理优先级，非已测量的故障严重度。
+以下发现使用稳定 ID，供后续 `/dev-plan` 的 `covered_findings` 引用。`Status` 遵循 `open`、`planned`、`resolved`、`verified`；原始审查时均为 `open`；当前PERF-01/02/04/05/06/08已验证；PERF-07局部已验收而整体仍open，PERF-03/09为open。原有 P0/P1/P2 表示建议处理优先级，非已测量的故障严重度。
 
 | ID | Severity | Status | Finding | Evidence | Owner Plan | Branch/Commit | Verification | Closeout |
 |---|---|---|---|---|---|---|---|---|
@@ -69,7 +69,7 @@ source_of_truth: code
 | PERF-05 | P1 | verified | PDF 资源表与 Word 依赖提前进入编辑器启动脚本链 | `index.html:170-176`；`filePreview.js:5-7`；只读构建产物大小记录 | docs/plans/archived/2026-10-15-preview-tool-performance.md | codex/20261015-preview-tool-performance；用户批准合并 | AMD预览22项与原生预览最终64项通过；首屏延期4,020,854字节专用脚本，真实加载故障后重开与Monaco共存通过 | 实现及原生验证闭合，用户批准当前分支合并；未新增真人实测，不声称启动提速比例 |
 | PERF-06 | P1 | verified | 工具结果变化时重新序列化结果并重建整个结果 DOM | `toolHarness.js:135-191,268-279,386` | docs/plans/archived/2026-10-15-preview-tool-performance.md | codex/20261015-preview-tool-performance；用户批准合并 | UI42项、原生240项通过；50次克隆整批序列化50→0，20次其他行进度节点创建3200→0，焦点/选区保持 | 实现及原生验证闭合，用户批准当前分支合并；原IPC与逐字段比较仍存在 |
 | PERF-07 | P2 | open | 工具历史数据变更采用全量克隆及 JSON 重写 | `src/main/tools/store.ts`；`tools/measure-tool-store.ts` | docs/plans/archived/2026-10-15-tool-store-performance.md | codex/20261015-editor-startup-order；本阶段收尾提交 | 前后100/1000/10000批各3样本，18重启去重校验及17针对性回归通过；全套并发4条件1167/1167、无跳过；实际变更不全量clone、无变化0写盘 | 局部改动用户已验收，计划归档；全量JSON写盘成本保留，整体仍open |
-| PERF-08 | P2 | open | 文件树刷新与单目录逐项安全路径校验可能累积等待时间 | `src/main/fileService.ts`；`tools/measure-directory-list.ts` | docs/plans/archived/2026-10-15-directory-list-performance.md | codex/20261015-editor-startup-order；本阶段收尾提交 | 前后各24真实磁盘样本输出全等、完整校验次数不变；最大在途1→4；针对性50、全套并发4条件1175、自检159通过，独立评审通过 | 列举调度用户批准收尾，计划归档；前端整树刷新未改、整体仍open |
+| PERF-08 | P2 | verified | 文件树刷新与单目录逐项安全路径校验可能累积等待时间 | `src/main/fileService.ts`；`src/renderer/fileExplorer.js`；`tools/measure-directory-list.ts`；`tools/verify-file-tree-refresh.cjs` | docs/plans/archived/2026-10-15-file-tree-local-refresh.md | codex/20261015-file-tree-refresh；本轮收尾提交 | 既有列举调度已验收；最新原生47、针对性33、全套并发4条件1187、工作区119功能通过；布局5/10失败已记录；4×100文件单项读取5→1、DOM约4000→0至10 | 用户知悉缩放限制后验收并批准提交合并，计划归档；不宣称实际项目FPS |
 | PERF-09 | P2 | open | 官网大量 DOM 变化时的监听开销需通过采样判断 | `tools/replyChangeWatcher.ts:135-173,269-303`；`tools/autoCollector.ts:37-82` | none；待性能证据后决定 | none | 已确认事件驱动和 150ms 合并；未证明空闲高 CPU | 未关闭；仅性能采样支持后才考虑改动 |
 
 下列各节保存原始审查的完整代码证据、优化建议与回归边界；本表是唯一的生命周期状态登记入口。
@@ -190,7 +190,7 @@ source_of_truth: code
 
 ## Closeout
 
-本审计保持 `status: active`：PERF-01/02已完成原先现场验收；PERF-05/06经实现、原生与自动化验证及用户批准当前分支合并，均为 `verified`，对应计划已归档。PERF-04已验收归档；PERF-07局部验收、计划归档，完整JSON成本仍open；PERF-08列举调度局部优化已验收归档，整树刷新成本仍open；PERF-03/09保持 `open`，后续按用户授权与测量决定。本次未发布。
+本审计保持 `status: active`：PERF-01/02已完成原先现场验收；PERF-05/06经实现、原生与自动化验证及用户批准当前分支合并，均为 `verified`，对应计划已归档。PERF-04已验收归档；PERF-07局部验收、计划归档，完整JSON成本仍open；PERF-08列举调度及前端局部刷新、原位改名均已验收归档；PERF-03/09保持 `open`，后续按用户授权与测量决定。本次未发布。
 
 ## 已批准实施范围（2026-10-13）
 
@@ -246,3 +246,15 @@ PERF-08验证收尾：全套并发4条件1175/1175、0失败/取消/跳过，原
 用户批准已完成改动先提交合并，后续优化单独开展。PERF-04、PERF-07局部、PERF-08局部的三个实施计划均已归档；本阶段没有扩展新实现，也没有创建新会话或推送。原审计保持active：PERF-01/02/04/05/06为verified；PERF-03/09未实施，PERF-07的完整JSON写盘和PERF-08的前端整树刷新仍open，后续立项时以这些稳定ID承接，不新建重复发现。
 
 最终验证沿用最近同一生产快照：类型/构建/1175项完整测试（并发4、无跳过）/159项原生自检及专项测量、独立评审通过。默认并发的既有超时和原GUI缩放5/10限制仍保留历史记录，不宣称全部环境通过。本阶段不处理拒绝清理的旧测量临时目录、不包含两个既有未跟踪用户路径。
+
+## 文件树局部刷新（2026-10-15，独立任务）
+
+用户在前阶段f9e5ee0提交合并后授权开始后续优化，本轮仅承接PERF-08前端剩余工作。fileExplorer单owner按最近可见父目录刷新，路径/类型稳定节点复用；手动仍重读全部展开目录，创建/删除/改名不再触发其他分支重读。项目代次、目录请求身份与节点归属共同拒绝旧结果；失败目录保留内容并继续检查其他分支。主进程路径安全及IPC不变。
+
+原生离线真实DOM/生产脚本CSS、内存目录桥的4分支×100文件夹具，三项变化读取均5→1，创建元素4046/4026/4036→10/0/10，未变分支节点/选择/焦点保持；自然滚动锚点最大约0.33px差，用户等待期间滚动不被复位。36项原生通过，仅代表受控目录桥，不外推真实项目磁盘、IPC、FPS或安装版耗时。最终回归、文档与验收记录在活跃计划中。
+
+文件树局部刷新验证收尾：最终同一生产hash下36原生、29针对性、并发4条件1183全套、自检159、完整工作区119功能+10布局均通过无跳过。原GUI缩放历史失败保留，本轮通过不推断根因修复。PERF-08为resolved待用户验收，其他未完成项不随之关闭；本轮未提交/合并。
+
+其后用户截图反馈重命名输入在目录顶部，本任务补充目标行原位编辑、文件名主体选区、组字及键盘事件隔离、取消/错误重试逻辑。最新生产构建及并发4完整1187无跳过、47项真实聚焦原生、119工作区功能通过；工作区布局再次5/10失败，完整探针exit1，不能用前轮通过样本声称当前全过。详细证据及版本边界见活跃计划；不在本轮扩展缩放修复，PERF-08仍resolved待验收。
+
+最终收尾：用户在上述限制已说明后验收通过并批准提交收尾合并。PERF-08更新为verified，实施计划移至docs/plans/archived/2026-10-15-file-tree-local-refresh.md；保留完整工作区exit1及5项布局失败证据，不将该限制改报通过。原审计仍active，PERF-03/07/09保持open；未发布或推送。

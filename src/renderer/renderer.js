@@ -542,7 +542,7 @@
     if (revision !== workspaceRevision) return;
     if (change === 'deleted') {
       editorWorkspace.entryChanged({ kind: 'deleted', oldRelPath: filePath, isDirectory: false });
-      await loadTree(); return;
+      await explorer.entryChanged({ kind: 'deleted', oldRelPath: filePath, isDirectory: false }); return;
     }
     /*
      * 磁盘被回程链路改写了。若这个文件正打开在编辑器里，必须重新读盘 ——
@@ -551,7 +551,7 @@
      */
 
     if (change === 'created') {
-      await loadTree();
+      await loadTree(filePath);
       if (revision !== workspaceRevision) return;
       if (!await editorWorkspace.reload(filePath, false, false, discardDraft) && revision === workspaceRevision) await editorWorkspace.open(filePath);
     } else await editorWorkspace.reload(filePath, false, false, discardDraft);
@@ -637,7 +637,7 @@
     refresh: document.getElementById('file-refresh'), welcome: document.getElementById('workspace-welcome'),
     setInfo, openFile: function (path) { return openFile(path, null); },
   });
-  function loadTree() { return explorer.refresh(false); }
+  function loadTree(changedPath) { return explorer.refresh(false, changedPath); }
   async function openFile(relPath, options) {
     const root = state.root; const revision = workspaceRevision;
     await fileWorkspace.showEditor(options && options.reveal);
