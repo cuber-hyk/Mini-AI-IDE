@@ -608,7 +608,6 @@ async function loadLocalView(
     resolveWorkspacePath: relative => fileService.resolveSafePath(relative).then(result => result.ok ? { ok: true, absolute: result.absolute } : { ok: false, error: result.error }),
     root: () => fileService.getRoot(), session: () => sessionKeyOf(activeWeb.getURL()),
     webAvailable: () => !platforms.state.switching && !platforms.state.error && !platforms.state.reloading && (WORKSPACE_PROBE || webPlatformOf(activeWeb.getURL()) !== null),
-    attachmentsAvailable: () => platforms.state.platform === 'deepseek',
     busy: () => { const state = tools.getState(); return state.busy || state.resultReturn?.phase === 'sending' || ['countdown', 'sending', 'waiting_tools'].includes(state.continuation?.phase ?? ''); },
     disabled: SELF_TEST || (UI_PROBE && !WORKSPACE_PROBE) || DIAGNOSE });
   const localPromptChannels = localPrompt.register();

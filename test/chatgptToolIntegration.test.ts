@@ -11,6 +11,7 @@ import { CHATGPT_OBSERVATION_SCRIPT } from '../src/main/chatgptPage';
 import { FileService } from '../src/main/fileService';
 import { ReturnPathService } from '../src/main/returnPathService';
 import { CHANNELS } from '../src/shared/contract';
+import type { PromptAttachmentData } from '../src/shared/localPrompt';
 
 const batch = (id: string, tool = 'get_project_info', args: unknown = {}) => '```mini-ai-tools\n' + JSON.stringify({ protocol_version: 1, batch_id: id, requests: [{ id: 'request', tool, args }] }) + '\n```';
 async function until(check: () => boolean | Promise<boolean>) {
@@ -47,11 +48,17 @@ function page(url: string) {
 async function fixture(t: TestContext, initial = 'chatgpt') {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'chatgpt-tools-')); const files = new FileService(); files.setRoot(root);
   const gpt = page('https://chatgpt.com/c/test-id'); const deepseek = page('https://chat.deepseek.com/a/chat/platform');
-  const copies: string[] = []; const sent: { text: string; session: string; attachments: number }[] = [];
-  let approved = true; let approvals = 0;
+  const copies: string[] = []; const sent: { text: string; session: string; attachments: number; contents: string[] }[] = [];
+  const approvalDetails: string[] = []; let response = 0; let approvals = 0; let beforeApproval = async () => {};
   const sender = () => ({
-    async send(text: string, session: string, _kind: unknown, current: () => boolean, attachments?: readonly unknown[]) {
-      assert.equal(current(), true, '失效运输不得进入发送器'); sent.push({ text, session, attachments: attachments?.length ?? 0 }); return { ok: true };
+    async send(text: string, session: string, _kind: unknown, current: () => boolean, attachments?: readonly PromptAttachmentData[]) {
+      assert.equal(current(), true, '失效运输不得进入发送器');
+      const contents: string[] = [];
+      for (const file of attachments ?? []) {
+        const chunks: Uint8Array[] = []; for await (const chunk of file.stream()) chunks.push(chunk);
+        contents.push(Buffer.concat(chunks).toString('utf8'));
+      }
+      sent.push({ text, session, attachments: attachments?.length ?? 0, contents }); return { ok: true };
     }, async cancel() {}, async dispose() {},
   });
   const handlers = new Map<string, (...args: any[]) => any>();
@@ -60,11 +67,12 @@ async function fixture(t: TestContext, initial = 'chatgpt') {
     ipc: { handle(channel: string, fn: any) { handlers.set(channel, fn); } } as any,
     workspace: { editor: { isDirty: () => false, current: { documents: [] } }, run: (fn: any) => fn() } as any,
     returnPath: new ReturnPathService(files), storePath: path.join(root, 'tools.json'), disabled: false,
-    ask: async () => { approvals++; return { response: approved ? 0 : 2, checkboxChecked: false }; },
+    ask: async (_title, detail) => { approvals++; approvalDetails.push(detail); await beforeApproval(); return { response, checkboxChecked: false }; },
     notifyFile() {}, copy(text) { copies.push(text); }, sender: sender(),
   });
   t.after(async () => { await system.dispose(); await fs.rm(root, { recursive: true, force: true }); });
-  return { root, system, gpt, deepseek, sent, copies, get approvals() { return approvals; }, deny() { approved = false; },
+  return { root, system, gpt, deepseek, sent, copies, approvalDetails, get approvals() { return approvals; }, deny() { response = 2; }, remember() { response = 1; },
+    setApprovalWait(wait: () => Promise<void>) { beforeApproval = wait; },
     call: (channel: string, ...args: unknown[]) => handlers.get(channel)!({ sender: editor, senderFrame: editor.mainFrame }, ...args),
     async switchTo(next: ReturnType<typeof page>) { await system.setWebActive(false); await system.bindWeb(next.web, sender()); await system.setWebActive(true); await next.ready(); },
   };
@@ -110,16 +118,83 @@ it('ChatGPT 自动执行仍遵守拒绝权限，拒绝回执不会产生文件�
   assert.equal(JSON.parse(f.sent[0]!.text).tool_results[0].status, 'permission_denied');
 });
 
-it('ChatGPT attach_file 明确失败，文件不进入暂存读取与上传', async t => {
-  const f = await fixture(t); const staged = t.mock.method(ToolAttachments.prototype, 'stage', async () => { throw new Error('不应读取附件'); });
+it('ChatGPT 批次图片和文档逐项批准，真实字节整批回传一次且正文与复制一致', async t => {
+  const f = await fixture(t);
+  await fs.writeFile(path.join(f.root, 'figure.png'), 'real-image-bytes'); await fs.writeFile(path.join(f.root, 'paper.pdf'), 'real-document-bytes');
+  await f.call(CHANNELS.setToolConfig, { permission: 'ask', automatic: true, sendIntervalSeconds: 0 }); await f.gpt.ready();
+  const text = '```mini-ai-tools\n' + JSON.stringify({ protocol_version: 1, batch_id: 'gpt-attachments', requests: [
+    { id: 'image', tool: 'attach_file', args: { path: 'figure.png' } }, { id: 'document', tool: 'attach_file', args: { path: 'paper.pdf' } },
+  ] }) + '\n```';
+  await f.gpt.notify(text); await until(() => f.sent.length === 1);
+  assert.equal(f.approvals, 2); assert.ok(f.approvalDetails.every(detail => detail.includes('上传到当前 ChatGPT')));
+  assert.ok(f.approvalDetails.every(detail => !detail.includes('DeepSeek')));
+  assert.ok(f.system.getState().results.every(result => result.status === 'done'));
+  assert.deepEqual(f.sent[0]!.contents, ['real-image-bytes', 'real-document-bytes']); assert.equal(f.sent[0]!.attachments, 2);
+  assert.equal(f.sent[0]!.text, f.copies[0]);
+  assert.deepEqual(Object.keys(JSON.parse(f.sent[0]!.text).tool_results[0].data).sort(), ['id', 'mediaType', 'name', 'size']);
+  await f.gpt.notify(text); await f.gpt.ready(); await delay(30);
+  assert.equal(f.sent.length, 1); assert.equal(f.approvals, 2); assert.equal((await f.call(CHANNELS.sendToolResults)).ok, false);
+});
+
+it('ChatGPT 附件被拒绝时不暂存或读取字节，纯拒绝回执无附件', async t => {
+  const f = await fixture(t); f.deny(); await fs.writeFile(path.join(f.root, 'private.docx'), 'private-document');
+  const staged = t.mock.method(ToolAttachments.prototype, 'stage', async () => { assert.fail('拒绝附件不得暂存读取'); });
+  await f.call(CHANNELS.setToolConfig, { permission: 'ask', automatic: true, sendIntervalSeconds: 0 }); await f.gpt.ready();
+  await f.gpt.notify(batch('gpt-attachment-denied', 'attach_file', { path: 'private.docx' })); await until(() => f.sent.length === 1);
+  assert.equal(f.approvals, 1); assert.equal(staged.mock.callCount(), 0);
+  assert.equal(f.system.getState().results[0]?.status, 'permission_denied');
+  assert.equal(f.sent[0]!.attachments, 0); assert.deepEqual(f.sent[0]!.contents, []); assert.equal(f.copies.length, 0);
+});
+
+it('ChatGPT 附件精确规则复用真实文件身份，文件改变后必须重新批准', async t => {
+  const f = await fixture(t); f.remember(); const file = path.join(f.root, 'remembered.pdf'); await fs.writeFile(file, 'first');
+  await f.call(CHANNELS.setToolConfig, { permission: 'rules', automatic: true, sendIntervalSeconds: 0 }); await f.gpt.ready();
+  await f.gpt.notify(batch('gpt-rule-first', 'attach_file', { path: 'remembered.pdf' })); await until(() => f.sent.length === 1);
+  await f.gpt.notify(batch('gpt-rule-reused', 'attach_file', { path: 'remembered.pdf' })); await until(() => f.sent.length === 2);
+  assert.equal(f.approvals, 1); assert.deepEqual(f.sent.map(item => item.contents), [['first'], ['first']]);
+  await fs.writeFile(file, 'changed-document'); f.deny();
+  await f.gpt.notify(batch('gpt-rule-changed', 'attach_file', { path: 'remembered.pdf' })); await until(() => f.sent.length === 3);
+  assert.equal(f.approvals, 2); assert.equal(f.system.getState().results[0]?.status, 'permission_denied'); assert.equal(f.sent[2]!.attachments, 0);
+});
+
+it('ChatGPT automatic 关闭时附件只暂存，由用户手动发送当前整批一次', async t => {
+  const f = await fixture(t); await fs.writeFile(path.join(f.root, 'manual-send.docx'), 'manual-send-bytes');
+  await f.call(CHANNELS.setToolConfig, { permission: 'full', automatic: false, sendIntervalSeconds: 0 });
+  const text = batch('gpt-attachment-manual-send', 'attach_file', { path: 'manual-send.docx' }); f.gpt.setReply(text);
+  await f.system.accept(text, 'complete'); await until(() => !f.system.getState().busy && f.system.getState().results[0]?.status === 'done');
+  assert.equal(f.sent.length, 0); assert.equal(f.approvals, 0);
+  assert.equal((await f.call(CHANNELS.sendToolResults)).ok, true); assert.equal(f.sent.length, 1);
+  assert.deepEqual(f.sent[0]!.contents, ['manual-send-bytes']); assert.equal(f.sent[0]!.text, f.copies[0]);
+  assert.equal((await f.call(CHANNELS.sendToolResults)).ok, false);
+});
+
+it('ChatGPT 手动 JSON 来源的 attach_file 不读取、暂存或上传，即使 automatic 开启', async t => {
+  const f = await fixture(t); await fs.writeFile(path.join(f.root, 'manual-json.pdf'), 'must-not-upload');
+  const staged = t.mock.method(ToolAttachments.prototype, 'stage', async () => { assert.fail('手动 JSON 附件不得读取'); });
   await f.call(CHANNELS.setToolConfig, { permission: 'full', automatic: true, sendIntervalSeconds: 0 }); await f.gpt.ready();
-  await f.gpt.notify(batch('gpt-attachment', 'attach_file', { path: 'private-document.docx' }));
-  await until(() => f.system.getState().results[0]?.status === 'failed' && !f.system.getState().busy);
-  const result = f.system.getState().results[0]!;
-  assert.match(result.error ?? '', /ChatGPT.*纯文本.*附件未读取或上传/); assert.equal(result.data, undefined);
-  assert.equal(staged.mock.callCount(), 0); assert.equal(f.approvals, 0);
-  assert.equal((await f.call(CHANNELS.copyToolResults)).ok, true); assert.match(f.copies.at(-1)!, /附件未读取或上传/);
-  await delay(30); assert.equal(f.sent.length, 0, '未执行附件不能成为自动回传结果');
+  assert.equal((await f.call(CHANNELS.executeToolJson, batch('gpt-manual-json', 'attach_file', { path: 'manual-json.pdf' }))).ok, true);
+  assert.equal(f.system.getState().source, 'manual'); assert.equal(f.system.getState().results[0]?.status, 'failed');
+  assert.match(f.system.getState().results[0]?.error ?? '', /手动 JSON.*附件未读取或上传/);
+  assert.equal(staged.mock.callCount(), 0); assert.equal(f.approvals, 0); assert.equal(f.sent.length, 0);
+  assert.equal((await f.call(CHANNELS.sendToolResults)).ok, false);
+});
+
+it('ChatGPT 附件审批中禁止绑定其他平台，网页失活再恢复不能复活旧批准', async t => {
+  const f = await fixture(t); await fs.writeFile(path.join(f.root, 'pending.pdf'), 'approval-pending');
+  const stage = ToolAttachments.prototype.stage;
+  const staged = t.mock.method(ToolAttachments.prototype, 'stage', stage);
+  let release!: () => void;
+  f.setApprovalWait(() => new Promise<void>(resolve => { release = resolve; }));
+  await f.call(CHANNELS.setToolConfig, { permission: 'ask', automatic: true, sendIntervalSeconds: 0 }); await f.gpt.ready();
+  await f.gpt.notify(batch('gpt-attachment-before-switch', 'attach_file', { path: 'pending.pdf' })); await until(() => Boolean(release));
+  await f.system.setWebActive(false);
+  await assert.rejects(f.system.bindWeb(f.deepseek.web), /工具正在执行/);
+  await f.system.setWebActive(true); release();
+  await until(() => !f.system.getState().busy);
+  assert.equal(staged.mock.callCount(), 0); assert.equal(f.sent.length, 0); assert.equal((await f.call(CHANNELS.sendToolResults)).ok, false);
+  f.setApprovalWait(async () => {});
+  await f.gpt.notify(batch('gpt-attachment-after-switch', 'attach_file', { path: 'pending.pdf' })); await until(() => f.sent.length === 1);
+  assert.equal(f.approvals, 2); assert.deepEqual(f.sent[0]!.contents, ['approval-pending']);
 });
 
 it('切到 ChatGPT 保留 DeepSeek 结果供复制，旧结果不补发，新 ChatGPT 批次正常回传', async t => {

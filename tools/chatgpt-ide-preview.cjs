@@ -2,6 +2,7 @@
 const { app, BaseWindow, webContents, session } = require('electron');
 const fs = require('node:fs');
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
 app.setName('mini-ai-ide');
 const directory = path.join(app.getPath('userData'), 'probes', 'ide-01');
 fs.mkdirSync(directory, { recursive: true });
@@ -24,6 +25,12 @@ process.stdout.write('[preview] 独立 IDE 数据目录：' + directory + '\n');
 // 按需只读诊断：不记录正文、草稿、会话 ID 或凭据，不向网页提供桥。
 if (process.env.MINI_CHATGPT_STRUCTURE_TRACE === '1') {
   const snapshots = new Map();
+  const attachmentSnapshots = new Map();
+  let attachmentSnapshotCount = 0;
+  const attachmentLog = path.join(app.getPath('temp'), 'mini-chatgpt-attachments-' + process.pid + '-' + randomUUID() + '.jsonl');
+  const attachmentLogLimit = 2 * 1024 * 1024;
+  let attachmentLogBytes = 0;
+  process.stdout.write('[chatgpt-attachments] ' + attachmentLog + '\n');
   let reading = false;
   const timer = setInterval(async () => {
     if (reading || !app.isReady()) return;
@@ -38,6 +45,13 @@ if (process.env.MINI_CHATGPT_STRUCTURE_TRACE === '1') {
         snapshots.set(web.id, snapshot);
         fs.writeFileSync(path.join(app.getPath('temp'), 'mini-chatgpt-structure.json'), snapshot, 'utf8');
         const state = JSON.parse(snapshot);
+        const attachmentSnapshot = JSON.stringify(state?.attachments);
+        if (state?.attachments && attachmentSnapshots.get(web.id) !== attachmentSnapshot && attachmentSnapshotCount < 80) {
+          attachmentSnapshots.set(web.id, attachmentSnapshot); attachmentSnapshotCount++;
+          const entry = attachmentSnapshot + '\n';
+          const size = Buffer.byteLength(entry, 'utf8');
+          if (attachmentLogBytes + size <= attachmentLogLimit) { fs.appendFileSync(attachmentLog, entry, 'utf8'); attachmentLogBytes += size; }
+        }
         process.stdout.write('[chatgpt-structure] ' + JSON.stringify({ replies: state?.replies?.length, composers: state?.composers?.length }) + '\n');
       }
     } catch { process.stdout.write('[chatgpt-structure] snapshot unavailable\n'); }

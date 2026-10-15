@@ -305,3 +305,42 @@ it('粘贴图片暂存失败后按回车不会退化为只发送文本', async (
   assert.equal(ui.sends.length, 0);
   assert.match(ui.messages.at(-1)!, /附件添加失败/);
 });
+
+it('选择或拖入空文件显示业务原因，发送时保留原因与已有附件，重新添加有效文件后恢复', async () => {
+  for (const action of ['choose', 'drop']) {
+    let next: 'existing' | 'empty' | 'valid' = 'existing';
+    async function stage() {
+      if (next === 'empty') throw new Error("Error invoking remote method 'ui:stage-prompt-attachments': Error: 文件为空：empty.txt");
+      return [{ id: next, name: next + '.txt', size: 3, mediaType: 'text/plain' }];
+    }
+    const ui = setup({ choosePromptAttachments: stage, stagePromptAttachments: stage }); await flush();
+    ui.input('检查附件'); ui.nodes['btn-add-prompt-attachment'].fire('click'); await flush();
+    next = 'empty';
+    if (action === 'choose') ui.nodes['btn-add-prompt-attachment'].fire('click');
+    else ui.nodes['prompt-shell'].fire('drop', { dataTransfer: { types: ['Files'], files: [{ name: 'empty.txt' }] }, preventDefault() {} });
+    await flush();
+    assert.equal(ui.messages.at(-1), '添加附件失败：文件为空：empty.txt');
+    assert.deepEqual(Array.from(ui.owner.getSubmission().attachments), ['existing']);
+    ui.key('Enter'); await flush();
+    assert.equal(ui.sends.length, 0, '附件失败后不能遗漏用户所选文件而发送其余内容');
+    assert.match(ui.messages.at(-1)!, /本次需求未发送：文件为空：empty.txt/);
+    assert.doesNotMatch(ui.messages.at(-1)!, /Error invoking|Error:|重新添加图片/);
+    assert.equal(ui.nodes.requirement.value, '检查附件');
+    assert.deepEqual(Array.from(ui.owner.getSubmission().attachments), ['existing']);
+    next = 'valid'; ui.nodes['btn-add-prompt-attachment'].fire('click'); await flush();
+    ui.key('Enter'); await flush();
+    assert.equal(ui.sends.length, 1);
+    assert.deepEqual(Array.from(ui.sends[0].attachments), ['existing', 'valid']);
+  }
+});
+
+it('取消选择文件保留已添加项，提交仍携带原有附件', async () => {
+  let cancelled = false;
+  const ui = setup({ async choosePromptAttachments() { return cancelled ? [] : [{ id: 'existing', name: 'notes.txt', size: 3, mediaType: 'text/plain' }]; } }); await flush();
+  ui.input('检查附件'); ui.nodes['btn-add-prompt-attachment'].fire('click'); await flush();
+  cancelled = true; ui.nodes['btn-add-prompt-attachment'].fire('click'); await flush();
+  assert.deepEqual(Array.from(ui.owner.getSubmission().attachments), ['existing']);
+  ui.key('Enter'); await flush();
+  assert.equal(ui.sends.length, 1);
+  assert.deepEqual(Array.from(ui.sends[0].attachments), ['existing']);
+});

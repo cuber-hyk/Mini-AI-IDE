@@ -1,14 +1,14 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-11
+updated: 2026-10-15
 owner: 胡运宽
-source_of_truth: [src/main/workspaceFileDrag.ts, docs/adr/2026-10-11-native-workspace-file-drag.md, test/workspaceFileDrag.test.ts, src/shared/formatSpec.ts, src/renderer/promptComposer.js, src/renderer/prompt.js, test/promptSettingsMigration.test.ts, test/promptComposer.test.ts, docs/adr/2026-10-09-default-local-prompt-send.md, docs/adr/2026-10-08-skills-and-local-demand-send.md, docs/adr/2026-10-08-local-prompt-attachments.md, src/main/localPromptAttachments.ts, src/main/skills.ts, src/main/localPromptController.ts, src/main/webComposerSender.ts, src/main/firstPromptSession.ts, src/main/tools/replyChangeWatcher.ts, src/main/settings.ts, src/main/tools/integration.ts, src/shared/skills.ts, src/shared/localPrompt.ts, src/renderer/localPrompt.js, test/skills.test.ts, test/localPromptController.test.ts, test/localPrompt.test.ts, test/localPromptAttachments.test.ts]
+source_of_truth: [src/main/chatgptPage.ts, test/chatgptComposerSender.test.ts, tools/verify-chatgpt-composer.cjs, src/main/workspaceFileDrag.ts, docs/adr/2026-10-11-native-workspace-file-drag.md, test/workspaceFileDrag.test.ts, src/shared/formatSpec.ts, src/renderer/promptComposer.js, src/renderer/prompt.js, test/promptSettingsMigration.test.ts, test/promptComposer.test.ts, docs/adr/2026-10-09-default-local-prompt-send.md, docs/adr/2026-10-08-skills-and-local-demand-send.md, docs/adr/2026-10-08-local-prompt-attachments.md, src/main/localPromptAttachments.ts, src/main/skills.ts, src/main/localPromptController.ts, src/main/webComposerSender.ts, src/main/firstPromptSession.ts, src/main/tools/replyChangeWatcher.ts, src/main/settings.ts, src/main/tools/integration.ts, src/shared/skills.ts, src/shared/localPrompt.ts, src/renderer/localPrompt.js, test/skills.test.ts, test/localPromptController.test.ts, test/localPrompt.test.ts, test/localPromptAttachments.test.ts]
 ---
 
 # 能力：技能与本地需求发送
 
-本节程序发送能力仅供活动平台使用；ChatGPT 普通对话支持纯文本需求及技能正文，携带本地附件时明确拒绝并保留暂存文件；DeepSeek 保持原有附件能力。切换期间及异步提交前由 LocalPromptController 的平台守卫复核，见 `web-platforms.md`。
+本节程序发送能力仅供活动平台使用；DeepSeek 与 ChatGPT 普通对话均支持需求、技能正文及本次用户选择、拖入或粘贴的附件。切换期间及异步提交前由 LocalPromptController 的平台守卫复核，见 `web-platforms.md`。
 
 目录树文件采用原生文件拖拽。本地需求框和资源管理器文件共用 Files 接收与主进程附件暂存，TXT/Markdown 按原文件添加，不填入正文、不自动发送；右键添加工作区附件继续走相对路径校验入口。用户直接拖到官网的附件由官网原生 drop 处理，不进入本地待发列表，也不随本地需求再次上传。该用户手动交付边界见 `docs/adr/2026-10-11-native-workspace-file-drag.md`；程序代上传仍仅由 WebComposerSender 运输。
 全局技能位于当前用户的 `.agents/skills/<目录>/SKILL.md`，项目技能位于当前项目 `.mini-ide/skills/<目录>/SKILL.md`。frontmatter 提供 `name`、`description`，正文是完整指令。名称区分大小写，项目同名优先；项目同名文件无效时报告错误，不悄悄使用全局版本。同层重复名称禁用并报告。
@@ -23,8 +23,10 @@ source_of_truth: [src/main/workspaceFileDrag.ts, docs/adr/2026-10-11-native-work
 
 本地需求默认 Enter 提交、Shift+Enter 换行，与工具 `automatic` 独立，无发送开关和常驻键盘说明。输入法组合、重复按键和技能菜单确认不发送；右下角圆形向上箭头按钮与 Enter 共用提交入口，空正文或忙时禁用，发送中显示加载状态。用户本地正文经可信编辑器主 frame 的窄 IPC 提交；普通文本粘贴仍由输入框处理，粘贴图片则作为附件暂存。图片异步暂存期间按回车会等待完成后再发送；暂存失败则取消整次提交，避免仅发送文本。回车或按钮提交经官网确认发送成功后，清空本次本地需求、技能选择、预览和附件，并通过现有 input 事件恢复输入高度；发送失败或状态未知时保留内容，等待期间新写的下一条需求不被旧成功回执清空。用户初始化选择不复位；需求通过输入框直接提交，不提供复制提示词或需求更多菜单。用户可从本地选择文件，或从资源管理器及右侧工作区文件树拖入文件，发送前可移除待发附件；本地需求附件只随本次需求提交，字节不进入组装文本；工具附件由独立 attach_file 请求及工具权限控制，见 tool-harness.md。
 
-`LocalPromptController` 校验当前项目、会话、选项与忙状态；`WebComposerSender` 是唯一 DOM 写入运输 owner，与工具结果互斥。文本只向已识别的官方活动平台空输入区填入并点击一次，ChatGPT 限普通对话纯文本。DeepSeek 本地需求暂存附件的程序代上传仅由主进程对用户选择的路径做类型、数量、大小和真实路径校验，再通过官方文件输入控件提交；网页不获得路径查询或文件桥。图片粘贴同时检查剪贴板 `items` 与 `files`，并将可解码的其他图片格式转成 PNG。提交前等待官网 composer 显示本次附件并确认上传进度结束；若页面未能确认附件已接收，则不发送正文并保留本地待发项供用户重试。草稿、生成、已有附件、未知/歧义控件或作用域变化拒绝。点击前失败清理本次暂存；点击后无法确认不重试。隔离世界 1005 无网页 IPC/文件桥。
+`LocalPromptController` 校验当前项目、会话、选项与忙状态；`WebComposerSender` 是唯一 DOM 写入运输 owner，与工具结果互斥。文本只向已识别的官方活动平台空输入区填入并点击一次，ChatGPT 限普通对话路径。本地需求附件的程序代上传仅由主进程对用户选择的路径做类型、数量（最多 50）、单文件大小（最多 100 MiB）和真实路径校验，再通过官方文件输入控件提交；128 MiB 的本地 PDF／DOCX 预览限制不扩大上传暂存上限，官网实际格式和额度另有约束。网页不获得路径查询或文件桥。图片粘贴同时检查剪贴板 `items` 与 `files`，并将可解码的其他图片格式转成 PNG。提交前等待官网 composer 显示全部本次附件并确认上传进度结束；若页面未能确认附件已接收，则不发送正文并保留本地待发项。草稿、生成、已有附件、未知/歧义控件或作用域变化拒绝。点击前失败仅清理明确属于本批的附件，未知归属或清理不确定暂停；点击后无法确认不重试或清理可能提交的附件。隔离世界 1005 无网页 IPC/文件桥。
 
 本地需求发送与自动采集独立。automatic 开启时，历史基线之后的新完成工具输出可自动采集，不依赖需求发送动作、回执或本地主动首发资格。发送器只在实际点击后允许首页一次同文档官方会话地址分配，以确认发送自身结果，不授予采集资格。采集 watcher 的本地发送记录与官网可信发送共用一次短期首页交接记录；识别交接后清除历史等待，仍独立检查实际新回复是否完成。生成/未知/中断不执行；协议、权限、去重及结果回传来源校验保留。离线测试不证明实际官网全部状态兼容。见 `../adr/2026-10-08-output-driven-collection.md`。
 
 附件确认范围是 textarea 与文件控件最近共同容器的局部外层，包含控件旁边的附件预览；拒绝扩到 body、html、代码或回复正文。图片可用本次新增的可见缩略图确认，不要求官网展示图片文件名；每个文档仍须出现本次文件名，混合附件不能仅凭图片放行，纯文档不能以零张图片作为确认依据。回归入口为 `tools/verify-web-result-sender.cjs`，覆盖文档后图片连续发送、无图片文件名、混合附件及缺失文档卡片。
+
+ChatGPT 通过唯一 ProseMirror 所属的 `form[data-chatgpt-composer]` 定位附件区域，选择其中唯一 multiple 且无 accept 限制的通用文件 input；图片卡和文档卡由 `chatgptPage.ts` 的只读附件规则逐一匹配。图片须可解码，文档卡若有缩略图须就绪，进度结束且发送控件就绪才填正文；官网清空 input.files 不代表完成。可信输入或附件操作使本次运输失效；点击前仅通过已知官方移除按钮清理明确本批卡片并有界复核。2026-10-15，用户在新版IDE确认TXT及PDF＋图片的本地需求实际发送验收通过；该证据与官网手动添加的结构核验及离线回归分别记录。

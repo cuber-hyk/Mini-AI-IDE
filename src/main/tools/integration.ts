@@ -335,7 +335,6 @@ export async function createToolIntegration(options: Options) {
     describe: async (root, request) => {
       if (!webActive || disposed || activeSelection && selectionRevisions.get(activeSelection) !== revision) throw new Error('当前网页平台不可执行工具');
       if (request.tool === 'attach_file' && activeSelection?.source === 'manual') throw new Error('手动 JSON 批次不向官网回传，附件未读取或上传');
-      if (request.tool === 'attach_file' && webPlatformOf(web.getURL()) === 'chatgpt') throw new Error('ChatGPT 本轮仅支持纯文本，附件未读取或上传');
       return describeTool(root, request);
     }, snapshotProcess: id => processes.snapshot(id), prepare: async (root, batch) => {
       if (!webActive || disposed) throw new Error('当前网页平台不可执行工具');
@@ -346,7 +345,8 @@ export async function createToolIntegration(options: Options) {
       if (!webActive || disposed) throw new Error('当前网页平台不可批准工具');
       const targets = await describeTool(root, request);
       if (!webActive || disposed || revision !== selectedRevision) throw new Error('网页平台已切换，工具未批准');
-      const choice = await options.ask('工具请求需要批准', `项目：${root}\n工具：${request.tool}\n${targets.external ? '包含项目外目标\n' : ''}${request.tool === 'attach_file' ? '批准后文件将作为附件上传到当前 DeepSeek 官网会话；自动继续关闭时等待手动发送。\n' : ''}${request.tool === 'run_command' ? '命令可访问当前账户的文件与网络；工作目录不构成沙箱。\n' : ''}实际参数：\n${JSON.stringify(request.args, null, 2)}`, targets.canRemember ? ['允许一次', '记住本项目的精确请求', '拒绝'] : ['允许一次', '拒绝']);
+      const platformName = webPlatformOf(web.getURL()) === 'chatgpt' ? 'ChatGPT' : 'DeepSeek';
+      const choice = await options.ask('工具请求需要批准', `项目：${root}\n工具：${request.tool}\n${targets.external ? '包含项目外目标\n' : ''}${request.tool === 'attach_file' ? `批准后文件将作为附件上传到当前 ${platformName} 官网会话；自动继续关闭时等待手动发送。\n` : ''}${request.tool === 'run_command' ? '命令可访问当前账户的文件与网络；工作目录不构成沙箱。\n' : ''}实际参数：\n${JSON.stringify(request.args, null, 2)}`, targets.canRemember ? ['允许一次', '记住本项目的精确请求', '拒绝'] : ['允许一次', '拒绝']);
       if (!webActive || disposed || revision !== selectedRevision) throw new Error('网页平台已切换，工具未批准');
       return choice.response === 0 ? 'once' : targets.canRemember && choice.response === 1 ? 'remember' : 'deny';
     },
@@ -354,7 +354,6 @@ export async function createToolIntegration(options: Options) {
       if (!webActive || disposed || selectionRevisions.get(selection) !== revision) throw new Error('网页平台已切换，工具未启动');
       if (request.tool === 'attach_file') {
         if (selection.source === 'manual') throw new Error('手动 JSON 批次不向官网回传，附件未读取或上传');
-        if (webPlatformOf(web.getURL()) === 'chatgpt') throw new Error('ChatGPT 本轮仅支持纯文本，附件未读取或上传');
         const selectedRevision = revision;
         return toolAttachments.stage(root, request.args.path as string, () => webActive && !disposed && revision === selectedRevision && activeSelection === selection && root === options.files.getRoot() && selection.session === sessionKeyOf(web.getURL()));
       }

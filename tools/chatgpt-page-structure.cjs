@@ -1,7 +1,7 @@
 /** 原生验收只读快照；生产采集核验只返回状态与长度，不记录正文、草稿、文件名、会话 ID 或凭据。 */
 const ownerPath = require.resolve('../dist/main/chatgptPage');
 delete require.cache[ownerPath];
-const { CHATGPT_COMPLETION_SCRIPT, CHATGPT_COLLECT_SCRIPT, CHATGPT_REPLY_NODES } = require(ownerPath);
+const { CHATGPT_COMPLETION_SCRIPT, CHATGPT_COLLECT_SCRIPT, CHATGPT_REPLY_NODES, CHATGPT_ATTACHMENT_READER, CHATGPT_DOCUMENTS_MATCH } = require(ownerPath);
 // 只查询本地编辑器既有状态入口，帮助区分网页识别与自动采集调度；不调用工具或发送。
 const { app, webContents } = require('electron');
 const path = require('node:path');
@@ -9,6 +9,18 @@ const fs = require('node:fs');
 const flowKey = Symbol.for('mini-ai-ide.chatgpt-preview-flow');
 const navigationKey = Symbol.for('mini-ai-ide.chatgpt-preview-navigation-format-current');
 const shapeKey = Symbol.for('mini-ai-ide.chatgpt-preview-route-shape');
+// 只读运输状态；仅比较当前卡片与 owner 已持有的文件，不返回文件名或字节，不调用发送/清理。
+for (const web of webContents.getAllWebContents()) {
+  if (web.isDestroyed() || !web.getURL().startsWith('https://chatgpt.com/')) continue;
+  void web.executeJavaScriptInIsolatedWorld(1005, [{ code: `(() => {
+    const s=globalThis.__miniAIComposerAttachments;if(!s?.read||!s.composer?.isConnected)return {installed:false};
+    const view=(${CHATGPT_ATTACHMENT_READER})(s.composer),files=s.expectedFiles||[];
+    return {installed:true,takenOver:!!s.takenOver,accepted:!!s.accepted,inputConnected:!!s.input?.isConnected,formConnected:!!s.composer?.isConnected,
+      documents:(${CHATGPT_DOCUMENTS_MATCH})(view.cards,files),expected:files.slice(0,50).map(f=>({image:/^image\\//.test(f.type||''),documentMatched:view.cards.some(c=>c.kind==='document'&&c.matchesName(f.name))})),
+      cards:view.cards.slice(0,50).map(c=>({kind:c.kind,ready:c.ready})),unknown:view.unknown,pending:view.pending,error:view.error};
+  })()` }])
+    .then(state => fs.writeFileSync(path.join(app.getPath('temp'), 'mini-chatgpt-attachment-runtime.json'), JSON.stringify({at:new Date().toISOString(),...state}), 'utf8')).catch(() => {});
+}
 const routeShape = value => {
   try {
     const url = new URL(value);
@@ -99,6 +111,8 @@ module.exports = `(() => {
     runtimeWatcher:(()=>{const s=globalThis.__miniAIReplyChanges;if(!s)return {installed:false};const current=s.replyNodes?.().at(-1);return {installed:true,scopeCurrent:s.scope===location.origin+location.pathname,initialCount:s.initialReplies?.length,replyCount:s.replyNodes?.().length,lastAction:s.lastAction,dirty:s.dirty,waiting:typeof s.waiter==='function',turn:s.turn,history:!!s.history,historyReady:s.historyReady,generated:s.generated,generating:s.generating?.(),source:s.sources?.source(current)||null,sourceNodeCount:s.sourceNodes?.().length,sourceHistory:s.sourceHistory,hasSubmit:s.submitAt>0,handoffCancelled:s.handoffCancelled};})(),
     productionCompletion: ${CHATGPT_COMPLETION_SCRIPT}, productionCollection: (()=>{try {const replies=${CHATGPT_COLLECT_SCRIPT};return {count:replies.length,lengths:replies.map(r=>r.length),formalToolFence:replies.some(r=>/\\n?\x60{4,}mini-ai-tools\\n/.test(r))};}catch{return {error:'collection structure rejected'};}})(),
     completionEvidence:(()=>{${CHATGPT_REPLY_NODES}return {reply:!!reply,visible:visible(reply),state:frame?.getAttribute('data-talvt-turn-state'),openDetails:!!assistant?.querySelector('details[open]'),footers:frame?Array.from(frame.querySelectorAll('.turn-action-controls')).map(e=>({inAssistant:!!assistant?.contains(e),inExcluded:!!e.closest(excluded),inUser:!!e.closest('[class~="group/user-message"]'),parents:ancestors(e).slice(0,3).map(p=>({tag:p.tag,classes:p.classes,attrs:p.attrs})),buttons:Array.from(e.querySelectorAll('button')).map(control)})):[]};})(),
+    attachments: JSON.parse(${fs.readFileSync(path.join(__dirname, 'inspect-chatgpt-attachments.js'), 'utf8').trim().replace(/;\s*$/, '')}),
+    attachmentReader: (() => { const form = document.querySelector('div.ProseMirror[contenteditable="true"][role="textbox"]')?.closest('form[data-chatgpt-composer]'); if (!form) return null; const state = (${CHATGPT_ATTACHMENT_READER})(form); return { unknown: state.unknown, pending: state.pending, error: state.error, cards: state.cards.slice(0, 50).map(card => ({ kind: card.kind, ready: card.ready, nameMatchesRemoveLabel: card.matchesName((card.remove.getAttribute('aria-label') || '').replace(/^(?:移除|删除|remove|delete)\\s*/i, '')) })), pendingNodes: Array.from(form.querySelectorAll('[role="progressbar"],[aria-busy="true"]')).filter(visible).slice(0, 16).map(e => ({tag:e.tagName,role:e.getAttribute('role'),inCard:state.cards.some(card=>card.node.contains(e)),inEditable:!!e.closest('[contenteditable="true"]')})) }; })(),
     composers: composers.map(e=>({ ...describe(e), form:!!e.closest('form'), controls:Array.from(e.closest('form')?.querySelectorAll('button')||[]).map(control), ancestors:ancestors(e).slice(0,12) })),
     turns:Array.from(document.querySelectorAll('[data-talvt-turn-state]')).slice(-3).map(e=>({root:describe(e),tree:tree(e,0),controls:Array.from(e.querySelectorAll('button')).map(control)})),
     replies: roots.map(e=>({ root:describe(e), ancestors:ancestors(e), tree:tree(e,0) })),

@@ -1,7 +1,7 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-14
+updated: 2026-10-15
 owner: 胡运宽
 source_of_truth: [src/main/webLoadingView.ts, src/renderer/webLoading.html, src/renderer/webLoading.css, tools/verify-web-loading.cjs, tools/verify-deepseek-startup.cjs, src/main/composerDraftBackup.ts, test/composerDraftBackup.test.ts, src/main/firstPromptSession.ts, src/main/tools/replyChangeWatcher.ts, test/chatgptReply.test.ts, test/replyChangeWatcher.test.ts, src/main/tools/replySource.ts, test/replySource.test.ts, src/shared/webPlatform.ts, src/main/webPlatformController.ts, src/main/webPlatformView.ts, src/main/index.ts, src/main/tools/integration.ts, src/main/localPromptController.ts, src/main/workspaceLayoutController.ts, src/renderer/webbar.js, src/renderer/promptComposer.js, src/renderer/toolHarness.js, test/webPlatformController.test.ts, test/toolPlatformActivity.test.ts, test/webPlatformUi.test.ts, src/main/chatgptPage.ts, src/shared/webConversation.ts, src/main/webComposerSender.ts, test/chatgptToolIntegration.test.ts, tools/verify-chatgpt-composer.cjs, tools/verify-chatgpt-tools.cjs, tools/verify-web-platform.cjs, docs/adr/2026-10-11-web-platform-switching.md]
 ---
@@ -10,9 +10,9 @@ source_of_truth: [src/main/webLoadingView.ts, src/renderer/webLoading.html, src/
 
 两平台官网视图均采用原生后台调度，窗口遮挡、隐藏与最小化不会因默认后台节流停止必要计时器和画面帧；资源影响见 `app-shell.md`。两平台自动采集共用 `replySource.ts` 的回复顺序、历史指纹与快照封存规则，回看不会授予新轮资格；来源无法核实时保留手动采集。平台关闭工具能力的门禁仍独立生效。
 
-顶栏具名选择框在 DeepSeek / ChatGPT 间直接切换，每次启动默认 DeepSeek。仅活动平台运行采集、权限执行和限定发送；两平台共用工具协议、权限、执行、复制及 automatic 单开关。ChatGPT 接入普通首页与 `/c/<id>` 会话的纯文本需求和工具结果，不接入 GPTs、项目专属路径或特殊编辑界面；未知地址或 DOM 状态暂停，不猜测控件。
+顶栏具名选择框在 DeepSeek / ChatGPT 间直接切换，每次启动默认 DeepSeek。仅活动平台运行采集、权限执行和限定发送；两平台共用工具协议、权限、执行、复制及 automatic 单开关。ChatGPT 接入普通首页与 `/c/<id>` 会话的需求、工具结果及其授权附件，不接入 GPTs、项目专属路径或特殊编辑界面；未知地址或 DOM 状态暂停，不猜测控件。
 
-ChatGPT 本地需求携带附件时明确拒绝并保留暂存文件；工具 `attach_file` 请求返回明确失败，不读取或上传文件。图片、PDF、Word 等仍可由用户通过官网原生入口操作。程序纯文本发送遇到官网已有附件也暂停，避免夹带文件。DeepSeek 原有程序附件运输保持独立。
+ChatGPT 支持本地需求中用户选择、拖入及粘贴的附件，以及当前官网工具批经权限批准的 `attach_file` 附件；手动 JSON 来源仍禁止上传。主进程复用暂存、文件身份校验和分块读取，网页只获得本次字节，不获得文件路径或磁盘桥。两平台均最多 50 个、单文件最多 100 MiB，官网实际格式和额度另有限制。程序发送遇到官网已有附件仍暂停，避免夹带文件；附件批要求空输入，不使用纯文本工具结果的草稿备份替换。
 平台复用各自原生视图，分别使用 persist:postcheck 与 persist:postcheck-02 固定分区，首次进入 ChatGPT 才创建。切换不重载已创建的网页、不清除登录态；登录资料不与用户浏览器或独立验证工具共享。正式应用首次需自行登录。无 iframe、网页 preload、Node、本地桥、凭据读取或指纹伪造。
 
 工具执行、存活后台进程及需求/结果发送期间拒绝切换；自动回传倒计时可先撤回再切换。已完成结果和需求草稿保留，可继续复制，旧批次和附件不补发；automatic 配置保留，活动网页重新绑定到同一工具流程时，先释放旧监听与运输，建立新历史基线；上一批展示结果仅保留复制资格，切回任何平台均不补发。跨异步回执以平台修订和活动守卫防止旧动作继续执行。
@@ -35,7 +35,13 @@ ChatGPT 首页首发可经过 `/c/local-chatgpt%3A<UUID>` 编码占位地址，�
 
 ChatGPT 只读规则由 `chatgptPage.ts` 提供：在最新 `data-talvt-turn-state` 轮次内取最后一个未被排除的 assistant 角色标记，其 owner 必须属于本轮且内部角色唯一；正式正文必须唯一、具有 data-dil-message-id、属于该 owner 的 markdown 区域且最近消息 owner 一致。同轮有较早角色时，仅接纳各自属于不同、非嵌套 owner 且具唯一内部页脚的已知连续消息结构。多消息时最后 owner 不能带自己的局部页脚；最后角色的 owner 或正文尚未挂载时等待，不回退采同轮较早消息。完成仍要求本轮 complete 及所有消息 owner 之外的唯一轮末复制页脚，用户、思考、正文和其他消息内操作栏不计入；多份答案各自带内部页脚时暂停，即使另有全局页脚也不能自动选择答案；其他未知比较结构不纳入支持范围。后续用户轮、生成、中断及歧义均不能回退采历史。CodeSurface 中的唯一 CodeContent 保留原始文本，语言仅取对应 StickyActionBar 的明确局部标签。变化监听涵盖这些轮次、角色、正文及页脚节点与状态属性。
 
-`webComposerSender.ts` 仍是唯一网页 DOM 写入 owner，分别验证平台官方 origin、普通会话、唯一可编辑 composer 和局部发送控件；ChatGPT 统一以最近且不含回复的 FORM 关联 ProseMirror 与唯一 type=submit/发送控件，空 composer 的语音控件只用于确认输入区，填入后等待真正发送控件出现。发送只接纳用户主动需求或当前批真实结果；当前工具结果/诊断可将已有纯文本草稿先保存到本项目隐藏目录，重新核验后替换回传。主动需求的已有草稿、已有附件、生成中、未知控件及不确定回执仍暂停，点击后不重试。
+`webComposerSender.ts` 仍是唯一网页 DOM 写入 owner，分别验证平台官方 origin、普通会话、唯一可编辑 composer 和局部发送控件；ChatGPT 统一以最近且不含回复的 FORM 关联 ProseMirror 与唯一 type=submit/发送控件，空 composer 的语音控件只用于确认输入区，填入后等待真正发送控件出现。发送只接纳用户主动需求或当前批真实结果；当前纯文本工具结果/诊断可将已有纯文本草稿先保存到本项目隐藏目录，重新核验后替换回传。主动需求及附件批的已有草稿、已有附件、生成中、未知控件及不确定回执仍暂停，点击后不重试。
+
+ChatGPT 附件只选择同一 `form[data-chatgpt-composer]` 内唯一 multiple 且无 accept 限制的通用文件 input。`chatgptPage.ts` 的 `CHATGPT_ATTACHMENT_READER` 只读核验图片卡和文档卡，逐一确认全部本次附件；图片须可解码，文档卡若有缩略图须就绪，上传进度消失及唯一发送控件就绪后才发送正文。选择后 input.files 被官网清空不能作为完成依据。可信输入和附件操作接管即暂停；点击前仅通过已知官方移除控件清理可明确归属本批的卡片，并有界异步复核，未知仍停。所有运输阶段保留 Document、nonce 和活动 token 守卫，点击后不确定不重试或清理可能提交的文件。
+
+文档匹配接纳完整原名，以及官网在相同扩展名前追加数字编号的完整名称；编号名称须同时出现在移除控件标签和卡内文本。`CHATGPT_DOCUMENTS_MATCH` 对本批文件和文档卡作双向唯一核对；名称可对应多个文件或卡片时，发送与清理均暂停，不使用前缀包含或任意改名匹配。
+
+2026-10-15，用户确认新版IDE中ChatGPT本地需求TXT及PDF＋图片实际发送验收通过。工具附件的权限和批次入口、图片/PDF/DOCX/混合运输及取消边界由回归覆盖，未将其写成另行取得的人工连续闭环证据。
 
 真实 ChatGPT 页面只读结构核验与离线夹具是不同证据。原生结构诊断已核验 ProseMirror/FORM、submit/发送、DilResponseRoot、轮次完成标记、局部复制页脚及代码语言标题；官网输入事件接收和连续闭环以真实对话验收为准，离线测试不能替代该证据，也不能证明重启登录保持。2026-10-12 用户补充确认完整 IDE 跨重启登录保持验收通过；该结论来自用户实际验收反馈。预览模式可开启 MINI_CHATGPT_STRUCTURE_TRACE，按 `tools/chatgpt-page-structure.cjs` 输出不含正文、草稿、凭据或会话 ID 的结构快照；不向官网提供桥。网页能力依赖平台当前 DOM，技术实现也不代表平台授权程序化提取输出。
 

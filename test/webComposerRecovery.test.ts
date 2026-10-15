@@ -113,11 +113,11 @@ it('同URL新文档拒绝排队旧写入、附件、恢复和取消；同文档�
   const f = fixture(); const sending = f.sender.send('old', session); await flush();
   const oldWrite = f.mutations[0]!;
   const cancel = f.sender.cancel(); await flush(); const oldCancel = f.mutations[1]!;
-  f.run(oldCancel); // 真正脚本撤销 activeToken；没有已安装发送state不伪造清理证明。
+  await f.run(oldCancel); // 真正脚本撤销 activeToken；没有已安装发送state不伪造清理证明。
   assert.equal(f.run(oldWrite).ok, false, '已撤销token不能在同文档迟到安装写脚本');
   f.replaceDocument(); f.navigate(); f.finish(); await flush();
   const rejected = f.run(oldWrite); assert.equal(rejected.ok, false); assert.match(rejected.error, /文档已变化/);
-  assert.equal(f.run(oldCancel), false, '新文档上旧取消不能清理新批');
+  assert.equal(await f.run(oldCancel), false, '新文档上旧取消不能清理新批');
   t.mock.timers.tick(1000); await flush(); await cancel; await sending;
   f.accept(); assert.equal((await f.sender.send('new', session)).ok, true); await f.sender.dispose();
 });
@@ -156,7 +156,7 @@ it('附件每一运输阶段及备份resume均在新文档中拒绝排队旧脚�
     context = vm.createContext({ document: {}, location: { href: url } });
     vm.runInContext('globalThis.__miniAIComposerDocument = { document, nonce: "new-document", activeToken: "new-token" }', context);
     for (const code of captured) {
-      const result = vm.runInContext(code, context);
+      const result = await vm.runInContext(code, context);
       assert.ok(result === false || result?.ok === false || result?.error, '必须在任何DOM、File或输入操作之前拒绝旧nonce');
     }
     await sender.dispose();

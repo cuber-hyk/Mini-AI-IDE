@@ -64,6 +64,23 @@ it('发送前复核附件是否仍存在且未变化', async () => {
   } finally { await fs.rm(root, { recursive: true, force: true }); }
 });
 
+it('拒绝空 TXT，不暂存同次选择的其他文件且保留此前有效附件', async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mini-prompt-attachments-'));
+  try {
+    const empty = path.join(root, 'empty.txt'); await fs.writeFile(empty, '');
+    const valid = path.join(root, 'notes.txt'); await fs.writeFile(valid, 'content');
+    const attachments = new LocalPromptAttachments(); const [existing] = await attachments.stage([valid]);
+    await assert.rejects(() => attachments.stage([valid, empty]), /^Error: 文件为空：empty\.txt$/);
+    assert.equal((await attachments.resolve([existing!.id])).length, 1);
+    assert.equal(attachments.remove(existing!.id), true);
+    const files: string[] = [];
+    for (let i = 0; i < MAX_PROMPT_ATTACHMENTS; i++) {
+      const file = path.join(root, `file-${i}.txt`); await fs.writeFile(file, 'x'); files.push(file);
+    }
+    assert.equal((await attachments.stage(files)).length, MAX_PROMPT_ATTACHMENTS, '失败批次不能占用附件名额');
+  } finally { await fs.rm(root, { recursive: true, force: true }); }
+});
+
 it('剪贴板图片只接纳明确的图片 MIME 与有限字节，并可流式用于网页上传', async () => {
   const attachments = new LocalPromptAttachments();
   assert.throws(() => attachments.stageClipboardImage('clipboard-image.svg', 'image/svg+xml', new Uint8Array([1])), /无效|支持/);

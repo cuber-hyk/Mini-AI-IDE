@@ -3,7 +3,7 @@ artifact_type: capability
 status: current
 updated: 2026-10-15
 owner: 胡运宽
-source_of_truth: [src/main/settings.ts, test/promptSettingsMigration.test.ts, src/renderer/prompt.js, docs/capabilities/skills-and-local-prompt.md, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, docs/adr/2026-10-06-native-tool-harness-boundary.md, src/shared/toolProtocol.ts, src/shared/formatSpec.ts, src/shared/returnPath.ts, src/main/replyCollector.ts, src/main/tools/changes.ts, src/main/tools/changeReview.ts, src/main/tools/integration.ts, src/main/returnPathService.ts, src/main/previewPreload.ts, src/main/fileService.ts, src/renderer/preview.js, src/renderer/editorWorkspace.js, test/replyCollector.test.ts, test/toolProtocol.test.ts, test/toolChanges.test.ts, test/formatSpec.test.ts, test/toolSamples.test.ts, src/main/tools/jsonDraft.ts, test/jsonDraft.test.ts, test/toolAutoContinueIntegration.test.ts]
+source_of_truth: [src/main/chatgptPage.ts, test/chatgptComposerSender.test.ts, tools/verify-chatgpt-composer.cjs, src/main/settings.ts, test/promptSettingsMigration.test.ts, src/renderer/prompt.js, docs/capabilities/skills-and-local-prompt.md, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, docs/adr/2026-10-06-native-tool-harness-boundary.md, src/shared/toolProtocol.ts, src/shared/formatSpec.ts, src/shared/returnPath.ts, src/main/replyCollector.ts, src/main/tools/changes.ts, src/main/tools/changeReview.ts, src/main/tools/integration.ts, src/main/returnPathService.ts, src/main/previewPreload.ts, src/main/fileService.ts, src/renderer/preview.js, src/renderer/editorWorkspace.js, test/replyCollector.test.ts, test/toolProtocol.test.ts, test/toolChanges.test.ts, test/formatSpec.test.ts, test/toolSamples.test.ts, src/main/tools/jsonDraft.ts, test/jsonDraft.test.ts, test/toolAutoContinueIntegration.test.ts]
 ---
 
 # 能力：工具修改与变更查看
@@ -15,6 +15,8 @@ AI 的实际文件读取、修改和命令统一输出一个顶层 mini-ai-tools
 apply_changes 使用 changes，每项含 path 和 operation。replace 提供 edits 中的 old_string/new_string；create/overwrite 提供完整 content，可为空。替换原文必须非空、真实、唯一且不重叠；同文件所有修改集中在一条请求。JSON 字符串正确转义换行、引号和反斜杠，正文按字面保存。
 
 同批次路径及真实目标别名冲突先检查，在任何请求产生副作用前拒绝。依赖只决定前置成功后的执行顺序，不提供输出插值。需要读取或进程 ID 时，AI 应先请求工具，等 IDE 自动回传或用户手动返回真实结果后再生成下一批。
+
+当前官网批次可用 `attach_file` 明确请求将文件上传到活动的 DeepSeek 或 ChatGPT 普通会话，经原有工具权限批准后仅暂存附件，done 不表示官网已接收。附件字节不编码进 JSON，也不从命令日志推测路径。整批实际结束及来源复核后由唯一 `WebComposerSender` 通过官方文件控件运输，确认全部图片和文档就绪后发送与复制同源的结果正文一次；已有官网草稿或附件、用户接管及未知运输状态暂停，点击后不重试。ChatGPT 附件批不使用纯文本工具结果的草稿备份替换。手动 JSON 来源仍不上传或回传；具体合同见 `tool-harness.md` 和 `../adr/2026-10-09-tool-attachment-return.md`。
 
 replyCollector 只读还原代码正文及语言：读取 code/pre 的 language-* 类名，或同一单代码框内、正文之前的独立工具栏语言标签。到回复根或多个代码框边界停止，不从正文提及、普通 JSON 或其他代码框补写正式协议。缺少明确语言仍作为资料。
 

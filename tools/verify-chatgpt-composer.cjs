@@ -46,13 +46,247 @@ async function setup(code = '', url = 'https://chatgpt.com/c/current', backupDra
   sender = new WebComposerSender(window.webContents, { backupDraft, draftSaved });
 }
 const send = (text = 'result', kind = 'results', scope = 'https://chatgpt.com/c/current') => sender.send(text, scope, kind);
+const pngBytes = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jWZkAAAAASUVORK5CYII=', 'base64');
+const pdfObjects = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Count 0 /Kids [] >>'];
+let pdfText = '%PDF-1.4\n'; const pdfOffsets = [0];
+pdfObjects.forEach((object, index) => { pdfOffsets.push(Buffer.byteLength(pdfText)); pdfText += `${index + 1} 0 obj\n${object}\nendobj\n`; });
+const pdfXref = Buffer.byteLength(pdfText);
+pdfText += `xref\n0 3\n0000000000 65535 f \n${pdfOffsets.slice(1).map(offset => `${String(offset).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size 3 /Root 1 0 R >>\nstartxref\n${pdfXref}\n%%EOF`;
+const pdfBytes = Buffer.from(pdfText); let docxBytes;
+const attachmentFile = (name, mediaType, bytes, onRead = () => {}) => ({ id: name, name, mediaType, size: bytes.length, async *stream() { onRead(); const middle = Math.ceil(bytes.length / 2); yield bytes.subarray(0, middle); yield bytes.subarray(middle); } });
+const imageFile = () => attachmentFile('figure.png', 'image/png', pngBytes);
+const pdfFile = () => attachmentFile('paper.pdf', 'application/pdf', pdfBytes);
+const wordFile = () => attachmentFile('report.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', docxBytes);
+const sendFiles = (files, kind = 'results', text = '真实附件结果') => sender.send(text, 'https://chatgpt.com/c/current', kind, () => true, files);
+// 复现现场四类隐藏 input，官网消费 FileList 后清空；上传与 React 移除均异步完成。
+const attachmentSetup = `
+window.fileChanges={};window.appFiles=[];window.sentFiles=[];window.uploadDelay=100;window.removeClicks=0;
+const composer=document.querySelector('form');
+window.makeAttachmentCard=file=>{
+  const image=file.type.startsWith('image/'),card=document.createElement(image?'div':'span');
+  if(image){card.setAttribute('role','button');card.setAttribute('aria-haspopup','dialog');card.setAttribute('data-state','closed');const img=document.createElement('img');img.src=${JSON.stringify('data:image/png;base64,' + pngBytes.toString('base64'))};img.style='width:28px;height:28px';card.append(img)}
+  else{const label=document.createElement('span');label.textContent=file.name;card.append(label);const thumb=document.createElement('img');thumb.setAttribute('data-attachment-thumbnail-state','ready');thumb.src=${JSON.stringify('data:image/png;base64,' + pngBytes.toString('base64'))};thumb.style='width:20px;height:20px';card.append(thumb)}
+  const remove=document.createElement('button');remove.type='button';remove.setAttribute('aria-label','移除 '+file.name);remove.append(document.createElementNS('http://www.w3.org/2000/svg','svg'));remove.addEventListener('click',()=>{window.removeClicks++;setTimeout(()=>{card.remove();if(!composer.querySelector('[data-fixture-card]'))send.disabled=!input.textContent},window.removeDelay||20)});card.append(remove);card.setAttribute('data-fixture-card','');return card;
+};
+for(const [id,accept,multiple] of [['camera','image/*',false],['media','image/*,video/*',true],['images','image/*',true],['general','',true]]){
+ const picker=document.createElement('input');picker.type='file';picker.hidden=true;picker.id=id;picker.multiple=multiple;if(accept)picker.accept=accept;composer.append(picker);
+ picker.addEventListener('change',async()=>{
+  window.fileChanges[id]=(window.fileChanges[id]||0)+1;const picked=Array.from(picker.files);picker.files=new DataTransfer().files;
+  window.appFiles=await Promise.all(picked.map(async file=>({name:file.name,size:file.size,type:file.type,bytes:Array.from(new Uint8Array(await file.arrayBuffer()))})));
+  for(const file of picked){if(window.hideDocument && !file.type.startsWith('image/'))continue;const card=window.makeAttachmentCard(file),progress=document.createElement('div');progress.setAttribute('role','progressbar');card.append(progress);composer.prepend(card);if(!window.holdUpload)setTimeout(()=>{progress.remove();if(!composer.querySelector('[role="progressbar"]'))send.disabled=false},window.uploadDelay)}
+ });
+}
+send.addEventListener('click',()=>{window.sentFiles.push(window.appFiles.slice());if(window.mode==='normal')for(const card of composer.querySelectorAll('[data-fixture-card]'))card.remove()});
+`;
+const attachmentState = () => run(`({changes:window.fileChanges,sent:window.sentFiles,files:window.appFiles,selected:document.querySelector('#general').files.length,cards:document.querySelectorAll('[data-fixture-card]').length,removeClicks:window.removeClicks})`);
+async function until(check, message) { const deadline = Date.now() + 3000; while (!await check()) { assert.ok(Date.now() < deadline, message); await pause(20); } }
 async function test(name, check) { await check(); passed++; console.log('ok ' + name); }
 app.whenReady().then(async () => {
+  const { createRequire } = require('node:module');
+  const JSZip = createRequire(require.resolve('docx-preview'))('jszip'), zip = new JSZip();
+  zip.file('[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>');
+  zip.file('_rels/.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rDoc" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>');
+  zip.file('word/document.xml', '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Offline attachment</w:t></w:r></w:p></w:body></w:document>');
+  docxBytes = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
   const offline = session.fromPartition('chatgpt-composer-offline');
   await offline.protocol.handle('https', request => request.url.startsWith('https://chatgpt.com/') ? new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8' } }) : new Response('', { status: 403 }));
   window = new BrowserWindow({ show: false, webPreferences: { session: offline, sandbox: true, contextIsolation: true, nodeIntegration: false } });
   const backupProject = path.join(temporary, 'draft-project'); fs.mkdirSync(backupProject);
   const backups = new ComposerDraftBackup();
+  const attachmentDiagnostic = fs.readFileSync(path.join(__dirname, 'inspect-chatgpt-attachments.js'), 'utf8');
+  await test('附件只读诊断区分FORM归属和上传状态且不暴露正文文件名或属性值', async () => {
+    await setup(`input.textContent='PRIVATE_DRAFT_991';const file=document.createElement('input');file.type='file';file.multiple=true;const data=new DataTransfer();data.items.add(new File(['PRIVATE_BYTES_991'],'PRIVATE_FILENAME_991.txt'));file.files=data.files;document.querySelector('form').append(file);const card=document.createElement('div');card.dataset.testid='PRIVATE_ATTRIBUTE_991';card.textContent='PRIVATE_FILENAME_991.txt';const remove=document.createElement('button');remove.setAttribute('aria-label','Remove PRIVATE_FILENAME_991.txt');card.append(remove);const image=document.createElement('img');image.src='data:image/png;base64,PRIVATE_URL_991';card.append(image);const progress=document.createElement('div');progress.setAttribute('role','progressbar');card.append(progress);document.querySelector('form').prepend(card)`);
+    await run(`window.diagnosticMutations=[];window.diagnosticObserver=new MutationObserver(records=>diagnosticMutations.push(...records));diagnosticObserver.observe(document.documentElement,{subtree:true,attributes:true,childList:true,characterData:true})`);
+    const raw = await window.webContents.executeJavaScriptInIsolatedWorld(1004, [{ code: attachmentDiagnostic }]);
+    assert.ok(!raw.includes('PRIVATE_'), raw); const result = JSON.parse(raw);
+    assert.equal(result.supported, true); assert.equal(result.fileInputs.length, 1); assert.equal(result.fileInputs[0].fileCount, 1);
+    assert.equal(result.fileInputs[0].ancestorFormIndex, 0); assert.equal(result.composers[0].hasText, true);
+    assert.equal(result.forms[0].progress.length, 1); assert.equal(result.forms[0].images, 1);
+    assert.equal(result.forms[0].removeControls[0].nameShape.extension, 'txt');
+    assert.equal(result.forms[0].removeControls[0].nameShape.fullNameInText, true);
+    assert.equal(await run('diagnosticObserver.takeRecords().length+diagnosticMutations.length'), 0);
+    await run('diagnosticObserver.disconnect()');
+  });
+  await test('附件诊断报告外置文件控件与有回复FORM，不擅自判定为可上传', async () => {
+    await setup(`const file=document.createElement('input');file.type='file';document.body.append(file);const reply=document.createElement('div');reply.setAttribute('data-dil-message-id','PRIVATE_REPLY_ID_991');reply.textContent='PRIVATE_REPLY_991';document.querySelector('form').append(reply)`);
+    const raw = await window.webContents.executeJavaScriptInIsolatedWorld(1004, [{ code: attachmentDiagnostic }]);
+    const result = JSON.parse(raw); assert.ok(!raw.includes('PRIVATE_'));
+    assert.equal(result.fileInputs[0].ancestorFormIndex, -1); assert.equal(result.forms[0].containsReply, true); assert.equal(result.forms[0].tree, null);
+    await setup('', 'https://chatgpt.com/g/custom');
+    const unsupported = JSON.parse(await window.webContents.executeJavaScriptInIsolatedWorld(1004, [{ code: attachmentDiagnostic }]));
+    assert.equal(unsupported.supported, false); assert.equal(unsupported.fileInputs, undefined);
+  });
+  await test('附件结构异常膨胀时返回截断证据，不生成无界快照', async () => {
+    await setup(`for(let n=0;n<30;n++){const file=document.createElement('input');file.type='file';document.body.append(file)}for(let n=0;n<400;n++){const status=document.createElement('div');status.setAttribute('role',n%2?'alert':'progressbar');for(let k=0;k<35;k++)status.setAttribute('data-shape-'+k,'PRIVATE_VALUE');document.querySelector('form').append(status)}`);
+    const raw = await window.webContents.executeJavaScriptInIsolatedWorld(1004, [{ code: attachmentDiagnostic }]);
+    const result = JSON.parse(raw); assert.equal(result.truncated, true); assert.equal(result.fileInputs.length, 16);
+    assert.ok(result.forms[0].progress.length <= 16); assert.ok(result.forms[0].alerts.length <= 16);
+    assert.ok(result.forms[0].tree.nodeCount <= 180); assert.ok(raw.length < 250000); assert.ok(!raw.includes('PRIVATE_VALUE'));
+  });
+  await test('图、PDF、DOCX与混合附件由本地需求和工具结果共用通用控件，一批一次上传和发送', async () => {
+    for (const kind of ['prompt', 'results']) for (const files of [[imageFile()], [pdfFile()], [wordFile()], [imageFile(), pdfFile(), wordFile()]]) {
+      await setup(attachmentSetup);
+      const result = await sendFiles(files, kind); assert.equal(result.ok, true, JSON.stringify(result));
+      const snapshot = await attachmentState();
+      assert.deepEqual(snapshot.changes, { general: 1 }); assert.equal(snapshot.selected, 0);
+      assert.equal(snapshot.sent.length, 1); assert.equal((await state()).clicks, 1);
+      assert.deepEqual((await state()).received, ['真实附件结果']);
+      assert.deepEqual(snapshot.sent[0].map(file => ({ name: file.name, size: file.size, type: file.type })), files.map(file => ({ name: file.name, size: file.size, type: file.mediaType })));
+      for (let index = 0; index < files.length; index++) {
+        const bytes = files[index].name.endsWith('.png') ? pngBytes : files[index].name.endsWith('.pdf') ? pdfBytes : docxBytes;
+        assert.deepEqual(snapshot.sent[0][index].bytes, Array.from(bytes));
+      }
+      assert.equal(snapshot.cards, 0); assert.equal(await run('typeof window.__miniAIComposerAttachments'), 'undefined');
+    }
+  });
+  await test('草稿、已有附件、通用控件歧义及跨FORM控件在预检零读取零上传', async () => {
+    for (const change of [
+      `input.textContent='用户草稿'`,
+      `composer.prepend(window.makeAttachmentCard({name:'user.pdf',type:'application/pdf'}))`,
+      `composer.append(document.querySelector('#general').cloneNode(true))`,
+      `const other=document.createElement('form');document.body.append(other);other.append(document.querySelector('#general'))`
+    ]) {
+      let reads = 0; await setup(attachmentSetup + change);
+      const result = await sendFiles([attachmentFile('paper.pdf', 'application/pdf', pdfBytes, () => reads++)]);
+      assert.equal(result.ok, false); assert.equal(reads, 0); assert.deepEqual((await attachmentState()).changes, {});
+      assert.equal((await state()).clicks, 0); assert.equal((await state()).inputs, 0);
+    }
+  });
+  await test('手动文档卡无缩略图且FileList清空时阻断纯文本需求和结果，草稿备份也不启动', async () => {
+    for (const entry of [{ kind: 'prompt', draft: '' }, { kind: 'results', draft: '' }, { kind: 'results', draft: '用户草稿' }]) {
+      let saved = 0;
+      await setup(attachmentSetup + `const card=window.makeAttachmentCard({name:'brief.docx',type:'application/vnd.openxmlformats-officedocument.wordprocessingml.document'});card.querySelector('img').remove();card.querySelector('button').setAttribute('aria-label','移除brief.docx');composer.prepend(card);input.textContent=${JSON.stringify(entry.draft)}`, undefined, async () => { saved++; return '/unexpected-backup.txt'; });
+      assert.equal(await run(`document.querySelector('#general').files.length`), 0);
+      const result = await send('纯文本正文', entry.kind); assert.equal(result.ok, false);
+      assert.equal(saved, 0); assert.equal((await state()).inputs, 0); assert.equal((await state()).clicks, 0);
+      assert.equal((await state()).text, entry.draft); assert.equal((await attachmentState()).cards, 1);
+      assert.equal((await attachmentState()).removeClicks, 0);
+    }
+  });
+  await test('程序DOCX无缩略图时仍核对独立文件名卡片并只发送一次', async () => {
+    for (const kind of ['prompt', 'results']) {
+      await setup(attachmentSetup + `const original=window.makeAttachmentCard;window.makeAttachmentCard=file=>{const card=original(file);card.querySelector('[data-attachment-thumbnail-state]')?.remove();return card};void 0`);
+      const result = await sendFiles([wordFile()], kind); assert.equal(result.ok, true, JSON.stringify(result));
+      assert.equal((await state()).clicks, 1); assert.deepEqual((await attachmentState()).changes, { general: 1 });
+      assert.equal((await attachmentState()).sent[0][0].name, 'report.docx');
+      assert.deepEqual((await attachmentState()).sent[0][0].bytes, Array.from(docxBytes));
+    }
+  });
+  await test('官网为PDF追加数字编号且与移除名称一致时，图片混合批等待全部就绪后只发送一次', async () => {
+    for (const kind of ['prompt', 'results']) {
+      await setup(attachmentSetup + `const original=window.makeAttachmentCard;window.makeAttachmentCard=file=>original(file.type.startsWith('image/')?file:{name:'paper(1).pdf',type:file.type});window.uploadDelay=250;void 0`);
+      const pending = sendFiles([imageFile(), pdfFile()], kind);
+      await until(async () => (await attachmentState()).cards === 2, '未显示带编号的图片/PDF混合卡片');
+      assert.equal((await state()).inputs, 0); assert.equal((await state()).clicks, 0);
+      assert.equal(await run(`document.querySelector('button[aria-label="移除 paper(1).pdf"]')!==null`), true);
+      const guard = setTimeout(() => { void sender.cancel(); }, 2000);
+      const result = await pending; clearTimeout(guard); assert.equal(result.ok, true, JSON.stringify(result));
+      assert.deepEqual((await state()).received, ['真实附件结果']); assert.equal((await state()).clicks, 1);
+      assert.deepEqual((await attachmentState()).changes, { general: 1 });
+      assert.deepEqual((await attachmentState()).sent[0].map(file => file.name), ['figure.png', 'paper.pdf']);
+    }
+  });
+  await test('带编号PDF上传中取消能清理本批，后续新批仅发送一次', async () => {
+    await setup(attachmentSetup + `const original=window.makeAttachmentCard;window.makeAttachmentCard=file=>original({name:'paper(2).pdf',type:file.type});window.holdUpload=true;void 0`);
+    const pending = sendFiles([pdfFile()]);
+    await until(async () => (await attachmentState()).cards === 1, '未显示带编号PDF卡片');
+    await sender.cancel(); const result = await pending; assert.equal(result.ok, false); assert.notEqual(result.uncertain, true, JSON.stringify(result));
+    assert.equal((await attachmentState()).cards, 0); assert.equal((await attachmentState()).removeClicks, 1);
+    await run('window.holdUpload=false'); assert.equal((await sendFiles([pdfFile()])).ok, true);
+    assert.equal((await state()).clicks, 1); assert.deepEqual((await attachmentState()).changes, { general: 2 });
+  });
+  await test('原名与真实编号名同批发生候选歧义时不发送，也不移除归属不明的卡片', async () => {
+    await setup(attachmentSetup + `const original=window.makeAttachmentCard;window.makeAttachmentCard=file=>original({name:'paper(1).pdf',type:file.type});void 0`);
+    const pending = sendFiles([pdfFile(), attachmentFile('paper(1).pdf', 'application/pdf', pdfBytes)]);
+    await until(async () => (await attachmentState()).cards === 2, '未显示歧义文档卡片');
+    await pause(180); assert.equal((await state()).clicks, 0); assert.equal((await state()).inputs, 0);
+    await sender.cancel(); const result = await pending; assert.equal(result.ok, false); assert.equal(result.uncertain, true);
+    assert.equal((await attachmentState()).cards, 2); assert.equal((await attachmentState()).removeClicks, 0);
+  });
+  await test('编号候选不接纳相似前缀、错误扩展、非数字或不一致移除名，也不替换原名已有编号', async () => {
+    for (const variant of [
+      { name: 'paper-extra(1).pdf', original: 'paper.pdf' },
+      { name: 'paper(1).docx', original: 'paper.pdf' },
+      { name: 'paper(one).pdf', original: 'paper.pdf' },
+      { name: 'paper(1).pdf', original: 'paper.pdf', remove: 'different(1).pdf' },
+      { name: 'paper(2).pdf', original: 'paper(1).pdf' }
+    ]) {
+      await setup(attachmentSetup + `const original=window.makeAttachmentCard;window.makeAttachmentCard=file=>{const card=original({name:${JSON.stringify(variant.name)},type:file.type});${variant.remove ? `card.querySelector('button').setAttribute('aria-label',${JSON.stringify('移除 ' + variant.remove)});` : ''}return card};void 0`);
+      const pending = sendFiles([attachmentFile(variant.original, 'application/pdf', pdfBytes)]);
+      await until(async () => (await attachmentState()).cards === 1, '未显示文档边界反例');
+      await pause(150); assert.equal((await state()).inputs, 0); assert.equal((await state()).clicks, 0);
+      await sender.cancel(); const result = await pending; assert.equal(result.ok, false); assert.equal(result.uncertain, true);
+      assert.equal((await attachmentState()).cards, 1); assert.equal((await attachmentState()).removeClicks, 0);
+    }
+    await setup(attachmentSetup);
+    assert.equal((await sendFiles([attachmentFile('paper(1).pdf', 'application/pdf', pdfBytes)])).ok, true);
+    assert.equal((await state()).clicks, 1);
+  });
+  await test('文档缩略图不充当图片附件，缺失文档时不能凭图片发送正文', async () => {
+    await setup(attachmentSetup + `window.hideDocument=true`);
+    const pending = sendFiles([imageFile(), pdfFile()]);
+    await until(async () => (await attachmentState()).cards === 1, '未出现图片卡');
+    await pause(180); assert.equal((await state()).clicks, 0); assert.equal((await state()).inputs, 0);
+    await sender.cancel(); const result = await pending; assert.equal(result.ok, false);
+    assert.equal((await state()).clicks, 0); assert.deepEqual((await attachmentState()).changes, { general: 1 });
+  });
+  await test('上传中不填正文，取消等待异步移除本批附件后允许未来新批', async () => {
+    await setup(attachmentSetup + `window.holdUpload=true`);
+    const pending = sendFiles([imageFile(), pdfFile()]);
+    await until(async () => (await attachmentState()).cards === 2, '未显示本批卡片');
+    assert.equal((await state()).inputs, 0); assert.equal((await state()).clicks, 0);
+    await sender.cancel(); const result = await pending; assert.equal(result.ok, false); assert.notEqual(result.uncertain, true, JSON.stringify(result));
+    const cancelled = await attachmentState(); assert.equal(cancelled.cards, 0); assert.equal(cancelled.removeClicks, 2);
+    await run('window.holdUpload=false'); assert.equal((await sendFiles([wordFile()])).ok, true);
+    assert.equal((await state()).clicks, 1); assert.deepEqual((await attachmentState()).changes, { general: 2 });
+  });
+  await test('可信用户接管保留新草稿和用户附件，不点击移除控件', async () => {
+    await setup(attachmentSetup + `window.holdUpload=true`);
+    // 捕获生产事件处理器验证可信事件分支；不向页面派发用户事件。
+    await window.webContents.executeJavaScriptInIsolatedWorld(1005, [{ code: `globalThis.fixtureAttachmentEdits={};const add=EventTarget.prototype.addEventListener;EventTarget.prototype.addEventListener=function(name,handler,...args){if(this instanceof HTMLFormElement)globalThis.fixtureAttachmentEdits[name]=handler;return add.call(this,name,handler,...args)};void 0` }]);
+    const pending = sendFiles([pdfFile()]);
+    await until(async () => (await attachmentState()).cards === 1, '未显示本批卡片');
+    await run(`input.textContent='用户接管';composer.prepend(window.makeAttachmentCard({name:'user.pdf',type:'application/pdf'}))`);
+    await window.webContents.executeJavaScriptInIsolatedWorld(1005, [{ code: `globalThis.fixtureAttachmentEdits.input({isTrusted:true,target:document.querySelector('.ProseMirror')})` }]);
+    const result = await pending; assert.equal(result.ok, false); assert.equal((await state()).text, '用户接管');
+    const snapshot = await attachmentState(); assert.equal(snapshot.cards, 2); assert.equal(snapshot.removeClicks, 0); assert.equal((await state()).clicks, 0);
+  });
+  await test('异步移除等待期间仍守卫新FileList和可信接管，不清新选择或宣称清理成功', async () => {
+    for (const trustedChange of [false, true]) {
+      await setup(attachmentSetup + `window.holdUpload=true;window.removeDelay=200`);
+      await window.webContents.executeJavaScriptInIsolatedWorld(1005, [{ code: `globalThis.fixtureAttachmentEdits={};const add=EventTarget.prototype.addEventListener;EventTarget.prototype.addEventListener=function(name,handler,...args){if(this instanceof HTMLFormElement)globalThis.fixtureAttachmentEdits[name]=handler;return add.call(this,name,handler,...args)};void 0` }]);
+      const pending = sendFiles([pdfFile()]);
+      await until(async () => (await attachmentState()).cards === 1, '未显示待清理附件');
+      const cancelling = sender.cancel();
+      await until(async () => (await attachmentState()).removeClicks === 1, '未进入官方异步移除等待');
+      // 新文件仅交给真实 FileList setter，change 信任分支单独调用捕获处理器；不向页面合成用户事件。
+      await run(`const selection=new DataTransfer();selection.items.add(new File(['user-file'],'user-selection.txt',{type:'text/plain'}));document.querySelector('#general').files=selection.files`);
+      if (trustedChange) await window.webContents.executeJavaScriptInIsolatedWorld(1005, [{ code: `globalThis.fixtureAttachmentEdits.change({isTrusted:true,target:document.querySelector('#general')})` }]);
+      await cancelling; const result = await pending;
+      assert.equal(result.ok, false); assert.equal(result.uncertain, true, JSON.stringify(result));
+      assert.equal(await run(`document.querySelector('#general').files[0]?.name`), 'user-selection.txt');
+      assert.equal((await attachmentState()).selected, 1); assert.equal((await state()).clicks, 0);
+      await pause(220); assert.equal(await run(`document.querySelector('#general').files[0]?.name`), 'user-selection.txt');
+    }
+  });
+  await test('正文写入后混入外来附件暂停发送，不擅自清理任何卡片', async () => {
+    await setup(attachmentSetup + `input.addEventListener('input',()=>{if(input.textContent){send.disabled=true;composer.prepend(window.makeAttachmentCard({name:'foreign.pdf',type:'application/pdf'}))}})`);
+    const result = await sendFiles([imageFile()]); assert.equal(result.ok, false);
+    const snapshot = await attachmentState(); assert.equal(snapshot.cards, 2); assert.equal(snapshot.removeClicks, 0); assert.equal((await state()).clicks, 0);
+  });
+  await test('上传失败不发送正文，并经官方移除按钮清理本批卡片', async () => {
+    await setup(attachmentSetup + `window.holdUpload=true;document.querySelector('#general').addEventListener('change',()=>setTimeout(()=>{const card=composer.querySelector('[data-fixture-card]');card.setAttribute('data-state','failed')},30))`);
+    const result = await sendFiles([pdfFile()]); assert.equal(result.ok, false); assert.equal((await state()).inputs, 0);
+    assert.equal((await state()).clicks, 0); assert.equal((await attachmentState()).cards, 0); assert.equal((await attachmentState()).removeClicks, 1);
+  });
+  await test('附件已点击但接收未知时不重传、不移除现场文件', async () => {
+    await setup(attachmentSetup + `window.mode='unknown'`);
+    const pending = sendFiles([pdfFile()]);
+    await until(async () => (await state()).clicks === 1, '未点击附件发送');
+    await sender.cancel(); const result = await pending; assert.equal(result.ok, false); assert.equal(result.uncertain, true);
+    const snapshot = await attachmentState(); assert.equal(snapshot.cards, 1); assert.equal(snapshot.removeClicks, 0);
+    assert.deepEqual(snapshot.changes, { general: 1 }); assert.equal((await state()).clicks, 1);
+  });
   const saveDraft = (text, scope) => backups.save(backupProject, scope, text);
   const draft = ' 草稿 https://example.test/url #123abc\n\n末行 ';
   const draftSetup = `input.replaceChildren(...${JSON.stringify(draft)}.split('\\n').map(line=>{const p=document.createElement('p');if(line)p.textContent=line;else p.append(document.createElement('br'));return p}));send.disabled=false;`;

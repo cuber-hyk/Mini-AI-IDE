@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import { it } from 'node:test';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
 import { LocalPromptController } from '../src/main/localPromptController';
+import { LocalPromptAttachments } from '../src/main/localPromptAttachments';
+import type { PromptAttachmentData } from '../src/shared/localPrompt';
 import { CHANNELS } from '../src/shared/contract';
 
 function fixture() {
@@ -169,13 +174,35 @@ it('运输期间网页活动守卫实时撤销，isSending 直到运输返回才
   release({ ok: false, error: 'inactive' }); assert.equal((await pending).ok, false); assert.equal(f.controller.isSending, false);
 });
 
-it('ChatGPT 纯文本阶段拒绝附件需求，不解析或删除用户暂存文件', async () => {
-  const f = fixture(); let resolves = 0; let removes = 0;
-  f.options.attachmentsAvailable = () => false;
-  f.options.attachments.resolve = async () => { resolves++; return []; };
-  f.options.attachments.remove = () => { removes++; };
-  const result = await f.controller.send({ ...f.input, attachments: ['staged-file'] });
-  assert.equal(result.ok, false); assert.match(result.error!, /纯文本/);
-  assert.equal(resolves, 0); assert.equal(removes, 0); assert.equal(f.sent.length, 0);
-  assert.equal((await f.controller.send({ ...f.input, attachments: [] })).ok, true);
+it('ChatGPT 本地需求的选择、拖入和粘贴附件共用真实暂存，发送失败保留、成功后移除', async t => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'chatgpt-prompt-attachments-'));
+  t.after(() => fs.rm(root, { recursive: true, force: true }));
+  const pdf = path.join(root, 'selected.pdf'); const docx = path.join(root, 'dropped.docx');
+  await fs.writeFile(pdf, 'chosen-document'); await fs.writeFile(docx, 'dropped-document');
+  const f = fixture(); f.setRoot(root); f.setSession('https://chatgpt.com/c/prompt-attachments');
+  f.controller.setOptions({ includeInitialization: false });
+  const attachments = new LocalPromptAttachments(); f.options.attachments = attachments; f.options.chooseFiles = async () => [pdf];
+  const chosen = await f.handlers.get(CHANNELS.choosePromptAttachments)!(f.event);
+  const dropped = await f.handlers.get(CHANNELS.stagePromptAttachments)!(f.event, [docx]);
+  const pasted = await f.handlers.get(CHANNELS.stageClipboardPromptImage)!(f.event, 'clipboard-image.png', 'image/png', new Uint8Array([1, 2, 3]));
+  const ids = [...chosen, ...dropped, ...pasted].map(item => item.id);
+  const contents: string[][] = [];
+  let fail = true;
+  f.options.sender.send = async (_text: string, session: string, kind: string, current: () => boolean, files: PromptAttachmentData[]) => {
+    assert.equal(session, 'https://chatgpt.com/c/prompt-attachments'); assert.equal(kind, 'prompt'); assert.equal(current(), true);
+    const read: string[] = [];
+    for (const file of files) {
+      const chunks: Uint8Array[] = []; for await (const chunk of file.stream()) chunks.push(chunk);
+      read.push(Buffer.concat(chunks).toString('hex'));
+    }
+    contents.push(read);
+    return fail ? { ok: false, error: '官网上传未就绪，未发送' } : { ok: true };
+  };
+  const input = { requirement: '读取附件', root, skills: [], attachments: ids };
+  const result = await f.controller.send(input);
+  assert.equal(result.ok, false); assert.match(result.error!, /上传未就绪/);
+  assert.equal((await attachments.resolve(ids)).length, 3, '失败不得删除用户选定的本地附件');
+  fail = false; assert.equal((await f.controller.send(input)).ok, true);
+  assert.deepEqual(contents, Array(2).fill([Buffer.from('chosen-document').toString('hex'), Buffer.from('dropped-document').toString('hex'), '010203']));
+  await assert.rejects(attachments.resolve(ids), /附件已失效/);
 });

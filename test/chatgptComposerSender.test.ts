@@ -2,6 +2,18 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { it } from 'node:test';
 import { WebComposerSender, COMPOSER_SEND_WORLD, type WebSendResult } from '../src/main/webComposerSender';
+import { CHATGPT_DOCUMENTS_MATCH } from '../src/main/chatgptPage';
+
+it('同批原名与官网编号名必须一对一确认，单卡多义或重复卡均不能授予发送和清理资格', () => {
+  const match = new Function(`return ${CHATGPT_DOCUMENTS_MATCH}`)();
+  const card = (...names: string[]) => ({ kind: 'document', matchesName: (name: string) => names.includes(name) });
+  const files = [{ name: 'paper.pdf', type: 'application/pdf' }, { name: 'paper(1).pdf', type: 'application/pdf' }];
+  for (const cards of [[card('paper.pdf', 'paper(1).pdf')], [card('paper.pdf', 'paper(1).pdf'), card('paper(1).pdf')], [card('paper.pdf'), card('paper.pdf')]]) {
+    assert.equal(match(cards, files).ready, false); assert.equal(match(cards, files).ambiguous, true);
+  }
+  assert.deepEqual(match([card('paper.pdf'), card('paper(1).pdf')], files), { ready: true, ambiguous: false, matched: 2 });
+  assert.deepEqual(match([card('paper.pdf')], files), { ready: false, ambiguous: false, matched: 1 });
+});
 
 async function flush() { for (let index = 0; index < 20; index++) await Promise.resolve(); }
 
@@ -133,13 +145,18 @@ it('本地主动需求即使有备份服务也没有覆盖草稿资格', async (
   await f.sender.dispose();
 });
 
-it('ChatGPT 附件明确拒绝且不启动stream或安装附件脚本，不能静默漏传', async () => {
+it('ChatGPT 未知附件控件在预检暂停且不读取stream，不能静默漏传', async () => {
   for (const kind of ['prompt', 'results'] as const) {
     const f = fixture(); let reads = 0;
     try {
+      f.web.executeJavaScriptInIsolatedWorld = async (world: number, entries: { code: string }[]) => {
+        assert.equal(world, COMPOSER_SEND_WORLD); f.scripts.push(entries[0]!.code);
+        return { ok: false, error: '无法唯一识别ChatGPT通用文件控件，请手动上传' };
+      };
       const result = await f.sender.send('read attachment', 'https://chatgpt.com/c/current', kind, () => true, [{ id: '1', name: 'brief.pdf', size: 1, mediaType: 'application/pdf', async *stream() { reads++; yield new Uint8Array([1]); } }]);
-      assert.equal(result.ok, false); assert.match(result.error!, /仅支持纯文本/);
-      assert.equal(reads, 0); assert.equal(f.scripts.length, 0);
+      assert.equal(result.ok, false); assert.match(result.error!, /无法唯一识别ChatGPT通用文件控件/);
+      assert.equal(reads, 0); assert.equal(f.scripts.length, 1);
+      assert.ok(f.scripts[0]!.includes('input[type="file"]'));
     } finally { await f.sender.dispose(); }
   }
 });

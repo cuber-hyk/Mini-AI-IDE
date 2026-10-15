@@ -3,7 +3,7 @@ artifact_type: capability
 status: current
 updated: 2026-10-15
 owner: 胡运宽
-source_of_truth: [src/main/tools/replySource.ts, test/replySource.test.ts, docs/adr/2026-10-09-batch-error-auto-return.md, docs/adr/2026-10-09-tool-attachment-return.md, src/main/tools/attachments.ts, src/main/tools/resultReturn.ts, test/toolAttachmentIntegration.test.ts, test/toolAttachments.test.ts, test/toolResultReturn.test.ts, docs/capabilities/skills-and-local-prompt.md, docs/adr/2026-10-08-local-prompt-attachments.md, src/main/localPromptAttachments.ts, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, docs/adr/2026-10-07-automatic-result-return-boundary.md, src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, src/main/tools/integration.ts, src/main/tools/autoCollector.ts, src/main/tools/replyChangeWatcher.ts, src/main/preload.ts, src/shared/toolProtocol.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, src/main/composerDraftBackup.ts, test/composerDraftBackup.test.ts, tools/verify-web-result-sender.cjs]
+source_of_truth: [src/main/chatgptPage.ts, test/chatgptComposerSender.test.ts, tools/verify-chatgpt-composer.cjs, src/main/tools/replySource.ts, test/replySource.test.ts, docs/adr/2026-10-09-batch-error-auto-return.md, docs/adr/2026-10-09-tool-attachment-return.md, src/main/tools/attachments.ts, src/main/tools/resultReturn.ts, test/toolAttachmentIntegration.test.ts, test/toolAttachments.test.ts, test/toolResultReturn.test.ts, docs/capabilities/skills-and-local-prompt.md, docs/adr/2026-10-08-local-prompt-attachments.md, src/main/localPromptAttachments.ts, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, docs/adr/2026-10-07-automatic-result-return-boundary.md, src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, src/main/tools/integration.ts, src/main/tools/autoCollector.ts, src/main/tools/replyChangeWatcher.ts, src/main/preload.ts, src/shared/toolProtocol.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, src/main/composerDraftBackup.ts, test/composerDraftBackup.test.ts, tools/verify-web-result-sender.cjs]
 ---
 
 # 能力：人机边界与限定结果回传
@@ -12,7 +12,7 @@ source_of_truth: [src/main/tools/replySource.ts, test/replySource.test.ts, docs/
 
 ## 职责
 
-下述采集、工具与限定发送能力仅适用于活动平台。ChatGPT 本轮限定普通对话纯文本，程序附件明确拒绝，切换平台撤回待回传并保留结果复制，执行/发送期间不能切换；详见 `web-platforms.md`。
+下述采集、工具与限定发送能力仅适用于活动平台。ChatGPT 限普通对话路径，支持主动需求附件和当前工具批经权限批准的附件；切换平台撤回待回传并保留结果复制，执行/发送期间不能切换；详见 `web-platforms.md`。
 
 | 环节 | 执行者 | 约束 |
 |---|---|---|
@@ -21,7 +21,7 @@ source_of_truth: [src/main/tools/replySource.ts, test/replySource.test.ts, docs/
 | 读取回复与生成状态 | IDE | 同步只读快照，未知状态不自动执行 |
 | 校验与执行正式工具 | IDE 按预选权限 | 需要授权时询问，拒绝不执行 |
 | 查看实际修改 | IDE | 本批执行快照只读展示，不提供第二条应用链路 |
-| 发送本批工具结果 | automatic 开启时 IDE；关闭时用户点击自适应按钮手动发送含附件的本批 | 当前项目/会话/批次真实完成，ChatGPT已有纯文本草稿先备份后复核替换，其他输入仍须为空；已授权附件，发送一次；同一点击复制文本结果 |
+| 发送本批工具结果 | automatic 开启时 IDE；关闭时用户点击自适应按钮手动发送含附件的本批 | 当前项目/会话/批次真实完成，ChatGPT纯文本批的已有纯文本草稿先备份后复核替换，附件批和其他输入仍须为空；已授权附件，发送一次；同一点击复制文本结果 |
 | 暂停后修正、续写、回答 AI | 用户；明确暂时性只读故障由 IDE 有限恢复 | 不自动点击继续生成或重试不确定发送 |
 | 处理未保存内容 | 用户或已保存策略 | 继续采用 AI 结果，停止保留草稿 |
 
@@ -42,11 +42,11 @@ source_of_truth: [src/main/tools/replySource.ts, test/replySource.test.ts, docs/
 ## 网页接触面
 
 - 回程采集同步只读读取正文与结束标志；只读 MutationObserver 和真实用户动作识别在隔离世界 1004，不读用户输入内容，不向网页主世界提供 IPC 或文件桥。
-- `WebComposerSender` 是唯一 DOM 写入运输 owner，`WebResultSender` 是工具结果门面，使用隔离世界 1005。仅接纳官方平台普通会话；DeepSeek 验证唯一可见 textarea 与已知 SVG 发送按钮，ChatGPT 验证唯一 ProseMirror 文本区与有界 FORM 内明确发送按钮。局部共同容器不能包含回复正文，ChatGPT 本轮仅纯文本。证据缺失、生成中或等待继续生成时暂停。
+- `WebComposerSender` 是唯一 DOM 写入运输 owner，`WebResultSender` 是工具结果门面，使用隔离世界 1005。仅接纳官方平台普通会话；DeepSeek 验证唯一可见 textarea 与已知 SVG 发送按钮，ChatGPT 验证唯一 ProseMirror 文本区与有界 FORM 内明确发送按钮。局部共同容器不能包含回复正文；ChatGPT 附件控件还须属于同一已知 composer FORM，且唯一 multiple、无 accept 限制。证据缺失、生成中或等待继续生成时暂停。
 - 用户可从目录树主动原生拖出当前项目单个普通文件，由官网处理真实 drop 和附件上传，正文仍由用户发送。此操作不写 DOM、不代上传、不新增官网路径查询/文件桥；本地需求框用相同 Files 接收入口暂存。见 `../adr/2026-10-11-native-workspace-file-drag.md`。
 - 工具结果正文与手动复制同源，通过 textarea 原生 value setter、input 事件和原生 click 完成，不读取剪贴板。当前批可携带经工具权限批准的 attach_file 附件；ToolAttachments 持有当前选择，ToolResultReturn 统一校验真实批次、一次运输及状态，自动与手动共用。
-- 用户主动本地需求可携带用户明确选择的附件；工具附件须明确请求并按工具权限执行。主进程校验类型、数量、大小、真实路径与文件身份后读取字节；唯一 sender 只通过官方文件输入控件提交，不向网页提供路径、磁盘读取或通用 IPC。sender 等待全部本次附件预览和上传进度结束后才发送正文。历史、拒绝、取消、无执行及失效附件不上传；开始运输后失败或未知都不重试同批。见 ../adr/2026-10-09-tool-attachment-return.md。
-- ChatGPT当前有效工具结果/诊断运输可在世界1005读取必要纯文本草稿，主进程先在本项目`.mini-ai-ide/composer-drafts/`独占保存UTF-8原文并核对字节/路径，之后重新核验草稿、原输入/FORM、作用域、附件及空闲才能替换回传。没有项目、备份失败、未知结构或超过1MiB时不覆盖；详情见`../adr/2026-10-13-chatgpt-composer-draft-backup.md`。本地主动需求与DeepSeek仍要求输入为空，其他附件和未知控件继续暂停。
+- 用户主动本地需求可携带用户明确选择的附件；工具附件须明确请求并按工具权限执行，审批说明显示实际活动平台，手动 JSON 来源不上传。主进程校验类型、数量、大小、真实路径与文件身份后读取字节；唯一 sender 只通过官方文件输入控件提交，不向网页提供路径、磁盘读取或通用 IPC。sender 逐一确认全部本次图片和文档、缩略图就绪、上传进度结束及发送就绪后才发送正文，不以 input.files 清空判完成。附件批须空输入且无既有附件，可信输入和附件操作接管即暂停；点击前仅经已知官方移除控件清理明确本批卡片，并有界异步复核，未知仍停，点击后不清可能已提交的附件。历史、拒绝、取消、无执行及失效附件不上传；开始运输后失败或未知都不重试同批。见 ../adr/2026-10-09-tool-attachment-return.md。
+- ChatGPT当前有效纯文本工具结果/诊断运输可在世界1005读取必要纯文本草稿，主进程先在本项目`.mini-ai-ide/composer-drafts/`独占保存UTF-8原文并核对字节/路径，之后重新核验草稿、原输入/FORM、作用域、附件及空闲才能替换回传。没有项目、备份失败、未知结构或超过1MiB时不覆盖；详情见`../adr/2026-10-13-chatgpt-composer-draft-backup.md`。本地主动需求、DeepSeek及ChatGPT附件批仍要求输入为空，已有附件和未知控件继续暂停。
 - 备份准备期间真实用户编辑（即使字节未变）、输入节点/FORM替换、草稿变化或不可编辑时不覆盖；保存成功不恢复失效资格。取消和点击前失败仅清理自有且未发送的文本；点击后不能确认、异常或超时均停止且不重试，不清理可能已提交的内容。清理无法确认时阻止后续自动发送。
 - 不使用 `SendInput`、`sendInputEvent`、模拟回车、CDP、浏览器驱动或指纹伪造。大模型业务网络仍由 Chromium 发起，主进程不包装 AI HTTP，不读网页凭据，也不提供任意网页动作接口。
 
@@ -58,7 +58,7 @@ source_of_truth: [src/main/tools/replySource.ts, test/replySource.test.ts, docs/
 
 状态规则由 `test/autoContinuation.test.ts`、`test/webResultSender.test.ts` 及 integration 回归验证。`tools/verify-web-result-sender.cjs` 使用隔离本地 Electron 夹具验证真实 textarea、事件、点击与取消，不连接官网。
 
-用户已确认本次工具附件功能通过；本地需求图片及文档上传亦已有用户实测通过。自动化验证未连接真实官网；控件结构或平台对合成 input/click 的处理可能变化，夹具不能证明官网全部状态兼容。未知与不确定结果必须显示暂停原因并留给用户处理。环境身份核验仍依据 ADR-0003，不能据此承诺平台可用性。
+DeepSeek 工具附件及本地需求图片、文档上传已有用户实测通过。2026-10-15，用户确认新版IDE的ChatGPT本地需求附件验收通过，实际证据包含TXT及PDF＋图片发送；工具附件权限和共用运输由回归覆盖，不将其写成单独取得的人工连续闭环记录。自动化验证不替代真实官网验收；控件结构或平台对合成 input/click 的处理可能变化，夹具不能证明官网全部状态兼容。未知与不确定结果必须显示暂停原因并留给用户处理。环境身份核验仍依据 ADR-0003，不能据此承诺平台可用性。
 
 
 取消未确认的发送阻断绑定具体token与文档。相同取消的迟到未点击且清理完成证据，或成功主frame新文档加载并核验新nonce后，仅允许后续合法新批继续；旧批结果不补发、工具不重跑。SPA、失败加载、未知或已点击的同文档取消不自动恢复。隔离世界所有运输阶段核对Document/nonce/活动token，旧排队脚本和逆序握手不能落入新批。当前纯文本被旧阻断挡住时显示“本批未发送”，不报告当前提交未知、不自动重试；真实未知状态仍等待用户处理。规则见 `../adr/2026-10-14-automatic-recovery.md`。

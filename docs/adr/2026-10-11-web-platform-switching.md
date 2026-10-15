@@ -2,14 +2,14 @@
 artifact_type: adr
 status: accepted
 created: 2026-10-11
-updated: 2026-10-13
+updated: 2026-10-15
 owner: 胡运宽
-source_of_truth: [src/shared/webPlatform.ts, src/main/webPlatformController.ts, src/main/webPlatformView.ts, src/main/tools/integration.ts, test/webPlatformController.test.ts, test/toolPlatformActivity.test.ts]
+source_of_truth: [src/main/chatgptPage.ts, test/chatgptComposerSender.test.ts, tools/verify-chatgpt-composer.cjs, src/shared/webPlatform.ts, src/main/webPlatformController.ts, src/main/webPlatformView.ts, src/main/tools/integration.ts, test/webPlatformController.test.ts, test/toolPlatformActivity.test.ts]
 ---
 
 # 官网平台切换与活动能力边界
 
-用户确认顶栏直接切换 DeepSeek / ChatGPT、默认 DeepSeek，并确认执行/发送期间阻止切换；并确认先完成 ChatGPT 普通对话纯文本自动执行与自动继续，程序附件留待后续。
+用户确认顶栏直接切换 DeepSeek / ChatGPT、默认 DeepSeek，并确认执行/发送期间阻止切换；ChatGPT 普通对话共用工具自动执行与自动继续，以及用户主动需求附件和经权限批准的工具附件运输。
 
 ## 决策
 
@@ -19,7 +19,7 @@ WebPlatformController 是平台选择唯一 owner。仅本地顶栏主 frame 可
 
 本地工具忙、后台进程存活、本地需求或工具结果运输期间拒绝切换。仅回传倒计时可撤回后切换：取消待发送与当前附件资格、递增活动修订并建立历史基线，保留完成结果与用户本地草稿。切回任何平台不补发旧批次，automatic 持久配置不变，仅对活动平台生效。重新绑定前释放旧网页监听与运输，历史基线与异步守卫独立核验；上一批结果只保留展示和复制资格。手动采集与所有跨异步执行/发送守卫核验活动状态。
 
-ChatGPT 普通对话通过专属只读 DOM 规则与唯一 WebComposerSender 接入共用工具流程，复用执行和权限 owner，不复制自动执行引擎。纯文本范围不包含程序附件上传，携带附件时明确拒绝；未知页面/控件/完成状态暂停。官网真实文件拖放仍由用户和官网处理。登录弹窗只开放 HTTPS 的 OpenAI 官方站点及明确列出的常见身份提供商，使用同一分区与沙箱，随主窗口关闭释放。
+ChatGPT 普通对话通过专属只读 DOM 规则与唯一 WebComposerSender 接入共用工具流程，复用执行和权限 owner，不复制自动执行引擎。本地需求附件和当前工具批经权限批准的 attach_file 复用主进程暂存与分块读取，在已知 composer FORM 内通过唯一通用文件控件上传；等待全部图片和文档就绪后才发送正文一次。附件批须空输入且无既有附件，真实接管或未知页面/控件/完成状态暂停，点击后不确定不重试。官网真实文件拖放仍由用户和官网处理。登录弹窗只开放 HTTPS 的 OpenAI 官方站点及明确列出的常见身份提供商，使用同一分区与沙箱，随主窗口关闭释放。
 
 首页首发分配正式会话前的 `/c/local-chatgpt%3A<UUID>` 占位地址只作为过渡等待：白名单保持普通首页和正式 `/c/<id>`，不在占位地址采集、执行或写入输入。已存在的只读监听保留未取消的短期提交标记和首页来源，正式地址出现后才交接；发送运输仅在实际点击后的同一占位地址等待，3 秒未确认分配即不确定暂停、不重试。其他导航仍隔离历史；返回支持的会话时重新建立监听和历史基线。
 
@@ -33,7 +33,7 @@ ChatGPT 生成检查在采集、监听和运输中共用当前回复范围见证
 
 ## 取舍与后果
 
-选择平台专属 DOM 规则和共用工具执行流程，而不复制整个协作引擎。这样保持用户中断、权限、去重、复制和回传语义一致；代价是平台切换必须显式释放并重新绑定监听、运输及历史基线。DOM 可变，因此源站结构与完成标记必须独立验证，不能用通用按钮文本或静默时间兜底。ChatGPT 附件未适配时明确失败，不能静默丢弃后发送正文。
+选择平台专属 DOM 规则和共用工具执行流程，而不复制整个协作引擎。这样保持用户中断、权限、去重、复制和回传语义一致；代价是平台切换必须显式释放并重新绑定监听、运输及历史基线。DOM 可变，因此源站结构与完成标记必须独立验证，不能用通用按钮文本或静默时间兜底。ChatGPT 附件无法确认接收时明确暂停，不能静默丢弃后发送正文；官网实际格式和额度仍可能拒绝上传。
 
 ## 本地加载反馈补充（2026-10-13）
 

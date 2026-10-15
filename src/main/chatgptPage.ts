@@ -1,5 +1,51 @@
 /** ChatGPT 普通对话只读 DOM 规则，依据原生页面结构诊断；控件变化时暂停。 */
 export const CHATGPT_SEND_SELECTOR = 'button[type="submit"][aria-label="发送"],button[type="submit"][aria-label="Send"]';
+/** 官网附件结构的只读解释；图片卡与文档卡分开，文档缩略图不能冒充图片附件。 */
+export const CHATGPT_ATTACHMENT_READER = `(composer => {
+  const visible = e => !!e && e.isConnected && e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden';
+  const remove = e => e.matches('button') && visible(e) && /^(移除|删除|remove|delete)/i.test(e.getAttribute('aria-label') || '');
+  const buttons = Array.from(composer.querySelectorAll('button')).filter(remove);
+  const cards = buttons.map(button => {
+    const node = button.parentElement;
+    if (!button.matches('button[type="button"]') || !node || node === composer || node.closest('form') !== composer || node.querySelector('input,textarea,[contenteditable="true"],[data-dil-message-id]')
+      || Array.from(node.querySelectorAll('button')).filter(remove).length !== 1) return null;
+    const images = Array.from(node.querySelectorAll('img')).filter(visible);
+    const image = node.matches('div[role="button"][aria-haspopup][data-state="closed"]') && images.length === 1
+      && !images[0].hasAttribute('data-attachment-thumbnail-state');
+    const document = node.tagName === 'SPAN' && String(node.textContent || '').trim() !== '';
+    if (!image && !document) return null;
+    const thumbnails = Array.from(node.querySelectorAll('[data-attachment-thumbnail-state]'));
+    const readyImage = image && images[0].complete && images[0].naturalWidth > 0 && /^(data:image\\/|blob:)/.test(images[0].getAttribute('src') || '');
+    const names = [node, ...Array.from(node.querySelectorAll('*'))].map(e => String(e.textContent || ''));
+    const displayName = (button.getAttribute('aria-label') || '').replace(/^(?:移除|删除|remove|delete)\\s*/i, '');
+    return { node, remove: button, kind: image ? 'image' : 'document', text: String(node.textContent || ''),
+      matchesName: name => {
+        if (names.includes(name)) return true;
+        const dot = name.lastIndexOf('.');
+        if (!document || dot <= 0 || !displayName.startsWith(name.slice(0, dot)) || !displayName.endsWith(name.slice(dot)) || !names.includes(displayName)) return false;
+        // 官网同名文档会在扩展名前追加数字编号；仅接受完整已知名称，不用前缀包含代替身份。
+        return /^ ?\\([1-9][0-9]*\\)$/.test(displayName.slice(dot, -name.slice(dot).length));
+      },
+      ready: image ? readyImage : thumbnails.every(e => e.getAttribute('data-attachment-thumbnail-state') === 'ready') };
+  });
+  const previews = Array.from(composer.querySelectorAll('img,video,audio,canvas,[data-attachment-thumbnail-state],[data-testid*="attachment"],[data-testid*="file"],[data-testid*="upload"],[data-testid*="image"]'))
+    .filter(e => visible(e) && !e.matches('button,[role="button"]'));
+  const unknown = cards.some(card => !card) || cards.some((card, i) => cards.some((other, j) => i !== j && card && other && card.node.contains(other.node)))
+    || previews.some(e => !cards.some(card => card?.node.contains(e)));
+  const pending = Array.from(composer.querySelectorAll('[role="progressbar"],[aria-busy="true"]')).some(visible);
+  const error = Array.from(composer.querySelectorAll('[role="alert"],[aria-invalid="true"],[data-state="error"],[data-state="failed"]')).some(e => visible(e) && !e.closest('[contenteditable="true"]'))
+    || cards.some(card => card && /上传失败|上传错误|无法上传|不支持.{0,12}文件|超出.{0,12}限制|upload failed|upload error|failed to upload|file too large|unsupported file/i.test(card.text));
+  return { cards: cards.filter(Boolean), unknown, pending, error };
+})`;
+/** 文档身份须双向唯一；同名或编号名称有多个解释时，发送和清理均暂停。 */
+export const CHATGPT_DOCUMENTS_MATCH = `((cards, files) => {
+  const documents = cards.filter(card => card.kind === 'document');
+  const expected = files.filter(file => !/^image\\//.test(file.type || ''));
+  const matches = expected.map(file => documents.map(card => card.matchesName(file.name)));
+  const matched = matches.filter(row => row.filter(Boolean).length === 1).length;
+  const ambiguous = matches.some(row => row.filter(Boolean).length > 1) || documents.some((_, index) => matches.filter(row => row[index]).length > 1);
+  return { ready: !ambiguous && matched === expected.length && documents.length === expected.length, ambiguous, matched };
+})`;
 export const CHATGPT_TURN_SELECTOR = 'div[data-talvt-turn-state]';
 // 正文资格由本轮角色、owner、markdown及唯一性限定，样式类不承担消息身份。
 export const CHATGPT_REPLY_SELECTOR = 'div[data-dil-message-id]';

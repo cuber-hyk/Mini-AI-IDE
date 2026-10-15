@@ -9,7 +9,7 @@ import type { PromptAttachmentData } from '../shared/localPrompt';
 import { traceCollection } from './tools/collectionTrace';
 import { webPlatformOf } from '../shared/webConversation';
 import type { WebPlatform } from '../shared/webPlatform';
-import { CHATGPT_SEND_SELECTOR, CHATGPT_GENERATING_SCRIPT } from './chatgptPage';
+import { CHATGPT_SEND_SELECTOR, CHATGPT_GENERATING_SCRIPT, CHATGPT_ATTACHMENT_READER, CHATGPT_DOCUMENTS_MATCH } from './chatgptPage';
 
 export const COMPOSER_SEND_WORLD = 1005;
 const KEY = '__miniAIComposerSend';
@@ -31,11 +31,51 @@ export type WebSendResult = { ok: boolean; error?: string; uncertain?: boolean; 
   blockedByPreviousCancellation?: true; retryable?: true; transportStarted?: boolean; stage?: WebSendStage; cancellation?: 'not_clicked' | 'clicked' | 'unknown' };
 type SendOptions = { allowLocalFixture?: boolean; backupDraft?: (text: string, session: string) => Promise<string>; draftSaved?: (path: string) => void };
 
-function attachmentStartScript(token: string, nonce: string, scope: string, fixture: boolean): string {
+function attachmentStartScript(token: string, nonce: string, scope: string, fixture: boolean, platform: WebPlatform): string {
   return `(() => {
     if (!(${documentGuard(nonce, token)})) return { ok: false, error: '网页文档已变化，未上传附件' };
     const token = ${JSON.stringify(token)}, scope = ${JSON.stringify(scope)};
     const u = new URL(location.href);
+    if (${platform === 'chatgpt'}) {
+      if (u.origin !== 'https://chatgpt.com' || u.origin + u.pathname !== scope || !(u.pathname === '/' || /^\\/c\\/[a-zA-Z0-9_-]+$/.test(u.pathname))) return { ok: false, error: '网页或会话已变化，未上传附件' };
+      if (globalThis[${JSON.stringify(ATTACHMENT_KEY)}]) return { ok: false, error: '此前附件清理未确认，请重新加载网页' };
+      const visible = e => !!e && e.isConnected && e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden';
+      const inputs = Array.from(document.querySelectorAll('div.ProseMirror[contenteditable="true"][role="textbox"]')).filter(visible);
+      if (inputs.length !== 1) return { ok: false, error: '无法唯一识别ChatGPT输入框，未上传附件' };
+      const text = inputs[0], composer = text.closest('form[data-chatgpt-composer]');
+      if (!composer || composer.querySelector('[data-dil-message-id],[data-message-author-role],[data-talvt-turn-state],[data-markdown-text-style]')
+        || Array.from(document.querySelectorAll('textarea,[contenteditable="true"]')).filter(visible).some(e => e !== text)) return { ok: false, error: 'ChatGPT附件区域无法与回复区隔离' };
+      if (text.textContent !== '' || !text.isContentEditable || text.getAttribute('aria-disabled') === 'true' || text.getAttribute('aria-readonly') === 'true') return { ok: false, error: '附件发送要求官网输入为空，请先处理网页草稿' };
+      if (${CHATGPT_GENERATING_SCRIPT} || Array.from(composer.querySelectorAll('button')).some(e => visible(e) && /^(continue generating|继续生成)$/i.test(e.getAttribute('aria-label') || ''))) return { ok: false, error: '网页仍在生成或等待继续，未上传附件' };
+      const files = Array.from(composer.querySelectorAll('input[type="file"]')).filter(e => e.isConnected && !e.disabled && e.multiple && !e.getAttribute('accept') && e.form === composer);
+      if (files.length !== 1) return { ok: false, error: '无法唯一识别ChatGPT通用文件控件，请手动上传' };
+      const input = files[0], read = ${CHATGPT_ATTACHMENT_READER};
+      const view = read(composer);
+      if (view.cards.length || view.unknown || view.pending || view.error || Array.from(document.querySelectorAll('input[type="file"]')).some(e => e.files?.length)) return { ok: false, error: '官网附件区已有文件或状态未知，请先处理后重试' };
+      const s = { token, scope, input, composer, text, files: [], parts: [], size: 0, name: '', type: '', takenOver: false };
+      const events = ['beforeinput', 'input', 'change', 'paste', 'drop', 'compositionstart', 'pointerdown'];
+      const takeOver = e => { if (e.isTrusted && composer.contains(e.target)) s.takenOver = true; };
+      events.forEach(name => composer.addEventListener(name, takeOver, true));
+      s.release = () => events.forEach(name => composer.removeEventListener(name, takeOver, true));
+      s.read = () => read(composer);
+      s.inspect = () => {
+        const now = new URL(location.href);
+        if (!(${documentGuard(nonce)}) || now.origin + now.pathname !== scope || !composer.isConnected || !input.isConnected || input.form !== composer || text.closest('form') !== composer || s.takenOver) return { error: '附件上传期间输入、文档或会话已变化，未发送正文' };
+        const current = read(composer), expected = s.expectedFiles || [];
+        if (current.error || current.unknown || current.cards.length > expected.length) return { error: '官网附件失败、混入其他附件或结构未知，未发送正文' };
+        const images = current.cards.filter(card => card.kind === 'image');
+        const expectedDocuments = expected.filter(file => !/^image\\//.test(file.type || ''));
+        const documents = (${CHATGPT_DOCUMENTS_MATCH})(current.cards, expected);
+        if (documents.ambiguous) return { error: '官网文档名称存在歧义，未发送正文' };
+        if (!documents.ready) return { pending: true, reason: '等待官网显示本次文档' };
+        const sends = Array.from(composer.querySelectorAll(${JSON.stringify(CHATGPT_SEND_SELECTOR)})).filter(visible);
+        if (!expected.length || current.cards.length !== expected.length || images.length !== expected.length - expectedDocuments.length || current.pending || current.cards.some(card => !card.ready)
+          || sends.length !== 1 || sends[0].disabled || sends[0].getAttribute('aria-disabled') === 'true') return { pending: true, reason: '等待全部附件和官网发送控件就绪' };
+        return { ready: true };
+      };
+      globalThis[${JSON.stringify(ATTACHMENT_KEY)}] = s;
+      return { ok: true };
+    }
     if (!(((u.origin === 'https://chat.deepseek.com' && u.protocol === 'https:') || (${fixture} && u.protocol === 'file:')) || false)) return { ok: false, error: '附件仅支持官方 DeepSeek 网页' };
     if ((u.protocol === 'file:' ? 'null' : u.origin) + u.pathname !== scope) return { ok: false, error: '网页会话已变化' };
     const visible = e => !!e && e.isConnected && e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden';
@@ -73,7 +113,7 @@ function attachmentFinishFileScript(token: string, nonce: string): string {
 }
 
 function attachmentCommitScript(token: string, nonce: string, files: readonly PromptAttachmentData[]): string {
-  return `(() => { if (!(${documentGuard(nonce, token)})) return false; const s = globalThis[${JSON.stringify(ATTACHMENT_KEY)}]; if (!s || s.token !== ${JSON.stringify(token)} || s.name || s.files.length !== ${files.length}) return { ok: false, error: '附件数据不完整' }; try { const transfer = new DataTransfer(); s.files.forEach(f => transfer.items.add(f)); const expected = ${JSON.stringify(files.map(file => ({ name: file.name, size: file.size })))}; s.input.files = transfer.files; const actual = Array.from(s.input.files || []); if (actual.length !== expected.length || actual.some((f, i) => f.name !== expected[i].name || f.size !== expected[i].size)) return { ok: false, error: '附件尚未交给官网控件' }; s.committed = expected; s.baselineNameCounts = expected.map(f => s.composer.textContent.split(f.name).length - 1); s.input.dispatchEvent(new Event('input', { bubbles: true })); s.input.dispatchEvent(new Event('change', { bubbles: true })); return { ok: true }; } catch { return { ok: false, error: '官网附件控件拒绝文件' }; } })()`;
+  return `(() => { if (!(${documentGuard(nonce, token)})) return false; const s = globalThis[${JSON.stringify(ATTACHMENT_KEY)}]; if (!s || s.token !== ${JSON.stringify(token)} || s.name || s.takenOver || s.files.length !== ${files.length}) return { ok: false, error: '附件数据不完整或用户已接管' }; if (s.inspect) { const view = s.read(); if (s.inspect().error || s.text.textContent !== '' || view.cards.length || view.unknown || view.pending || view.error || Array.from(document.querySelectorAll('input[type="file"]')).some(e => e.files?.length)) return { ok: false, error: '上传前网页输入或附件状态已变化' }; } try { const transfer = new DataTransfer(); s.files.forEach(f => transfer.items.add(f)); const expected = ${JSON.stringify(files.map(file => ({ name: file.name, size: file.size })))}; s.input.files = transfer.files; const actual = Array.from(s.input.files || []); if (actual.length !== expected.length || actual.some((f, i) => f.name !== expected[i].name || f.size !== expected[i].size)) return { ok: false, error: '附件尚未交给官网控件' }; s.committed = expected; s.expectedFiles = ${JSON.stringify(files.map(file => ({ name: file.name, size: file.size, type: file.mediaType })))}; s.baselineNameCounts = expected.map(f => s.composer.textContent.split(f.name).length - 1); s.input.dispatchEvent(new Event('input', { bubbles: true })); s.input.dispatchEvent(new Event('change', { bubbles: true })); return { ok: true }; } catch { return { ok: false, error: '官网附件控件拒绝文件' }; } })()`;
 }
 
 function attachmentStatusScript(token: string, nonce: string, files: readonly PromptAttachmentData[]): string {
@@ -81,6 +121,7 @@ function attachmentStatusScript(token: string, nonce: string, files: readonly Pr
     if (!(${documentGuard(nonce, token)})) return { error: '网页文档已变化，附件状态不可确认' };
     const s = globalThis[${JSON.stringify(ATTACHMENT_KEY)}];
     if (!s || s.token !== ${JSON.stringify(token)} || !s.composer?.isConnected) return { error: '官网附件区域已变化，未发送文本' };
+    if (s.inspect) { const result = s.inspect(); if (result.ready) { s.accepted = true; s.files = []; } return result; }
     const expected = ${JSON.stringify(files.map(file => ({ name: file.name, size: file.size, type: file.mediaType })))};
     const visible = e => !!e && e.isConnected && e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden';
     const descendants = [s.composer, ...Array.from(s.composer.querySelectorAll('*'))].filter(visible);
@@ -103,7 +144,34 @@ function attachmentStatusScript(token: string, nonce: string, files: readonly Pr
 }
 
 function attachmentCleanupScript(token: string, nonce: string): string {
-  return `(() => { if (!(${documentGuard(nonce)})) return false; const key = ${JSON.stringify(ATTACHMENT_KEY)}, s = globalThis[key]; if (!s || s.token !== ${JSON.stringify(token)}) return true; try { if (s.committed && s.input.isConnected) { const actual = Array.from(s.input.files || []); if (actual.length !== s.committed.length || actual.some((f, i) => f.name !== s.committed[i].name || f.size !== s.committed[i].size)) return false; s.input.files = new DataTransfer().files; s.input.dispatchEvent(new Event('input', { bubbles: true })); s.input.dispatchEvent(new Event('change', { bubbles: true })); } delete globalThis[key]; return true; } catch { return false; } })()`;
+  return `(async () => { if (!(${documentGuard(nonce)})) return false; const key = ${JSON.stringify(ATTACHMENT_KEY)}, s = globalThis[key]; if (!s || s.token !== ${JSON.stringify(token)}) return true;
+    try {
+      if (s.read) {
+        const current = () => { const url = new URL(location.href); return (${documentGuard(nonce)}) && !s.takenOver && s.composer.isConnected && s.input.isConnected && s.input.form === s.composer && s.text.closest('form') === s.composer && url.origin + url.pathname === s.scope; };
+        if (!current()) return false;
+        if (s.committed) {
+          const view = s.read();
+          if (view.unknown || !s.expectedFiles || view.cards.length !== s.expectedFiles.length) return false;
+          if (!(${CHATGPT_DOCUMENTS_MATCH})(view.cards, s.expectedFiles).ready
+            || view.cards.filter(card => card.kind === 'image').length !== s.expectedFiles.filter(file => /^image\\//.test(file.type || '')).length) return false;
+          const ownFiles = () => { const selected = Array.from(s.input.files || []); return !selected.length || selected.length === s.committed.length && selected.every((f, i) => f.name === s.committed[i].name && f.size === s.committed[i].size); };
+          if (!ownFiles()) return false;
+          for (const card of view.cards) { if (!current() || !ownFiles() || !card.remove.isConnected) return false; HTMLElement.prototype.click.call(card.remove); }
+          const deadline = Date.now() + 250;
+          while (Date.now() < deadline) {
+            if (!current() || !ownFiles()) return false;
+            const after = s.read();
+            if (!after.cards.length && !after.unknown && !after.pending) { s.input.files = new DataTransfer().files; s.release(); delete globalThis[key]; return true; }
+            await new Promise(resolve => setTimeout(resolve, 20));
+          }
+          return false;
+        }
+        s.release(); delete globalThis[key]; return true;
+      }
+      if (s.committed && s.input.isConnected) { const actual = Array.from(s.input.files || []); if (actual.length !== s.committed.length || actual.some((f, i) => f.name !== s.committed[i].name || f.size !== s.committed[i].size)) return false; s.input.files = new DataTransfer().files; s.input.dispatchEvent(new Event('input', { bubbles: true })); s.input.dispatchEvent(new Event('change', { bubbles: true })); }
+      delete globalThis[key]; return true;
+    } catch { return false; }
+  })()`;
 }
 
 function sendScript(token: string, nonce: string, text: string, scope: string, fixture: boolean, prompt: boolean, expectedFiles: readonly PromptAttachmentData[], platform: WebPlatform, backupDraft = false): string {
@@ -176,17 +244,19 @@ function sendScript(token: string, nonce: string, text: string, scope: string, f
     const hasAttachments = () => {
       if (Array.from(document.querySelectorAll('input[type="file"]')).some(e => e.files?.length)) return true;
       if (!chatgpt) return false;
-      // 检查有界 composer 及相邻附件区；不读取文件名、草稿或回复正文。
+      // 复用附件结构解释，包含没有缩略图且 FileList 已被官网清空的文档卡。
       const area = composer.closest('form');
       if (!area || area === document.body || containsReply(area, input)) return true;
-      return Array.from(area.querySelectorAll('img,video,audio,canvas,[data-testid*="attachment"],[data-testid*="file"],[data-testid*="upload"],[data-testid*="image"],button,[role="button"]')).filter(visible).some(e => /^(IMG|VIDEO|AUDIO|CANVAS)$/.test(e.tagName) || (!e.matches('button,[role="button"]') && /attachment|file|upload|image/i.test(e.getAttribute('data-testid') || '')) || /remove.*(file|attachment|image)|删除.*(文件|附件|图片)|移除.*(文件|附件|图片)/i.test([e.getAttribute('aria-label'), e.getAttribute('title')].filter(Boolean).join(' ')));
+      const view = (${CHATGPT_ATTACHMENT_READER})(area);
+      return view.cards.length > 0 || view.unknown || view.pending || view.error;
     };
     if (stateOfPage() !== 'idle') return { ok: false, error: '网页仍在生成或等待继续生成' };
     if (!editable() || (!empty() && !${backupDraft})) return { ok: false, error: '网页输入框已有内容或不可编辑，未覆盖草稿' };
     const attachmentState = globalThis[${JSON.stringify(ATTACHMENT_KEY)}];
     if (${expectedFiles.length > 0}) {
       const expected = ${JSON.stringify(expectedFiles.map(file => ({ name: file.name, size: file.size })))};
-      if (attachmentState?.token !== token || attachmentState.accepted !== true || JSON.stringify(attachmentState.committed) !== JSON.stringify(expected)) return { ok: false, error: '官网附件尚未确认接收，已停止发送' };
+      if (attachmentState?.token !== token || attachmentState.accepted !== true || JSON.stringify(attachmentState.committed) !== JSON.stringify(expected)
+        || chatgpt && (attachmentState.text !== input || !attachmentState.inspect?.().ready || !empty())) return { ok: false, error: '官网附件尚未确认接收或网页输入已变化，已停止发送' };
     } else {
       if (hasAttachments()) return { ok: false, error: '官网附件区已有文件或无法确认纯文本输入，未发送本地内容' };
     }
@@ -293,8 +363,9 @@ function sendScript(token: string, nonce: string, text: string, scope: string, f
         }
         if (state.clicked) {
           // DeepSeek 允许已验证的首轮 composer 重挂载；ChatGPT 断开本身不证明接收。
-          if ((input.isConnected && empty()) || (!chatgpt && !input.isConnected) || stateOfPage() === 'generating') {
-            const attachment = globalThis[${JSON.stringify(ATTACHMENT_KEY)}]; if (attachment?.token === token) delete globalThis[${JSON.stringify(ATTACHMENT_KEY)}];
+          const attachmentCleared = !chatgpt || !${expectedFiles.length > 0} || attachmentState?.composer.isConnected && (() => { const view = attachmentState.read(); return !view.cards.length && !view.unknown && !view.pending; })();
+          if ((input.isConnected && empty() && attachmentCleared) || (!chatgpt && !input.isConnected) || stateOfPage() === 'generating') {
+            const attachment = globalThis[${JSON.stringify(ATTACHMENT_KEY)}]; if (attachment?.token === token) { attachment.release?.(); delete globalThis[${JSON.stringify(ATTACHMENT_KEY)}]; }
             return finish({ ok: true, session: boundScope });
           }
           if (Date.now() - clickedAt >= 3000) return finish({ ok: false, error: '发送后未确认网页接收，已停止且不会重试', uncertain: true });
@@ -314,9 +385,10 @@ function sendScript(token: string, nonce: string, text: string, scope: string, f
           if (!send && current.send) send = current.send;
           if (!owns()) return finish({ ok: false, error: '网页输入已被修改，自动发送暂停' });
           if (!editable() || stateOfPage() !== 'idle') return finish({ ok: false, error: '网页输入不可编辑或仍在生成' });
-          if (chatgpt && hasAttachments()) return finish({ ok: false, error: '官网附件区已变化，已停止纯文本发送' });
+          if (chatgpt && (${expectedFiles.length > 0} ? !attachmentState?.inspect?.().ready : hasAttachments())) return finish({ ok: false, error: '官网附件区已变化，已停止发送' });
           if (input.maxLength >= 0 && payload.length > input.maxLength) return finish({ ok: false, error: '发送内容超过网页输入框长度限制' });
           if (send && enabled(send)) {
+            attachmentState?.release?.();
             state.clicked = true; state.stage = 'clicked'; clickedAt = Date.now();
             // 点击前所有检查在同一同步任务完成；点击之后绝不重试或清理可能已提交内容。
             HTMLElement.prototype.click.call(send);
@@ -355,7 +427,7 @@ function resumeDraftScript(token: string, nonce: string): string {
 }
 
 function cancelScript(token: string, nonce: string): string {
-  return `(() => { if (!(${documentGuard(nonce)})) return false; const binding = globalThis[${JSON.stringify(DOCUMENT_KEY)}]; if (binding.activeToken === ${JSON.stringify(token)}) binding.activeToken = undefined; const state = globalThis[${JSON.stringify(KEY)}]; const attachment = globalThis[${JSON.stringify(ATTACHMENT_KEY)}]; if (state?.token === ${JSON.stringify(token)}) { const clicked = state.clicked, result = state.cancel(); if (clicked) return result; const cleaned = ${attachmentCleanupScript(token, nonce)}; return cleaned ? result : { ...result, uncertain: true, cancellation: 'unknown' }; } if (attachment?.token === ${JSON.stringify(token)}) { const cleanupOk = ${attachmentCleanupScript(token, nonce)}; return { ok: false, error: '自动发送已取消', transportStarted: true, stage: 'preparing', cancellation: cleanupOk ? 'not_clicked' : 'unknown', ...(cleanupOk ? {} : { uncertain: true }) }; } return false; })()`;
+  return `(async () => { if (!(${documentGuard(nonce)})) return false; const binding = globalThis[${JSON.stringify(DOCUMENT_KEY)}]; if (binding.activeToken === ${JSON.stringify(token)}) binding.activeToken = undefined; const state = globalThis[${JSON.stringify(KEY)}]; const attachment = globalThis[${JSON.stringify(ATTACHMENT_KEY)}]; if (state?.token === ${JSON.stringify(token)}) { const clicked = state.clicked, result = state.cancel(); if (clicked) return result; const cleaned = await ${attachmentCleanupScript(token, nonce)}; return cleaned ? result : { ...result, uncertain: true, cancellation: 'unknown' }; } if (attachment?.token === ${JSON.stringify(token)}) { const cleanupOk = await ${attachmentCleanupScript(token, nonce)}; return { ok: false, error: '自动发送已取消', transportStarted: true, stage: 'preparing', cancellation: cleanupOk ? 'not_clicked' : 'unknown', ...(cleanupOk ? {} : { uncertain: true }) }; } return false; })()`;
 }
 
 export class WebComposerSender {
@@ -425,10 +497,10 @@ export class WebComposerSender {
     try { return await this.sendReserved(text, expectedSession, current, attachments); }
     finally { this.reserved = false; this.kind = undefined; }
   }
-  private async stageAttachments(token: string, nonce: string, scope: string, fixture: boolean, files: readonly PromptAttachmentData[], generation: number, current: () => boolean): Promise<WebSendResult | null> {
+  private async stageAttachments(token: string, nonce: string, scope: string, fixture: boolean, files: readonly PromptAttachmentData[], generation: number, current: () => boolean, platform: WebPlatform): Promise<WebSendResult | null> {
     if (!files.length) return null;
     const call = (code: string) => this.web.executeJavaScriptInIsolatedWorld(COMPOSER_SEND_WORLD, [{ code }]);
-    const started: unknown = await call(attachmentStartScript(token, nonce, scope, fixture));
+    const started: unknown = await call(attachmentStartScript(token, nonce, scope, fixture, platform));
     if (!started || typeof started !== 'object' || !('ok' in started) || !started.ok) {
       const error = started && typeof started === 'object' && 'error' in started ? String(started.error) : '无法准备官网附件控件';
       traceCollection('composer.attachment-start-rejected', { count: files.length, error });
@@ -450,6 +522,7 @@ export class WebComposerSender {
         }
         if (size !== file.size || await call(attachmentFinishFileScript(token, nonce)) !== true) throw new Error(`附件读取不完整：${file.name}`);
       }
+      if (generation !== this.generation || !current()) throw new Error('需求、项目或会话已变化，附件上传已取消');
       const committed: unknown = await call(attachmentCommitScript(token, nonce, files));
       if (committed && typeof committed === 'object' && 'ok' in committed && committed.ok) {
         traceCollection('composer.attachment-committed', { count: files.length });
@@ -500,7 +573,6 @@ export class WebComposerSender {
     try { url = new URL(raw); } catch { return { ok: false, error: '网页地址不可识别' }; }
     const platform = webPlatformOf(raw) ?? (this.options.allowLocalFixture && url.protocol === 'file:' ? 'deepseek' : undefined);
     if (!platform) return { ok: false, error: '自动发送仅支持官方平台普通对话网页' };
-    if (platform === 'chatgpt' && attachments.length) return { ok: false, error: 'ChatGPT 当前仅支持纯文本发送，附件未读取或上传' };
     if (sessionKeyOf(raw) !== expectedSession) return { ok: false, error: '网页会话已变化' };
     // 等待清理期间其他调用可能已开始，必须再核验唯一正在发送的批次。
     if (this.token) return { ok: false, error: '已有内容正在发送' };
@@ -555,7 +627,7 @@ export class WebComposerSender {
       nonce = bound; this.documentNonce = nonce; this.tokenDocument = { nonce, revision: documentRevision };
       transportStarted = true; stage = 'preparing';
       if (attachments.length) {
-        const staged = await waitFor(this.stageAttachments(token, nonce, expectedSession, this.options.allowLocalFixture === true, attachments, generation, current));
+        const staged = await waitFor(this.stageAttachments(token, nonce, expectedSession, this.options.allowLocalFixture === true, attachments, generation, current, platform));
         if (staged) return { stage: 'preparing', ...staged, transportStarted: true };
       }
       if (generation !== this.generation || !current()) {

@@ -2,7 +2,7 @@
 artifact_type: adr
 status: accepted
 created: 2026-10-13
-updated: 2026-10-13
+updated: 2026-10-15
 owner: 胡运宽
 source_of_truth: [src/main/webComposerSender.ts, src/main/composerDraftBackup.ts, src/main/index.ts, src/main/tools/integration.ts, src/main/tools/resultReturn.ts, test/composerDraftBackup.test.ts, test/chatgptComposerSender.test.ts, tools/verify-chatgpt-composer.cjs]
 ---
@@ -15,7 +15,7 @@ source_of_truth: [src/main/webComposerSender.ts, src/main/composerDraftBackup.ts
 
 ## Decision
 
-1. 仅WebComposerSender当前有效ChatGPT工具结果/诊断运输有备份替换资格。用户主动本地需求、DeepSeek和ChatGPT程序附件仍无此资格；不新增任意正文入口或剪贴板读取。
+1. 仅WebComposerSender当前有效ChatGPT纯文本工具结果/诊断运输有备份替换资格。用户主动本地需求、DeepSeek和ChatGPT程序附件批均无此资格；附件批须官网空输入且无既有附件，按附件运输规则执行，不新增任意正文入口或剪贴板读取。
 2. 原文从唯一已知ProseMirror/FORM中以现有纯文本reader读取（包含已核验、仅允许class及data-prompt-literal-paste属性的粘贴文本SPAN，以及无属性STRONG中的递归纯文本）；备份保留可见输入中的全部正文及空白，不取隐藏编辑器的内容。未知节点、正文丢失、超过1MiB、无当前项目或不可编辑时暂停，不以任意innerText/HTML猜测草稿。采集与动作监听世界1004继续不读取用户输入，运输世界1005在本次准备阶段读取必要纯文本。
 3. 先在世界1005冻结原输入/FORM、文本和一次token，安装真实编辑接管处理器，不改输入。主进程ComposerDraftBackup核验并保存成功后，主进程再次核对当前项目/会话/批次资格；一次恢复脚本复核原输入/FORM、纯文本字节、附件和生成状态，全部仍有效才填入并发送一次。真实编辑即使文本相同也作废本次覆盖，保存成功不重新授权；取消或导航不补发。
 4. 当前项目`.mini-ai-ide/composer-drafts/`仅保存独占创建的UTF-8 TXT原文；专用归属标记及.gitignore拒绝冲突/未知目录，祖先链接与真实路径别名拒绝。文件名使用UTC时间、规范化会话hash摘要、随机ID，不记录原会话ID。写入sync并核对字节/路径后才返回；不修改项目.gitignore，不覆盖历史备份、不自动清理。

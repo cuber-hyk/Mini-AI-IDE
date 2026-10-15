@@ -22,14 +22,17 @@ window.setupLocalPrompt = function (bridge, setInfo) {
   let changing = false;
   let sending = false;
   let stagingAttachments = 0;
-  let attachmentStageFailed = false;
+  let attachmentStageError = '';
   let lastAttachmentStage = Promise.resolve(true);
   let composerBusy = false;
   let composing = false;
   let attachments = [];
   let busyListener = function () {};
   let publishedBusy;
-  function errorText(err) { return err && err.message ? err.message : String(err); }
+  function errorText(err) {
+    const text = err && err.message ? err.message : String(err);
+    return text.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, '');
+  }
   function resized() { document.dispatchEvent(new Event('prompt-size-changed')); }
   function busy() { return !optionsReady || !catalogReady || changing || sending || stagingAttachments > 0 || composerBusy; }
   function paint() {
@@ -64,7 +67,7 @@ window.setupLocalPrompt = function (bridge, setInfo) {
   }
   async function addFiles(operation) {
     if (busy()) return;
-    stagingAttachments += 1; attachmentStageFailed = false; paint();
+    stagingAttachments += 1; attachmentStageError = ''; paint();
     setInfo('正在添加附件…');
     lastAttachmentStage = (async function () {
       try {
@@ -75,7 +78,7 @@ window.setupLocalPrompt = function (bridge, setInfo) {
           renderAttachments();
         }
         return true;
-      } catch (err) { attachmentStageFailed = true; setInfo('添加附件失败：' + errorText(err), true); return false; }
+      } catch (err) { attachmentStageError = errorText(err); setInfo('添加附件失败：' + attachmentStageError, true); return false; }
     })();
     try { await lastAttachmentStage; }
     finally { stagingAttachments = Math.max(0, stagingAttachments - 1); renderAttachments(); paint(); }
@@ -169,7 +172,7 @@ window.setupLocalPrompt = function (bridge, setInfo) {
       setInfo('正在添加附件，完成后将继续发送…');
       await lastAttachmentStage;
     }
-    if (attachmentStageFailed) { setInfo('附件添加失败，本次需求未发送；请重新添加图片后再试。', true); sending = false; paint(); return; }
+    if (attachmentStageError) { setInfo('附件添加失败，本次需求未发送：' + attachmentStageError + '。请处理后重新添加附件。', true); sending = false; paint(); return; }
     const draft = input.value;
     const submission = getSubmission();
     if (!submission.requirement) { setInfo('请先写下你的需求', true); input.focus(); sending = false; paint(); return; }

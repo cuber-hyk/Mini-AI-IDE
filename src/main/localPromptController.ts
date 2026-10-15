@@ -18,7 +18,6 @@ interface Options {
   attachments: LocalPromptAttachments; chooseFiles: () => Promise<string[]>; resolveWorkspacePath: (path: string) => Promise<{ ok: boolean; absolute?: string; error?: string }>;
   root: () => string | null; session: () => string; busy: () => boolean;
   webAvailable?: () => boolean;
-  attachmentsAvailable?: () => boolean;
   sendingChanged?: () => void;
   disabled?: boolean;
 }
@@ -81,8 +80,6 @@ export class LocalPromptController {
     try {
       this.options.sendingChanged?.();
       const prompt = await this.compose(raw);
-      if (this.options.attachmentsAvailable?.() === false && (raw as LocalPromptInput).attachments?.length)
-        return { ok: false, error: 'ChatGPT 本轮仅支持纯文本需求，请移除本地附件或在官网手动上传' };
       if (this.options.webAvailable?.() === false || generation !== this.generation || session !== this.options.session() || this.options.busy()) return { ok: false, error: '平台、选项、会话或工具状态已变化，需求未发送' };
       // 会话作用域由 integration/sender 核验，允许它们证明首页首发的地址分配。
       const current = () => this.options.webAvailable?.() !== false && generation === this.generation && !this.options.busy();

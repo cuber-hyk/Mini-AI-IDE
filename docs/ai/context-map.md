@@ -16,7 +16,7 @@
 
 官网切回白页/网络加载失败先读`docs/capabilities/web-platforms.md`及平台切换ADR。两平台主frame失败与手动重载owner为`webPlatformController.ts`，顶栏恢复入口为`webbar.js/html`及`webbarPreload.ts`，本地需求可用性为`promptComposer.js`与index的webAvailable。回归为`test/webPlatformController.test.ts`、`test/webPlatformUi.test.ts`及离线`tools/verify-web-platform.cjs`；chrome-error完成不是官网成功，不改CSP或TLS来猜测网络原因。
 
-ChatGPT工具回传前纯文本草稿备份读 `docs/capabilities/human-machine-boundary.md`、`docs/adr/2026-10-13-chatgpt-composer-draft-backup.md`；主进程留底 owner 为 `src/main/composerDraftBackup.ts`，唯一网页运输为 `webComposerSender.ts`，当前项目注入由 index/tools-integration 管理，路径反馈归 resultReturn。验证为 `test/composerDraftBackup.test.ts`、`test/chatgptComposerSender.test.ts`、`tools/verify-chatgpt-composer.cjs`。
+ChatGPT工具纯文本回传前的草稿备份读 `docs/capabilities/human-machine-boundary.md`、`docs/adr/2026-10-13-chatgpt-composer-draft-backup.md`；附件批要求空输入，不适用备份替换。主进程留底 owner 为 `src/main/composerDraftBackup.ts`，唯一网页运输为 `webComposerSender.ts`，当前项目注入由 index/tools-integration 管理，路径反馈归 resultReturn。验证为 `test/composerDraftBackup.test.ts`、`test/chatgptComposerSender.test.ts`、`tools/verify-chatgpt-composer.cjs`。
 
 备份自动展示读同一人机边界能力及`DESIGN.md`；编辑器单向通知经contract/preload，界面owner为`src/renderer/composerDraftFeedback.js`，文件缓冲/非聚焦打开归editorWorkspace，正文显隐归fileWorkspace。验证为`test/composerDraftFeedback.test.ts`、`test/editorWorkspace.test.ts`、`test/fileWorkspace.test.ts`。
 
@@ -33,7 +33,7 @@ AI 临时目录及 JSON 草稿恢复先读 `docs/capabilities/tool-harness.md`�
 
 工具实际文件变更由 `src/main/tools/changeReview.ts` 留存本批执行快照，`changes.ts` 提供实际修改与撤销事件，`integration.ts` 绑定项目／会话／批次；右侧文件正文的只读 Diff 界面为 `src/renderer/preview.*` 和 `src/main/previewPreload.ts`。回归入口为 `test/toolChangeReview.test.ts`、`test/toolReviewIntegration.test.ts`、`test/changeTree.test.ts`。文件树类型图标由 `src/renderer/fileIcons.js` 和 `fileExplorer.css` 管理。
 
-工具附件回传先读 `docs/adr/2026-10-09-tool-attachment-return.md`；协议唯一入口 `attach_file` 在 `src/shared/toolProtocol.ts`，当前选择附件由 `src/main/tools/attachments.ts` 持有并复用 `localPromptAttachments.ts`，自动/手动批次发送资格由 `src/main/tools/resultReturn.ts` 管理，`integration.ts` 核验官网最新正式批次并接线。`sendToolResults` 只供编辑器主 frame 零参数调用，不接收任意路径或正文；验证为 `test/toolAttachmentIntegration.test.ts`、`test/toolAttachments.test.ts`、`test/toolResultReturn.test.ts` 及 UI/原生运输夹具。
+工具附件回传先读 `docs/adr/2026-10-09-tool-attachment-return.md`；协议唯一入口 `attach_file` 在 `src/shared/toolProtocol.ts`，当前选择附件由 `src/main/tools/attachments.ts` 持有并复用 `localPromptAttachments.ts`，自动/手动批次发送资格由 `src/main/tools/resultReturn.ts` 管理，`integration.ts` 核验官网最新正式批次并接线。两平台共用暂存与权限；ChatGPT 图片/文档只读识别归 `src/main/chatgptPage.ts` 的 `CHATGPT_ATTACHMENT_READER`，唯一网页写入归 `webComposerSender.ts`。`sendToolResults` 只供编辑器主 frame 零参数调用，不接收任意路径或正文；验证为 `test/toolAttachmentIntegration.test.ts`、`test/toolAttachments.test.ts`、`test/toolResultReturn.test.ts`、`test/chatgptComposerSender.test.ts` 及 UI/原生运输夹具。
 
 自动继续先读 `docs/adr/2026-10-08-output-driven-collection.md`、`docs/capabilities/human-machine-boundary.md`、`docs/adr/2026-10-07-automatic-result-return-boundary.md`：`src/main/tools/autoContinuation.ts` 拥有完成事件、作用域与计时，`webResultSender.ts` 调用唯一运输 `src/main/webComposerSender.ts`，`integration.ts` 接线和发送前复核。UI 单开关仍由 `src/renderer/toolHarness.js` 管理，间隔由原生工具设置窗口调整；测试为 `test/autoContinuation.test.ts`、`test/webResultSender.test.ts`，原生本地夹具为 `tools/verify-web-result-sender.cjs`，不替代真实官网验收。差异连续阅读、可收起导航、上下文展开、换行及主动临时拓宽由 `preview.js/css` 管理，读 `test/changeTree.test.ts` 和 `src/main/layoutProbe.ts`。
 
@@ -112,7 +112,7 @@ AI 临时目录及 JSON 草稿恢复先读 `docs/capabilities/tool-harness.md`�
 
 JSON 解析定位由 `src/shared/toolJsonDiagnostic.ts` 负责；本地执行秒数由 `src/renderer/toolExecutionClock.js` 负责；主进程完成事件的自动复制与提示由 `src/main/tools/resultClipboard.ts` 负责。回归入口为 `test/toolJsonDiagnostic.test.ts`、`test/toolExecutionClock.test.ts`、`test/toolResultClipboard.test.ts`、`test/toolExecutionIntegration.test.ts`。
 
-ChatGPT 普通对话纯文本适配：平台 URL 规则为 `src/shared/webConversation.ts`，只读 DOM 规则为 `src/main/chatgptPage.ts`，正文/完成快照为 `tools/replyObservation.ts`，监听生命周期为 `tools/replyChangeWatcher.ts`，唯一 DOM 写入仍为 `src/main/webComposerSender.ts`；活动绑定由 `tools/integration.ts` 管理。验证为 `test/chatgptToolIntegration.test.ts` 与 `tools/verify-chatgpt-composer.cjs`，源站真实连续对话另需人工验收。
+ChatGPT 普通对话文本及附件适配：平台 URL 规则为 `src/shared/webConversation.ts`，只读 DOM 及附件卡规则为 `src/main/chatgptPage.ts`，正文/完成快照为 `tools/replyObservation.ts`，监听生命周期为 `tools/replyChangeWatcher.ts`，唯一 DOM 写入仍为 `src/main/webComposerSender.ts`；活动绑定由 `tools/integration.ts` 管理。验证为 `test/chatgptToolIntegration.test.ts`、`test/chatgptComposerSender.test.ts` 与 `tools/verify-chatgpt-composer.cjs`；源站手动添加图文的结构核验与真实程序上传、连续对话验收是不同证据。
 
 ChatGPT 原生只读结构诊断为 `tools/chatgpt-page-structure.cjs`，由 `tools/chatgpt-ide-preview.cjs` 在显式诊断开关开启时运行，不记录正文、输入或凭据；离线两轮真实工具验证为 `tools/verify-chatgpt-tools.cjs`。
 
