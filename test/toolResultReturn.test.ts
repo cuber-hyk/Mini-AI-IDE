@@ -252,3 +252,20 @@ it('临时预检结束时关闭或用户接管仍取消旧资格，重开不能�
     assert.equal(f.resolved, 0); assert.equal(f.sent.length, 0);
   }
 });
+
+
+it('旧取消阻断拒绝当前纯文本时保留未运输事实，但不补发本批或释放一次资格', async () => {
+  const selection = { root: 'root', session: 'chat', batch: { protocol_version: 1 as const, batch_id: 'blocked', requests: [{ id: 'read', tool: 'read_file' as const, args: { path: 'a.txt' } }] } };
+  const state: ToolState = { config: { permission: 'full', automatic: true, dirtyPolicy: 'ask', completionSound: false, autoCopyResults: true, sendIntervalSeconds: 0 },
+    busy: false, message: '', completion: { id: 1, batch_id: 'blocked', outcome: 'success' },
+    results: [{ batch_id: 'blocked', request_id: 'read', tool: 'read_file', status: 'done', started_at: 1, data: { text: 'real output' } }] };
+  const context = { root: 'root', session: 'chat', state };
+  let sends = 0;
+  const owner = new ToolResultReturn({ current: () => context, verify: async () => ({ ok: true }), attachments: async () => [],
+    send: async () => { sends++; return { ok: false, blockedByPreviousCancellation: true, transportStarted: false, stage: 'preflight', error: '上次取消状态未确认，本批结果未发送' } as WebSendResult; }, changed() {} });
+  owner.begin({ kind: 'batch', selection });
+  const result = await owner.send('automatic');
+  assert.equal(result.transportStarted, false); assert.equal(result.uncertain, undefined); assert.equal(result.retryable, undefined);
+  assert.match(owner.getState(context).message, /本批结果未发送/);
+  await owner.send('automatic'); assert.equal(sends, 1, '旧阻断不自动复活本批发送资格');
+});

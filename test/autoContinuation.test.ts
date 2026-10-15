@@ -356,3 +356,16 @@ it('手动解析诊断来源阻断自动计时，状态省略 source 也不回�
   context.state = state; owner.observe(context); t.mock.timers.tick(9000); await flush(); assert.equal(sent.length, 0);
   context.state = completed(1); context.diagnostic = null; owner.observe(context); t.mock.timers.tick(3000); await flush(); assert.equal(sent.length, 1);
 });
+
+
+it('旧取消阻断显示本批未发送，不循环重试，后续新批可在运输恢复后继续', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] }); const f = fixture(); t.after(() => f.owner.dispose());
+  let calls = 0;
+  f.setSend(async () => { calls++; return { ok: false, error: '上次取消未确认', transportStarted: false, stage: 'preflight', blockedByPreviousCancellation: true } as WebSendResult; });
+  const first = completed(); f.update(first); t.mock.timers.tick(3000); await flush();
+  assert.equal(f.owner.getState().phase, 'paused'); assert.match(f.owner.getState().message, /^本批未发送：/);
+  f.update(first); t.mock.timers.tick(10000); await flush(); assert.equal(calls, 1);
+  f.setSend(async () => { calls++; return { ok: true, transportStarted: true }; });
+  f.update(completed(2)); t.mock.timers.tick(3000); await flush();
+  assert.equal(calls, 2); assert.equal(f.owner.getState().phase, 'waiting_reply');
+});

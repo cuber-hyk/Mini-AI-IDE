@@ -8,6 +8,13 @@ async function flush() { for (let index = 0; index < 20; index++) await Promise.
 function fixture(url = 'https://chatgpt.com/c/current', backupDraft?: (text: string, session: string) => Promise<string>, draftSaved?: (path: string) => void) {
   const web = new EventEmitter() as any;
   const scripts: string[] = [];
+  const documentNonce = 'fixture-document-one';
+  let execute: (world: number, entries: { code: string }[]) => Promise<unknown>;
+  Object.defineProperty(web, 'executeJavaScriptInIsolatedWorld', {
+    get: () => (world: number, entries: { code: string }[]) => entries[0]!.code.startsWith('/* composer-document */')
+      ? Promise.resolve(documentNonce) : execute(world, entries),
+    set: value => { execute = value; }
+  });
   web.getURL = () => url;
   web.isDestroyed = () => false;
   web.executeJavaScriptInIsolatedWorld = async (world: number, entries: { code: string }[]) => {

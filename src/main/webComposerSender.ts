@@ -14,14 +14,26 @@ import { CHATGPT_SEND_SELECTOR, CHATGPT_GENERATING_SCRIPT } from './chatgptPage'
 export const COMPOSER_SEND_WORLD = 1005;
 const KEY = '__miniAIComposerSend';
 const ATTACHMENT_KEY = '__miniAIComposerAttachments';
+const DOCUMENT_KEY = '__miniAIComposerDocument';
+let documentRequestSequence = 0;
+
+function documentScript(nonce: string, token?: string): string {
+  const sequence = token ? ++documentRequestSequence : undefined;
+  return `/* composer-document */ (() => { const key = ${JSON.stringify(DOCUMENT_KEY)}; let state = globalThis[key]; if (state?.document !== document || typeof state.nonce !== 'string') state = globalThis[key] = { document, nonce: ${JSON.stringify(nonce)} }; ${token ? `if ((state.requestSequence ?? 0) >= ${sequence}) return false; state.requestSequence = ${sequence}; state.activeToken = ${JSON.stringify(token)};` : ''} return state.nonce; })()`;
+}
+
+function documentGuard(nonce: string, token?: string): string {
+  return `globalThis[${JSON.stringify(DOCUMENT_KEY)}]?.document === document && globalThis[${JSON.stringify(DOCUMENT_KEY)}]?.nonce === ${JSON.stringify(nonce)}${token ? ` && globalThis[${JSON.stringify(DOCUMENT_KEY)}]?.activeToken === ${JSON.stringify(token)}` : ''}`;
+}
 type SendWeb = Pick<WebContents, 'getURL' | 'isDestroyed' | 'executeJavaScriptInIsolatedWorld' | 'on' | 'removeListener'>;
 export type WebSendStage = 'preflight' | 'preparing' | 'draft_backup' | 'waiting_button' | 'clicked' | 'confirmed' | 'unknown';
 export type WebSendResult = { ok: boolean; error?: string; uncertain?: boolean; session?: string; draftBackupPath?: string;
-  retryable?: true; transportStarted?: boolean; stage?: WebSendStage; cancellation?: 'not_clicked' | 'clicked' | 'unknown' };
+  blockedByPreviousCancellation?: true; retryable?: true; transportStarted?: boolean; stage?: WebSendStage; cancellation?: 'not_clicked' | 'clicked' | 'unknown' };
 type SendOptions = { allowLocalFixture?: boolean; backupDraft?: (text: string, session: string) => Promise<string>; draftSaved?: (path: string) => void };
 
-function attachmentStartScript(token: string, scope: string, fixture: boolean): string {
+function attachmentStartScript(token: string, nonce: string, scope: string, fixture: boolean): string {
   return `(() => {
+    if (!(${documentGuard(nonce, token)})) return { ok: false, error: '网页文档已变化，未上传附件' };
     const token = ${JSON.stringify(token)}, scope = ${JSON.stringify(scope)};
     const u = new URL(location.href);
     if (!(((u.origin === 'https://chat.deepseek.com' && u.protocol === 'https:') || (${fixture} && u.protocol === 'file:')) || false)) return { ok: false, error: '附件仅支持官方 DeepSeek 网页' };
@@ -47,25 +59,26 @@ function attachmentStartScript(token: string, scope: string, fixture: boolean): 
   })()`;
 }
 
-function attachmentBeginFileScript(token: string, file: PromptAttachmentData): string {
-  return `(() => { const s = globalThis[${JSON.stringify(ATTACHMENT_KEY)}]; if (!s || s.token !== ${JSON.stringify(token)} || s.parts.length || s.name) return false; s.name = ${JSON.stringify(file.name)}; s.type = ${JSON.stringify(file.mediaType)}; s.expected = ${file.size}; s.size = 0; return true; })()`;
+function attachmentBeginFileScript(token: string, nonce: string, file: PromptAttachmentData): string {
+  return `(() => { if (!(${documentGuard(nonce, token)})) return false; const s = globalThis[${JSON.stringify(ATTACHMENT_KEY)}]; if (!s || s.token !== ${JSON.stringify(token)} || s.parts.length || s.name) return false; s.name = ${JSON.stringify(file.name)}; s.type = ${JSON.stringify(file.mediaType)}; s.expected = ${file.size}; s.size = 0; return true; })()`;
 }
 
-function attachmentChunkScript(token: string, bytes: Uint8Array): string {
+function attachmentChunkScript(token: string, nonce: string, bytes: Uint8Array): string {
   const base64 = Buffer.from(bytes).toString('base64');
-  return `(() => { const s = globalThis[${JSON.stringify(ATTACHMENT_KEY)}]; if (!s || s.token !== ${JSON.stringify(token)} || !s.name) return false; const raw = atob(${JSON.stringify(base64)}), part = new Uint8Array(raw.length); for (let i = 0; i < raw.length; i++) part[i] = raw.charCodeAt(i); s.parts.push(part); s.size += part.length; return s.size <= s.expected; })()`;
+  return `(() => { if (!(${documentGuard(nonce, token)})) return false; const s = globalThis[${JSON.stringify(ATTACHMENT_KEY)}]; if (!s || s.token !== ${JSON.stringify(token)} || !s.name) return false; const raw = atob(${JSON.stringify(base64)}), part = new Uint8Array(raw.length); for (let i = 0; i < raw.length; i++) part[i] = raw.charCodeAt(i); s.parts.push(part); s.size += part.length; return s.size <= s.expected; })()`;
 }
 
-function attachmentFinishFileScript(token: string): string {
-  return `(() => { const s = globalThis[${JSON.stringify(ATTACHMENT_KEY)}]; if (!s || s.token !== ${JSON.stringify(token)} || !s.name || s.size !== s.expected) return false; try { s.files.push(new File(s.parts, s.name, { type: s.type })); s.parts = []; s.size = 0; s.name = ''; s.type = ''; return true; } catch { return false; } })()`;
+function attachmentFinishFileScript(token: string, nonce: string): string {
+  return `(() => { if (!(${documentGuard(nonce, token)})) return false; const s = globalThis[${JSON.stringify(ATTACHMENT_KEY)}]; if (!s || s.token !== ${JSON.stringify(token)} || !s.name || s.size !== s.expected) return false; try { s.files.push(new File(s.parts, s.name, { type: s.type })); s.parts = []; s.size = 0; s.name = ''; s.type = ''; return true; } catch { return false; } })()`;
 }
 
-function attachmentCommitScript(token: string, files: readonly PromptAttachmentData[]): string {
-  return `(() => { const s = globalThis[${JSON.stringify(ATTACHMENT_KEY)}]; if (!s || s.token !== ${JSON.stringify(token)} || s.name || s.files.length !== ${files.length}) return { ok: false, error: '附件数据不完整' }; try { const transfer = new DataTransfer(); s.files.forEach(f => transfer.items.add(f)); const expected = ${JSON.stringify(files.map(file => ({ name: file.name, size: file.size })))}; s.input.files = transfer.files; const actual = Array.from(s.input.files || []); if (actual.length !== expected.length || actual.some((f, i) => f.name !== expected[i].name || f.size !== expected[i].size)) return { ok: false, error: '附件尚未交给官网控件' }; s.committed = expected; s.baselineNameCounts = expected.map(f => s.composer.textContent.split(f.name).length - 1); s.input.dispatchEvent(new Event('input', { bubbles: true })); s.input.dispatchEvent(new Event('change', { bubbles: true })); return { ok: true }; } catch { return { ok: false, error: '官网附件控件拒绝文件' }; } })()`;
+function attachmentCommitScript(token: string, nonce: string, files: readonly PromptAttachmentData[]): string {
+  return `(() => { if (!(${documentGuard(nonce, token)})) return false; const s = globalThis[${JSON.stringify(ATTACHMENT_KEY)}]; if (!s || s.token !== ${JSON.stringify(token)} || s.name || s.files.length !== ${files.length}) return { ok: false, error: '附件数据不完整' }; try { const transfer = new DataTransfer(); s.files.forEach(f => transfer.items.add(f)); const expected = ${JSON.stringify(files.map(file => ({ name: file.name, size: file.size })))}; s.input.files = transfer.files; const actual = Array.from(s.input.files || []); if (actual.length !== expected.length || actual.some((f, i) => f.name !== expected[i].name || f.size !== expected[i].size)) return { ok: false, error: '附件尚未交给官网控件' }; s.committed = expected; s.baselineNameCounts = expected.map(f => s.composer.textContent.split(f.name).length - 1); s.input.dispatchEvent(new Event('input', { bubbles: true })); s.input.dispatchEvent(new Event('change', { bubbles: true })); return { ok: true }; } catch { return { ok: false, error: '官网附件控件拒绝文件' }; } })()`;
 }
 
-function attachmentStatusScript(token: string, files: readonly PromptAttachmentData[]): string {
+function attachmentStatusScript(token: string, nonce: string, files: readonly PromptAttachmentData[]): string {
   return `(() => {
+    if (!(${documentGuard(nonce, token)})) return { error: '网页文档已变化，附件状态不可确认' };
     const s = globalThis[${JSON.stringify(ATTACHMENT_KEY)}];
     if (!s || s.token !== ${JSON.stringify(token)} || !s.composer?.isConnected) return { error: '官网附件区域已变化，未发送文本' };
     const expected = ${JSON.stringify(files.map(file => ({ name: file.name, size: file.size, type: file.mediaType })))};
@@ -89,12 +102,13 @@ function attachmentStatusScript(token: string, files: readonly PromptAttachmentD
   })()`;
 }
 
-function attachmentCleanupScript(token: string): string {
-  return `(() => { const key = ${JSON.stringify(ATTACHMENT_KEY)}, s = globalThis[key]; if (!s || s.token !== ${JSON.stringify(token)}) return true; try { if (s.committed && s.input.isConnected) { const actual = Array.from(s.input.files || []); if (actual.length !== s.committed.length || actual.some((f, i) => f.name !== s.committed[i].name || f.size !== s.committed[i].size)) return false; s.input.files = new DataTransfer().files; s.input.dispatchEvent(new Event('input', { bubbles: true })); s.input.dispatchEvent(new Event('change', { bubbles: true })); } delete globalThis[key]; return true; } catch { return false; } })()`;
+function attachmentCleanupScript(token: string, nonce: string): string {
+  return `(() => { if (!(${documentGuard(nonce)})) return false; const key = ${JSON.stringify(ATTACHMENT_KEY)}, s = globalThis[key]; if (!s || s.token !== ${JSON.stringify(token)}) return true; try { if (s.committed && s.input.isConnected) { const actual = Array.from(s.input.files || []); if (actual.length !== s.committed.length || actual.some((f, i) => f.name !== s.committed[i].name || f.size !== s.committed[i].size)) return false; s.input.files = new DataTransfer().files; s.input.dispatchEvent(new Event('input', { bubbles: true })); s.input.dispatchEvent(new Event('change', { bubbles: true })); } delete globalThis[key]; return true; } catch { return false; } })()`;
 }
 
-function sendScript(token: string, text: string, scope: string, fixture: boolean, prompt: boolean, expectedFiles: readonly PromptAttachmentData[], platform: WebPlatform, backupDraft = false): string {
+function sendScript(token: string, nonce: string, text: string, scope: string, fixture: boolean, prompt: boolean, expectedFiles: readonly PromptAttachmentData[], platform: WebPlatform, backupDraft = false): string {
   return `(() => {
+    if (!(${documentGuard(nonce, token)})) return { ok: false, error: '网页文档已变化，未发送' };
     const key = ${JSON.stringify(KEY)}, token = ${JSON.stringify(token)}, payload = ${JSON.stringify(text.replace(/\r\n?/g, '\n'))}, scope = ${JSON.stringify(scope)};
     const previous = globalThis[key];
     if (previous) return { ok: false, error: '页面仍有等待发送的结果' };
@@ -103,7 +117,7 @@ function sendScript(token: string, text: string, scope: string, fixture: boolean
     const pendingFirstSession = ${isPendingFirstPromptSession.toString()};
     let pendingScope = null;
     const chatgpt = ${platform === 'chatgpt'};
-    const inScope = () => { const current = new URL(location.href); return !current.username && !current.password && ((current.protocol === 'https:' && (chatgpt ? current.origin === 'https://chatgpt.com' && (current.pathname === '/' || /^\\/c\\/[a-zA-Z0-9_-]+$/.test(current.pathname)) : current.origin === 'https://chat.deepseek.com')) || (${fixture} && !chatgpt && current.protocol === 'file:')) && (current.protocol === 'file:' ? 'null' : current.origin) + current.pathname === boundScope; };
+    const inScope = () => { if (!(${documentGuard(nonce, token)})) return false; const current = new URL(location.href); return !current.username && !current.password && ((current.protocol === 'https:' && (chatgpt ? current.origin === 'https://chatgpt.com' && (current.pathname === '/' || /^\\/c\\/[a-zA-Z0-9_-]+$/.test(current.pathname)) : current.origin === 'https://chat.deepseek.com')) || (${fixture} && !chatgpt && current.protocol === 'file:')) && (current.protocol === 'file:' ? 'null' : current.origin) + current.pathname === boundScope; };
     if (!inScope()) return { ok: false, error: '网页或会话已变化' };
     const visible = e => !!e && e.isConnected && e.getClientRects().length > 0 && getComputedStyle(e).visibility !== 'hidden';
     const outside = e => !e.closest('pre,code,[class*="code-block"],[class*="markdown"],.ds-message,[data-message-author-role],[data-talvt-turn-state],[data-markdown-text-style],[data-dil-message-id]');
@@ -336,12 +350,12 @@ function sendScript(token: string, text: string, scope: string, fixture: boolean
   })()`;
 }
 
-function resumeDraftScript(token: string): string {
-  return `(() => { const state = globalThis[${JSON.stringify(KEY)}]; if (state?.token !== ${JSON.stringify(token)} || state.done || state.takenOver || typeof state.resume !== 'function') return { ok: false, error: '草稿备份后的发送已取消，未覆盖' }; return state.resume(); })()`;
+function resumeDraftScript(token: string, nonce: string): string {
+  return `(() => { if (!(${documentGuard(nonce, token)})) return false; const state = globalThis[${JSON.stringify(KEY)}]; if (state?.token !== ${JSON.stringify(token)} || state.done || state.takenOver || typeof state.resume !== 'function') return { ok: false, error: '草稿备份后的发送已取消，未覆盖' }; return state.resume(); })()`;
 }
 
-function cancelScript(token: string): string {
-  return `(() => { const state = globalThis[${JSON.stringify(KEY)}]; const attachment = globalThis[${JSON.stringify(ATTACHMENT_KEY)}]; if (state?.token === ${JSON.stringify(token)}) { const clicked = state.clicked, result = state.cancel(); if (clicked) return result; const cleaned = ${attachmentCleanupScript(token)}; return cleaned ? result : { ...result, uncertain: true, cancellation: 'unknown' }; } if (attachment?.token === ${JSON.stringify(token)}) { const cleanupOk = ${attachmentCleanupScript(token)}; return { ok: false, error: '自动发送已取消', transportStarted: true, stage: 'preparing', cancellation: cleanupOk ? 'not_clicked' : 'unknown', ...(cleanupOk ? {} : { uncertain: true }) }; } return false; })()`;
+function cancelScript(token: string, nonce: string): string {
+  return `(() => { if (!(${documentGuard(nonce)})) return false; const binding = globalThis[${JSON.stringify(DOCUMENT_KEY)}]; if (binding.activeToken === ${JSON.stringify(token)}) binding.activeToken = undefined; const state = globalThis[${JSON.stringify(KEY)}]; const attachment = globalThis[${JSON.stringify(ATTACHMENT_KEY)}]; if (state?.token === ${JSON.stringify(token)}) { const clicked = state.clicked, result = state.cancel(); if (clicked) return result; const cleaned = ${attachmentCleanupScript(token, nonce)}; return cleaned ? result : { ...result, uncertain: true, cancellation: 'unknown' }; } if (attachment?.token === ${JSON.stringify(token)}) { const cleanupOk = ${attachmentCleanupScript(token, nonce)}; return { ok: false, error: '自动发送已取消', transportStarted: true, stage: 'preparing', cancellation: cleanupOk ? 'not_clicked' : 'unknown', ...(cleanupOk ? {} : { uncertain: true }) }; } return false; })()`;
 }
 
 export class WebComposerSender {
@@ -349,23 +363,60 @@ export class WebComposerSender {
   private token: string | undefined;
   private disposed = false;
   private generation = 0;
-  private cancellationFailed = false;
+  private documentRevision = 0;
+  private documentNonce: string | undefined;
+  private tokenDocument: { nonce: string; revision: number } | undefined;
+  private cancellationBlock: { token: string; nonce: string; revision: number; reason: string } | undefined;
+  private cancelOperation: { token: string; promise: Promise<void> } | undefined;
+  private loadingDocument: { revision: number; process: number; routing: number } | undefined;
   private abort: ((result: WebSendResult) => void) | undefined;
-  private cleanup: Promise<unknown> = Promise.resolve();
+  private cleanup: Promise<void> = Promise.resolve();
   private cancellation: { token: string; result: WebSendResult } | undefined;
   private kind: 'results' | 'prompt' | undefined;
   private scope = '';
   constructor(private readonly web: SendWeb, private readonly options: SendOptions = {}) {
     web.on('did-start-navigation', this.navigating);
     web.on('did-navigate-in-page', this.inPage);
+    web.on('did-frame-navigate', this.documentNavigated);
+    web.on('did-frame-finish-load', this.documentFinished);
+    web.on('did-fail-load', this.documentFailed);
     web.on('destroyed', this.destroyed);
   }
   private readonly navigating = (event: { isMainFrame: boolean; isSameDocument: boolean }) => {
-    if (event.isMainFrame && !event.isSameDocument) void this.cancel();
+    if (event.isMainFrame && !event.isSameDocument) { this.loadingDocument = undefined; void this.cancel(); }
   };
   private readonly inPage = (_event: unknown, url: string, main: boolean) => {
     if (main && sessionKeyOf(url) !== this.scope && !(this.kind === 'prompt' && (isFirstPromptSession(this.scope, url) || isPendingFirstPromptSession(this.scope, url)))) void this.cancel();
   };
+  private readonly documentNavigated = (_event: unknown, url: string, status: number, _text: string, main: boolean, process: number, routing: number) => {
+    if (!main) return;
+    void this.cancel();
+    this.documentRevision++; this.documentNonce = undefined; this.loadingDocument = undefined;
+    const fixture = this.options.allowLocalFixture && url.startsWith('file:');
+    if ((status >= 200 && status < 400 && webPlatformOf(url)) || fixture)
+      this.loadingDocument = { revision: this.documentRevision, process, routing };
+  };
+  private readonly documentFailed = (_event: unknown, _code: number, _description: string, _url: string, main: boolean) => {
+    if (main) this.loadingDocument = undefined;
+  };
+  private readonly documentFinished = (_event: unknown, main: boolean, process: number, routing: number) => {
+    const loading = this.loadingDocument;
+    if (!main || !loading || loading.process !== process || loading.routing !== routing) return;
+    const block = this.cancellationBlock;
+    if (!block || block.revision >= loading.revision) { this.loadingDocument = undefined; return; }
+    void this.web.executeJavaScriptInIsolatedWorld(COMPOSER_SEND_WORLD, [{ code: documentScript(randomUUID()) }]).then(nonce => {
+      if (!this.disposed && this.loadingDocument === loading && this.documentRevision === loading.revision && typeof nonce === 'string' && nonce && nonce !== block.nonce) {
+        this.documentNonce = nonce;
+        if (this.cancellationBlock === block) { this.cancellationBlock = undefined; traceCollection('composer.cancellation-recovered', { reason: 'new-document' }); }
+      }
+      if (this.loadingDocument === loading) this.loadingDocument = undefined;
+    }).catch(() => { if (this.loadingDocument === loading) this.loadingDocument = undefined; });
+  };
+  private blockedResult(): WebSendResult | undefined {
+    const block = this.cancellationBlock;
+    return block ? { ok: false, error: `本批尚未发送：此前取消未确认（${block.reason}）；请完整重新加载网页后继续新批次`,
+      blockedByPreviousCancellation: true, transportStarted: false, stage: 'preflight' } : undefined;
+  }
   private readonly destroyed = () => { void this.dispose(); };
 
   async send(text: string, expectedSession: string, kind: 'results' | 'prompt' = 'results', current: () => boolean = () => true, attachments: readonly PromptAttachmentData[] = []): Promise<WebSendResult> {
@@ -374,10 +425,10 @@ export class WebComposerSender {
     try { return await this.sendReserved(text, expectedSession, current, attachments); }
     finally { this.reserved = false; this.kind = undefined; }
   }
-  private async stageAttachments(token: string, scope: string, fixture: boolean, files: readonly PromptAttachmentData[], generation: number, current: () => boolean): Promise<WebSendResult | null> {
+  private async stageAttachments(token: string, nonce: string, scope: string, fixture: boolean, files: readonly PromptAttachmentData[], generation: number, current: () => boolean): Promise<WebSendResult | null> {
     if (!files.length) return null;
     const call = (code: string) => this.web.executeJavaScriptInIsolatedWorld(COMPOSER_SEND_WORLD, [{ code }]);
-    const started: unknown = await call(attachmentStartScript(token, scope, fixture));
+    const started: unknown = await call(attachmentStartScript(token, nonce, scope, fixture));
     if (!started || typeof started !== 'object' || !('ok' in started) || !started.ok) {
       const error = started && typeof started === 'object' && 'error' in started ? String(started.error) : '无法准备官网附件控件';
       traceCollection('composer.attachment-start-rejected', { count: files.length, error });
@@ -387,19 +438,19 @@ export class WebComposerSender {
     try {
       for (const file of files) {
         if (generation !== this.generation || !current()) throw new Error('需求、项目或会话已变化，附件上传已取消');
-        const begin: unknown = await call(attachmentBeginFileScript(token, file));
+        const begin: unknown = await call(attachmentBeginFileScript(token, nonce, file));
         if (begin !== true) throw new Error('官网附件上传状态已变化');
         let size = 0;
         for await (const bytes of file.stream()) {
           if (generation !== this.generation || !current()) throw new Error('需求、项目或会话已变化，附件上传已取消');
           size += bytes.byteLength;
           if (size > file.size) throw new Error(`附件大小已变化：${file.name}`);
-          const accepted: unknown = await call(attachmentChunkScript(token, bytes));
+          const accepted: unknown = await call(attachmentChunkScript(token, nonce, bytes));
           if (accepted !== true) throw new Error(`官网拒绝附件数据：${file.name}`);
         }
-        if (size !== file.size || await call(attachmentFinishFileScript(token)) !== true) throw new Error(`附件读取不完整：${file.name}`);
+        if (size !== file.size || await call(attachmentFinishFileScript(token, nonce)) !== true) throw new Error(`附件读取不完整：${file.name}`);
       }
-      const committed: unknown = await call(attachmentCommitScript(token, files));
+      const committed: unknown = await call(attachmentCommitScript(token, nonce, files));
       if (committed && typeof committed === 'object' && 'ok' in committed && committed.ok) {
         traceCollection('composer.attachment-committed', { count: files.length });
         const totalMb = Math.ceil(files.reduce((sum, file) => sum + file.size, 0) / (1024 * 1024));
@@ -407,7 +458,7 @@ export class WebComposerSender {
         let lastStatus = '';
         while (Date.now() < deadline) {
           if (generation !== this.generation || !current()) throw new Error('需求、项目或会话已变化，附件上传已取消');
-          const state: unknown = await call(attachmentStatusScript(token, files));
+          const state: unknown = await call(attachmentStatusScript(token, nonce, files));
           const status = JSON.stringify(state);
           if (status !== lastStatus) {
             lastStatus = status;
@@ -425,7 +476,11 @@ export class WebComposerSender {
       }
       throw new Error(committed && typeof committed === 'object' && 'error' in committed ? String(committed.error) : '官网未接收附件');
     } catch (error) {
-      const cleaned = await call(attachmentCleanupScript(token)).catch(() => false);
+      if (generation !== this.generation && this.cancelOperation?.token === token) {
+        await this.cancelOperation.promise;
+        return this.cancellation?.token === token ? this.cancellation.result : { ok: false, error: '附件运输已取消，清理状态未知', uncertain: true };
+      }
+      const cleaned = await call(attachmentCleanupScript(token, nonce)).catch(() => false);
       const message = error instanceof Error ? error.message : String(error);
       traceCollection('composer.attachment-stage-failed', { count: files.length, cleaned, error: message });
       return { ok: false, error: `${message}${cleaned ? '' : '；官网附件清理状态未确认，请检查页面'}`, ...(!cleaned ? { uncertain: true } : {}) };
@@ -433,14 +488,14 @@ export class WebComposerSender {
   }
   private async sendReserved(text: string, expectedSession: string, current: () => boolean, attachments: readonly PromptAttachmentData[]): Promise<WebSendResult> {
     if (this.disposed || this.web.isDestroyed()) return { ok: false, error: '网页已关闭' };
-    if (this.cancellationFailed) return { ok: false, error: '网页取消状态未确认，自动发送已停止，请重新打开网页', uncertain: true };
+    const blocked = this.blockedResult(); if (blocked) return blocked;
     if (this.token) return { ok: false, error: '已有内容正在发送' };
     if (!text.trim()) return { ok: false, error: '发送内容为空' };
     const generation = this.generation;
     await this.cleanup;
     if (generation !== this.generation) return { ok: false, error: '自动发送已取消' };
     if (this.disposed || this.web.isDestroyed()) return { ok: false, error: '网页已关闭' };
-    if (this.cancellationFailed) return { ok: false, error: '网页取消状态未确认，自动发送已停止，请重新打开网页', uncertain: true };
+    const afterCleanup = this.blockedResult(); if (afterCleanup) return afterCleanup;
     const raw = this.web.getURL(); let url: URL;
     try { url = new URL(raw); } catch { return { ok: false, error: '网页地址不可识别' }; }
     const platform = webPlatformOf(raw) ?? (this.options.allowLocalFixture && url.protocol === 'file:' ? 'deepseek' : undefined);
@@ -455,7 +510,9 @@ export class WebComposerSender {
     let timeout: ReturnType<typeof setTimeout> | undefined;
     let timedOut = false;
     let cancellationSettled = false;
-    let stage: WebSendStage = 'preparing';
+    let stage: WebSendStage = 'preflight';
+    let transportStarted = false;
+    let nonce = '';
     const bounded = new Promise<WebSendResult>(resolve => { timeout = setTimeout(() => {
       timedOut = true;
       void this.cancel().then(() => {
@@ -465,7 +522,7 @@ export class WebComposerSender {
         const cancellation = cancelled?.cancellation ?? 'unknown';
         traceCollection('composer.send-timeout', { stage: cancelled?.stage ?? stage, cancellation });
         resolve({ ok: false, error: '网页发送等待超时，' + (notClicked ? '已确认取消且未点击发送，本批不会重试' : cancellation === 'clicked' ? '已触发发送但接收未确认，不会重试' : '取消状态未确认，已停止且不会重试'),
-          ...(!notClicked ? { uncertain: true } : {}), transportStarted: true, stage: cancelled?.stage ?? stage, cancellation });
+          ...(!notClicked ? { uncertain: true } : {}), transportStarted, stage: cancelled?.stage ?? stage, cancellation });
       });
     }, attachments.length ? Math.min(300_000, Math.max(30_000, 30_000 + Math.ceil(attachments.reduce((sum, file) => sum + file.size, 0) / (1024 * 1024)) * 1000)) : 7500); });
     // 超时后的取消会使页面原 Promise 一并结束；仍等待有界清理结论，不能丢失点击证据。
@@ -487,19 +544,29 @@ export class WebComposerSender {
     };
     let draftBackupPath: string | undefined;
     try {
+      const documentRevision = this.documentRevision;
+      const bound = await waitFor(this.web.executeJavaScriptInIsolatedWorld(COMPOSER_SEND_WORLD, [{ code: documentScript(randomUUID(), token) }]));
+      if (typeof bound !== 'string' || !bound) {
+        if (bound && typeof bound === 'object' && 'ok' in bound && bound.ok === false) return bound as WebSendResult;
+        return { ok: false, error: '无法确认当前网页文档，未发送', transportStarted: false, stage: 'preflight' };
+      }
+      if (generation !== this.generation || documentRevision !== this.documentRevision || !current() || sessionKeyOf(this.web.getURL()) !== expectedSession)
+        return { ok: false, error: '需求、项目或网页文档已变化，未发送', transportStarted: false, stage: 'preflight' };
+      nonce = bound; this.documentNonce = nonce; this.tokenDocument = { nonce, revision: documentRevision };
+      transportStarted = true; stage = 'preparing';
       if (attachments.length) {
-        const staged = await waitFor(this.stageAttachments(token, expectedSession, this.options.allowLocalFixture === true, attachments, generation, current));
+        const staged = await waitFor(this.stageAttachments(token, nonce, expectedSession, this.options.allowLocalFixture === true, attachments, generation, current));
         if (staged) return { stage: 'preparing', ...staged, transportStarted: true };
       }
       if (generation !== this.generation || !current()) {
         if (attachments.length) {
-          const cleaned = await this.web.executeJavaScriptInIsolatedWorld(COMPOSER_SEND_WORLD, [{ code: attachmentCleanupScript(token) }]).catch(() => false);
+          const cleaned = await this.web.executeJavaScriptInIsolatedWorld(COMPOSER_SEND_WORLD, [{ code: attachmentCleanupScript(token, nonce) }]).catch(() => false);
           if (cleaned !== true) return { ok: false, error: '发送资格已失效，官网附件清理状态未确认，请检查页面', uncertain: true };
         }
         return { ok: false, error: '需求、项目或会话已变化，未发送' };
       }
       const canBackup = platform === 'chatgpt' && this.kind === 'results' && !!this.options.backupDraft;
-      let result: unknown = await waitFor(this.web.executeJavaScriptInIsolatedWorld(COMPOSER_SEND_WORLD, [{ code: sendScript(token, text, expectedSession, this.options.allowLocalFixture === true, this.kind === 'prompt', attachments, platform, canBackup) }]));
+      let result: unknown = await waitFor(this.web.executeJavaScriptInIsolatedWorld(COMPOSER_SEND_WORLD, [{ code: sendScript(token, nonce, text, expectedSession, this.options.allowLocalFixture === true, this.kind === 'prompt', attachments, platform, canBackup) }]));
       if (canBackup && result && typeof result === 'object' && 'draftText' in result && typeof result.draftText === 'string') {
         if (generation !== this.generation || !current() || sessionKeyOf(this.web.getURL()) !== expectedSession) {
           await this.cancel('results'); return { ok: false, error: '草稿备份前发送资格已失效，未覆盖' };
@@ -522,7 +589,7 @@ export class WebComposerSender {
         if (generation !== this.generation || !current() || sessionKeyOf(this.web.getURL()) !== expectedSession) {
           await this.cancel('results'); return { ok: false, error: '草稿已备份，但发送资格已失效，未覆盖', draftBackupPath };
         }
-        result = await waitFor(this.web.executeJavaScriptInIsolatedWorld(COMPOSER_SEND_WORLD, [{ code: resumeDraftScript(token) }]));
+        result = await waitFor(this.web.executeJavaScriptInIsolatedWorld(COMPOSER_SEND_WORLD, [{ code: resumeDraftScript(token, nonce) }]));
       }
       traceCollection('composer.send-result', { kind: this.kind, attachmentCount: attachments.length,
         ok: Boolean(result && typeof result === 'object' && 'ok' in result && result.ok === true),
@@ -532,17 +599,18 @@ export class WebComposerSender {
         cancellation: result && typeof result === 'object' && 'cancellation' in result ? result.cancellation : undefined });
       if (result && typeof result === 'object' && 'ok' in result && result.ok === false && !('uncertain' in result) && attachments.length
         && !(cancellationSettled && 'cancellation' in result && result.cancellation === 'not_clicked')) {
-        const cleaned = await this.web.executeJavaScriptInIsolatedWorld(COMPOSER_SEND_WORLD, [{ code: attachmentCleanupScript(token) }]).catch(() => false);
+        const cleaned = await this.web.executeJavaScriptInIsolatedWorld(COMPOSER_SEND_WORLD, [{ code: attachmentCleanupScript(token, nonce) }]).catch(() => false);
         if (cleaned !== true) return { ok: false, error: '发送未完成，官网附件清理状态未确认，请检查页面', uncertain: true };
       }
       if (result && typeof result === 'object' && 'ok' in result && typeof result.ok === 'boolean') return { stage, ...result as WebSendResult, transportStarted: true, ...(draftBackupPath ? { draftBackupPath } : {}) };
       return { ok: false, error: '网页发送状态不可识别，已停止且不会重试', uncertain: true, transportStarted: true, stage: 'unknown' };
     } catch {
       // 渲染进程异常可能发生在点击后，不能推断为未发送。
-      return { ok: false, error: '网页发送检查失败，已停止且不会重试', uncertain: true, transportStarted: true, stage: 'unknown', ...(draftBackupPath ? { draftBackupPath } : {}) };
+      return transportStarted ? { ok: false, error: '网页发送检查失败，已停止且不会重试', uncertain: true, transportStarted: true, stage: 'unknown', ...(draftBackupPath ? { draftBackupPath } : {}) }
+        : { ok: false, error: '网页文档核验失败，本批尚未发送', transportStarted: false, stage: 'preflight' };
     } finally {
       clearTimeout(timeout);
-      if (this.token === token) { this.token = undefined; this.kind = undefined; this.abort = undefined; }
+      if (this.token === token) { this.token = undefined; this.tokenDocument = undefined; this.kind = undefined; this.abort = undefined; }
     }
   }
 
@@ -551,23 +619,40 @@ export class WebComposerSender {
     this.generation++;
     const token = this.token;
     if (!token) { await this.cleanup; return; }
-    const abort = this.abort;
-    // 保留 token 至脚本返回，清理过程中不接受第二次发送。
-    if (!this.web.isDestroyed()) {
-      let timeout: ReturnType<typeof setTimeout> | undefined;
-      const unconfirmed = new Promise<WebSendResult>(resolve => { timeout = setTimeout(() => {
-        this.cancellationFailed = true;
-        resolve({ ok: false, error: '网页取消状态未确认，自动发送已停止', uncertain: true, transportStarted: true, stage: 'unknown', cancellation: 'unknown' });
-      }, 1000); });
-      this.cleanup = Promise.race([Promise.resolve().then(() => this.web.executeJavaScriptInIsolatedWorld(COMPOSER_SEND_WORLD, [{ code: cancelScript(token) }])), unconfirmed]).then(result => {
-        const outcome = result && typeof result === 'object' && 'ok' in result ? result as WebSendResult : { ok: false, error: '网页已变化，自动发送已取消', uncertain: true, transportStarted: true, stage: 'unknown' as const, cancellation: 'unknown' as const };
-        if (outcome.cancellation === 'unknown') this.cancellationFailed = true;
-        this.cancellation = { token, result: outcome };
-        traceCollection('composer.cancel-result', { stage: outcome.stage, cancellation: outcome.cancellation ?? 'unknown', uncertain: outcome.uncertain === true });
-        abort?.(outcome);
-      }).catch(() => { this.cancellationFailed = true; const result: WebSendResult = { ok: false, error: '网页检查失败，自动发送已取消', uncertain: true, transportStarted: true, stage: 'unknown', cancellation: 'unknown' }; this.cancellation = { token, result }; abort?.(result); }).finally(() => clearTimeout(timeout));
+    if (this.cancelOperation?.token === token) { await this.cancelOperation.promise; return; }
+    const abort = this.abort, binding = this.tokenDocument;
+    if (!binding) {
+      const outcome: WebSendResult = { ok: false, error: '文档核验期间已取消，未发送', transportStarted: false, stage: 'preflight', cancellation: 'not_clicked' };
+      this.cancellation = { token, result: outcome }; abort?.(outcome); return;
     }
-    else abort?.({ ok: false, error: '网页已关闭，自动发送已取消', uncertain: true });
+    const { nonce, revision } = binding;
+    const activeDocument = () => !this.disposed && this.documentRevision === revision && this.documentNonce === nonce;
+    const safe = (result: WebSendResult | undefined) => result?.cancellation === 'not_clicked' && !result.uncertain;
+    const normalize = (result: unknown): WebSendResult => result && typeof result === 'object' && 'ok' in result ? result as WebSendResult
+      : { ok: false, error: '网页已变化，自动发送已取消', uncertain: true, transportStarted: true, stage: 'unknown', cancellation: 'unknown' };
+    let late: WebSendResult | undefined;
+    const recover = () => {
+      if (activeDocument() && safe(late) && this.cancellationBlock?.token === token && this.cancellationBlock.nonce === nonce) {
+        this.cancellationBlock = undefined; traceCollection('composer.cancellation-recovered', { reason: 'confirmed-cleanup' });
+      }
+    };
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const raw = Promise.resolve().then(() => this.web.isDestroyed() ? false
+      : this.web.executeJavaScriptInIsolatedWorld(COMPOSER_SEND_WORLD, [{ code: cancelScript(token, nonce) }])).then(normalize, () => normalize(false));
+    // 原取消结论有界返回；迟到证据只解除对应旧阻断，不修改旧批结果，也不启动任何发送。
+    void raw.then(result => { late = result; recover(); });
+    const unconfirmed = new Promise<WebSendResult>(resolve => { timeout = setTimeout(() => resolve({ ok: false,
+      error: '网页取消状态未确认，自动发送已停止', uncertain: true, transportStarted: true, stage: 'unknown', cancellation: 'unknown' }), 1000); });
+    this.cleanup = Promise.race([raw, unconfirmed]).then(outcome => {
+      if (activeDocument() && !safe(outcome)) {
+        this.cancellationBlock ??= { token, nonce, revision, reason: `${outcome.stage ?? 'unknown'}：${(outcome.error ?? '取消或清理状态未知').replace(/[\r\n]/g, ' ').slice(0, 160)}` };
+        recover();
+      }
+      this.cancellation = { token, result: outcome };
+      traceCollection('composer.cancel-result', { stage: outcome.stage, cancellation: outcome.cancellation ?? 'unknown', uncertain: outcome.uncertain === true });
+      abort?.(outcome);
+    }).finally(() => clearTimeout(timeout));
+    this.cancelOperation = { token, promise: this.cleanup };
     await this.cleanup;
   }
 
@@ -577,6 +662,9 @@ export class WebComposerSender {
     this.web.removeListener('did-start-navigation', this.navigating);
     this.web.removeListener('did-navigate-in-page', this.inPage);
     this.web.removeListener('destroyed', this.destroyed);
+    this.web.removeListener('did-frame-navigate', this.documentNavigated);
+    this.web.removeListener('did-frame-finish-load', this.documentFinished);
+    this.web.removeListener('did-fail-load', this.documentFailed);
     await this.cancel();
   }
 }

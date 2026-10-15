@@ -17,5 +17,6 @@ export type FilePreviewResult =
   | { ok: false; error: string };
 
 export const FILE_PREVIEW_BYTE_LIMIT = 32 * 1024 * 1024;
+export const DOCUMENT_PREVIEW_BYTE_LIMIT = 128 * 1024 * 1024;
 export const DOCX_EXPANDED_BYTE_LIMIT = 100 * 1024 * 1024;
 export const DOCX_ENTRY_LIMIT = 5_000;

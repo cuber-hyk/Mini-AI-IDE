@@ -26,13 +26,14 @@ app.setPath('userData', path.join(directory, 'profile'));
 app.disableHardwareAcceleration();
 app.on('window-all-closed', () => {});
 const results = [], screenshots = [], network = [];
+let resultRendering;
 let window;
 const deadline = setTimeout(() => finish(new Error('工具布局验证超过 90 秒')), 90000);
 
 function finish(error) {
   clearTimeout(deadline);
   const report = {
-    ok: !error && results.every(item => item.pass), directory, results, screenshots, network,
+    ok: !error && results.every(item => item.pass), directory, results, screenshots, network, resultRendering,
     scope: '本地离线 Electron 渲染、DOM 焦点与 Escape 处理；不代表人工键盘、官网或真实工具验收。',
     error: error && String(error.stack || error),
   };
@@ -40,7 +41,7 @@ function finish(error) {
   console.log(JSON.stringify({
     ok: report.ok, checks: results.length, passed: results.filter(item => item.pass).length,
     failures: results.filter(item => !item.pass), screenshots, report: path.join(directory, 'report.json'),
-    network, error: report.error,
+    network, resultRendering, error: report.error,
   }, null, 2));
   app.exit(report.ok ? 0 : 1);
 }
@@ -103,6 +104,7 @@ function setupFixture() {
   };
   window.toolProbe = {
     longPath, calls,
+    publish(next) { state = next; receive(state); },
     state(kind) {
       state = { ...base, results: kind === 'empty' ? [] : kind === 'background' ? [...ordinary, background] : ordinary,
         canUndo: !['no-undo', 'empty'].includes(kind), hasRunningProcesses: kind === 'background' };
@@ -111,6 +113,65 @@ function setupFixture() {
     },
   };
   document.getElementById('tool-workspace').hidden = false;
+}
+
+async function measureResultRendering() {
+  const originalCreate = document.createElement, originalStringify = JSON.stringify;
+  let created = 0, fullBatch = 0, fullResult = 0, serializedCharacters = 0;
+  document.createElement = function (...args) { created += 1; return originalCreate.apply(this, args); };
+  JSON.stringify = function (value, ...args) {
+    const text = originalStringify.call(this, value, ...args);
+    const batch = Array.isArray(value) && Array.isArray(value[0]) && value[0].some(item => item && item.batch_id === 'performance-probe');
+    const result = value && value.batch_id === 'performance-probe' && value.tool;
+    if (batch) fullBatch += 1;
+    if (result) fullResult += 1;
+    if (batch || result) serializedCharacters += text.length;
+    return text;
+  };
+  const snapshot = () => ({ created, fullBatch, fullResult, serializedCharacters });
+  const delta = before => Object.fromEntries(Object.entries(snapshot()).map(([key, value]) => [key, value - before[key]]));
+  const settle = () => new Promise(resolve => setTimeout(resolve, 10));
+  const state = { config: { permission: 'ask', automatic: false }, results: [], busy: false, message: '离线性能计数', canUndo: false };
+  const rows = Array.from({ length: 20 }, (_, index) => ({
+    batch_id: 'performance-probe', request_id: 'large-' + index, tool: 'read_file', status: 'done', data: { path: 'sample-' + index, text: 'x'.repeat(131072) },
+  }));
+  try {
+    window.toolProbe.publish(state); const beforeInitial = snapshot();
+    window.toolProbe.publish({ ...state, results: structuredClone(rows) });
+    const initial = delta(beforeInitial);
+    const items = [...document.querySelectorAll('#tool-results > details')];
+    const beforeClone = snapshot();
+    for (let index = 0; index < 50; index++) window.toolProbe.publish({ ...state, results: structuredClone(rows), message: '进度 ' + index });
+    const clonedBroadcasts = delta(beforeClone);
+    items[0].open = true; await settle();
+    const body = document.querySelector('#tool-results > details pre');
+    const selectedText = body.firstChild;
+    const selection = getSelection(); const range = document.createRange(); range.setStart(selectedText, 0); range.setEnd(selectedText, 15);
+    selection.removeAllRanges(); selection.addRange(range);
+    items[0].querySelector('summary').focus();
+    const selected = selection.toString(), focused = document.activeElement;
+    let replacedRows = 0;
+    const beforeProgress = snapshot();
+    for (let index = 0; index < 20; index++) {
+      const next = structuredClone(rows); next[1].status = index % 2 ? 'done' : 'failed';
+      window.toolProbe.publish({ ...state, results: next });
+      replacedRows += items.filter((item, position) => document.querySelectorAll('#tool-results > details')[position] !== item).length;
+    }
+    const otherRowProgress = delta(beforeProgress);
+    const preserved = { nodes: replacedRows === 0, focused: document.activeElement === focused, selection: selection.toString() === selected, body: document.querySelector('#tool-results > details pre') === body };
+    const latest = structuredClone(rows); latest[0].data.text = '<img src=x onerror="throw 1">latest';
+    const beforeChanged = snapshot(); window.toolProbe.publish({ ...state, results: latest });
+    const changedOpenResult = delta(beforeChanged);
+    const current = document.querySelector('#tool-results > details');
+    const safeLatest = JSON.parse(current.querySelector('pre').textContent).data.text === latest[0].data.text && !current.querySelector('img');
+    current.open = false; await settle();
+    const releasedClosedBody = !current.querySelector('pre');
+    window.toolProbe.publish({ ...state, results: [{ ...rows[0], batch_id: 'next-batch' }] });
+    const freshBatchClosed = !document.querySelector('#tool-results > details').open && !current.isConnected;
+    return { rows: 20, charactersPerOutput: 131072, cloneBroadcasts: 50, progressBroadcasts: 20, initial, clonedBroadcasts, otherRowProgress, changedOpenResult, replacedRows, preserved, safeLatest, releasedClosedBody, freshBatchClosed };
+  } finally {
+    document.createElement = originalCreate; JSON.stringify = originalStringify;
+  }
 }
 
 function inspect(width, phase) {
@@ -244,6 +305,25 @@ app.whenReady().then(async () => {
   await execute('window.toolProbe.state("batch-error")'); await settle();
   results.push(...await execute('(' + inspect.toString() + ')(240,"batch-error")'));
   check('仅点击执行、复制与中断的内存替身，未调用其他桥', await execute('window.toolProbe.calls.length === 3 && window.toolProbe.calls.every(name => ["executeToolJson","copyToolResults","stopToolCommand"].includes(name))'));
+  const current = await execute('(' + measureResultRendering.toString() + ')()');
+  const baselineWindow = new BrowserWindow({ show: false, width: 1220, height: 800,
+    webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } });
+  try {
+    await baselineWindow.loadFile(html);
+    await baselineWindow.webContents.executeJavaScript('(' + setupFixture.toString() + ')()');
+    const baselineRevision = '5286f26628e03e71d08c1bdcba8d62ecf3011c48';
+    const baselineHarness = require('node:child_process').execFileSync('git', ['show', baselineRevision + ':src/renderer/toolHarness.js'], { cwd: root, encoding: 'utf8', windowsHide: true });
+    for (const name of ['toolResultPresentation', 'toolExecutionClock', 'toolPanelLayout', 'toolJsonPanel', 'toolAttention', 'toolCompletionSound', 'toolHarness']) {
+      await baselineWindow.webContents.executeJavaScript(name === 'toolHarness' ? baselineHarness : fs.readFileSync(path.join(root, 'src/renderer/' + name + '.js'), 'utf8'));
+    }
+    await baselineWindow.webContents.executeJavaScript('new Promise(resolve => setTimeout(resolve, 20))');
+    resultRendering = { baselineRevision, baseline: await baselineWindow.webContents.executeJavaScript('(' + measureResultRendering.toString() + ')()'), current };
+  } finally { baselineWindow.destroy(); }
+  check('大结果折叠时不创建正文或序列化整批', current.initial.fullResult === 0 && current.initial.fullBatch === 0);
+  check('50次克隆广播不创建节点或序列化整批', current.clonedBroadcasts.created === 0 && current.clonedBroadcasts.fullBatch === 0 && current.clonedBroadcasts.fullResult === 0);
+  check('20次其他行进度保持节点、焦点与选区且不序列化未变详情', Object.values(current.preserved).every(Boolean) && current.otherRowProgress.fullBatch === 0 && current.otherRowProgress.fullResult === 0);
+  check('展开行变化只序列化自身并安全显示最新输出', current.changedOpenResult.fullResult === 1 && current.changedOpenResult.fullBatch === 0 && current.safeLatest);
+  check('收起移除大正文且新批不继承展开状态', current.releasedClosedBody && current.freshBatchClosed);
   check('离线验证没有网络请求', network.length === 0);
   finish();
 }).catch(finish);

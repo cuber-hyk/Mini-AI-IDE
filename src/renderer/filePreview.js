@@ -1,13 +1,68 @@
 /* 本地附件只读呈现；文件读取和外部打开仍由主进程负责。 */
 (function () {
   'use strict';
+  const scripts = new Map();
+  function previewScript(path, ready) {
+    if (ready()) return Promise.resolve();
+    if (!scripts.has(path)) {
+      const loading = new Promise(function (resolve, reject) {
+        const script = document.createElement('script'); script.src = path;
+        function failed(message) { script.remove(); reject(new Error(message + path)); }
+        script.onload = function () {
+          if (ready()) resolve();
+          else failed('预览组件不可用：');
+        };
+        script.onerror = function () { failed('预览组件加载失败：'); };
+        document.head.appendChild(script);
+      }).catch(function (error) {
+        scripts.delete(path);
+        throw error;
+      });
+      scripts.set(path, loading);
+    }
+    return scripts.get(path);
+  }
   let pdfLibrary;
   function pdfjs() {
-    if (!pdfLibrary) pdfLibrary = import('./vendor/pdfjs/pdf.mjs').then(function (library) {
+    if (!pdfLibrary) pdfLibrary = Promise.all([
+      previewScript('./filePreviewPdfResources.js', function () { return Boolean(window.filePreviewPdfResources); }),
+      import('./vendor/pdfjs/pdf.mjs')
+    ]).then(function (loaded) {
+      const library = loaded[1];
       library.GlobalWorkerOptions.workerSrc = new URL('./vendor/pdfjs/pdf.worker.mjs', document.baseURI).href;
       return library;
+    }).catch(function (error) {
+      pdfLibrary = null;
+      throw error;
     });
     return pdfLibrary;
+  }
+  const wordModules = new Map(); let moduleAttempt = 0; let zipRegistered = false;
+  function wordModule(path, ready) {
+    if (!wordModules.has(path)) {
+      const loading = new Promise(function (resolve, reject) {
+        if (!window.require || !window.require.config || !window.require.define) throw new Error('Word 预览模块加载器不可用');
+        // Monaco 缓存失败模块；重开失败组件时换专用 ID，保留编辑器加载状态。
+        const id = 'mini-ai-file-preview/' + (++moduleAttempt);
+        const paths = {}; paths[id] = path;
+        window.require.config({ paths });
+        window.require([id], function (library) {
+          if (ready(library)) resolve(library);
+          else reject(new Error('Word 预览组件不可用：' + path));
+        }, reject);
+      }).catch(function (error) { wordModules.delete(path); throw error; });
+      wordModules.set(path, loading);
+    }
+    return wordModules.get(path);
+  }
+  async function wordLibraries() {
+    const zip = await wordModule('./vendor/jszip.min', function (library) { return typeof library === 'function'; });
+    // DOCX 的 UMD 模块声明固定的 jszip 依赖，仅注册已经成功加载的导出。
+    if (!zipRegistered) { window.require.define('jszip', [], function () { return zip; }); zipRegistered = true; }
+    return Promise.all([
+      wordModule('./vendor/docx-preview.min', function (library) { return Boolean(library && library.renderAsync); }),
+      wordModule('./vendor/purify.min', function (library) { return Boolean(library && library.sanitize); })
+    ]);
   }
   window.createFilePreview = function (options) {
     const host = options.host;
@@ -216,11 +271,11 @@
           const loaded = await task.promise; if (epoch !== generation) return;
           pdf = loaded; page = Math.min(page, pdf.numPages); await paintPdf();
         } else if (doc.kind === 'docx') {
+          const libraries = await wordLibraries(); if (epoch !== generation) return;
           const body = document.createElement('div'); const styles = document.createElement('div');
-          if (!window.docx || !window.DOMPurify) throw new Error('Word 预览组件未加载');
-          await window.docx.renderAsync(doc.preview.bytes.slice(), body, styles, { useBase64URL: true, renderAltChunks: false, ignoreWidth: false });
+          await libraries[0].renderAsync(doc.preview.bytes.slice(), body, styles, { useBase64URL: true, renderAltChunks: false, ignoreWidth: false });
           if (epoch !== generation) return;
-          const sanitized = window.DOMPurify.sanitize(body, { RETURN_DOM: true, FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'svg', 'form', 'input', 'button', 'link', 'meta', 'base', 'a'], FORBID_ATTR: ['srcset', 'formaction'] });
+          const sanitized = libraries[1].sanitize(body, { RETURN_DOM: true, FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'svg', 'form', 'input', 'button', 'link', 'meta', 'base', 'a'], FORBID_ATTR: ['srcset', 'formaction'] });
           const first = sanitized.querySelector('section.docx');
           if (first && first.style.width) {
             const parsed = /^([\d.]+)(pt|px|in|cm|mm)$/.exec(first.style.width);

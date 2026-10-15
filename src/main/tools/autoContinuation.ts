@@ -146,7 +146,7 @@ export class AutoContinuation {
       }
       this.pending = undefined;
       if (result.ok && !pending.corrective) { this.consecutiveBatchErrors = 0; this.correctiveReservations.clear(); }
-      this.change(result.ok ? { phase: 'waiting_reply', message: '结果已发送，等待 AI 回复' } : { phase: 'paused', message: (result.uncertain ? '发送结果无法确认，不会重复发送：' : '自动发送暂停：') + (result.error || '请检查网页') });
+      this.change(result.ok ? { phase: 'waiting_reply', message: '结果已发送，等待 AI 回复' } : { phase: 'paused', message: (result.blockedByPreviousCancellation && result.transportStarted === false ? '本批未发送：' : result.uncertain ? '发送结果无法确认，不会重复发送：' : '自动发送暂停：') + (result.error || '请检查网页') });
     } catch (error) {
       if (reservation) this.correctiveReservations.delete(reservation);
       if (this.disposed || generation !== this.generation || this.pending !== pending) return;

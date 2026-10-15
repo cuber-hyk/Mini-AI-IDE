@@ -48,7 +48,7 @@
     let undoing = false;
     let localMessage = '';
     let localError = false;
-    let resultSignature = '';
+    const resultRows = new Map();
     let completionBaseline = false;
     let lastCompletionId;
     let feedbackTimer;
@@ -135,68 +135,109 @@
       if (state.config.completionSound) void playCompletionSound(completion.id);
     }
 
-    function renderResults() {
-      const nextSignature = JSON.stringify([state.results, state.batchError, Array.from(stopping)]);
-      if (nextSignature === resultSignature) return;
-      resultSignature = nextSignature;
-      const openItems = new Set(Array.from(results.children).filter(function (item) { return item.open; }).map(function (item) { return item.dataset.key; }));
-      results.replaceChildren();
-      const timedItems = [];
-      if (state.batchError) {
-        const item = document.createElement('details');
-        item.className = 'tool-result tool-batch-error'; item.dataset.key = 'batch-error'; item.open = true;
-        const summary = document.createElement('summary');
-        const label = document.createElement('span'); label.className = 'tool-result-label'; label.textContent = '批次校验';
-        const status = document.createElement('span'); status.className = 'tool-result-status'; status.dataset.status = 'failed'; status.textContent = '格式错误';
-        const detail = document.createElement('span'); detail.className = 'tool-result-detail'; detail.textContent = '未执行任何工具';
-        summary.appendChild(label); summary.appendChild(status); summary.appendChild(detail);
-        const body = document.createElement('pre'); body.textContent = JSON.stringify({ batch_error: state.batchError }, null, 2);
-        item.appendChild(summary); item.appendChild(body); results.appendChild(item);
-      }
-      state.results.forEach(function (result) {
-        const item = document.createElement('details');
-        item.className = 'tool-result';
-        item.dataset.key = JSON.stringify([result.batch_id, result.request_id]);
-        item.open = openItems.has(item.dataset.key);
-        const summary = document.createElement('summary');
-        const status = document.createElement('span');
-        status.className = 'tool-result-status';
-        const processStatus = result.tool === 'run_command' && result.status === 'done' && result.data && result.data.status;
-        const displayedStatus = processStatus === 'stopped' ? (result.data.timed_out ? 'failed' : 'cancelled') : ['running', 'failed'].includes(processStatus) ? processStatus : result.status;
-        status.dataset.status = displayedStatus;
-        const statusText = statusLabels[displayedStatus] || displayedStatus;
-        status.textContent = displayedStatus === 'skipped_dependency' ? '已跳过' : displayedStatus === 'unknown' ? '结果未知' : statusText;
-        status.title = statusText;
-        const time = document.createElement('span'); time.className = 'tool-result-time';
-        timedItems.push({ result: result, node: time });
-        const description = window.describeToolResult(result);
-        const tool = document.createElement('span'); tool.className = 'tool-result-label';
-        tool.textContent = description.label;
-        summary.title = [description.label, description.target, description.detail].filter(Boolean).join(' · ');
-        const target = document.createElement('span'); target.className = 'tool-result-target';
-        target.textContent = description.target; target.title = description.target;
-        const detail = document.createElement('span'); detail.className = 'tool-result-detail';
-        detail.textContent = description.detail; detail.title = description.detail; detail.dataset.important = String(description.detailImportant);
-        summary.appendChild(tool); summary.appendChild(target); summary.appendChild(time); summary.appendChild(detail); summary.appendChild(status);
-        if (result.tool === 'run_command' && result.data && result.data.process_id && (result.data.status === 'running' || result.data.cleanup_pending)) {
-          const stop = document.createElement('button');
-          stop.type = 'button'; stop.className = 'ui-button tool-command-stop';
-          stop.disabled = stopping.has(JSON.stringify([result.batch_id, result.request_id, result.data.process_id]));
-          stop.title = stop.disabled ? '正在中断此命令及其子进程…' : '强制中断此命令及其子进程';
-          stop.setAttribute('aria-label', stop.title);
-          stop.setAttribute('aria-busy', String(stop.disabled));
-          stop.addEventListener('click', function (event) {
-            event.preventDefault(); event.stopPropagation();
-            return stopCommand(result);
-          });
-          summary.appendChild(stop);
-        }
-        const body = document.createElement('pre');
-        // 文件内容、命令输出与报错均为不可信普通文本，不解析 HTML 或触发工具。
-        body.textContent = JSON.stringify(result, null, 2);
-        item.appendChild(summary); item.appendChild(body); results.appendChild(item);
+    // IPC 每次克隆状态；逐字段比较 JSON 数据，避免为未变的大输出再分配整批字符串。
+    function sameResult(left, right) {
+      if (left === right) return true;
+      if (!left || !right || typeof left !== 'object' || typeof right !== 'object' || Array.isArray(left) !== Array.isArray(right)) return false;
+      const keys = Object.keys(left);
+      return keys.length === Object.keys(right).length && keys.every(function (key) {
+        return Object.hasOwn(right, key) && sameResult(left[key], right[key]);
       });
-      clock.replace(timedItems);
+    }
+
+    function renderResultBody(row) {
+      if (!row.item.open) {
+        if (row.body) { row.body.remove(); row.body = null; }
+        return;
+      }
+      if (!row.body) {
+        row.body = document.createElement('pre');
+        row.item.appendChild(row.body);
+      }
+      // 文件内容、命令输出与报错均为不可信普通文本，不解析 HTML 或触发工具。
+      row.body.textContent = JSON.stringify(row.result, null, 2);
+    }
+
+    function createResultRow(key, batchError) {
+      const item = document.createElement('details');
+      item.className = 'tool-result' + (batchError ? ' tool-batch-error' : '');
+      item.dataset.key = key;
+      item.open = batchError;
+      const summary = document.createElement('summary');
+      const row = { item, summary, result: null, body: null, stop: null };
+      ['label', 'target', 'time', 'detail', 'status'].forEach(function (name) {
+        row[name] = document.createElement('span'); row[name].className = 'tool-result-' + name;
+        summary.appendChild(row[name]);
+      });
+      item.appendChild(summary);
+      item.addEventListener('toggle', function () {
+        // 同一轮多个 toggle 可能合并；只按最终 open 状态更新正文。
+        if (!item.open || !row.body) renderResultBody(row);
+      });
+      return row;
+    }
+
+    function updateResultStop(row) {
+      const result = row.result;
+      const canStop = result.tool === 'run_command' && result.data && result.data.process_id && (result.data.status === 'running' || result.data.cleanup_pending);
+      if (!canStop) {
+        if (row.stop) { row.stop.remove(); row.stop = null; }
+        return;
+      }
+      if (!row.stop) {
+        row.stop = document.createElement('button'); row.stop.type = 'button'; row.stop.className = 'ui-button tool-command-stop';
+        row.stop.addEventListener('click', function (event) {
+          event.preventDefault(); event.stopPropagation();
+          return stopCommand(row.result);
+        });
+        row.summary.appendChild(row.stop);
+      }
+      row.stop.disabled = stopping.has(JSON.stringify([result.batch_id, result.request_id, result.data.process_id]));
+      row.stop.title = row.stop.disabled ? '正在中断此命令及其子进程…' : '强制中断此命令及其子进程';
+      row.stop.setAttribute('aria-label', row.stop.title);
+      row.stop.setAttribute('aria-busy', String(row.stop.disabled));
+    }
+
+    function renderResults() {
+      const ordered = [];
+      let timingChanged = false;
+      function update(key, result, batchError) {
+        let row = resultRows.get(key);
+        if (!row) { row = createResultRow(key, batchError); resultRows.set(key, row); timingChanged = true; }
+        const changed = !sameResult(row.result, result);
+        row.result = result;
+        if (changed) {
+          timingChanged = true;
+          if (batchError) {
+            row.label.textContent = '批次校验'; row.status.dataset.status = 'failed'; row.status.textContent = '格式错误'; row.detail.textContent = '未执行任何工具';
+          } else {
+            const processStatus = result.tool === 'run_command' && result.status === 'done' && result.data && result.data.status;
+            const displayedStatus = processStatus === 'stopped' ? (result.data.timed_out ? 'failed' : 'cancelled') : ['running', 'failed'].includes(processStatus) ? processStatus : result.status;
+            row.status.dataset.status = displayedStatus;
+            const statusText = statusLabels[displayedStatus] || displayedStatus;
+            row.status.textContent = displayedStatus === 'skipped_dependency' ? '已跳过' : displayedStatus === 'unknown' ? '结果未知' : statusText;
+            row.status.title = statusText;
+            const description = window.describeToolResult(result);
+            row.label.textContent = description.label;
+            row.summary.title = [description.label, description.target, description.detail].filter(Boolean).join(' · ');
+            row.target.textContent = description.target; row.target.title = description.target;
+            row.detail.textContent = description.detail; row.detail.title = description.detail; row.detail.dataset.important = String(description.detailImportant);
+          }
+          renderResultBody(row);
+        }
+        if (!batchError) updateResultStop(row);
+        ordered.push(row);
+      }
+      if (state.batchError) update('batch-error', { batch_error: state.batchError }, true);
+      state.results.forEach(function (result) { update(JSON.stringify([result.batch_id, result.request_id]), result, false); });
+      const keys = new Set(ordered.map(function (row) { return row.item.dataset.key; }));
+      resultRows.forEach(function (row, key) {
+        if (!keys.has(key)) { row.item.remove(); resultRows.delete(key); timingChanged = true; }
+      });
+      ordered.forEach(function (row, index) {
+        if (results.children[index] !== row.item) results.insertBefore(row.item, results.children[index] || null);
+      });
+      if (timingChanged) clock.replace(ordered.filter(function (row) { return row.result.tool; }).map(function (row) { return { result: row.result, node: row.time }; }));
     }
 
     function render() {

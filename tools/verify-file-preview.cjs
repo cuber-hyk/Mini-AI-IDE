@@ -1,5 +1,5 @@
 /** 原生 Electron 离线附件预览验收；仅加载临时 fixture，不连接官网或用户项目。 */
-const { app, BrowserWindow, nativeImage } = require('electron');
+const { app, BrowserWindow, nativeImage, ipcMain } = require('electron');
 const fs = require('node:fs/promises');
 const fsSync = require('node:fs');
 const os = require('node:os');
@@ -12,12 +12,13 @@ const directory = fsSync.mkdtempSync(path.join(os.tmpdir(), 'mini-file-preview-p
 app.setPath('userData', path.join(directory, 'user-data'));
 app.disableHardwareAcceleration();
 const checks = []; const screenshots = []; const networkRequests = []; const rendererErrors = [];
+const previewResourceRequests = []; const expectedLoadErrors = []; let failedPurifyRequests = 0;
 let window;
 const deadline = setTimeout(() => finish(new Error('附件预览离线验收超过 30 秒')), 30_000);
 
 function finish(error) {
   clearTimeout(deadline);
-  console.log(JSON.stringify({ ok: !error, checks, screenshots, networkRequests, rendererErrors, directory, error: error && String(error.stack || error) }, null, 2));
+  console.log(JSON.stringify({ ok: !error, checks, screenshots, networkRequests, rendererErrors, previewResourceRequests, expectedLoadErrors, directory, error: error && String(error.stack || error) }, null, 2));
   app.exit(error ? 1 : 0);
 }
 
@@ -28,7 +29,7 @@ function check(name, observed, detail) {
   if (!observed) throw new Error(name);
 }
 
-function makePdf() {
+function makePdf(paddingBytes = 0) {
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
     '<< /Type /Pages /Kids [3 0 R 4 0 R] /Count 2 >>',
@@ -37,7 +38,7 @@ function makePdf() {
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
   ];
   for (const text of ['Local PDF page one', 'Local PDF page two']) {
-    const content = `BT /F1 24 Tf 35 225 Td (${text}) Tj ET\n0.2 0.5 0.8 rg 40 65 220 100 re f\n`;
+    const content = `BT /F1 24 Tf 35 225 Td (${text}) Tj ET\n0.2 0.5 0.8 rg 40 65 220 100 re f\n` + (objects.length === 5 ? ' '.repeat(paddingBytes) : '');
     objects.push(`<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}endstream`);
   }
   let pdf = '%PDF-1.7\n'; const offsets = [0];
@@ -59,9 +60,9 @@ function makePng() {
   return nativeImage.createFromBitmap(pixels, { width, height }).toPNG();
 }
 
-async function makeDocx(png) {
+async function makeDocx(png, paddingBytes = 0) {
   const zip = new JSZip();
-  zip.file('[Content_Types].xml', '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>');
+  zip.file('[Content_Types].xml', '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Default Extension="bin" ContentType="application/octet-stream"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>');
   zip.file('_rels/.rels', '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rDoc" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>');
   zip.file('word/_rels/document.xml.rels', '<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rImage" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/image.png"/><Relationship Id="rLink" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="https://example.invalid/never-request" TargetMode="External"/></Relationships>');
   zip.file('word/media/image.png', png);
@@ -72,6 +73,7 @@ async function makeDocx(png) {
     <w:p><w:r><w:drawing><wp:inline><wp:extent cx="3657600" cy="1828800"/><wp:docPr id="1" name="Embedded local image"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:nvPicPr><pic:cNvPr id="1" name="image.png"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rImage"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="3657600" cy="1828800"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>
     <w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="720" w:right="720" w:bottom="720" w:left="720"/></w:sectPr>
   </w:body></w:document>`);
+  if (paddingBytes) zip.file('word/media/unused.bin', Buffer.alloc(paddingBytes), { compression: 'STORE' });
   return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
 }
 
@@ -81,15 +83,30 @@ app.whenReady().then(async () => {
   const policy = /<meta\s+http-equiv="Content-Security-Policy"\s+content="([^"]+)"\s*\/>/m.exec(source)?.[1];
   if (!policy) throw new Error('无法读取编辑器 CSP');
   const page = path.join(directory, 'preview.html');
-  const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${policy}"><base href="${pathToFileURL(rendererDirectory + path.sep).href}"><link rel="stylesheet" href="ui-tokens.css"><link rel="stylesheet" href="ui.css"><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="filePreview.css"><style>html,body{margin:0;width:100%;height:100%;font:14px system-ui;background:var(--ui-bg,#fafafa)}#file-preview{position:relative;width:100%;height:600px}</style></head><body><div id="file-preview" class="file-preview"></div><script src="vendor/jszip.min.js"></script><script src="vendor/docx-preview.min.js"></script><script src="vendor/purify.min.js"></script><script src="filePreviewPdfResources.js"></script><script src="filePreview.js"></script><script>window.externalOpenCount=0;window.previewZoomNotifications=0;window.preview=window.createFilePreview({host:document.getElementById('file-preview'),openExternal:async function(){window.externalOpenCount++;return {ok:true}}});window.editorBridge.onFilePreviewZoom(function(input){window.previewZoomNotifications++;window.preview.zoomFromWheel(input)});</script></body></html>`;
+  const html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${policy}"><base href="${pathToFileURL(rendererDirectory + path.sep).href}"><link rel="stylesheet" href="ui-tokens.css"><link rel="stylesheet" href="ui.css"><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="filePreview.css"><style>html,body{margin:0;width:100%;height:100%;font:14px system-ui;background:var(--ui-bg,#fafafa)}#file-preview{position:relative;width:100%;height:600px}</style></head><body><div id="file-preview" class="file-preview"></div><script src="filePreview.js"></script><script src="vendor/monaco/vs/loader.js"></script><script>window.externalOpenCount=0;window.previewZoomNotifications=0;window.preview=window.createFilePreview({host:document.getElementById('file-preview'),openExternal:async function(){window.externalOpenCount++;return {ok:true}}});window.editorBridge.onFilePreviewZoom(function(input){window.previewZoomNotifications++;window.preview.zoomFromWheel(input)});</script></body></html>`;
   await fs.writeFile(page, html);
   window = new BrowserWindow({ show: false, width: 920, height: 640, webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true, offscreen: true, preload: path.resolve(__dirname, '../dist/main/preload.js') } });
+  const { FileService } = require('../dist/main/fileService');
+  const { registerFilePreviewIpc } = require('../dist/main/filePreviewIpc');
+  const files = new FileService(); files.setRoot(directory);
+  registerFilePreviewIpc(ipcMain, window.webContents, files);
   let cursorPoint = { x: -1, y: -1 };
   const { registerFilePreviewZoom } = require('../dist/main/filePreviewZoom');
   registerFilePreviewZoom(window.webContents, () => window.getContentBounds(), () => cursorPoint);
-  window.webContents.session.webRequest.onBeforeRequest({ urls: ['http://*/*', 'https://*/*'] }, (details, reply) => { networkRequests.push(details.url); reply({ cancel: true }); });
+  window.webContents.session.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, (details, reply) => {
+    if (/^https?:/.test(details.url)) { networkRequests.push(details.url); reply({ cancel: true }); return; }
+    if (/\/(?:jszip|docx-preview|purify)\.min\.js$/.test(details.url)) {
+      previewResourceRequests.push(details.url);
+      if (details.url.endsWith('/purify.min.js') && failedPurifyRequests === 0) { failedPurifyRequests += 1; reply({ cancel: true }); return; }
+    }
+    reply({ cancel: false });
+  });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  window.webContents.on('console-message', event => { if (event.level === 'error') rendererErrors.push(event.message); });
+  window.webContents.on('console-message', event => {
+    if (event.level !== 'error') return;
+    if (event.sourceId.endsWith('/purify.min.js') && event.message.includes('ERR_BLOCKED_BY_CLIENT')) expectedLoadErrors.push(event.message);
+    else rendererErrors.push(event.message);
+  });
   window.webContents.on('render-process-gone', (_event, details) => finish(new Error(`渲染进程退出：${details.reason}`)));
   await window.loadFile(page);
   const evaluate = code => window.webContents.executeJavaScript(code, true);
@@ -101,6 +118,10 @@ app.whenReady().then(async () => {
     throw new Error('等待预览状态超时：' + code + '\n' + await evaluate("document.querySelector('.file-preview-status')?.textContent"));
   };
   const show = async (kind, mimeType, bytes) => evaluate(`window.preview.show({path:${JSON.stringify(`fixture.${kind === 'image' ? 'png' : kind}`)},kind:${JSON.stringify(kind)},preview:{ok:true,kind:${JSON.stringify(kind)},mimeType:${JSON.stringify(mimeType)},bytes:Uint8Array.from(${JSON.stringify(Array.from(bytes))})}})`);
+  const showFile = async (name, kind, size) => {
+    const loaded = await evaluate(`(async () => {const result=await window.editorBridge.readFilePreview(${JSON.stringify(name)},${JSON.stringify(directory)});await window.preview.show({path:${JSON.stringify(name)},kind:${JSON.stringify(kind)},preview:result});return {ok:result.ok,bytes:result.ok?result.bytes.byteLength:0,error:result.ok?null:result.error};})()`);
+    check(name + ' 通过真实主进程与 IPC 完整读取超过 32 MiB 的本地附件', loaded.ok && loaded.bytes === size, loaded);
+  };
   const chooseScale = async value => {
     await evaluate(`(() => {const select=document.querySelector('select.file-preview-scale');select.focus();select.value=${JSON.stringify(String(value))};select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
     await waitFor("!document.querySelector('select.file-preview-scale').disabled");
@@ -196,11 +217,12 @@ app.whenReady().then(async () => {
   };
   const png = makePng(); const pdf = makePdf(); const docx = await makeDocx(png);
   await Promise.all([fs.writeFile(path.join(directory, 'fixture.png'), png), fs.writeFile(path.join(directory, 'fixture.pdf'), pdf), fs.writeFile(path.join(directory, 'fixture.docx'), docx)]);
-  check('真实预览 owner、preload 与供应商库加载', await evaluate("Boolean(window.preview && window.editorBridge.onFilePreviewZoom && window.docx && window.DOMPurify && window.JSZip)"));
+  check('真实预览 owner、preload 和 Monaco AMD 就绪，普通首屏不加载专用库', await evaluate("Boolean(window.preview && window.editorBridge.onFilePreviewZoom && window.define.amd && window.require.config && !window.docx && !window.DOMPurify && !window.JSZip && !window.filePreviewPdfResources)"));
   await show('image', 'image/png', png);
   await waitFor("document.querySelector('.file-preview-content img')?.naturalWidth === 640");
   check('图片成功解码且适应窗口', await evaluate("document.querySelector('.file-preview-content img').naturalHeight === 320 && !document.querySelector('[aria-label=\"放大\"]').disabled"));
   check('图片默认使用适应窗口模式', await evaluate("window.preview.captureViewState().mode === 'window'"));
+  check('图片预览不加载 PDF 或 Word 专用库', await evaluate("!window.docx && !window.DOMPurify && !window.JSZip && !window.filePreviewPdfResources"));
   await bottomBar('图片');
   await wheelZoom('图片');
   await ignoredWheel('鼠标位于底栏', '.file-preview-toolbar');
@@ -234,6 +256,7 @@ app.whenReady().then(async () => {
   await waitFor("document.querySelector('.file-preview-more').open");
   await capture('image-preview');
   await show('pdf', 'application/pdf', pdf);
+  check('首次 PDF 只加载 PDF 本地资源，不提前加载 Word 依赖', await evaluate("Boolean(window.filePreviewPdfResources && !window.docx && !window.DOMPurify && !window.JSZip)"));
   await waitFor("document.querySelector('.file-preview-pages').textContent === '1 / 2' && !document.querySelector('[aria-label=\"下一页\"]').disabled");
   check('切换附件关闭更多菜单且 PDF 默认适应宽度', await evaluate("!document.querySelector('.file-preview-more').open && window.preview.captureViewState().mode === 'width'"));
   await wheelZoom('PDF');
@@ -257,6 +280,12 @@ app.whenReady().then(async () => {
   window.setContentSize(920, 640);
   await waitFor("document.getElementById('file-preview').clientWidth >= 900");
   await show('docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', docx);
+  check('真实 AMD 首次净化库加载故障显示错误，不渲染未净化 Word', failedPurifyRequests === 1 && await evaluate("!document.querySelector('iframe') && !document.querySelector('.file-preview-status').hidden && document.querySelector('.file-preview-status').textContent.includes('预览失败')"));
+  const monacoAfterFailure = await evaluate("new Promise((resolve,reject)=>{window.require.config({paths:{vs:'./vendor/monaco/vs'}});window.require(['vs/editor/editor.main'],()=>resolve(Boolean(window.monaco.editor)),reject)})");
+  check('Word 依赖加载失败不影响真实 Monaco AMD 模块', monacoAfterFailure);
+  await show('docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', docx);
+  check('再次打开通过 AMD 重试 Word 净化库，模块导出不依赖全局变量', await evaluate("!window.JSZip && !window.docx && !window.DOMPurify && typeof window.require('jszip') === 'function'"));
+  const successfulWordRequests = previewResourceRequests.slice();
   await waitFor("Boolean(document.querySelector('iframe')?.srcdoc.includes('本地 Word 预览验收'))");
   check('Word 文字、表格、内嵌图片保留且脚本和外链不能执行', await evaluate("(() => {const f=document.querySelector('iframe'),d=new DOMParser().parseFromString(f.srcdoc,'text/html');return f.getAttribute('sandbox') === '' && d.querySelectorAll('table').length===1 && d.querySelectorAll('tr').length===2 && d.querySelector('img')?.src.startsWith('data:image/png') && !d.querySelector('script,[href],[onclick],[onload]') && d.body.textContent.includes('External link becomes plain text');})()"));
   check('Word 近似排版提示保留在底栏图标中且默认适应宽度', await evaluate("document.querySelector('.file-preview-note')?.title.includes('Word') && document.querySelector('.file-preview-status').hidden && window.preview.captureViewState().mode === 'width'"));
@@ -268,6 +297,24 @@ app.whenReady().then(async () => {
   await capture('word-preview');
   await narrow('Word', 380);
   await narrow('Word', 240);
+  await show('pdf', 'application/pdf', pdf);
+  await show('docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', docx);
+  const previewScriptCounts = await evaluate("(() => {const paths=['filePreviewPdfResources.js','vendor/jszip.min.js','vendor/docx-preview.min.js','vendor/purify.min.js'];return Object.fromEntries(paths.map(path=>[path,Array.from(document.scripts).filter(script=>script.src.endsWith('/'+path)).length]));})()");
+  check('成功后再次打开 PDF 和 Word 不增加专用脚本请求', JSON.stringify(previewResourceRequests) === JSON.stringify(successfulWordRequests) && previewScriptCounts['filePreviewPdfResources.js'] === 1, previewScriptCounts);
+  window.setContentSize(920, 640);
+  await waitFor("document.getElementById('file-preview').clientWidth >= 900");
+  const largePdf = makePdf(33 * 1024 * 1024); await fs.writeFile(path.join(directory, 'large.pdf'), largePdf);
+  await showFile('large.pdf', 'pdf', largePdf.length);
+  await waitFor("document.querySelector('.file-preview-pages').textContent === '1 / 2' && !document.querySelector('select.file-preview-scale').disabled");
+  check('超过 32 MiB PDF 的页面与文字仍正常绘制', await waitFor("(() => {const c=document.querySelector('canvas');if(!c)return false;const p=c.getContext('2d').getImageData(0,0,c.width,Math.floor(c.height/3)).data;let count=0;for(let i=0;i<p.length;i+=4)if(p[i]<100&&p[i+1]<100&&p[i+2]<100)count++;return count>50;})()"));
+  const largeDocx = await makeDocx(png, 33 * 1024 * 1024); await fs.writeFile(path.join(directory, 'large.docx'), largeDocx);
+  await showFile('large.docx', 'docx', largeDocx.length);
+  await waitFor("Boolean(document.querySelector('iframe')?.srcdoc.includes('本地 Word 预览验收'))");
+  check('超过 32 MiB Word 正文、表格和图片正常，切换已清理 PDF 画布', await evaluate("(() => {const f=document.querySelector('iframe'),d=new DOMParser().parseFromString(f.srcdoc,'text/html');return !document.querySelector('canvas') && d.body.textContent.includes('Preview text stays local.') && d.querySelector('table') && d.querySelector('img')?.src.startsWith('data:image/png') && f.getAttribute('sandbox')==='';})()"));
+  await capture('word-large-preview');
+  await show('image', 'image/png', png);
+  await waitFor("document.querySelector('.file-preview-content img')?.naturalWidth === 640");
+  check('大文档切换回图片清理 iframe 和画布，未增加 Word 专用资源请求', await evaluate("!document.querySelector('iframe,canvas')") && JSON.stringify(previewResourceRequests) === JSON.stringify(successfulWordRequests));
   await evaluate("window.preview.show({path:'unreadable.pdf',kind:'pdf',preview:{ok:false,error:'fixture read failure'}})");
   check('预览失败仍显示错误原因与系统打开入口', await evaluate("document.querySelector('.file-preview-status').textContent.includes('fixture read failure') && !document.querySelector('.file-preview-status').hidden && Boolean(document.querySelector('.file-preview-status [aria-label=\"系统应用打开\"]'))"));
   await ignoredWheel('附件读取失败状态', '.file-preview-viewport');

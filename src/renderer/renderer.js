@@ -502,6 +502,7 @@
       });
       // 选区浮层复制按钮必须等state.editor 就绪后才能建（见 setupSelectionCopyBubble 注释）
       setupSelectionCopyBubble();
+      performance.mark('mini-editor-ready');
       resolveMonacoReady();
     });
   }

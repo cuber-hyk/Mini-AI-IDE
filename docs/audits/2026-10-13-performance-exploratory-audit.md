@@ -2,7 +2,7 @@
 artifact_type: audit
 status: active
 created: 2026-10-13
-updated: 2026-10-13
+updated: 2026-10-15
 scope: "Mini-AI-IDE 启动、编辑输入、分栏布局、文件树、文档预览、工具结果与自动采集性能"
 source_of_truth: code
 ---
@@ -62,12 +62,12 @@ source_of_truth: code
 
 | ID | Severity | Status | Finding | Evidence | Owner Plan | Branch/Commit | Verification | Closeout |
 |---|---|---|---|---|---|---|---|---|
-| PERF-01 | P0 | verified | 拖动分栏时重复触发布局、同步设置写盘和原生菜单重建 | `workspaceLayout.js:55-71`；`workspaceLayoutController.ts:40-83`；`settings.ts:209-218`；`index.ts:252-254,755-857` | docs/plans/archived/2026-10-13-interaction-performance.md | codex/interaction-performance / 未提交 | 夹具600移动/60帧：写盘600→1、菜单600→0、布局600→61；回归通过 | 用户确认拖拽、重启宽度恢复通过；已验证 |
-| PERF-02 | P0 | verified | Monaco 输入变化执行全文取值、脏状态检查及标签状态上报 | `renderer.js:496-501,575-581`；`editorWorkspace.js:13-26`；`workspaceController.ts:121-127` | docs/plans/archived/2026-10-13-interaction-performance.md | codex/interaction-performance / 未提交 | 真实Monaco百万字符/20标签/100次追加：全文读取100→0、报告100→1；草稿回归通过 | 用户确认编辑/撤销/保存/切换通过；未声称输入P95 |
+| PERF-01 | P0 | verified | 拖动分栏时重复触发布局、同步设置写盘和原生菜单重建 | `workspaceLayout.js:55-71`；`workspaceLayoutController.ts:40-83`；`settings.ts:209-218`；`index.ts:252-254,755-857` | docs/plans/archived/2026-10-13-interaction-performance.md | 3b210aa；已包含于v0.4.0 | 夹具600移动/60帧：写盘600→1、菜单600→0、布局600→61；回归通过 | 用户确认拖拽、重启宽度恢复通过；已验证 |
+| PERF-02 | P0 | verified | Monaco 输入变化执行全文取值、脏状态检查及标签状态上报 | `renderer.js:496-501,575-581`；`editorWorkspace.js:13-26`；`workspaceController.ts:121-127` | docs/plans/archived/2026-10-13-interaction-performance.md | 3b210aa；已包含于v0.4.0 | 真实Monaco百万字符/20标签/100次追加：全文读取100→0、报告100→1；草稿回归通过 | 用户确认编辑/撤销/保存/切换通过；未声称输入P95 |
 | PERF-03 | P1 | open | 源码启动入口先执行完整构建 | `package.json:9-12`；`scripts/copy-static.mjs:22-47,63-73` | none；待 `/dev-plan` | none | 启动脚本确认；冷/热启动时间待测 | 未关闭；生产安装版影响未确认 |
 | PERF-04 | P1 | open | 编辑器页面加载前存在辅助页面与工具初始化串行等待 | `index.ts:449,500-522,572-574,859-883,920` | none；待 `/dev-plan` | none | 调用顺序确认；首次可编辑时间与竞态回归待测 | 未关闭；须保留 IPC 注册和加载重试 |
-| PERF-05 | P1 | open | PDF 资源表与 Word 依赖提前进入编辑器启动脚本链 | `index.html:170-176`；`filePreview.js:5-7`；只读构建产物大小记录 | none；待 `/dev-plan` | none | 静态引用与磁盘体积已核实；解析时间和堆占用待测 | 未关闭；不得破坏离线预览和内容隔离 |
-| PERF-06 | P1 | open | 工具结果变化时重新序列化结果并重建整个结果 DOM | `toolHarness.js:135-191,268-279,386` | none；待 `/dev-plan` | none | 静态调用链确认；大型结果渲染性能待测 | 未关闭；须保留原始结果完整性 |
+| PERF-05 | P1 | verified | PDF 资源表与 Word 依赖提前进入编辑器启动脚本链 | `index.html:170-176`；`filePreview.js:5-7`；只读构建产物大小记录 | docs/plans/archived/2026-10-15-preview-tool-performance.md | codex/20261015-preview-tool-performance；用户批准合并 | AMD预览22项与原生预览最终64项通过；首屏延期4,020,854字节专用脚本，真实加载故障后重开与Monaco共存通过 | 实现及原生验证闭合，用户批准当前分支合并；未新增真人实测，不声称启动提速比例 |
+| PERF-06 | P1 | verified | 工具结果变化时重新序列化结果并重建整个结果 DOM | `toolHarness.js:135-191,268-279,386` | docs/plans/archived/2026-10-15-preview-tool-performance.md | codex/20261015-preview-tool-performance；用户批准合并 | UI42项、原生240项通过；50次克隆整批序列化50→0，20次其他行进度节点创建3200→0，焦点/选区保持 | 实现及原生验证闭合，用户批准当前分支合并；原IPC与逐字段比较仍存在 |
 | PERF-07 | P2 | open | 工具历史数据变更采用全量克隆及 JSON 重写 | `tools/store.ts:84-119,163-169` | none；待 `/dev-plan` | none | 静态持久化机制确认；不同历史规模的耗时待测 | 未关闭；禁止破坏持久化去重 |
 | PERF-08 | P2 | open | 文件树刷新与单目录逐项安全路径校验可能累积等待时间 | `fileExplorer.js:34-99`；`fileService.ts:121-156`；`test/fileService.test.ts:72-80` | none；待 `/dev-plan` | none | 按需展开及串行校验已确认；大型目录性能待测 | 未关闭；必须保留符号链接与越界保护 |
 | PERF-09 | P2 | open | 官网大量 DOM 变化时的监听开销需通过采样判断 | `tools/replyChangeWatcher.ts:135-173,269-303`；`tools/autoCollector.ts:37-82` | none；待性能证据后决定 | none | 已确认事件驱动和 150ms 合并；未证明空闲高 CPU | 未关闭；仅性能采样支持后才考虑改动 |
@@ -190,7 +190,7 @@ source_of_truth: code
 
 ## Closeout
 
-本审计保持 `status: active`：PERF-01、PERF-02已完成自动化、原生离线、独立评审及用户现场验收，状态为 `verified`；对应计划已归档。PERF-03至PERF-09保持 `open`，后续是否实施按用户授权与测量决定。本次未提交、合并或发布。
+本审计保持 `status: active`：PERF-01/02已完成原先现场验收；PERF-05/06经实现、原生与自动化验证及用户批准当前分支合并，均为 `verified`，对应计划已归档。PERF-03/04/07/08/09保持 `open`，后续按用户授权与测量决定；启动计时不是PERF-04已优化的证据。本次未发布。
 
 ## 已批准实施范围（2026-10-13）
 
@@ -199,3 +199,27 @@ source_of_truth: code
 ## 实施验证补充
 
 PERF-01、PERF-02已实施并完成自动化、原生离线验证与独立评审，详见owner plan的次数对比和证据限制；用户已确认现场验收全部通过。其他七项没有实施，不因本轮成功而关闭。加载反馈改善等待界面，不证明官网网络或实际渲染速度提升。
+
+
+## 当前版本完成情况复核（2026-10-15）
+
+核对基线：master / 5286f26，package.json为0.4.0，本地v0.4.0标签指向同一提交；3b210aa是该标签的祖先，当前产品源码与标签无差异。用户已确认发布最新版；本次未查询远端Release资产或运行安装包，不把本地标签当作远端资产核验。
+
+- PERF-01、PERF-02：保持verified。当前workspaceLayout.js仍按requestAnimationFrame合并移动，workspaceLayoutController保留临时布局/最终保存和菜单语义去重；editorWorkspace仍按需取全文、按状态签名报告。布局、编辑缓冲、标签和未保存保护53项针对性回归全部通过，0失败/取消/跳过。
+- 当前次数夹具：600次移动/60帧的优化路径为写盘1次、菜单0次、布局61次、广播183次；百万字符/20标签/100次追加，全文读取100→0、状态报告和标签渲染100→1，显式取快照后读取1次。此处输入基准使用模型替身；历史计划另有真实Monaco证据，不将本次夹具称为原生输入延迟或FPS测量。
+- PERF-03：仍open。package.json的start仍先完整build；此项针对源码启动，不能作为安装版启动慢的解释。
+- PERF-04：仍open。index.ts依次等待promptView、createToolIntegration、webBarView、previewView，再加载editorView；工具integration仍等待store.ready。首次可编辑时间尚无本次实测。
+- PERF-05：仍open。index.html仍直接引入jszip、docx-preview、purify及filePreviewPdfResources；filePreview.js中的PDF主模块已有动态import，不能误记为PDF整体已懒加载或完全未懒加载。
+- PERF-06：仍open。toolHarness.js的renderResults仍对整批结果JSON.stringify生成签名，变化后replaceChildren并为每项生成完整详细JSON。新版面板的排布、摘要与计时改进不等于增量结果渲染。
+- PERF-07：仍open。ToolStore.mutate仍克隆全部data，再完整JSON序列化、临时写入和原子重命名；去重记录上限及不淘汰规则保留。
+- PERF-08：仍open。文件树refresh仍重建当前展开结构，FileService.list仍逐项await resolveSafePath；未测量大型目录时延，不削弱链接/越界防护。
+- PERF-09：仍open且须先测量。监听仍为MutationObserver与150ms事件合并；本次自动采集有限恢复解决可靠性问题，不构成CPU、内存或流式DOM性能优化的验证。
+
+结论：原九项清单完成并验收两项，其余七项尚无实施计划；两项完成数不能换算为总体性能提升百分比。当前审计继续active，沿用PERF-01至PERF-09作为唯一发现登记，不新建重复清单。建议下一阶段先处理预览专用依赖按需加载（PERF-05）与工具结果按条目更新/展开时生成详情（PERF-06）；首次可编辑时序（PERF-04）先建立里程碑计时。PERF-07/08按规模测量，PERF-09仅在Profile证实热点后改动。
+
+本次只更新本报告，不修改产品代码、安装包、用户数据或权限，不提交或推送。未运行全量测试、构建、原生GUI、CPU/堆采样或安装版冷/热启动基准；以上未测项目不宣称通过。
+
+
+## 后续实施跟踪（2026-10-15）
+
+用户同意开始预览资源按需加载与工具结果增量渲染，PERF-05/06由docs/plans/archived/2026-10-15-preview-tool-performance.md承接，最终实现、原生验证和独立评审通过。2026-10-15用户批准当前分支提交合并，未补充真人现场测试，两项按现有验证证据标记verified、计划归档；先前“七项无计划”为实施前快照。PERF-04仅增加离线启动计时，不调整顺序或认定已优化。PERF-03/07/08/09尚未实施，整体审计继续active。

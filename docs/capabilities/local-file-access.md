@@ -1,7 +1,7 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-14
+updated: 2026-10-15
 owner: 胡运宽
 source_of_truth: [src/renderer/workspaceNavigation.js, docs/adr/2026-10-07-workspace-ui-shell-layout.md, docs/adr/2026-10-02-filesystem-permission-model.md, src/main/fileService.ts, src/main/fileManagement.ts, src/main/workspaceService.ts, src/main/workspaceController.ts, src/main/editorSession.ts, src/main/settings.ts, src/shared/contract.ts, src/main/preload.ts, src/renderer/editorWorkspace.js, src/renderer/editorTabs.js, src/renderer/fileExplorer.js, src/renderer/fileIcons.js, src/renderer/fileExplorer.css, test/workspaceService.test.ts, test/fileManagement.test.ts, test/workspaceController.test.ts, test/fileExplorer.test.ts, test/fileIcons.test.ts, test/editorSession.test.ts, test/editorWorkspace.test.ts, test/fileService.test.ts, src/main/filePreview.ts, src/main/filePreviewZoom.ts, src/main/workspaceFileDrag.ts, docs/adr/2026-10-11-native-workspace-file-drag.md, test/workspaceFileDrag.test.ts, tools/verify-workspace-file-drag.cjs, src/main/filePreviewIpc.ts, src/main/docxArchive.ts, src/shared/filePreview.ts, src/shared/imageDimensions.ts, src/renderer/filePreview.js, src/renderer/filePreview.css, test/filePreview.test.ts, test/filePreviewZoom.test.ts, test/filePreviewIpc.test.ts, test/filePreviewRenderer.test.ts, test/imageDimensions.test.ts, tools/verify-file-preview.cjs, src/main/tools/aiTempDirectory.ts, test/aiTempDirectory.test.ts]
 ---
@@ -17,9 +17,9 @@ source_of_truth: [src/renderer/workspaceNavigation.js, docs/adr/2026-10-07-works
 
 图片/PDF/Word 正文支持 Ctrl＋滚轮缩放，向上放大、向下缩小，按 1.25 倍步幅切换为 10%–400% 手动比例并同步底栏。`src/main/filePreviewZoom.ts` 仅监听 editor 的原生 `zoom-changed`，将当前鼠标的屏幕 DIP 坐标按窗口/view 位置和 UI 缩放换算，经 `ui:file-preview-zoom` 单向通知编辑器主 frame。预览 owner 命中可见已加载正文才缩放，工具栏、菜单覆盖区、错误/未加载文件不响应；普通滚动不经过该入口。Word iframe 仍无脚本、同源或文件桥；不修改外壳或官网缩放。坐标取原生通知时的当前鼠标位置。
 
-预览字节仅由 `src/main/filePreview.ts` 经 `FileService.resolveSafePath` 读取，单文件上限 32 MiB，读取前后核对目录版本、真实路径和文件身份。图片尺寸上限 4000 万像素；DOCX 容器上限 5000 条目、实际展开 100 MiB，不支持加密或 ZIP64。损坏、超限、格式不匹配显示具体原因并可用系统应用打开，不截断后伪装成功。
+预览字节仅由 `src/main/filePreview.ts` 经 `FileService.resolveSafePath` 读取，PDF/DOCX单文件上限128 MiB、图片32 MiB，读取前后核对目录版本、真实路径和文件身份。图片尺寸上限 4000 万像素；DOCX 容器上限 5000 条目、实际展开 100 MiB（独立于外层128 MiB上限），不支持加密或 ZIP64。损坏、超限、格式不匹配显示具体原因并可用系统应用打开，不截断后伪装成功。
 
-`src/renderer/filePreview.js` 管理渲染、异步代次及释放。PDF.js、docx-preview 与字体/CMap/解码资源在构建时随包分发，`connect-src 'none'` 保持不变。PDF 仅绘制页面，不运行文档脚本；单页 canvas 限 1600 万像素及 8192 单边。Word 禁用 altChunk，净化 HTML 后放进无脚本、无同源权限的 sandbox iframe，禁止导航、外部图片及资源，无 IPC/文件桥。预览不提交官网或上传附件。
+`src/renderer/filePreview.js` 管理渲染、异步代次及释放。PDF.js、docx-preview 与字体/CMap/解码资源在构建时随包分发。PDF主模块及资源表只在首次打开PDF时加载；JSZip、docx-preview和DOMPurify只在首次打开Word时通过现有Monaco AMD加载器加载，模块导出由预览owner持有，不依赖全局UMD变量。并发打开复用加载Promise，成功后复用；失败后再次打开仅为失败库分配新的本地模块ID重试，不重置加载器或改写全局define。加载期间切换或关闭继续受预览代次核验，迟到任务不覆盖当前文档；普通编辑与图片不加载这些专用组件。`connect-src 'none'` 保持不变。PDF 仅绘制页面，不运行文档脚本；单页 canvas 限 1600 万像素及 8192 单边。Word 禁用 altChunk，净化 HTML 后放进无脚本、无同源权限的 sandbox iframe，禁止导航、外部图片及资源，无 IPC/文件桥。预览不提交官网或上传附件。
 
 通用工具有独立授权路径，详见 `tool-harness.md`；完全访问或明确批准可访问项目外目标，工具不能扩大本能力的编辑器文件 IPC 根目录。
 

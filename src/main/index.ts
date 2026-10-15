@@ -107,6 +107,13 @@ interface BootInfo {
 
 
 async function bootstrap(): Promise<void> {
+  // 离线探针只记录本地主进程阶段；不改初始化顺序，不包含模块导入/构建耗时。
+  const startupStarted = performance.now();
+  const startupTimings: Array<{ name: string; milliseconds: number }> = [];
+  const startupMark = (name: string) => {
+    if (STARTUP_PROBE) startupTimings.push({ name, milliseconds: performance.now() - startupStarted });
+  };
+  startupMark('bootstrap');
   // Electron 的应用名会影响 userData 目录；显式设定以保证分区落盘位置可预期。
   app.setName('mini-ai-ide');
   const probeDirectory = SELF_TEST || UI_PROBE ? configureWorkspaceProbe() : null;
@@ -122,6 +129,7 @@ async function bootstrap(): Promise<void> {
 
 
   await app.whenReady();
+  startupMark('app-ready');
 
   const fileService = new FileService();
   let settings: SettingsStore;
@@ -164,6 +172,7 @@ async function bootstrap(): Promise<void> {
 
   /* ---------------- 窗口与两个视图 ---------------- */
   const win = new BaseWindow({ width: 1600, height: 960, minWidth: 1080, minHeight: 600, show: !SELF_TEST && !STARTUP_PROBE, title: 'Mini-AI-IDE' });
+  startupMark('window-created');
   sharedInstance.setWindow(win);
   let updater: ApplicationUpdater | null = null;
   let toolSettingsWindow: ToolSettingsWindow | null = null;
@@ -474,6 +483,7 @@ async function loadLocalView(
     open: () => layoutController.update({ toolsVisible: true, previewVisible: false, fileVisible: true }) });
   // 提示词面板：同样是本地页面。它的 handler 已在上方注册完毕（见那段注释）。
   await loadLocalView(promptView, 'prompt.html');
+  startupMark('prompt-loaded');
 
   /* ---------------- IPC ---------------- */
 
@@ -548,6 +558,7 @@ async function loadLocalView(
     copy: text => clipboard.writeText(text),
     settingsChanged: () => toolSettingsWindow?.publish(),
   });
+  startupMark('tools-ready');
   const getToolSettings = () => toolSettingsState(tools.getState(), Boolean(fileService.getRoot()));
   toolSettingsWindow = new ToolSettingsWindow(win, getToolSettings, () => fileService.getRoot(), state => {
     if (editorView.webContents.isDestroyed()) return;
@@ -603,8 +614,10 @@ async function loadLocalView(
   const localPromptChannels = localPrompt.register();
   await webLoadingReady;
   await loadLocalView(webBarView, 'webbar.html');
+  startupMark('webbar-loaded');
   // 先注册只读变更桥，再加载会立即请求初始状态的面板。
   await loadLocalView(previewView, 'preview.html');
+  startupMark('preview-loaded');
   const updateWindow = new ApplicationUpdateWindow(win, () => updater!.getState(), () => {
     if (!editorView.webContents.isDestroyed()) { editorView.webContents.focus(); editorView.webContents.send(CHANNELS.closeUpdatePanel); }
   });
@@ -913,6 +926,7 @@ async function loadLocalView(
     else process.stdout.write(restoredRoot ? `[fs] 已恢复上次打开的目录：${restoredRoot}\n` : '[fs] 无历史目录记录\n');
   }
   announcedRevision = workspace.getState().revision;
+  startupMark('workspace-restored');
   buildApplicationMenu();
 
   // 记下启动时的恢复结果：自检会把根目录改成临时样例目录，
@@ -950,7 +964,9 @@ async function loadLocalView(
     if (isMainFrame) process.stderr.write(`[editor] 加载失败 ${code} ${desc} ${url}\n`);
   });
 
+  startupMark('editor-load-start');
   await loadLocalView(editorView, 'index.html');
+  startupMark('editor-loaded');
   relayout();
 
   // 告知渲染进程：记忆的目录已失效（让界面明确提示，而不是"看似有目录、实际读不了"）
@@ -979,7 +995,7 @@ async function loadLocalView(
   }
 
   if (workspaceProbeDirectory) {
-    const workspaceReport = await runWorkspaceProbe(editorView.webContents, webView.webContents, previewView.webContents, workspaceController, workspaceProbeDirectory, webBarView.webContents, () => toolSettingsWindow!.contents, STARTUP_PROBE);
+    const workspaceReport = await runWorkspaceProbe(editorView.webContents, webView.webContents, previewView.webContents, workspaceController, workspaceProbeDirectory, webBarView.webContents, () => toolSettingsWindow!.contents, STARTUP_PROBE, startupTimings);
     if (STARTUP_PROBE) {
       process.stdout.write(`\n===== 启动与文件树探针 =====\n${JSON.stringify(workspaceReport, null, 2)}\n`);
       app.exit(workspaceReport.pass ? 0 : 1);

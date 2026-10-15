@@ -1,7 +1,7 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-14
+updated: 2026-10-15
 owner: 胡运宽
 source_of_truth: [src/main/tools/replySource.ts, test/replySource.test.ts, docs/adr/2026-10-09-batch-error-auto-return.md, docs/adr/2026-10-09-tool-attachment-return.md, src/main/tools/attachments.ts, src/main/tools/resultReturn.ts, test/toolAttachmentIntegration.test.ts, test/toolAttachments.test.ts, test/toolResultReturn.test.ts, docs/capabilities/skills-and-local-prompt.md, docs/adr/2026-10-08-local-prompt-attachments.md, src/main/localPromptAttachments.ts, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, docs/adr/2026-10-07-automatic-result-return-boundary.md, src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, src/main/tools/integration.ts, src/main/tools/autoCollector.ts, src/main/tools/replyChangeWatcher.ts, src/main/preload.ts, src/shared/toolProtocol.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, src/main/composerDraftBackup.ts, test/composerDraftBackup.test.ts, tools/verify-web-result-sender.cjs]
 ---
@@ -59,3 +59,6 @@ source_of_truth: [src/main/tools/replySource.ts, test/replySource.test.ts, docs/
 状态规则由 `test/autoContinuation.test.ts`、`test/webResultSender.test.ts` 及 integration 回归验证。`tools/verify-web-result-sender.cjs` 使用隔离本地 Electron 夹具验证真实 textarea、事件、点击与取消，不连接官网。
 
 用户已确认本次工具附件功能通过；本地需求图片及文档上传亦已有用户实测通过。自动化验证未连接真实官网；控件结构或平台对合成 input/click 的处理可能变化，夹具不能证明官网全部状态兼容。未知与不确定结果必须显示暂停原因并留给用户处理。环境身份核验仍依据 ADR-0003，不能据此承诺平台可用性。
+
+
+取消未确认的发送阻断绑定具体token与文档。相同取消的迟到未点击且清理完成证据，或成功主frame新文档加载并核验新nonce后，仅允许后续合法新批继续；旧批结果不补发、工具不重跑。SPA、失败加载、未知或已点击的同文档取消不自动恢复。隔离世界所有运输阶段核对Document/nonce/活动token，旧排队脚本和逆序握手不能落入新批。当前纯文本被旧阻断挡住时显示“本批未发送”，不报告当前提交未知、不自动重试；真实未知状态仍等待用户处理。规则见 `../adr/2026-10-14-automatic-recovery.md`。

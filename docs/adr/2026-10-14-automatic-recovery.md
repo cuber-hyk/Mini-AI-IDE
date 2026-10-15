@@ -2,9 +2,9 @@
 artifact_type: adr
 status: accepted
 created: 2026-10-14
-updated: 2026-10-14
+updated: 2026-10-15
 owner: 胡运宽
-source_of_truth: [src/main/tools/replySource.ts, src/main/tools/replyChangeWatcher.ts, src/main/tools/replyObservation.ts, src/main/chatgptPage.ts, src/main/tools/autoCollector.ts, src/main/tools/integration.ts, src/main/tools/autoContinuation.ts, src/main/tools/resultReturn.ts, src/main/webComposerSender.ts, src/shared/toolProtocol.ts, src/main/toolWorkspaceStatus.ts, src/renderer/toolHarness.js, test/replySource.test.ts, test/replyChangeWatcher.test.ts, test/chatgptReply.test.ts, test/toolAutoCollector.test.ts, test/toolAutoContinueIntegration.test.ts, test/autoContinuation.test.ts, test/toolResultReturn.test.ts, test/webResultSender.test.ts, tools/verify-chatgpt-tools.cjs]
+source_of_truth: [test/webComposerRecovery.test.ts, src/main/tools/replySource.ts, src/main/tools/replyChangeWatcher.ts, src/main/tools/replyObservation.ts, src/main/chatgptPage.ts, src/main/tools/autoCollector.ts, src/main/tools/integration.ts, src/main/tools/autoContinuation.ts, src/main/tools/resultReturn.ts, src/main/webComposerSender.ts, src/shared/toolProtocol.ts, src/main/toolWorkspaceStatus.ts, src/renderer/toolHarness.js, test/replySource.test.ts, test/replyChangeWatcher.test.ts, test/chatgptReply.test.ts, test/toolAutoCollector.test.ts, test/toolAutoContinueIntegration.test.ts, test/autoContinuation.test.ts, test/toolResultReturn.test.ts, test/webResultSender.test.ts, tools/verify-chatgpt-tools.cjs]
 ---
 
 # ADR：保留来源进度的有限自动恢复
@@ -21,7 +21,11 @@ ChatGPT 连续协作中，用户已开启 automatic，监听暂时失效、来�
 4. 监听明确失败后按 250/1000/3000 ms 最多恢复三次。隔离世界仍持有同 token、同文档/会话的 sources 时，只修复订阅、撤销遗留 waiter，保留来源、生成见证、用户动作及采集/执行/结果状态，主动复核当前回复。正常通知后恢复额度归零。状态丢失时重建安全历史并明确提示已有回复需手动采集，不能凭执行账本补跑历史。关闭、导航、销毁撤销旧恢复。仅缺少 DOM 变化不判故障，不增加后台历史全文轮询。
 5. 回复读取抛错仅在只读读取阶段按同样三次间隔复核，保留当前基线；工具执行或接纳失败不作为读取重试。历史加载维持 500 ms 相关 DOM 安静窗口，且不把安静当作回复完成证据。导航时已经替换为目标历史节点的完整 DOM 立即安排一次仅更新历史基线的通知；仍是旧节点或空加载帧时继续等待迟到历史。
 6. ToolResultReturn 仅对明确标为 retryable、stage=preflight、transportStarted=false 且非 uncertain 的临时生成/完成未知预检失败释放预检资格。AutoContinuation 保留同一完成事件、正文和守卫，按 1/3/5 秒最多额外复核三次。真实中断、来源/项目/会话变化、用户接管和取消不复活旧回传。工具不重新执行；附件读取或 sender 开始后保持一次尝试。解析/整批错误额度只计真正进入运输或无法排除运输的尝试，纯预检不占额；迟到预检不得倒扣新 scope 或成功结果清零后的额度。
-7. 网页纯文本运输仍有整体 7.5 秒期限，附件沿现有大小上限期限。整体超时先有界收敛取消，再保留 preparing/draft_backup/waiting_button/clicked/confirmed 等阶段与 not_clicked/clicked/unknown 结论。只有当前 token 的取消与清理确认才能报告未点击；取消最多等待 1 秒，未确认则阻断后续运输。取消已完成附件清理时不重复等待清理。即使确认未点击，本批开始运输后仍不重试；已点击或未知提交绝不重发。
+7. 网页纯文本运输仍有整体 7.5 秒期限，附件沿现有大小上限期限。整体超时先有界收敛取消，再保留 preparing/draft_backup/waiting_button/clicked/confirmed 等阶段与 not_clicked/clicked/unknown 结论。只有当前 token 的取消与清理确认才能报告未点击；取消最多等待 1 秒，未确认则阻断后续运输；阻断绑定取消token、文档身份与代次。取消已完成附件清理时不重复等待清理。即使确认未点击，本批开始运输后仍不重试；已点击或未知提交绝不重发。
+
+8. 相同token与文档的取消迟到确认只有在not_clicked、非uncertain且附件清理确认时，才可解除该阻断供未来批次使用，不改变旧批已返回的未知事实、不补发旧结果。取消请求及其附件清理单飞；已点击或未知清理仍不能解除同文档阻断。
+9. 成功主frame文档提交（官网正常HTTP状态）与对应frame加载完成后，在隔离世界核实Document引用及新nonce，才能解除旧文档阻断。SPA、子frame、失败导航、同nonce、迟到旧回调不解除。所有运输/附件/resume/取消脚本绑定Document、nonce和活动token；文档握手使用主进程递增请求序，逆序迟到握手或取消后重放不得覆盖新token。导航只撤销旧任务，不自动刷新或重新发送。
+10. 继承旧取消阻断在当前发送前返回blockedByPreviousCancellation、transportStarted=false及preflight，不携带retryable或当前提交未知；界面明确“本批未发送”。纯文本情况下保留未运输事实与校验错误额度，但本批一次资格仍消费；读取了附件的调用保留原资格消耗。恢复本身不触发发送，后续仍须新批来源、权限和作用域核验。
 
 ## Alternatives Considered
 

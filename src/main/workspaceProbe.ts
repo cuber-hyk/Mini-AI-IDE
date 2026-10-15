@@ -17,7 +17,7 @@ export function configureWorkspaceProbe(): string {
   return directory;
 }
 
-export async function runWorkspaceProbe(view: WebContents, web: WebContents, preview: WebContents, controller: WorkspaceController, directory: string, webbar: WebContents, toolSettings: () => WebContents | null, startupOnly = false) {
+export async function runWorkspaceProbe(view: WebContents, web: WebContents, preview: WebContents, controller: WorkspaceController, directory: string, webbar: WebContents, toolSettings: () => WebContents | null, startupOnly = false, startupTimings: Array<{ name: string; milliseconds: number }> = []) {
   const checks: Array<{ name: string; pass: boolean; observed?: unknown }> = [];
   const screenshotErrors: Array<{ file: string; error: string }> = [];
   async function capture(contents: WebContents, file: string) {
@@ -55,6 +55,18 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
   try {
     check('Monaco 初始化', await waitFor('Boolean(window.__uiProbe && window.__uiProbe().ready)'));
     if (startupOnly) {
+      const rendererTiming = await evaluate<{ editorReadyMs: number | null; scripts: string[] }>(`(() => {
+        const ready = performance.getEntriesByName('mini-editor-ready', 'mark')[0];
+        return { editorReadyMs: ready ? ready.startTime : null,
+          scripts: Array.from(document.scripts, script => script.getAttribute('src') || '').filter(Boolean) };
+      })()`);
+      check('启动阶段计时完整且单调', startupTimings.length === 10 && startupTimings.every((item, index) =>
+        Number.isFinite(item.milliseconds) && item.milliseconds >= (startupTimings[index - 1]?.milliseconds ?? 0)));
+      check('Monaco初始化里程碑可测', rendererTiming.editorReadyMs !== null && Number.isFinite(rendererTiming.editorReadyMs));
+      check('普通启动未加载PDF或Word专用资源', !rendererTiming.scripts.some(script => /(?:filePreviewPdfResources|jszip|docx-preview|purify)/.test(script)));
+      const timing = { scope: 'offline-fresh-profile', main: startupTimings, rendererNavigationToEditorReadyMs: rendererTiming.editorReadyMs,
+        limits: '主进程从bootstrap进入开始；编辑器从自身导航开始，两者时钟分别报告。不含构建、模块导入、官网、生产历史工具记录或安装版冷/热启动；隐藏窗口不代表窗口可见时间。' };
+
       const treeReady = "Boolean(document.querySelector('#tree .tree-row[data-rel-path=\"a.txt\"]'))";
       await evaluate("document.getElementById('workspace-add').click()");
       check('启动后加入工作区显示目录', await waitFor(treeReady) && controller.workspace.getState().root === a);
@@ -70,7 +82,7 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
       check('切回第一工作区同步目录', await waitFor(`window.editorBridge.getRoot().then(s => s.root === ${JSON.stringify(a)})`) && await waitFor(treeReady));
       await evaluate("document.querySelector('#tree .tree-row[data-rel-path=\"a.txt\"]').click()");
       check('目录文件实际打开到编辑器', await waitFor("document.querySelector('#editor-tabs [data-kind=file][aria-selected=true]')?.getAttribute('data-path') === 'a.txt' && window.monaco.editor.getEditors()[0].getModel().getValue() === 'A original'"));
-      return { scope: 'startup', checks, pass: checks.every(item => item.pass), temporaryDirectory: directory, screenshotErrors };
+      return { scope: 'startup', timing, checks, pass: checks.every(item => item.pass), temporaryDirectory: directory, screenshotErrors };
     }
     let initialWebUrl = web.getURL();
     const originalFileWidth = await evaluate<number>("document.querySelector('.toolbar').getBoundingClientRect().width");

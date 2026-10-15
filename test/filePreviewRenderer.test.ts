@@ -17,6 +17,7 @@ class Element {
   get textContent(): string { return this.text + this.children.map(node => node.textContent).join(''); }
   get outerHTML(): string { return `<${this.tagName}>${this.text}${this.children.map(node => node.outerHTML).join('')}</${this.tagName}>`; }
   appendChild(child: Element) { this.children.push(child); child.parentNode = this; return child; }
+  remove() { if (this.parentNode) this.parentNode.children = this.parentNode.children.filter(node => node !== this); this.parentNode = null; }
   setAttribute(name: string, value: string) { this.attributes[name] = value; }
   removeAttribute(name: string) { delete this.attributes[name]; if (name === 'src') this.src = ''; }
   addEventListener(name: string, fn: (event: any) => any) { (this.events[name] ||= []).push(fn); }
@@ -30,14 +31,35 @@ class Element {
   cloneNode(): Element { const node = new Element(this.tagName); node.text = this.text; node.style = { ...this.style }; this.children.forEach(child => node.appendChild(child.cloneNode())); return node; }
 }
 function deferred<T = any>() { let resolve!: (value: T) => void; let reject!: (value: any) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
-function fixture(loadPdf?: () => Promise<any>) {
+function fixture(loadPdf?: () => Promise<any>, loadScript?: (script: Element, context: any) => void,
+  loadModule?: (path: string, resolve: (library: any) => void, reject: (error: Error) => void) => void) {
   const host = new Element('div'); const revoked: string[] = []; const created: Element[] = []; let externalCount = 0;
+  const scriptRequests: string[] = []; const head = new Element('head');
+  const moduleRequests: string[] = []; const modulePaths: Record<string, string> = {}; const registered: Record<string, any> = {};
+  const wordModules: any = { zip: function JSZip() {} };
   const documentEvents: Record<string, (event: any) => void> = {};
   let resize!: () => void; const frames: (() => void)[] = [];
-  const context: any = { window: { devicePixelRatio: 2, loadPdf }, document: { activeElement: null, hit: null, elementFromPoint() { return this.hit; }, baseURI: 'file:///app/index.html', addEventListener(name: string, listener: (event: any) => void) { documentEvents[name] = listener; }, createElement(name: string) { const node = new Element(name); node.whenFocused = () => { context.document.activeElement = node; }; created.push(node); return node; } },
+  const context: any = { window: { devicePixelRatio: 2, loadPdf }, document: { head, activeElement: null, hit: null, elementFromPoint() { return this.hit; }, baseURI: 'file:///app/index.html', addEventListener(name: string, listener: (event: any) => void) { documentEvents[name] = listener; }, createElement(name: string) { const node = new Element(name); node.whenFocused = () => { context.document.activeElement = node; }; created.push(node); return node; } },
     URL: { createObjectURL() { return 'blob:local-preview'; }, revokeObjectURL(value: string) { revoked.push(value); } }, Blob, Uint8Array, atob,
     ResizeObserver: class { constructor(callback: () => void) { resize = callback; } observe() {} },
     requestAnimationFrame(callback: () => void) { frames.push(callback); return frames.length; } };
+  head.appendChild = script => {
+    head.children.push(script); script.parentNode = head; scriptRequests.push(script.src);
+    queueMicrotask(() => {
+      if (loadScript) { loadScript(script, context); return; }
+      if (script.src.includes('PdfResources')) context.window.filePreviewPdfResources = {};
+      script.onload!();
+    });
+    return script;
+  };
+  context.window.require = Object.assign((ids: string[], resolve: (library: any) => void, reject: (error: Error) => void) => {
+    const path = modulePaths[ids[0]]; moduleRequests.push(path + '.js');
+    queueMicrotask(() => {
+      if (loadModule) { loadModule(path, resolve, reject); return; }
+      const name = path.includes('jszip') ? 'zip' : path.includes('docx-preview') ? 'docx' : 'purify';
+      resolve(wordModules[name]);
+    });
+  }, { config(value: any) { Object.assign(modulePaths, value.paths); }, define(name: string, _dependencies: string[], factory: () => any) { registered[name] = factory(); } });
   // 只替换 ES 模块加载边界，实际 owner 和异步生命周期保持原样执行。
   const source = fs.readFileSync('src/renderer/filePreview.js', 'utf8').replace("import('./vendor/pdfjs/pdf.mjs')", 'window.loadPdf()');
   vm.runInNewContext(source, context);
@@ -45,12 +67,97 @@ function fixture(loadPdf?: () => Promise<any>) {
   const button = (text: string) => host.querySelectorAll('button').find(node => node.attributes['aria-label'] === text || node.textContent === text)!;
   const scale = () => created.find(node => node.tagName === 'select')!;
   const chooseScale = async (value: string) => { scale().value = value; await scale().fire('change'); };
-  return { host, owner, created, revoked, button, context, documentEvents, scale, chooseScale, externalCount: () => externalCount,
+  return { host, owner, created, revoked, scriptRequests, moduleRequests, wordModules, registered, button, context, documentEvents, scale, chooseScale, externalCount: () => externalCount,
     resize: () => resize(), flushResize: () => { frames.splice(0).forEach(callback => callback()); }, pendingFrames: () => frames.length,
     status: () => created.find(node => node.className === 'file-preview-status')!,
     viewport: () => created.find(node => node.className === 'file-preview-viewport')! };
 }
 function doc(kind = 'image', preview: any = { ok: true, bytes: new Uint8Array([1, 2]), mimeType: 'image/png' }) { return { path: '附件.' + kind, kind, preview }; }
+
+it('普通编辑与图片预览不加载 PDF 或 Word 专用脚本', async () => {
+  let imports = 0; const f = fixture(async () => { imports += 1; throw new Error('不应加载'); });
+  await f.owner.show(doc(), false); await f.owner.show(doc('unsupported'), false);
+  await f.owner.show(doc('pdf', { ok: false, error: '读取失败' }), false);
+  assert.deepEqual(f.scriptRequests, []); assert.deepEqual(f.moduleRequests, []); assert.equal(imports, 0);
+  const html = fs.readFileSync('src/renderer/index.html', 'utf8');
+  assert.doesNotMatch(html, /<script[^>]+src="[^"]*(?:jszip|docx-preview|purify|filePreviewPdfResources)/);
+});
+
+it('PDF 首次并发打开共用本地资源和模块，迟到加载只为当前标签创建文档', async () => {
+  const module = deferred(); let imports = 0; let documents = 0;
+  const pdf = { numPages: 1, async getPage() { return { getViewport: () => ({ width: 600, height: 800 }), render: () => ({ cancel() {}, promise: Promise.resolve() }) }; } };
+  const f = fixture(() => { imports += 1; return module.promise; }); f.context.URL = URL;
+  const first = f.owner.show(doc('pdf'), false); const second = f.owner.show(doc('pdf'), false);
+  module.resolve({ GlobalWorkerOptions: {}, getDocument() { documents += 1; return { promise: Promise.resolve(pdf), destroy() {} }; } });
+  await Promise.all([first, second]); await f.owner.show(doc('pdf'), false);
+  assert.equal(imports, 1); assert.equal(documents, 2);
+  assert.deepEqual(f.scriptRequests, ['./filePreviewPdfResources.js']);
+  assert.equal(f.created.filter(node => node.tagName === 'script').length, 1);
+});
+
+it('本地 PDF 资源失败不锁死预览，下一次打开可重试且切出后不覆盖新状态', async () => {
+  let attempts = 0; let documents = 0;
+  const f = fixture(async () => ({ GlobalWorkerOptions: {}, getDocument() { documents += 1; throw new Error('新文档错误'); } }), (script, context) => {
+    attempts += 1;
+    if (attempts === 1) script.onerror!();
+    else { context.window.filePreviewPdfResources = {}; script.onload!(); }
+  }); f.context.URL = URL;
+  await f.owner.show(doc('pdf'), false); assert.match(f.status().textContent, /组件加载失败/);
+  assert.equal(f.context.document.head.children.length, 0);
+  const retry = f.owner.show(doc('pdf'), false); await f.owner.show(doc('unsupported'), false); await retry;
+  assert.equal(attempts, 2); assert.equal(documents, 0); assert.match(f.status().textContent, /系统应用打开/);
+  await f.owner.show(doc('pdf'), false); assert.equal(attempts, 2); assert.equal(documents, 1);
+});
+
+it('PDF 模块加载拒绝后下一次打开可再次尝试', async () => {
+  let imports = 0;
+  const f = fixture(async () => { imports += 1; throw new Error('模块读取失败'); });
+  await f.owner.show(doc('pdf'), false); await f.owner.show(doc('pdf'), false);
+  assert.equal(imports, 2); assert.deepEqual(f.scriptRequests, ['./filePreviewPdfResources.js']);
+  assert.match(f.status().textContent, /模块读取失败/);
+});
+
+it('Word 按依赖顺序首次加载，失败只重试缺失库，安全组件就绪前不渲染', async () => {
+  let renderCount = 0; let sanitizerAttempts = 0;
+  const sanitizer = deferred();
+  const f = fixture(undefined, undefined, (path, resolve, reject) => {
+    if (path.includes('jszip')) { resolve(function JSZip() {}); return; }
+    if (path.includes('docx-preview')) {
+      assert.equal(typeof f.registered.jszip, 'function');
+      resolve({ async renderAsync(_bytes: any, body: Element) { renderCount += 1; body.appendChild(new Element('section')); } }); return;
+    }
+    if (path.includes('purify')) {
+      sanitizerAttempts += 1;
+      if (sanitizerAttempts === 1) { reject(new Error('组件加载失败')); return; }
+      void sanitizer.promise.then(() => resolve({ sanitize: (body: Element) => body.cloneNode() })); return;
+    }
+  });
+  await f.owner.show(doc('docx'), false); assert.match(f.status().textContent, /组件加载失败/); assert.equal(renderCount, 0);
+  const first = f.owner.show(doc('docx'), false); const latest = f.owner.show(doc('docx'), false);
+  await new Promise(done => setImmediate(done)); assert.equal(renderCount, 0);
+  sanitizer.resolve(); await Promise.all([first, latest]); assert.equal(renderCount, 1);
+  await f.owner.show(doc('docx'), false); assert.equal(renderCount, 2);
+  assert.deepEqual(f.moduleRequests, ['./vendor/jszip.min.js', './vendor/docx-preview.min.js', './vendor/purify.min.js', './vendor/purify.min.js']);
+  assert.equal(f.context.window.docx, undefined); assert.equal(f.context.window.DOMPurify, undefined);
+  assert.equal(f.created.some(node => node.tagName === 'canvas'), false);
+});
+
+it('Word 压缩库首次加载失败不注册无效依赖，再次打开可完整加载 AMD 导出', async () => {
+  let zipAttempts = 0; let renders = 0;
+  const f = fixture(undefined, undefined, (path, resolve, reject) => {
+    if (path.includes('jszip')) {
+      zipAttempts += 1;
+      if (zipAttempts === 1) reject(new Error('本地压缩库暂不可读'));
+      else resolve(function JSZip() {});
+    } else if (path.includes('docx-preview')) resolve({ async renderAsync() { renders += 1; } });
+    else resolve({ sanitize: (body: Element) => body.cloneNode() });
+  });
+  await f.owner.show(doc('docx'), false);
+  assert.match(f.status().textContent, /压缩库暂不可读/); assert.equal(f.registered.jszip, undefined); assert.equal(renders, 0);
+  await f.owner.show(doc('docx'), false);
+  assert.equal(zipAttempts, 2); assert.equal(typeof f.registered.jszip, 'function'); assert.equal(renders, 1);
+  assert.equal(f.context.window.JSZip, undefined); assert.equal(f.status().hidden, true);
+});
 
 it('图片只读预览可缩放，切出立即释放 URL，过时加载不覆盖新标签', async () => {
   const f = fixture(); await f.owner.show(doc(), true);
@@ -141,10 +248,10 @@ it('比例选择保留键盘连续导航位置，失焦后显示实际百分比'
 
 it('Word 适应窗口以页面尺寸计算比例，排版说明保持在可聚焦提示图标', async () => {
   const f = fixture();
-  f.context.window.docx = { async renderAsync(_bytes: any, body: Element) {
+  f.wordModules.docx = { async renderAsync(_bytes: any, body: Element) {
     const section = new Element('section'); section.style.width = '612pt'; section.style.minHeight = '792pt'; body.appendChild(section);
   } };
-  f.context.window.DOMPurify = { sanitize(body: Element) { return body.cloneNode(); } };
+  f.wordModules.purify = { sanitize(body: Element) { return body.cloneNode(); } };
   await f.owner.show(doc('docx'), false); const widthScale = f.owner.captureViewState().zoom;
   await f.chooseScale('window');
   assert.equal(f.owner.captureViewState().zoom, 468 / 1116);
@@ -219,11 +326,11 @@ it('读取失败显示真实错误，未允许导航或自动打开外部应用'
 
 it('Word 只在净化后进入无脚本 iframe，源 CSS 不能闭合 style 标签注入 HTML', async () => {
   const f = fixture(); let sanitizeConfig: any; let renderOptions: any;
-  f.context.window.docx = { async renderAsync(_bytes: any, body: Element, styles: Element, options: any) {
+  f.wordModules.docx = { async renderAsync(_bytes: any, body: Element, styles: Element, options: any) {
     renderOptions = options; const section = new Element('section'); section.style.width = '612pt'; section.textContent = '正文和表格'; body.appendChild(section);
     const style = new Element('style'); style.textContent = 'p{color:black} </style><script>attack()</script>'; styles.appendChild(style);
   } };
-  f.context.window.DOMPurify = { sanitize(body: Element, config: any) { sanitizeConfig = config; return body.cloneNode(); } };
+  f.wordModules.purify = { sanitize(body: Element, config: any) { sanitizeConfig = config; return body.cloneNode(); } };
   await f.owner.show(doc('docx'), false); const frame = f.created.find(node => node.tagName === 'iframe')!;
   assert.equal(renderOptions.renderAltChunks, false); assert.equal(renderOptions.useBase64URL, true);
   assert.ok(sanitizeConfig.FORBID_TAGS.includes('a')); assert.ok(sanitizeConfig.FORBID_TAGS.includes('script'));
@@ -234,7 +341,22 @@ it('Word 只在净化后进入无脚本 iframe，源 CSS 不能闭合 style 标�
 
 it('Word 异步加载过时后不建立 iframe，不改写新标签状态', async () => {
   const f = fixture(); const pending = deferred<void>();
-  f.context.window.docx = { renderAsync: () => pending.promise }; f.context.window.DOMPurify = { sanitize() { throw new Error('不应净化过时内容'); } };
-  const showing = f.owner.show(doc('docx'), false); await f.owner.show(doc('unsupported'), false);
+  f.wordModules.docx = { renderAsync: () => pending.promise }; f.wordModules.purify = { sanitize() { throw new Error('不应净化过时内容'); } };
+  const showing = f.owner.show(doc('docx'), false); await new Promise(done => setImmediate(done)); await f.owner.show(doc('unsupported'), false);
   pending.resolve(); await showing; assert.equal(f.created.some(node => node.tagName === 'iframe'), false); assert.match(f.status().textContent, /系统应用打开/);
+});
+
+it('Word 首次依赖仍在加载时切出，迟到完成不渲染也不改写新状态', async () => {
+  let resolveZip!: (library: any) => void; let renders = 0;
+  const f = fixture(undefined, undefined, (path, resolve) => {
+    if (path.includes('jszip')) resolveZip = resolve;
+    else resolve(path.includes('docx-preview') ? f.wordModules.docx : f.wordModules.purify);
+  });
+  const showing = f.owner.show(doc('docx'), false); await new Promise(done => setImmediate(done));
+  await f.owner.show(doc('unsupported'), false);
+  f.wordModules.docx = { renderAsync() { renders += 1; } };
+  f.wordModules.purify = { sanitize() { throw new Error('不应净化'); } };
+  resolveZip(function JSZip() {}); await showing;
+  assert.equal(renders, 0); assert.equal(f.created.some(node => node.tagName === 'iframe'), false);
+  assert.match(f.status().textContent, /系统应用打开/);
 });

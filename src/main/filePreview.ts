@@ -2,7 +2,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type { Stats } from 'node:fs';
-import { FILE_PREVIEW_BYTE_LIMIT, filePreviewKind, type FilePreviewResult } from '../shared/filePreview';
+import { FILE_PREVIEW_BYTE_LIMIT, DOCUMENT_PREVIEW_BYTE_LIMIT, filePreviewKind, type FilePreviewResult } from '../shared/filePreview';
 import { imageDimensions } from '../shared/imageDimensions';
 import { validateDocxArchive } from './docxArchive';
 import type { FileService } from './fileService';
@@ -34,7 +34,8 @@ export async function readFilePreview(files: FileService, relPath: string, expec
     const realPath = await fs.realpath(target.absolute);
     const before = await fs.stat(realPath);
     if (!before.isFile()) return fail('只能预览普通文件');
-    if (before.size > FILE_PREVIEW_BYTE_LIMIT) return fail('文件超过 32 MiB，无法预览');
+    const byteLimit = kind === 'image' ? FILE_PREVIEW_BYTE_LIMIT : DOCUMENT_PREVIEW_BYTE_LIMIT;
+    if (before.size > byteLimit) return fail(`文件超过 ${byteLimit / (1024 * 1024)} MiB，无法预览`);
     handle = await fs.open(realPath, 'r');
     if (!sameFile(before, await handle.stat())) return fail('文件已变化，请重新打开预览');
     const bytes = Buffer.alloc(before.size);

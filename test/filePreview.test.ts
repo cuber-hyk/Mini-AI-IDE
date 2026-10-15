@@ -6,7 +6,7 @@ import { it } from 'node:test';
 import { deflateRawSync } from 'node:zlib';
 import { readFilePreview } from '../src/main/filePreview';
 import { FileService } from '../src/main/fileService';
-import { filePreviewKind, FILE_PREVIEW_BYTE_LIMIT, DOCX_EXPANDED_BYTE_LIMIT } from '../src/shared/filePreview';
+import { filePreviewKind, FILE_PREVIEW_BYTE_LIMIT, DOCUMENT_PREVIEW_BYTE_LIMIT, DOCX_EXPANDED_BYTE_LIMIT } from '../src/shared/filePreview';
 
 async function fixture(t: any, files = new FileService()) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'mini-file-preview-'));
@@ -15,17 +15,17 @@ async function fixture(t: any, files = new FileService()) {
   return { root, files, read: (relative: string) => readFilePreview(files, relative, root) };
 }
 
-function zip(entries: Array<{ name: string; text?: string; bytes?: Buffer; expandedSize?: number; encrypted?: boolean }>): Buffer {
+function zip(entries: Array<{ name: string; text?: string; bytes?: Buffer; expandedSize?: number; encrypted?: boolean; stored?: boolean }>): Buffer {
   const local: Buffer[] = []; const directory: Buffer[] = []; let offset = 0;
   for (const entry of entries) {
     const name = Buffer.from(entry.name);
     const content = entry.bytes ?? Buffer.from(entry.text ?? 'content');
-    const compressed = deflateRawSync(content);
+    const compressed = entry.stored ? content : deflateRawSync(content);
     const header = Buffer.alloc(30); header.writeUInt32LE(0x04034b50); header.writeUInt16LE(entry.encrypted ? 1 : 0, 6);
-    header.writeUInt16LE(8, 8); header.writeUInt32LE(compressed.length, 18); header.writeUInt32LE(entry.expandedSize ?? content.length, 22); header.writeUInt16LE(name.length, 26);
+    header.writeUInt16LE(entry.stored ? 0 : 8, 8); header.writeUInt32LE(compressed.length, 18); header.writeUInt32LE(entry.expandedSize ?? content.length, 22); header.writeUInt16LE(name.length, 26);
     local.push(header, name, compressed);
     const central = Buffer.alloc(46); central.writeUInt32LE(0x02014b50); central.writeUInt16LE(entry.encrypted ? 1 : 0, 8);
-    central.writeUInt16LE(8, 10); central.writeUInt32LE(compressed.length, 20); central.writeUInt32LE(entry.expandedSize ?? content.length, 24);
+    central.writeUInt16LE(entry.stored ? 0 : 8, 10); central.writeUInt32LE(compressed.length, 20); central.writeUInt32LE(entry.expandedSize ?? content.length, 24);
     central.writeUInt16LE(name.length, 28); central.writeUInt32LE(offset, 42); directory.push(central, name);
     offset += header.length + name.length + compressed.length;
   }
@@ -91,10 +91,33 @@ it('外部 junction 不会返回项目外二进制；项目内链接保持可用
   assert.equal((await f.read('link/a.pdf')).ok, true);
 });
 
-it('单附件超过 32 MiB 时拒绝而不截断返回', async t => {
-  const f = await fixture(t); const handle = await fs.open(path.join(f.root, 'huge.pdf'), 'w');
-  await handle.truncate(FILE_PREVIEW_BYTE_LIMIT + 1); await handle.close();
-  const result = await f.read('huge.pdf'); assert.equal(result.ok, false); if (!result.ok) assert.match(result.error, /32 MiB/);
+it('PDF 超过旧的 32 MiB 限制及恰好 128 MiB 都完整读取，保留末尾二进制', async t => {
+  const f = await fixture(t);
+  for (const size of [33 * 1024 * 1024, DOCUMENT_PREVIEW_BYTE_LIMIT]) {
+    const handle = await fs.open(path.join(f.root, 'large.pdf'), 'w');
+    await handle.truncate(size); await handle.write(Buffer.from('%PDF-1.7\n'), 0, 9, 0);
+    await handle.write(Buffer.from([0, 255, 128, 17]), 0, 4, size - 4); await handle.close();
+    const result = await f.read('large.pdf'); assert.equal(result.ok, true);
+    if (result.ok) {
+      assert.equal(result.bytes.byteLength, size);
+      assert.deepEqual(Array.from(result.bytes.subarray(-4)), [0, 255, 128, 17]);
+    }
+  }
+});
+
+it('PDF 和 DOCX 超过 128 MiB 在分配正文缓冲区之前拒绝，图片仍限制 32 MiB', async t => {
+  const f = await fixture(t);
+  for (const [name, limit] of [['huge.pdf', DOCUMENT_PREVIEW_BYTE_LIMIT], ['huge.docx', DOCUMENT_PREVIEW_BYTE_LIMIT], ['huge.png', FILE_PREVIEW_BYTE_LIMIT]] as const) {
+    const handle = await fs.open(path.join(f.root, name), 'w'); await handle.truncate(limit + 1); await handle.close();
+  }
+  const allocate = Buffer.alloc;
+  t.mock.method(Buffer, 'alloc', (size: number, ...args: any[]) => {
+    assert.ok(size <= FILE_PREVIEW_BYTE_LIMIT, '超限附件不应分配大正文缓冲区');
+    return (allocate as any)(size, ...args);
+  });
+  for (const [name, expected] of [['huge.pdf', /128 MiB/], ['huge.docx', /128 MiB/], ['huge.png', /32 MiB/]] as const) {
+    const result = await f.read(name); assert.equal(result.ok, false); if (!result.ok) assert.match(result.error, expected);
+  }
 });
 
 it('切根和切根后返回原目录都撤销正在进行的旧预览读取', async t => {
@@ -126,6 +149,14 @@ it('DOCX 必须具有有效 ZIP 目录、内容类型和 Word 正文条目', asy
   for (const bytes of [zip([{ name: 'other.xml' }]), zip([{ name: '[Content_Types].xml' }]), zip([...docxEntries, docxEntries[1]!]), zip(docxEntries).subarray(0, -1)]) {
     await fs.writeFile(target, bytes); assert.equal((await f.read('a.docx')).ok, false);
   }
+});
+
+it('DOCX 超过 32 MiB 的有效附件完整返回，独立于展开量保护', async t => {
+  const f = await fixture(t);
+  const bytes = zip([...docxEntries, { name: 'word/media/large.bin', bytes: Buffer.alloc(33 * 1024 * 1024, 17), stored: true }]);
+  await fs.writeFile(path.join(f.root, 'large.docx'), bytes);
+  const result = await f.read('large.docx'); assert.equal(result.ok, true);
+  if (result.ok) { assert.equal(result.kind, 'docx'); assert.deepEqual(Buffer.from(result.bytes), bytes); }
 });
 
 it('DOCX 拒绝加密、ZIP64 和超过 5000 项的容器', async t => {

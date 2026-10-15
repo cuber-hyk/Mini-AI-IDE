@@ -1,7 +1,7 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-13
+updated: 2026-10-15
 owner: 胡运宽
 source_of_truth: [test/webBackgroundPolicy.test.ts, tools/verify-web-background.cjs, src/main/toolWorkspaceStatus.ts, src/renderer/toolAttention.js, test/toolWorkspaceStatus.test.ts, test/toolAttention.test.ts, src/main/settings.ts, test/promptSettingsMigration.test.ts, docs/capabilities/skills-and-local-prompt.md, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, src/renderer/fileWorkspace.js, test/fileWorkspace.test.ts, docs/adr/2026-10-07-workspace-ui-shell-layout.md, src/main/workspaceLayoutController.ts, src/main/workspaceService.ts, src/renderer/workspaceLayout.js, src/renderer/workspaceNavigation.js, src/renderer/webbar.html, src/renderer/webbar.js, src/renderer/webbar.css, src/main/webbarPreload.ts, src/shared/contract.ts, test/workspaceLayoutController.test.ts, src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, tools/verify-web-result-sender.cjs, src/renderer/preview.css, src/main/previewPreload.ts, test/changeTree.test.ts, docs/adr/2026-10-02-honest-electron-identity.md, docs/adr/2026-10-02-filesystem-permission-model.md, DESIGN.md, design-tokens.json, src/main/windowLayout.ts, src/main/layoutProbe.ts, src/main/tools/changeReview.ts, src/renderer/preview.js, src/renderer/editorToolbar.js, src/renderer/ui.css, test/windowLayout.test.ts, test/toolChanges.test.ts, test/editorToolbar.test.ts, src/main/index.ts, src/renderer/index.html, src/renderer/style.css, src/renderer/promptComposer.js, test/promptComposer.test.ts, src/renderer/toolPanelLayout.js, test/toolPanelLayout.test.ts, src/main/workspaceController.ts, src/main/workspaceProbe.ts, src/renderer/fileExplorer.js, src/renderer/fileIcons.js, src/renderer/fileExplorer.css, src/renderer/editorTabs.js, src/renderer/editorWorkspace.js, test/editorWorkspace.test.ts, test/fileExplorer.test.ts, test/fileIcons.test.ts, test/workspaceController.test.ts]
 ---
@@ -251,3 +251,8 @@ node scripts/install-electron.mjs   # 走镜像；或从 tools/ 复制已有二�
 ## 高频分栏调整
 
 分栏移动由 workspaceLayout.js 按 requestAnimationFrame 合并，仍通过单一 setWorkspaceLayout 入口交付主进程。temporary=true 仅接受非空的宽度字段并只预览几何；结束、取消、失捕获或窗口失焦提交最后有效宽度。WorkspaceLayoutController 保存待提交状态，在批准关闭前 flushPendingLayout，普通显隐操作仍按原规则保存。菜单只在菜单语义状态变化时重建，纯宽度变化不重建。layoutRevision 仅用于拒绝旧显示回执，不授予其他权限；主 frame、参数和布局边界核验保持。
+
+
+## 离线启动计时
+
+现有 `electron . --workspace-probe --startup-only` 在独立临时profile内报告bootstrap、app-ready、窗口创建、提示词/工具/网页顶栏/预览就绪、工作区恢复及编辑器load起止阶段；渲染进程使用 `mini-editor-ready` Performance mark单独报告从自身导航到Monaco初始化完成的时间。计时不改变初始化顺序，不连接官网；主进程计时不包括模块导入和构建，隐藏窗口的创建不等于窗口可见。临时空配置与工具账本不能代表真实安装版冷/热启动；原探针仍验证加入/刷新/切换工作区和实际打开文本。

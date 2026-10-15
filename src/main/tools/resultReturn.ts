@@ -91,13 +91,17 @@ export class ToolResultReturn {
         transportStarted = true;
         const attachments = source.kind === 'diagnostic' || isBatchValidationFailure(context.state) || isPermissionDenialReceipt(context.state) ? [] : await this.options.attachments(context.state);
         result = current() ? await this.options.send(text, context.session, current, attachments) : { ok: false, error: '项目、会话、批次或发送选项已变化，未发送' };
+        // 旧取消阻断发生在本批纯文本运输之前；不据此释放本批或重试附件。
+        if (result.blockedByPreviousCancellation && result.transportStarted === false && !attachments.length) transportStarted = false;
         if (result.retryable) { const { retryable: _retryable, ...terminal } = result; result = { ...terminal, transportStarted: true }; }
       }
     } catch (error) { result = { ok: false, error: error instanceof Error ? error.message : String(error) }; }
     result = { ...result, transportStarted, ...(!transportStarted ? { stage: 'preflight' as const } : {}) };
     if (generation === this.generation) {
       this.phase = result.ok ? 'sent' : 'paused';
-      this.message = result.ok ? '本批结果与附件已发送' : `${result.error ?? '发送失败'}；本批不重复上传，请在官网处理或发起新批次`;
+      this.message = result.ok ? '本批结果与附件已发送' : result.blockedByPreviousCancellation && !transportStarted
+        ? `${result.error}；本批结果保留，可复制处理`
+        : `${result.error ?? '发送失败'}；本批不重复上传，请在官网处理或发起新批次`;
       if (result.draftBackupPath) this.message += `；原网页草稿已备份：${result.draftBackupPath}`;
       this.options.changed();
     }

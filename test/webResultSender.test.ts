@@ -3,9 +3,18 @@ import { EventEmitter } from 'node:events';
 import { it } from 'node:test';
 import { WebResultSender, RESULT_SEND_WORLD } from '../src/main/tools/webResultSender';
 
+async function flush() { for (let index = 0; index < 30; index++) await Promise.resolve(); }
+
 function fixture(url = 'https://chat.deepseek.com/a/chat/one') {
   const web = new EventEmitter() as any;
   const scripts: string[] = [];
+  const documentNonce = 'fixture-document-one';
+  let execute: (world: number, entries: { code: string }[]) => Promise<unknown>;
+  Object.defineProperty(web, 'executeJavaScriptInIsolatedWorld', {
+    get: () => (world: number, entries: { code: string }[]) => entries[0]!.code.startsWith('/* composer-document */')
+      ? Promise.resolve(documentNonce) : execute(world, entries),
+    set: value => { execute = value; }
+  });
   web.getURL = () => url;
   web.isDestroyed = () => false;
   web.executeJavaScriptInIsolatedWorld = async (world: number, entries: { code: string }[]) => {
@@ -50,7 +59,7 @@ it('同一时间仅一份结果发送，导航取消隔离世界等待且销毁�
     return new Promise(resolve => { finish = resolve; });
   };
   const first = f.sender.send('first', 'https://chat.deepseek.com/a/chat/one');
-  await Promise.resolve();
+  await flush();
   assert.equal((await f.sender.send('second', 'https://chat.deepseek.com/a/chat/one')).ok, false);
   f.web.emit('did-start-navigation', { isMainFrame: false, isSameDocument: false });
   assert.equal(f.scripts.length, 1);
@@ -81,7 +90,7 @@ it('网页取消检查悬挂时有界结束并阻止后续结果，不能在未�
   const f = fixture(); let count = 0;
   f.web.executeJavaScriptInIsolatedWorld = () => { count++; return new Promise(() => {}); };
   const sending = f.sender.send('result', 'https://chat.deepseek.com/a/chat/one');
-  await Promise.resolve();
+  await flush();
   await f.sender.cancel();
   const result = await sending;
   assert.equal(result.ok, false); assert.equal(result.uncertain, true);
@@ -191,4 +200,21 @@ it('主动取消附件运输必须等待最终清理结论，正文先结束的�
     assert.equal((await f.sender.send('下一批', 'https://chat.deepseek.com/a/chat/one')).ok, false, '未确认附件清理前不能开始下一次运输');
     assert.equal(f.scripts.length, 8, '清理未知必须阻止后续网页动作');
   } finally { await f.sender.dispose(); }
+});
+it('附件读取取消与迟到读取失败共用同次清理，不再安装第二条清理脚本', async () => {
+  const f = fixture(); let rejectRead!: (error: Error) => void;
+  const attachment = { id: 'one', name: 'one.txt', size: 1, mediaType: 'text/plain',
+    async *stream() { await new Promise((_resolve, reject) => { rejectRead = reject; }); yield new Uint8Array([65]); } };
+  f.web.executeJavaScriptInIsolatedWorld = async (_world: number, entries: { code: string }[]) => {
+    const code = entries[0]!.code; f.scripts.push(code);
+    if (code.includes('s.parts.length || s.name')) return true;
+    if (code.includes('state.cancel();')) return { ok: false, error: '已取消并清理', stage: 'preparing', cancellation: 'not_clicked' };
+    if (code.includes('const key = "__miniAIComposerAttachments"')) assert.fail('取消 owner 已确认清理，读取失败不能再次清理');
+    return { ok: true };
+  };
+  const sending = f.sender.send('结果', 'https://chat.deepseek.com/a/chat/one', 'results', () => true, [attachment]); await flush();
+  assert.ok(rejectRead); await f.sender.cancel(); assert.equal((await sending).cancellation, 'not_clicked');
+  rejectRead(new Error('stream closed')); await flush();
+  assert.equal(f.scripts.filter(code => code.includes('state.cancel();')).length, 1);
+  assert.equal(f.scripts.length, 3); await f.sender.dispose();
 });

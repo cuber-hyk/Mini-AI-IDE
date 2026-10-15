@@ -389,5 +389,46 @@ app.whenReady().then(async () => {
   await test('点击前地址变化不能借首发例外发送', async () => { await setup(`window.mode='disabled'`, 'https://chatgpt.com/'); const sending=send('prompt','prompt','https://chatgpt.com/'); await pause(80); await run(`history.pushState({},'', '/c/other')`); assert.equal((await sending).ok,false); assert.equal((await state()).clicks,0); });
   await test('工具结果不享有首页会话交接例外', async () => { await setup(`send.addEventListener('click',event=>history.pushState({},'', '/c/allocated'))`, 'https://chatgpt.com/'); const result=await send('results','results','https://chatgpt.com/'); assert.equal(result.ok,false); assert.equal(result.uncertain,true); assert.equal((await state()).clicks,1); });
   await test('首页首发交接后再次换会话暂停且不能重试', async () => { await setup(`window.mode='unknown';send.addEventListener('click',event=>{history.pushState({},'', '/c/allocated');setTimeout(()=>history.pushState({},'', '/c/other'),100)})`, 'https://chatgpt.com/');const result=await send('prompt','prompt','https://chatgpt.com/');assert.equal(result.ok,false);assert.equal(result.uncertain,true);assert.equal((await state()).clicks,1); });
+  await test('取消确认迟到仅恢复后续新批，旧结果不重发', async () => {
+    await setup("window.mode='disabled'"); await sender.dispose();
+    const web = window.webContents, actual = web.executeJavaScriptInIsolatedWorld.bind(web);
+    let release;
+    sender = new WebComposerSender({ getURL: () => web.getURL(), isDestroyed: () => web.isDestroyed(),
+      on: (...args) => web.on(...args), removeListener: (...args) => web.removeListener(...args),
+      async executeJavaScriptInIsolatedWorld(world, entries) {
+        const result = await actual(world, entries);
+        if (entries[0].code.includes('state.cancel();')) return new Promise(resolve => { release = () => resolve(result); });
+        return result;
+      } });
+    const old = send('old-receipt'); await pause(100); assert.equal((await state()).text, 'old-receipt');
+    await sender.cancel(); assert.equal((await old).uncertain, true);
+    const blocked = await send('new-receipt'); assert.equal(blocked.blockedByPreviousCancellation, true); assert.equal(blocked.transportStarted, false);
+    release(); await pause(60); await run("window.mode='normal'");
+    assert.equal((await send('new-receipt')).ok, true);
+    assert.deepEqual((await state()).received, ['new-receipt']); assert.equal((await state()).clicks, 1);
+  });
+  await test('同URL新文档恢复未来批，旧排队写入不能进入替换页面', async () => {
+    await setup(); await sender.dispose();
+    const web = window.webContents, actual = web.executeJavaScriptInIsolatedWorld.bind(web);
+    let pendingCode, settleOld, hold = true;
+    sender = new WebComposerSender({ getURL: () => web.getURL(), isDestroyed: () => web.isDestroyed(),
+      on: (...args) => web.on(...args), removeListener: (...args) => web.removeListener(...args),
+      executeJavaScriptInIsolatedWorld(world, entries) {
+        if (hold && entries[0].code.includes('payload =')) {
+          hold = false; pendingCode = entries[0].code;
+          return new Promise(resolve => { settleOld = resolve; });
+        }
+        return actual(world, entries);
+      } });
+    const old = send('must-never-appear'); await pause(100); assert.ok(pendingCode);
+    await sender.cancel(); assert.equal((await old).uncertain, true);
+    assert.equal((await send('blocked-before-navigation')).blockedByPreviousCancellation, true);
+    await window.loadURL('https://chatgpt.com/c/current'); await pause(80);
+    const rejected = await actual(1005, [{ code: pendingCode }]); settleOld(rejected);
+    assert.equal(rejected.ok, false); assert.match(rejected.error, /文档已变化/);
+    assert.equal((await state()).inputs, 0); assert.equal((await state()).clicks, 0);
+    assert.equal((await send('fresh-document-receipt')).ok, true);
+    assert.deepEqual((await state()).received, ['fresh-document-receipt']);
+  });
   await sender.dispose(); window.destroy(); console.log(JSON.stringify({ passed, failed: 0, realWebsiteVerified: false })); app.exit(0);
 }).catch(async error => { console.error(error); if (sender) await sender.dispose(); if(window&&!window.isDestroyed())window.destroy(); app.exit(1); });

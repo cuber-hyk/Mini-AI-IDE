@@ -1,7 +1,7 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-14
+updated: 2026-10-15
 owner: 胡运宽
 source_of_truth: [src/main/settings.ts, test/promptSettingsMigration.test.ts, src/renderer/prompt.js, docs/capabilities/skills-and-local-prompt.md, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, docs/adr/2026-10-06-native-tool-harness-boundary.md, src/shared/toolProtocol.ts, src/shared/formatSpec.ts, src/shared/returnPath.ts, src/main/replyCollector.ts, src/main/tools/changes.ts, src/main/tools/changeReview.ts, src/main/tools/integration.ts, src/main/returnPathService.ts, src/main/previewPreload.ts, src/main/fileService.ts, src/renderer/preview.js, src/renderer/editorWorkspace.js, test/replyCollector.test.ts, test/toolProtocol.test.ts, test/toolChanges.test.ts, test/formatSpec.test.ts, test/toolSamples.test.ts, src/main/tools/jsonDraft.ts, test/jsonDraft.test.ts, test/toolAutoContinueIntegration.test.ts]
 ---
@@ -61,3 +61,6 @@ tools/changes.ts 将工具参数转换为 ReturnPathService 的内部编辑模�
 formatSpec.test.ts 实际解析并执行示例的查询和修改；toolProtocol/toolIntegration 回归验证手动入口不接受旧格式；toolChanges/FileService/ReturnPathService 测试验证原文、别名、草稿、写入与撤销。docs/工具调用测试样例.md 提供 35 场景，toolSamples.test.ts 直接读取其原文并实际执行关键工具。
 
 离线样例不能保证任意网页版本的结束状态或模型遵守率，权限弹窗、Monaco 草稿和真实网页需手测。原文核验不提供跨进程文件锁；逐文件写盘后遇到系统错误可能部分成功。唯一匹配证明定位，不能证明生成代码符合用户需求。
+
+
+取消未确认的发送阻断绑定具体token与文档。相同取消的迟到未点击且清理完成证据，或成功主frame新文档加载并核验新nonce后，仅允许后续合法新批继续；旧批结果不补发、工具不重跑。SPA、失败加载、未知或已点击的同文档取消不自动恢复。隔离世界所有运输阶段核对Document/nonce/活动token，旧排队脚本和逆序握手不能落入新批。当前纯文本被旧阻断挡住时显示“本批未发送”，不报告当前提交未知、不自动重试；真实未知状态仍等待用户处理。规则见 `../adr/2026-10-14-automatic-recovery.md`。
