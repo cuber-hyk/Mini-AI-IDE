@@ -68,7 +68,7 @@ source_of_truth: code
 | PERF-04 | P1 | verified | 编辑器页面加载前存在辅助页面与工具初始化串行等待 | `src/main/index.ts`；`tools/verify-startup-sequence.cjs` | docs/plans/archived/2026-10-15-editor-startup-order.md | codex/20261015-editor-startup-order；本阶段收尾提交 | 专项76、单测1161、自检159、工作区功能119通过；三次同口径Monaco就绪中位2512.3→1596.5ms；原生缩放5/10与master同失败 | 用户知悉master同样的布局5/10限制后验收通过；保留失败证据，不声称安装版收益 |
 | PERF-05 | P1 | verified | PDF 资源表与 Word 依赖提前进入编辑器启动脚本链 | `index.html:170-176`；`filePreview.js:5-7`；只读构建产物大小记录 | docs/plans/archived/2026-10-15-preview-tool-performance.md | codex/20261015-preview-tool-performance；用户批准合并 | AMD预览22项与原生预览最终64项通过；首屏延期4,020,854字节专用脚本，真实加载故障后重开与Monaco共存通过 | 实现及原生验证闭合，用户批准当前分支合并；未新增真人实测，不声称启动提速比例 |
 | PERF-06 | P1 | verified | 工具结果变化时重新序列化结果并重建整个结果 DOM | `toolHarness.js:135-191,268-279,386` | docs/plans/archived/2026-10-15-preview-tool-performance.md | codex/20261015-preview-tool-performance；用户批准合并 | UI42项、原生240项通过；50次克隆整批序列化50→0，20次其他行进度节点创建3200→0，焦点/选区保持 | 实现及原生验证闭合，用户批准当前分支合并；原IPC与逐字段比较仍存在 |
-| PERF-07 | P2 | open | 工具历史数据变更采用全量克隆及 JSON 重写 | `src/main/tools/store.ts`；`tools/measure-tool-store.ts` | docs/plans/archived/2026-10-15-tool-store-performance.md | codex/20261015-editor-startup-order；本阶段收尾提交 | 前后100/1000/10000批各3样本，18重启去重校验及17针对性回归通过；全套并发4条件1167/1167、无跳过；实际变更不全量clone、无变化0写盘 | 局部改动用户已验收，计划归档；全量JSON写盘成本保留，整体仍open |
+| PERF-07 | P2 | open | 工具历史真实变更仍采用完整 JSON 保存 | `src/main/tools/store.ts`；`tools/measure-tool-store.ts` | docs/plans/archived/2026-10-16-tool-store-measurement.md（已验收测量）；旧局部计划已归档 | codex/20261016-tool-store-measurement；本轮验证收尾提交，生产store未改 | 系统Node与应用Electron运行时各90样本，重启/去重/精确字节核验通过；17针对性通过；Electron下10000×10请求约52–54ms、10000×50约163–215ms/真实更新 | 用户批准仅保留验证记录并提交合并；测量计划已归档，未实施增量存储，整体仍open |
 | PERF-08 | P2 | verified | 文件树刷新与单目录逐项安全路径校验可能累积等待时间 | `src/main/fileService.ts`；`src/renderer/fileExplorer.js`；`tools/measure-directory-list.ts`；`tools/verify-file-tree-refresh.cjs` | docs/plans/archived/2026-10-15-file-tree-local-refresh.md | codex/20261015-file-tree-refresh；本轮收尾提交 | 既有列举调度已验收；最新原生47、针对性33、全套并发4条件1187、工作区119功能通过；布局5/10失败已记录；4×100文件单项读取5→1、DOM约4000→0至10 | 用户知悉缩放限制后验收并批准提交合并，计划归档；不宣称实际项目FPS |
 | PERF-09 | P2 | open | 官网大量 DOM 变化时的监听开销需通过采样判断 | `tools/replyChangeWatcher.ts:135-173,269-303`；`tools/autoCollector.ts:37-82` | none；待性能证据后决定 | none | 已确认事件驱动和 150ms 合并；未证明空闲高 CPU | 未关闭；仅性能采样支持后才考虑改动 |
 
@@ -266,3 +266,13 @@ PERF-08验证收尾：全套并发4条件1175/1175、0失败/取消/跳过，原
 两轮原生20场景符合期望，其中100项布局用例通过，10个最小化或故障注入场景为明确拒绝/失败验证，不能称为几何通过；恢复前直接读取视口和需求区边界、不调用截图，均对齐。原性能审计的PERF-03/07/09仍open，本轮不开展或关闭它们。
 
 布局验收修正已获用户批准提交收尾合并，实施计划归档；后续工具历史存储测量另立任务，不沿用本轮布局任务扩大范围。
+
+## 工具历史剩余成本测量（2026-10-16）
+
+布局任务已以d7b8439合并。按用户授权独立测量PERF-07，扩展既有measure-tool-store唯一入口，未修改ToolStore或实际存储格式。100/1000/10000批×每批1/10/50请求×首尾位置×5次，系统Node22与应用Electron44.5.1（Node24.21）各90样本；所有重启/去重/冲突、无变化0写盘、真实变更完整字节核验通过。
+
+以Electron受控CLI为主要依据：1000×10请求状态更新中位9.23–11.11ms、10000×10为52.37–54.27ms、10000×50为163.50–215.28ms；后者JSON序列化分项中位86.44–113.53ms，相同状态末尾查找约0.601ms且无写盘。说明大账本全量保存值得单独设计，优先级高于单纯查找优化；小账本暂无立即重构证据。各分项中位数不可相加，两运行时差异不代表优化收益，不外推真实GUI、P95或冷盘。
+
+记录与原始报告路径见当前测量计划。PERF-07保持open，后续若实施需独立确认持久化/迁移/损坏及中断恢复方案，不以测量任务暗中决定数据库、日志或分段存储；PERF-03/09本轮未动。
+
+存储测量最终收尾：用户明确本轮只做验证记录，并批准提交合并。测量计划已归档，两份原始合成数据报告原样保存在docs/audits/evidence/2026-10-16-tool-store-node.json和2026-10-16-tool-store-electron.json；保留180样本及运行时边界。产品存储未改，PERF-07保持open，不自动开展后续优化或推送。
