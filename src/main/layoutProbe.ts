@@ -1,8 +1,28 @@
-/** 三列本地 UI 的运行时验收；仅在 --ui-probe 调用，不访问官方网页 DOM。 */
-import type { BaseWindow, WebContentsView } from 'electron';
+/** 本地工作区的运行时验收；仅在UI/工作区探针调用，不访问官方网页DOM。 */
+import type { BaseWindow, NativeImage, WebContentsView } from 'electron';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type { Layout } from './windowLayout';
+
+async function captureProbeFrame(view: WebContentsView, failures: string[]): Promise<NativeImage> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const image = await Promise.race([
+        view.webContents.capturePage(undefined, { stayHidden: true, stayAwake: true }),
+        new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error('layout_capture_timeout')), 3000); }),
+      ]);
+      if (image.isEmpty()) throw new Error('layout_capture_empty');
+      return image;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error); failures.push(message);
+      // Chromium 首帧读回可能暂未就绪；仅此已观察错误有限重采，其他失败保留并结束。
+      if (message !== 'UnknownVizError' || attempt === 2) throw error;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    } finally { if (timer) clearTimeout(timer); }
+  }
+  throw new Error('layout_capture_exhausted');
+}
 
 export async function runLayoutProbe(input: {
   win: BaseWindow;
@@ -12,12 +32,15 @@ export async function runLayoutProbe(input: {
   configure: (previewVisible: boolean, maximized?: boolean) => void;
   getLayout: () => Layout;
   captureDirectory?: string;
-}): Promise<{ ok: boolean; cases: unknown[] }> {
+}): Promise<{ ok: boolean; cases: unknown[]; captureFailures?: string[]; error?: string }> {
+  if (!input.win.isVisible() || input.win.isMinimized()) return { ok: false, cases: [], error: 'window_not_presentable' };
   const originalSize = input.win.getSize();
   const originalZoom = input.editor.webContents.getZoomFactor();
   const originalRequirementOpen = await input.editor.webContents.executeJavaScript("document.getElementById('requirement-panel').open");
   const cases: unknown[] = [];
   let ok = true;
+  let samplingError: string | undefined;
+  const captureFailures: string[] = [];
   try {
     for (const [width, height, previewVisible, zoom, maximized, toolsVisible] of [[1600, 960, true, 1, false, false], [1080, 600, true, 1, false, false], [1080, 600, false, 1, false, false], [1600, 960, true, 1.25, false, false], [1600, 960, true, 1.5, false, false], [1600, 960, true, 1, true, false], [1080, 600, false, 1, true, false], [1600, 960, false, 1, false, true], [1080, 600, false, 1, false, true], [1600, 960, false, 1.5, true, true]] as const) {
       input.win.setSize(width, height);
@@ -32,10 +55,15 @@ export async function runLayoutProbe(input: {
       // 原生尺寸与 renderer resize 通知异步到达，等待 CSS 视口真正采用本轮尺寸和缩放。
       let viewportReady = false;
       let viewport: number[] = [];
+      const viewportSamples: unknown[] = [];
       for (let attempt = 0; attempt < 20; attempt++) {
+        // 本地视图被遮挡/最小化时可能保留上一帧视口；原生采样唤醒画面，不改变产品节流策略。
+        await captureProbeFrame(input.editor, captureFailures);
         const native = input.win.getContentSize();
         viewport = await input.editor.webContents.executeJavaScript('[innerWidth, innerHeight]') as number[];
-        viewportReady = Math.abs(viewport[0]! * zoom - native[0]!) <= zoom * 2 && Math.abs(viewport[1]! * zoom - native[1]!) <= zoom * 2;
+        viewportSamples.push({ native, bounds: input.editor.getBounds(), zoom: input.editor.webContents.getZoomFactor(), viewport });
+        viewportReady = Math.abs(input.editor.webContents.getZoomFactor() - zoom) < .001 &&
+          Math.abs(viewport[0]! * zoom - native[0]!) <= zoom * 2 && Math.abs(viewport[1]! * zoom - native[1]!) <= zoom * 2;
         if (viewportReady) break;
         await new Promise(resolve => setTimeout(resolve, 100));
       }
@@ -87,6 +115,7 @@ export async function runLayoutProbe(input: {
         for (const open of [true, false]) {
           await input.editor.webContents.executeJavaScript(`document.getElementById('requirement-panel').open = ${open}`);
           await new Promise(resolve => setTimeout(resolve, 150));
+          await captureProbeFrame(input.editor, captureFailures);
           const prompt = await input.editor.webContents.executeJavaScript(`(() => {
             const dock=document.getElementById('collaboration-dock'), panel=document.getElementById('requirement-panel'), footer=document.getElementById('prompt-actions');
             const d=dock.getBoundingClientRect(), p=panel.getBoundingClientRect(), f=footer.getBoundingClientRect();
@@ -100,23 +129,32 @@ export async function runLayoutProbe(input: {
           promptCases.push(prompt);
         }
       }
-      const pass = viewportReady && geometry && controls === true && previewControls === true && webbarControls === true && promptCases.every(value => (value as { pass: boolean }).pass);
+      let pass = viewportReady && geometry && controls === true && previewControls === true && webbarControls === true && promptCases.every(value => (value as { pass: boolean }).pass);
+      const viewportDiagnostics = await input.editor.webContents.executeJavaScript(`(() => ({
+        inner: [innerWidth,innerHeight], outer: [outerWidth,outerHeight], client: [document.documentElement.clientWidth,document.documentElement.clientHeight],
+        dpr:devicePixelRatio, visual:visualViewport && {width:visualViewport.width,height:visualViewport.height,scale:visualViewport.scale},
+        visible:document.visibilityState, focused:document.hasFocus(), dock:document.getElementById('collaboration-dock').getBoundingClientRect().toJSON()
+      }))()`);
       ok = ok && pass;
       let screenshot: string | undefined;
       let screenshotError: string | undefined;
       if (input.captureDirectory) {
         await fs.mkdir(input.captureDirectory, { recursive: true });
         screenshot = path.join(input.captureDirectory, `${width}-${height}-${previewVisible}-${zoom}-${maximized}-${toolsVisible}.png`);
-        try { await fs.writeFile(screenshot, (await input.editor.webContents.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG()); }
-        catch (error) { screenshot = undefined; screenshotError = String(error); }
+        try { await fs.writeFile(screenshot, (await captureProbeFrame(input.editor, captureFailures)).toPNG()); }
+        catch (error) { screenshot = undefined; screenshotError = String(error); pass = false; ok = false; }
       }
-      cases.push({ width, height, zoom, actualZoom: input.editor.webContents.getZoomFactor(), maximized, previewVisible, toolsVisible, editor, bar, preview, viewportReady, viewport, geometry, controls, previewControls, webbarControls, promptCases, pass, ...(controlDiagnostics ? { controlDiagnostics } : {}), ...(screenshot ? { screenshot } : {}), ...(screenshotError ? { screenshotError } : {}) });
+      cases.push({ width, height, zoom, actualZoom: input.editor.webContents.getZoomFactor(), maximized, previewVisible, toolsVisible, editor, bar, preview, viewportReady, viewport, viewportSamples, viewportDiagnostics,
+        nativeDiagnostics: { visible: input.win.isVisible(), minimized: input.win.isMinimized(), focused: input.win.isFocused(), backgroundThrottling: input.editor.webContents.getBackgroundThrottling() },
+        geometry, controls, previewControls, webbarControls, promptCases, pass, ...(controlDiagnostics ? { controlDiagnostics } : {}), ...(screenshot ? { screenshot } : {}), ...(screenshotError ? { screenshotError } : {}) });
     }
+  } catch (error) {
+    ok = false; samplingError = error instanceof Error ? error.message : String(error);
   } finally {
     input.editor.webContents.setZoomFactor(originalZoom);
     input.win.setSize(originalSize[0]!, originalSize[1]!);
     await input.editor.webContents.executeJavaScript(`document.getElementById('requirement-panel').open = ${originalRequirementOpen}; window.editorBridge.setWorkspaceLayout({ toolsVisible: false })`);
     input.configure(true);
   }
-  return { ok, cases };
+  return { ok, cases, captureFailures, ...(samplingError ? { error: samplingError } : {}) };
 }
