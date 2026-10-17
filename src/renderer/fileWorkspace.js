@@ -88,6 +88,8 @@
       document.getElementById('monaco').inert = visible || toolsVisible;
       const filePreview = document.getElementById('file-preview');
       if (filePreview) filePreview.inert = visible || toolsVisible;
+      const markdownEditor = document.getElementById('markdown-editor');
+      if (markdownEditor) markdownEditor.inert = visible || toolsVisible;
       document.getElementById('workspace-welcome').inert = visible || toolsVisible;
 
     });

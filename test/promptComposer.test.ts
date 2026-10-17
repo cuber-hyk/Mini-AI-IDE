@@ -170,7 +170,7 @@ it('选区复制没有全文回退，纯空白选区仍保留原文', async () =
     getModel: () => ({ getValueInRange: () => '  \n\t' }),
     getSelection: () => ({ isEmpty: () => !selected, startLineNumber: 6 }),
   } };
-  const sandbox: any = { state, setInfo() {}, bridge: {
+  const sandbox: any = { state, markdownEditor: null, setInfo() {}, bridge: {
     async copyNumberedSnippet(input: any) { snippets.push(input); return { ok: true, startLine: 6, endLine: 7, length: 12 }; },
   } };
   vm.createContext(sandbox); vm.runInContext(handlers, sandbox);
@@ -179,4 +179,21 @@ it('选区复制没有全文回退，纯空白选区仍保留原文', async () =
   assert.equal(snippets[0].text, '  \n\t'); assert.equal(snippets[0].startLine, 6);
   state.currentPath = null; assert.equal(await sandbox.copyNumberedSelection(), false); assert.equal(snippets.length, 1);
   assert.doesNotMatch(renderer, /copyWholeFileContext|bridge\.copyWholeFile/);
+});
+
+it('Markdown 选区复制使用真实原文与行号，不读取已隐藏的 Monaco 内容', async () => {
+  const renderer = fs.readFileSync(path.join(__dirname, '../src/renderer/renderer.js'), 'utf8');
+  const copy = renderer.slice(renderer.indexOf('  async function copyMarkdownSelection(selection)'), renderer.indexOf('  const filePreview ='));
+  const handler = renderer.slice(renderer.indexOf('  async function copyNumberedSelection()'), renderer.indexOf('  /* ---------------- 选区'));
+  const snippets: any[] = [];
+  let selection: any = { text: '**原文**\n$42$', startLine: 5 };
+  const sandbox: any = { state: { root: 'C:/root', currentPath: 'notes/a.md', editor: { getModel() { throw new Error('不得读取旧 Monaco'); } } },
+    markdownEditor: { active: () => true, getSelection: () => selection }, setInfo() {}, bridge: {
+      async copyNumberedSnippet(input: any) { snippets.push(input); return { ok: true, startLine: 5, endLine: 6 }; },
+    } };
+  vm.createContext(sandbox); vm.runInContext(copy + '\n' + handler, sandbox);
+  assert.equal(await sandbox.copyNumberedSelection(), true);
+  assert.equal(snippets[0].text, '**原文**\n$42$'); assert.equal(snippets[0].startLine, 5);
+  assert.equal(snippets[0].relPath, 'notes/a.md');
+  selection = null; assert.equal(await sandbox.copyNumberedSelection(), false); assert.equal(snippets.length, 1);
 });

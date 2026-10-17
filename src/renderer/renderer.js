@@ -81,6 +81,7 @@
    * 只回答"编辑器当前处于什么状态"。
    */
   window.__uiProbe = function () {
+    if (markdownEditor && markdownEditor.active()) return { ...markdownEditor.diagnostics(), currentPath: state.currentPath };
     const ed = state.editor;
     if (!ed) return { ready: false, reason: '编辑器尚未创建' };
     const opts = ed.getOptions();
@@ -170,6 +171,7 @@
    * 不写文件、不发网络请求。
    */
   window.__uiSelectionProbe = function () {
+    if (markdownEditor && markdownEditor.active()) return { ok: false, reason: '此探针专用于 Monaco，Markdown 选区由原生 Markdown 夹具验证' };
     const ed = state.editor;
     if (!ed) return { ok: false, reason: '编辑器尚未创建' };
     const model = ed.getModel();
@@ -297,6 +299,7 @@
    * 本函数**只读**：除了派发事件与挂观察器，不改任何 DOM/样式。
    */
   window.__uiFindHoverProbe = function () {
+    if (markdownEditor && markdownEditor.active()) return { ok: false, reason: '此探针专用于 Monaco，Markdown 使用自身查找控件' };
     if (!state.editor) return { ok: false, reason: '编辑器尚未创建' };
     const dom = state.editor.getDomNode();
     if (!dom) return { ok: false, reason: '编辑器根节点不存在' };
@@ -512,6 +515,7 @@
   const fileWorkspace = window.setupFileWorkspace(bridge);
   document.addEventListener('workspace-layout-changed', function () {
     if (state.editor) state.editor.layout();
+    if (markdownEditor) markdownEditor.layout();
   });
 
   // 快捷键通过主进程打开独立提示词编辑视图。
@@ -585,6 +589,30 @@
   /* 当前缓冲与文件树由独立 owner 管理，入口只适配 Monaco。 */
   let recentRoots = [];
   let workspaceRevision = null;
+  let markdownEditor = null;
+  let markdownLoading = null;
+  const markdownHost = document.getElementById('markdown-editor');
+  const readMarkdownImage = window.createMarkdownImageReader({ bridge,
+    context: function () { return { root: state.root, path: state.currentPath, revision: workspaceRevision }; },
+  });
+  function markdownPath(path) { return /\.(md|markdown)$/i.test(path); }
+  async function readyForFile(path) {
+    await monacoReady;
+    if (!markdownPath(path) || markdownEditor) return;
+    if (!markdownLoading) markdownLoading = import('./vendor/markdown/markdownEditor.js').then(function (module) {
+      markdownEditor = module.createMarkdownEditor({ host: markdownHost, setInfo, readImage: readMarkdownImage,
+        onChange: function (model) { editorWorkspace.contentChanged(model); },
+        onSave: function () { void save(); }, onCopy: copyMarkdownSelection,
+      });
+    }).catch(function (error) { markdownLoading = null; throw error; });
+    await markdownLoading;
+  }
+  async function copyMarkdownSelection(selection) {
+    if (!selection || !selection.text || !state.currentPath) return false;
+    const result = await bridge.copyNumberedSnippet({ root: state.root, relPath: state.currentPath, text: selection.text, startLine: selection.startLine });
+    setInfo(result.ok ? '已复制 Markdown 原文片段（' + result.startLine + '-' + result.endLine + ' 行）' : '复制片段失败：' + result.error, !result.ok);
+    return result.ok;
+  }
   const filePreview = window.createFilePreview({
     host: document.getElementById('file-preview'),
     openExternal: async function () {
@@ -597,17 +625,20 @@
   const editorWorkspace = window.createEditorWorkspace({
     state, bridge, setInfo,
     kindForPath: window.filePreviewKind,
-    ready: function () { return monacoReady; },
-    createModel: function (path, text) { return window.monaco.editor.createModel(text, languageFor(path)); },
-    captureViewState: function (doc) { return doc.kind ? filePreview.captureViewState() : state.editor && state.editor.saveViewState(); },
+    ready: readyForFile,
+    createModel: function (path, text) { return markdownPath(path) ? markdownEditor.createModel(path, text) : window.monaco.editor.createModel(text, languageFor(path)); },
+    captureViewState: function (doc) { return doc.kind ? filePreview.captureViewState() : doc.model.markdown ? markdownEditor.captureViewState() : state.editor && state.editor.saveViewState(); },
     showDocument: function (doc, focus) {
       const preview = Boolean(doc && doc.kind);
-      el.monacoHost.hidden = preview;
+      const markdown = Boolean(doc && doc.model && doc.model.markdown);
+      el.monacoHost.hidden = preview || markdown;
+      markdownHost.hidden = !markdown;
+      if (markdownEditor) { if (markdown) markdownEditor.show(doc.model, focus); else markdownEditor.clear(); }
       if (preview) void filePreview.show(doc, focus); else filePreview.clear();
       if (state.editor) {
-        state.editor.setModel(doc && !preview ? doc.model : emptyModel);
-        if (doc && !preview && doc.viewState) state.editor.restoreViewState(doc.viewState);
-        if (focus && !preview) state.editor.focus();
+        state.editor.setModel(doc && !preview && !markdown ? doc.model : emptyModel);
+        if (doc && !preview && !markdown && doc.viewState) state.editor.restoreViewState(doc.viewState);
+        if (focus && !preview && !markdown) state.editor.focus();
       }
     },
     replaceContent: function (doc, text) {
@@ -615,7 +646,8 @@
       else if (state.currentPath === doc.path) { doc.viewState = filePreview.captureViewState(); void filePreview.show(doc, false); }
     },
     renameModel: function (doc) {
-      if (doc.model) window.monaco.editor.setModelLanguage(doc.model, languageFor(doc.path));
+      if (doc.model && doc.model.markdown) markdownEditor.renameModel(doc.model, doc.path);
+      else if (doc.model) window.monaco.editor.setModelLanguage(doc.model, languageFor(doc.path));
       else filePreview.rename(doc);
     },
     disposeModel: function (model) { model.dispose(); },
@@ -689,6 +721,7 @@
   /* ---------------- 事件绑定 ---------------- */
   /** 选区浮动入口仅复制真实选中原文，无全文回退。 */
   async function copyNumberedSelection() {
+    if (markdownEditor && markdownEditor.active()) return copyMarkdownSelection(markdownEditor.getSelection());
     if (!state.currentPath) {
       setInfo('请先打开一个文件，再选中要交给模型修改的代码', true);
       return false;

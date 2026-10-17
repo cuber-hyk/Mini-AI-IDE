@@ -257,11 +257,11 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     await evaluate("document.getElementById('file-new').click()"); await waitFor("Boolean(document.querySelector('.tree-name-input'))");
     await evaluate("const input=document.querySelector('.tree-name-input'); input.value='note.md'; input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));");
     check('选中文件夹下新建文件并打开', await waitFor("(document.querySelector('#editor-tabs [data-kind=file][aria-selected=true]')?.getAttribute('data-path') ?? '未打开文件') === 'notes/note.md'") && fs.existsSync(path.join(a, 'notes/note.md')));
-    await evaluate("window.monaco.editor.getEditors()[0].getModel().setValue('unsaved note')"); await pause();
+    await evaluate("document.querySelector('#markdown-editor .cm-content').focus(); document.execCommand('insertText', false, 'unsaved note')"); await pause();
     await evaluate("document.querySelector('#tree .tree-row[data-rel-path=\"notes/note.md\"]').dispatchEvent(new KeyboardEvent('keydown',{key:'F2',bubbles:true}))");
     await waitFor("Boolean(document.querySelector('.tree-name-input'))");
     await evaluate("const input=document.querySelector('.tree-name-input'); input.value='renamed.md'; input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));");
-    check('F2 改名更新路径并保留未保存缓冲', await waitFor("(document.querySelector('#editor-tabs [data-kind=file][aria-selected=true]')?.getAttribute('data-path') ?? '未打开文件') === 'notes/renamed.md'") && await evaluate("window.monaco.editor.getEditors()[0].getModel().getValue() === 'unsaved note'"));
+    check('F2 改名更新路径并保留未保存缓冲', await waitFor("(document.querySelector('#editor-tabs [data-kind=file][aria-selected=true]')?.getAttribute('data-path') ?? '未打开文件') === 'notes/renamed.md'") && await evaluate("document.querySelector('#markdown-editor .cm-content').textContent === 'unsaved note'"));
     check('文件树操作按钮有名称且处于可见范围', await evaluate(`['file-new','folder-new','file-refresh'].every(id => {
       const button = document.getElementById(id); const r = button.getBoundingClientRect();
       return Boolean(button.getAttribute('aria-label')) && r.width > 0 && r.left >= 0 && r.right <= innerWidth;
@@ -269,7 +269,7 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     await evaluate("document.querySelector('#tree .tree-row[data-rel-path=\"notes/renamed.md\"]').dispatchEvent(new KeyboardEvent('keydown',{key:'F2',bubbles:true}))");
     await waitFor("Boolean(document.querySelector('.tree-name-input'))");
     await evaluate("document.querySelector('.tree-name-input').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))");
-    check('Esc 取消改名不改变文件与草稿', fs.existsSync(path.join(a, 'notes/renamed.md')) && await evaluate("!document.querySelector('.tree-name-input') && window.monaco.editor.getEditors()[0].getModel().getValue() === 'unsaved note'"));
+    check('Esc 取消改名不改变文件与草稿', fs.existsSync(path.join(a, 'notes/renamed.md')) && await evaluate("!document.querySelector('.tree-name-input') && document.querySelector('#markdown-editor .cm-content').textContent === 'unsaved note'"));
     await evaluate("document.querySelector('#tree .tree-row[data-rel-path=\"notes/renamed.md\"]').dispatchEvent(new KeyboardEvent('keydown',{key:'F10',shiftKey:true,bubbles:true}))");
     check('键盘可打开文件右键菜单', await waitFor("Array.from(document.querySelectorAll('.file-menu [role=menuitem]')).some(button => button.textContent === '永久删除…')"));
     await evaluate("document.querySelector('.file-menu').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))");
@@ -278,7 +278,7 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     check('树内重名错误可见且不覆盖文件', await waitFor("Boolean(document.querySelector('.tree-name-error').textContent)") && fs.readFileSync(path.join(a, 'notes/renamed.md'), 'utf8') === '');
     await evaluate("document.querySelector('.tree-name-input').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}))");
     const renamedFolder = await evaluate<{ ok: boolean }>(`window.editorBridge.renameEntry('notes','renamed-notes',${JSON.stringify(a)})`);
-    check('文件夹改名更新内部文件路径并保留草稿', renamedFolder.ok && await waitFor("(document.querySelector('#editor-tabs [data-kind=file][aria-selected=true]')?.getAttribute('data-path') ?? '未打开文件') === 'renamed-notes/renamed.md'") && await evaluate("window.monaco.editor.getEditors()[0].getModel().getValue() === 'unsaved note'"));
+    check('文件夹改名更新内部文件路径并保留草稿', renamedFolder.ok && await waitFor("(document.querySelector('#editor-tabs [data-kind=file][aria-selected=true]')?.getAttribute('data-path') ?? '未打开文件') === 'renamed-notes/renamed.md'") && await evaluate("document.querySelector('#markdown-editor .cm-content').textContent === 'unsaved note'"));
     await evaluate("document.getElementById('tree').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,clientX:40,clientY:250}))");
     check('树空白右键提供新建与路径操作', await waitFor("document.querySelectorAll('.file-menu [role=menuitem]').length >= 6"));
     await evaluate("document.querySelector('.file-menu [role=menuitem]').click()"); await waitFor("Boolean(document.querySelector('.tree-name-input'))");
@@ -292,7 +292,7 @@ export async function runWorkspaceProbe(view: WebContents, web: WebContents, pre
     await evaluate("document.querySelector('#editor-tabs [role=tab][data-path=\"renamed-notes/renamed.md\"]').click()"); choice = 1;
     // 保存再验证真实回收站，不删除任何用户文件。
     const leave = await evaluate<{ ok: boolean }>('window.editorBridge.confirmLeave()');
-    check('放弃确认不提前清空缓冲', leave.ok && await evaluate("window.monaco.editor.getEditors()[0].getModel().getValue() === 'unsaved note'"));
+    check('放弃确认不提前清空缓冲', leave.ok && await evaluate("document.querySelector('#markdown-editor .cm-content').textContent === 'unsaved note'"));
     choice = 0;
     const savedRenamed = await evaluate<{ ok: boolean }>('window.editorBridge.confirmLeave()');
     check('改名后保存确实写向新路径', savedRenamed.ok && fs.readFileSync(path.join(a, 'renamed-notes/renamed.md'), 'utf8') === 'unsaved note' && !fs.existsSync(path.join(a, 'notes')));

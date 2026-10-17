@@ -12,6 +12,8 @@
 
 ## 按任务类型路由
 
+Markdown 实时/源码编辑、数学公式及 Mermaid 先读 `docs/capabilities/markdown-editing.md` 和 `docs/adr/2026-10-17-markdown-document-kernel.md`。文件/保存 owner 仍为 `src/renderer/editorWorkspace.js`；Markdown 内核为 `markdownEditor.js`，源码装饰为 `markdownPresentation.js`，数学/图表分别归 `markdownMath.js`、`markdownMermaid.js`，图片路径读取归 `markdownImages.js`。本地 ESM 构建归 `scripts/build-markdown.mjs`，只由静态资源构建调用；原生验收为 `tools/verify-markdown-editor.cjs`，不使用官网、CDP 或外部资源。真实 OS 中文候选窗仍需人工验收，合成 composition 不替代该证据。
+
 本地工作区缩放/需求区越界先读`docs/capabilities/app-shell.md`的本地布局验收及工作区布局说明；原生几何归`windowLayout.ts`、应用/广播归`workspaceLayoutController.ts`，CSS映射与dock测量归`src/renderer/workspaceLayout.js`，输入增高归`promptComposer.js`。验收owner为`src/main/layoutProbe.ts`，离线生命周期/故障注入入口`tools/verify-workspace-zoom.cjs`；先区分原生与CSS视口、实际缩放及遮挡状态，不将后台旧帧直接当作产品布局错误。
 
 自动流程停滞与有限恢复先读 `docs/adr/2026-10-14-automatic-recovery.md`、`docs/capabilities/tool-harness.md` 与 `docs/capabilities/human-machine-boundary.md`。来源/实际接纳归 replySource、replyChangeWatcher、replyObservation/chatgptPage 与 integration；监听/读取恢复归 replyChangeWatcher/autoCollector，未运输预检复核归 resultReturn/autoContinuation，运输阶段与取消归 webComposerSender。collection 健康由 integration 投影，顶栏/工具摘要归 toolWorkspaceStatus/toolHarness。回归使用对应 owner 测试及 `tools/verify-chatgpt-tools.cjs` 的30轮离线故障注入；真实官网另验。

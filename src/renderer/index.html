@@ -16,6 +16,8 @@
     <link rel="stylesheet" href="./workspaceNavigation.css" />
     <link rel="stylesheet" href="./localPrompt.css" />
     <link rel="stylesheet" href="./filePreview.css" />
+    <link rel="stylesheet" href="./markdownEditor.css" />
+    <link rel="stylesheet" href="./vendor/katex/katex.min.css" />
   </head>
   <body>
     <nav id="workspace-navigation" class="workspace-navigation" aria-label="项目工作区">
@@ -65,6 +67,7 @@
 
       <section class="editor-wrap">
         <div id="monaco" class="monaco"></div>
+        <section id="markdown-editor" class="markdown-editor" aria-label="Markdown 编辑器" hidden></section>
         <section id="file-preview" class="file-preview" aria-label="文件只读预览" hidden></section>
         <div id="workspace-welcome" class="workspace-welcome" hidden></div>
         <div id="info" class="info">未打开文件</div>
@@ -187,6 +190,7 @@
 
     <script src="./filePreviewTypes.js"></script>
     <script src="./filePreview.js"></script>
+    <script src="./markdownImages.js"></script>
     <script src="./vendor/monaco/vs/loader.js"></script>
     <script src="./promptComposer.js"></script>
     <script src="./localPrompt.js"></script>

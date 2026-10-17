@@ -102,7 +102,7 @@
       const existing = documents.get(key(relPath));
       if (existing) { activate(existing, focus); return true; }
       try {
-        await options.ready();
+        await options.ready(relPath);
         if (epoch !== generation || request !== openRequest || root !== state.root) return false;
         const kind = options.kindForPath ? options.kindForPath(relPath) : null;
         const result = await read(relPath, root, kind);

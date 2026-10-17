@@ -4,7 +4,7 @@
 
 ## 1. 项目是什么
 
-Mini-AI-IDE 是一个 **Windows 桌面工具**：左侧展示可切换的多项目工作区，中间在**独立渲染进程**中加载官方大模型网页（目标平台为 DeepSeek 与 ChatGPT 普通对话网页版），并**只读**采集规范请求；右侧使用 Monaco 编辑本地文件（编辑／Diff 正文在左、目录树在最右）。IDE 按用户预选权限执行通用本地工具、整理结果；开启“自动继续”后，可将当前工具批次真正执行结束的整批真实结果填入官网输入框并发送。用户在本地需求框 Enter 或点击发送按钮主动提交需求，Shift+Enter 换行；初始化提示词是否附带由用户决定。暂时性只读故障及明确未运输的预检可有限恢复，来源未知、真实中断和未知提交仍由用户处理；复制仍走原统一入口。
+Mini-AI-IDE 是一个 **Windows 桌面工具**：左侧展示可切换的多项目工作区，中间在**独立渲染进程**中加载官方大模型网页（目标平台为 DeepSeek 与 ChatGPT 普通对话网页版），并**只读**采集规范请求；右侧使用 Monaco 编辑普通文本、CodeMirror 编辑 Markdown 本地文件（编辑／Diff 正文在左、目录树在最右）。IDE 按用户预选权限执行通用本地工具、整理结果；开启“自动继续”后，可将当前工具批次真正执行结束的整批真实结果填入官网输入框并发送。用户在本地需求框 Enter 或点击发送按钮主动提交需求，Shift+Enter 换行；初始化提示词是否附带由用户决定。暂时性只读故障及明确未运输的预检可有限恢复，来源未知、真实中断和未知提交仍由用户处理；复制仍走原统一入口。
 
 三条不可动摇的项目原则：
 
@@ -22,7 +22,7 @@ Mini-AI-IDE 是一个 **Windows 桌面工具**：左侧展示可切换的多项�
 | 运行时 | Electron（**不 patch Chromium 构建**，见 ADR-0001） |
 | 语言 | TypeScript（strict） |
 | 包管理 | pnpm |
-| 编辑器 | Monaco Editor（渲染进程内，沙箱化） |
+| 编辑器 | Monaco Editor / Markdown CodeMirror 6（本地渲染进程内，沙箱化） |
 | 当前仓库状态 | 已有 Electron 实现、测试与安装版发布链路；当前能力以 `docs/capabilities/` 为准 |
 
 ## 3. 目录约定
@@ -79,6 +79,8 @@ Mini-AI-IDE 是一个 **Windows 桌面工具**：左侧展示可切换的多项�
 依据见 ADR-0001「受控实验结论与 UA 规则」。
 
 ## 6. Dev Flow 文档路由
+
+Markdown 实时/源码编辑与公式、Mermaid 的当前行为见 `docs/capabilities/markdown-editing.md`，文档内核边界见 `docs/adr/2026-10-17-markdown-document-kernel.md`。统一保存归 `editorWorkspace.js`，Markdown 排版不得转换 DOM 回写源文，也不得引入在线资源或扩大文件/官网权限。
 
 | 产物 | 位置 | 规则 |
 |---|---|---|

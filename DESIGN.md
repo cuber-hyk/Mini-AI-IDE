@@ -1,7 +1,7 @@
 ---
 artifact_type: design_system
 status: current
-updated: 2026-10-15
+updated: 2026-10-17
 token_source: design-tokens.json
 ---
 
@@ -14,6 +14,8 @@ token_source: design-tokens.json
 本文件记录用户已批准的工作区布局与紧凑本地 IDE 视觉方向。基础数值以运行实现为准，随实际使用交由用户审阅；未确认的新场景不在此定义。
 
 ## Layout Patterns
+
+- Markdown 共用文件标签和正文，默认实时编辑，在正文顶部紧凑工具栏切换“实时编辑 / 源码”；两种模式共用内容与撤销，切换不产生未保存状态。光标进入所在段落或渲染块时显示源码；公式、表格、代码和 Mermaid 支持点击或键盘进入源码。选区复制只取真实 Markdown 原文及行号。普通代码继续 Monaco；工具/Diff 覆盖时 Markdown 同样不可聚焦，隐藏与切标签保留草稿。公式错误和图表错误在对应块显示并保留源码；本地渲染使用主题、现有文件权限与离线资源。实现为 `src/renderer/markdownEditor.js`、`src/renderer/markdownPresentation.js`、`src/renderer/markdownMath.js`、`src/renderer/markdownMermaid.js` 和 `src/renderer/markdownEditor.css`。
 
 - 目录树单个文件行可原生拖出，包含普通文本和附件；文件夹不可拖出。拖到官网只由官网添加附件，不自动发送；拖到本地需求框显示待发附件并随用户明确提交。两种目标共用真实文件拖放，错误显示本地反馈；磁盘文件保持原格式，未保存编辑草稿不随拖拽导出。
 - 附件预览正文支持 Ctrl＋滚轮，向上放大、向下缩小，复用按钮的 1.25 倍步幅与 10%–400% 手动比例范围，同步右下角实际百分比。仅命中可见、已加载的预览正文时生效，不缩放外壳；普通滚轮继续滚动。图片/PDF/Word 共用编辑器原生缩放通知入口，Word 不增加脚本或同源权限。
