@@ -11,7 +11,7 @@
   const LOAD_RETRIES = 4;
   let state = null;
   let savedText = '';
-  let maxLength = 10000;
+  let maxLength = 15000;
   let saving = false;
   let loadError = '';
   function normalize(text) { return text.replace(/\r\n/g, '\n').trim(); }

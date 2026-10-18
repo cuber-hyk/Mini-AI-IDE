@@ -21,7 +21,8 @@ it('保留真实解析错误和位置，非法工具批次不能产生请求', (
 });
 
 it('无可用草稿的独立指导要求完整重发，不创建补丁或猜测草稿身份', () => {
-  assert.match(TOOL_JSON_RESEND_INSTRUCTION, /完整、合法的 mini-ai-tools JSON 围栏/);
+  assert.match(TOOL_JSON_RESEND_INSTRUCTION, /完整、合法的 mini-ai-tools 围栏/);
+  assert.match(TOOL_JSON_RESEND_INSTRUCTION, /短 JSON 清单及其引用的全部原文块/, '重发指导必须包括原文，避免模型只发清单导致引用缺失');
   assert.match(TOOL_JSON_RESEND_INSTRUCTION, /不要只返回补丁或残片/);
   assert.doesNotMatch(TOOL_JSON_RESEND_INSTRUCTION, /repair_draft|draft_id|version/);
 });

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { joinToolTextEnvelope, wrapToolTextEnvelope } from '../src/shared/toolTextBodies';
 import { it } from 'node:test';
 import { EventEmitter } from 'node:events';
 import * as fs from 'node:fs/promises';
@@ -56,6 +57,54 @@ async function fixture(t: { after(fn: () => Promise<void>): void }) {
     navigateTo(url: string) { session = url; web.emit('did-navigate-in-page', {}, session, true); },
   };
 }
+
+it('具名原文通过真实文件与命令执行闭环，重复采集不重写或重复回传', async t => {
+  const f = await fixture(t); await f.call(CHANNELS.setToolConfig, { permission: 'full', automatic: true, sendIntervalSeconds: 0 });
+  const content = "# 引号和反斜杠无需JSON转义\n$value = 'raw-\"quoted\" C:\\data'\nWrite-Output $value\n";
+  const manifest = JSON.stringify({ protocol_version: 1, batch_id: 'raw-command-loop', requests: [
+    { id: 'create', tool: 'apply_changes', args: { changes: [{ path: 'raw-script.ps1', operation: 'create', content: { text_ref: 'script' } }] } },
+    { id: 'run', tool: 'run_command', args: { command: "& './raw-script.ps1'", shell: 'powershell', timeout_ms: 15000 }, depends_on: ['create'] },
+  ] });
+  const source = wrapToolTextEnvelope(joinToolTextEnvelope({ manifest, bodies: [{ id: 'script', text: content }] }));
+  f.setReply(source); await f.system.accept(source, 'complete'); await until(() => f.sent.length === 1);
+  assert.equal(await fs.readFile(path.join(f.root, 'raw-script.ps1'), 'utf8'), content);
+  const results = JSON.parse(f.sent[0]!).tool_results;
+  assert.equal(results.length, 2); assert.ok(results.every((item: any) => item.status === 'done'));
+  assert.match(results[1].data.stdout, /raw-"quoted" C:\\data/);
+  await f.notify(source); await delay(40); assert.equal(f.sent.length, 1);
+});
+
+it('原文块整批校验失败时前置合法修改也零执行；清单修复保留长原文且只回传一次', async t => {
+  const f = await fixture(t); await f.call(CHANNELS.setToolConfig, { permission: 'full', automatic: true, sendIntervalSeconds: 0 });
+  const content = Array.from({ length: 300 }, (_, n) => `print("中文 ${n}", r'C:\\data')`).join('\n') + '\n';
+  const manifest = JSON.stringify({ protocol_version: 1, batch_id: 'raw-repair-loop', requests: [
+    { id: 'create', tool: 'apply_changes', args: { changes: [{ path: 'recovered.py', operation: 'create', content: { text_ref: 'script' } }] } },
+  ] });
+  const bad = wrapToolTextEnvelope(joinToolTextEnvelope({ manifest: manifest.slice(0, -1) + ',}', bodies: [{ id: 'script', text: content }] }));
+  f.setReply(bad); await f.system.accept(bad, 'complete'); await until(() => f.sent.length === 1);
+  await assert.rejects(fs.access(path.join(f.root, 'recovered.py')), { code: 'ENOENT' });
+  const diagnostic = f.system.getState().batchError!.error;
+  const draft = /草稿 ([\w-]+)；修订稿版本 (\d+)/.exec(diagnostic)!; assert.ok(draft);
+  const patch = wrapToolTextEnvelope(joinToolTextEnvelope({ manifest: JSON.stringify({ repair_draft: {
+    draft_id: draft[1], version: Number(draft[2]), body_id: 'manifest', content: { text_ref: 'fixed' },
+  } }), bodies: [{ id: 'fixed', text: manifest }] }));
+  assert.ok(patch.length < content.length / 5, '恢复只需小清单，无需抄写长正文或其转义');
+  await f.notify(patch); await until(() => f.sent.length === 2);
+  assert.equal(await fs.readFile(path.join(f.root, 'recovered.py'), 'utf8'), content);
+  assert.equal(JSON.parse(f.sent[1]!).tool_results[0].status, 'done');
+  await f.notify(patch); await delay(40); assert.equal(f.sent.length, 2);
+});
+
+it('合法前置请求不能绕过缺失原文块或非法引用的整批拒绝', async t => {
+  const f = await fixture(t); await f.call(CHANNELS.setToolConfig, { permission: 'full', automatic: true, sendIntervalSeconds: 0 });
+  const source = wrapToolTextEnvelope(JSON.stringify({ protocol_version: 1, batch_id: 'raw-missing-loop', requests: [
+    { id: 'create', tool: 'apply_changes', args: { changes: [{ path: 'never.txt', operation: 'create', content: 'must not run' }] } },
+    { id: 'run', tool: 'run_command', args: { command: { text_ref: 'missing' }, shell: 'powershell' } },
+  ] }));
+  f.setReply(source); await f.system.accept(source, 'complete'); await until(() => f.sent.length === 1);
+  await assert.rejects(fs.access(path.join(f.root, 'never.txt')), { code: 'ENOENT' });
+  assert.equal(JSON.parse(f.sent[0]!).tool_results.length, 0);
+});
 
 it('旧回复已确认接纳后迟到的回执不能跨会话或导航往返执行命令，也不污染新会话采集状态', async t => {
   for (const roundTrip of [false, true]) {

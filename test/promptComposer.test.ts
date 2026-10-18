@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vm from 'node:vm';
 import { it } from 'node:test';
-import { FORMAT_SPEC } from '../src/shared/formatSpec';
+import { FORMAT_SPEC, MAX_CUSTOM_FORMAT_SPEC_LENGTH } from '../src/shared/formatSpec';
 import { buildWholeFileText } from '../src/shared/snippet';
 
 const source = fs.readFileSync(path.join(__dirname, '../src/renderer/promptComposer.js'), 'utf8');
@@ -124,7 +124,7 @@ it('窄窗口操作栏换行后压缩长输入，常用控件仍保留高度预�
 function panelFixture(fail = false, saveFail = false) {
   const names = ['close', 'editor', 'status', 'count', 'hint', 'usage', 'reset', 'cancel', 'save'];
   const nodes = Object.fromEntries(names.map(name => ['pm-' + name, Object.assign(element(), { className: '', classList: { toggle() {} } })]));
-  const state = { maxLength: 10000, updatedAt: null, defaultSpec: FORMAT_SPEC, isCustom: true, customSpec: '\n我的自定义原文\n' as string | null };
+  const state = { maxLength: MAX_CUSTOM_FORMAT_SPEC_LENGTH, updatedAt: null, defaultSpec: FORMAT_SPEC, isCustom: true, customSpec: '\n我的自定义原文\n' as string | null };
   const saves: string[] = [];
   const sandbox = { window: { formatSpecDefaults: FORMAT_SPEC,
     setTimeout(fn: () => void) { fn(); }, promptBridge: {

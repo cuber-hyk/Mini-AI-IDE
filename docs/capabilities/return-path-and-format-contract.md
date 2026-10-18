@@ -1,18 +1,22 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-15
+updated: 2026-10-16
 owner: 胡运宽
-source_of_truth: [src/main/chatgptPage.ts, test/chatgptComposerSender.test.ts, tools/verify-chatgpt-composer.cjs, src/main/settings.ts, test/promptSettingsMigration.test.ts, src/renderer/prompt.js, docs/capabilities/skills-and-local-prompt.md, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, docs/adr/2026-10-06-native-tool-harness-boundary.md, src/shared/toolProtocol.ts, src/shared/formatSpec.ts, src/shared/returnPath.ts, src/main/replyCollector.ts, src/main/tools/changes.ts, src/main/tools/changeReview.ts, src/main/tools/integration.ts, src/main/returnPathService.ts, src/main/previewPreload.ts, src/main/fileService.ts, src/renderer/preview.js, src/renderer/editorWorkspace.js, test/replyCollector.test.ts, test/toolProtocol.test.ts, test/toolChanges.test.ts, test/formatSpec.test.ts, test/toolSamples.test.ts, src/main/tools/jsonDraft.ts, test/jsonDraft.test.ts, test/toolAutoContinueIntegration.test.ts]
+source_of_truth: [test/toolTextBodies.test.ts, test/toolTextDraft.test.ts, tools/verify-chatgpt-tools.cjs, src/shared/toolTextBodies.ts, src/main/chatgptPage.ts, test/chatgptComposerSender.test.ts, tools/verify-chatgpt-composer.cjs, src/main/settings.ts, test/promptSettingsMigration.test.ts, src/renderer/prompt.js, docs/capabilities/skills-and-local-prompt.md, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, docs/adr/2026-10-06-native-tool-harness-boundary.md, src/shared/toolProtocol.ts, src/shared/formatSpec.ts, src/shared/returnPath.ts, src/main/replyCollector.ts, src/main/tools/changes.ts, src/main/tools/changeReview.ts, src/main/tools/integration.ts, src/main/returnPathService.ts, src/main/previewPreload.ts, src/main/fileService.ts, src/renderer/preview.js, src/renderer/editorWorkspace.js, test/replyCollector.test.ts, test/toolProtocol.test.ts, test/toolChanges.test.ts, test/formatSpec.test.ts, test/toolSamples.test.ts, src/main/tools/jsonDraft.ts, test/jsonDraft.test.ts, test/toolAutoContinueIntegration.test.ts]
 ---
 
 # 能力：工具修改与变更查看
 
 ## 职责与唯一输出
 
-AI 的实际文件读取、修改和命令统一输出一个顶层 mini-ai-tools JSON 批次，格式、参数及拒绝规则由 shared/toolProtocol.ts 定义。普通解释、讨论和引用资料不执行。手动采集也拒绝旧文件操作文本，不退回另一条可写盘协议；网页独立、无文件 IPC，采集只读；开启自动继续时按限定回传边界发送真实工具结果，关闭或暂停时粘贴与发送由用户完成。九类工具及权限见 tool-harness.md。
+AI 的实际文件读取、修改和命令统一输出一个顶层 mini-ai-tools 围栏：先版本 1 JSON 清单，再按需附加具名原文块。格式与参数由 shared/toolProtocol.ts 定义，原文边界与正文引用由 shared/toolTextBodies.ts 负责；内部仍是一种 ToolBatch。普通解释、讨论和引用资料不执行。手动采集也拒绝旧文件操作文本，不退回另一条可写盘协议；网页独立、无文件 IPC，采集只读；开启自动继续时按限定回传边界发送真实工具结果，关闭或暂停时粘贴与发送由用户完成。工具及权限见 tool-harness.md。
 
-apply_changes 使用 changes，每项含 path 和 operation。replace 提供 edits 中的 old_string/new_string；create/overwrite 提供完整 content，可为空。替换原文必须非空、真实、唯一且不重叠；同文件所有修改集中在一条请求。JSON 字符串正确转义换行、引号和反斜杠，正文按字面保存。
+apply_changes 使用 changes，每项含 path 和 operation。replace 提供 edits 中的 old_string/new_string；create/overwrite 提供完整 content，可为空。替换原文必须非空、真实、唯一且不重叠；同文件所有修改集中在一条请求。run_command 的 command 及这些文件正文槽允许字符串或单字段对象 `{ "text_ref": "块名" }`；长命令、多行文件和引号/反斜杠复杂正文推荐原文块，短参数可直接用 JSON 字符串。路径、cwd、工具名和其他参数不引用或插值。
+
+原文块以独立的 `@@body 块名` 行开始，以对应 `@@end 块名` 行结束，处于同一正式围栏内并紧随 JSON 清单。块名匹配 `[A-Za-z0-9][A-Za-z0-9_.-]{0,99}`，`manifest` 保留给草稿清单替换。每块恰好引用一次；缺失、闲置、重名、多次引用、边界冲突、截断及任何独立 `@@body` / `@@end` 前缀正文行整批拒绝。至多100块，带块的整个围栏正文至多200000字符。运输仅统一换行为LF，不trim正文；标记两侧各一个边界换行不计正文，额外空行保留为正文换行，空正文也须保留边界分隔。外层围栏须长于正文内同类围栏。模型不计算长度或摘要，解析器不猜测修复。
+
+长脚本先等 get_ai_temp_dir 返回真实路径，再通过 apply_changes 创建独立脚本，用短 run_command 依赖创建成功后执行；不把 Python、PowerShell here-string 与 JSON 再嵌套。格式变化不校正错误命令参数或 create/overwrite 用法，仍以真实工具帮助与执行回执为准。
 
 同批次路径及真实目标别名冲突先检查，在任何请求产生副作用前拒绝。依赖只决定前置成功后的执行顺序，不提供输出插值。需要读取或进程 ID 时，AI 应先请求工具，等 IDE 自动回传或用户手动返回真实结果后再生成下一批。
 
@@ -20,11 +24,13 @@ apply_changes 使用 changes，每项含 path 和 operation。replace 提供 edi
 
 replyCollector 只读还原代码正文及语言：读取 code/pre 的 language-* 类名，或同一单代码框内、正文之前的独立工具栏语言标签。到回复根或多个代码框边界停止，不从正文提及、普通 JSON 或其他代码框补写正式协议。缺少明确语言仍作为资料。
 
-## 格式错误的局部修复
+## 格式错误的草稿修复
 
-正式执行协议仍只接受单个顶层 `mini-ai-tools` 围栏。只有其中的 JSON.parse 失败时，IDE 才建立未执行草稿并在诊断中给出 draft_id 和 version。后续完整回复可提交唯一 `repair_draft`，要求 old_string 在当前修订稿中恰好出现一次。替换仅发生于主进程内存，不修改官网原文、磁盘文件或工具审批状态。修复为合法完整批次后，仍须通过原有参数校验、整批冲突检查、文件真实路径校验、权限和去重；回传前核对最新官网补丁及恢复批次来源。已经合法的 JSON 若存在协议错误，不适用局部语法修复。内存补丁与 `apply_changes` 的磁盘修改是不同入口，不得混用。
+正式执行协议仍只接受单个顶层 `mini-ai-tools` 围栏。完整容器可明确分出清单及原文块、但清单 JSON.parse 失败时，IDE 建立未执行草稿并在诊断中给出 draft_id 和 version；歧义边界不能建立草稿。后续完整回复可提交唯一 `repair_draft`，使用真实 draft_id、version、body_id 和 content：body_id 为 `manifest` 时替换短清单，为已有块名时替换该块正文；content 可为短字符串或引用本补丁自带的具名原文块。其余块保留，不需复述旧长内容。小错误仍可用唯一匹配的 old_string/new_string 短补丁，但默认优先重发短清单。
 
-默认执行提示提前说明修复机制；模型须等待真实草稿 ID/版本。有有效草稿时错误回执只给局部补丁指导，畸形补丁不会建立新草稿，仍可沿用原 ID/版本。无草稿或语法修复资格已失效时才要求完整重发。纯解析诊断不决定修复策略，草稿 owner 与采集入口按当前事实选择。
+替换仅发生于主进程内存，不修改官网原文、磁盘文件或工具审批状态。修复为合法完整批次后，仍须通过完整正文引用校验、原有参数校验、整批冲突检查、文件真实路径校验、权限和去重；回传前核对最新官网补丁及恢复批次来源。已经合法的 JSON 若存在协议错误，不适用语法草稿修复；运行失败通过新批次处理。内存补丁与 `apply_changes` 的磁盘修改是不同入口，不得混用。
+
+默认执行提示提前说明修复机制；模型须等待真实草稿 ID/版本。有有效草稿时错误回执提供当前身份的修复指导，畸形补丁不会建立新草稿，仍可沿用原 ID/版本。无草稿或语法修复资格已失效时要求完整重发。纯解析诊断不决定修复策略，草稿 owner 与采集入口按当前事实选择。
 
 JSON 解析失败时，只读词法扫描仅在根对象的属性位置识别 `repair_draft`，覆盖漏冒号、裸属性名、单引号及转义属性名；嵌套内容和属性值不被视为修复指令。明确的畸形修复尝试只回传错误，不建立替代草稿或改变原修订版本。扫描只用于分类，不补全或执行非法 JSON，不推断任意破损文本的意图；执行仍要求完整合法协议。
 
@@ -32,7 +38,7 @@ JSON 解析失败时，只读词法扫描仅在根对象的属性位置识别 `r
 
 选区和全文输出只读上下文头，保留当前 Monaco 草稿、空白、空文件及末尾换行，不含执行操作或定位行号。复制全文不暗示覆盖。实际读取工具使用磁盘内容，AI 必须区别草稿与执行时原文。
 
-shared/formatSpec.ts 是唯一默认来源：单一完整内置模板的工具示例使用统一协议，普通讨论示例只含解释。构建生成 formatSpecDefaults.js。菜单复制格式要求与本地需求提交经过同一个有效格式入口，始终保留强制执行协议。
+shared/formatSpec.ts 是唯一默认来源：单一完整内置模板的工具示例将复杂正文提取为原文块，覆盖长Python写脚本再执行、Markdown内嵌围栏与末尾换行；普通讨论示例只含解释。构建生成 formatSpecDefaults.js。菜单复制格式要求与本地需求提交经过同一个有效格式入口，始终保留强制执行协议。
 
 单一自定义设置和面板未保存草稿独立；有效提示词将其逐字附为补充，不能取消执行协议或权限管理。恢复默认由用户保存；新版要求由用户手动粘贴到已有网页对话，IDE 不改写或重发历史回复。
 

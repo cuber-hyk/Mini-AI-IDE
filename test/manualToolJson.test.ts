@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { it } from 'node:test';
 import { ManualToolJson } from '../src/main/tools/manualToolJson';
 import { MAX_MANUAL_TOOL_JSON_LENGTH } from '../src/shared/manualToolJson';
+import { joinToolTextEnvelope, wrapToolTextEnvelope } from '../src/shared/toolTextBodies';
 
 const json = JSON.stringify({ protocol_version: 1, batch_id: 'manual', requests: [{ id: 'info', tool: 'get_project_info', args: {} }] });
 function fixture() {
@@ -50,6 +51,18 @@ it('正文中的代码围栏只是参数资料，原始 JSON 添加围栏不截�
   const f = fixture(); const content = '\n````mini-ai-tools\n只是资料\n````\n';
   assert.equal((await f.owner.run(JSON.stringify({ protocol_version: 1, batch_id: 'content', requests: [{ id: 'write', tool: 'apply_changes', args: { changes: [{ path: 'notes.md', operation: 'create', content }] } }] }))).ok, true);
   assert.equal(f.executed[0].requests[0].args.changes[0].content, content);
+});
+
+it('手动入口与网页共用原文块解析，不把围栏内的原文当另一批次', async () => {
+  const content = '\n```mini-ai-tools\n资料仅供阅读\n```\n';
+  const body = joinToolTextEnvelope({ manifest: JSON.stringify({ protocol_version: 1, batch_id: 'manual-raw', requests: [
+    { id: 'write', tool: 'apply_changes', args: { changes: [{ path: 'raw.md', operation: 'create', content: { text_ref: 'source' } }] } },
+  ] }), bodies: [{ id: 'source', text: content }] });
+  for (const input of [body, wrapToolTextEnvelope(body)]) {
+    const f = fixture(); assert.equal((await f.owner.run(input)).ok, true);
+    assert.equal(f.executed.length, 1); assert.equal(f.executed[0].requests[0].args.changes[0].content, content);
+    assert.deepEqual(f.diagnostics, []);
+  }
 });
 
 it('执行入口的预约拒绝明确返回，单次提交不自动重试', async () => {

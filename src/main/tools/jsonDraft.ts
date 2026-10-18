@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { parseToolBatch, type ToolBatch, type ToolDraftPatch } from '../../shared/toolProtocol';
 import { TOOL_JSON_RESEND_INSTRUCTION } from '../../shared/toolJsonDiagnostic';
+import { replaceToolTextBody, wrapToolTextEnvelope } from '../../shared/toolTextBodies';
 
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 const MAX_SOURCE = 200_000;
@@ -66,7 +67,7 @@ export class JsonDraft {
   }
 
   static instruction(metadata: { draft_id: string; version: number }): string {
-    return `草稿 ${metadata.draft_id}；修订稿版本 ${metadata.version}。当前草稿仅保存在 IDE 内存中，本批工具未执行，原始回复保持不变。请用单个完整 mini-ai-tools 围栏发送 {"repair_draft":{"draft_id":"${metadata.draft_id}","version":${metadata.version},"old_string":"当前修订稿中的唯一原文","new_string":"替换内容"}}，只返回这一条草稿补丁。沿用以上真实 draft_id 和 version，只能更改当前修订稿中的唯一片段；修复后的完整批次仍须通过协议校验和原工具权限检查。`;
+    return `草稿 ${metadata.draft_id}；修订稿版本 ${metadata.version}。当前草稿仅保存在 IDE 内存中，本批工具未执行，原始回复保持不变。优先在单个完整 mini-ai-tools 围栏发送 {"repair_draft":{"draft_id":"${metadata.draft_id}","version":${metadata.version},"body_id":"manifest","content":{"text_ref":"fixed"}}}，随后给出 @@body fixed 与 @@end fixed 之间的完整修正短JSON清单，保留原清单的正文引用；body_id 也可指定当前草稿的原文块ID以替换该整块。只返回这一条草稿补丁，不重复长正文。小错误仍可使用仅含 draft_id、version、old_string、new_string 的唯一片段替换，old_string 必须取当前修订稿中的唯一原文。沿用以上真实 draft_id 和 version；边界缺失或无法确定当前清单时重发完整未执行批次，不猜测修复；修复后的完整批次仍须通过协议校验和原工具权限检查。`;
   }
 
   apply(root: string | null, session: string, scope: string, sourceText: string, patch: ToolDraftPatch): DraftPatchOutcome {
@@ -76,16 +77,26 @@ export class JsonDraft {
     const rejected = (error: string): DraftPatchOutcome => ({ kind: 'rejected', error: `${error}\n${JsonDraft.instruction({ draft_id: draft.id, version: draft.version })}` });
     if (draft.id !== patch.draft_id || draft.version !== patch.version)
       return rejected(`草稿 ID 或版本不匹配，当前修订版本为 ${draft.version}；补丁未应用`);
-    if (!patch.old_string || patch.old_string === patch.new_string || patch.new_string.length > MAX_SOURCE || sourceText.length > MAX_SOURCE)
+    if (sourceText.length > MAX_SOURCE)
       return rejected('修复片段无效或超过限制；补丁未应用');
-    const offset = draft.revisedBody.indexOf(patch.old_string);
-    if (offset < 0 || draft.revisedBody.indexOf(patch.old_string, offset + 1) !== -1)
-      return rejected('old_string 在当前修订稿中不存在或不唯一；补丁未应用');
-    const revised = draft.revisedBody.slice(0, offset) + patch.new_string + draft.revisedBody.slice(offset + patch.old_string.length);
+    let revised: string;
+    if ('body_id' in patch) {
+      if (patch.content.length > MAX_SOURCE) return rejected('替换正文超过限制；补丁未应用');
+      try { revised = replaceToolTextBody(draft.revisedBody, patch.body_id, patch.content); }
+      catch (error) { return rejected(`${String(error)}；补丁未应用`); }
+      if (revised === draft.revisedBody) return rejected('替换后草稿未变化；补丁未应用');
+    } else {
+      if (!patch.old_string || patch.old_string === patch.new_string || patch.new_string.length > MAX_SOURCE)
+        return rejected('修复片段无效或超过限制；补丁未应用');
+      const offset = draft.revisedBody.indexOf(patch.old_string);
+      if (offset < 0 || draft.revisedBody.indexOf(patch.old_string, offset + 1) !== -1)
+        return rejected('old_string 在当前修订稿中不存在或不唯一；补丁未应用');
+      revised = draft.revisedBody.slice(0, offset) + patch.new_string + draft.revisedBody.slice(offset + patch.old_string.length);
+    }
     if (revised.length > MAX_SOURCE) return rejected('修订稿超过 200000 字符；补丁未应用');
     draft.revisedBody = revised;
     draft.version++;
-    const parsed = parseToolBatch('```mini-ai-tools\n' + revised + '\n```');
+    const parsed = parseToolBatch(wrapToolTextEnvelope(revised));
     if (parsed.kind !== 'batch') {
       const detail = parsed.kind === 'error' ? parsed.error : '修订稿未形成合法的完整工具批次';
       if (parsed.kind !== 'error' || parsed.jsonBody === undefined) {

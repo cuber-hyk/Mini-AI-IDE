@@ -7,7 +7,27 @@ function request(id: string, tool: ToolRequest['tool'], args: ToolRequest['args'
   return { id, tool, args, ...(depends_on ? { depends_on } : {}) };
 }
 function batch(id: string, requests: ToolRequest[]): string {
-  return ['```mini-ai-tools', JSON.stringify({ protocol_version: 1, batch_id: id, requests }), '```'].join('\n');
+  const bodies: string[] = [];
+  const text = (value: unknown): unknown => {
+    if (typeof value !== 'string' || !/[\n\r"\\]/.test(value)) return value;
+    const name = 'text-' + (bodies.length + 1);
+    bodies.push('@@body ' + name + '\n' + value + '\n@@end ' + name);
+    return { text_ref: name };
+  };
+  const manifest = requests.map(req => {
+    if (req.tool === 'run_command') return { ...req, args: { ...req.args, command: text(req.args.command) } };
+    if (req.tool !== 'apply_changes') return req;
+    return { ...req, args: { ...req.args, changes: (req.args.changes as Record<string, unknown>[]).map(change => ({
+      ...change,
+      ...(typeof change.content === 'string' ? { content: text(change.content) } : {}),
+      ...(Array.isArray(change.edits) ? { edits: change.edits.map(edit => ({
+        ...edit, old_string: text(edit.old_string), new_string: text(edit.new_string),
+      })) } : {}),
+    })) } };
+  });
+  const content = [JSON.stringify({ protocol_version: 1, batch_id: id, requests: manifest }), ...bodies].join('\n');
+  const fence = fenceFor(content);
+  return [fence + 'mini-ai-tools', content, fence].join('\n');
 }
 function replace(path: string, old_string: string, new_string: string): ToolRequest {
   return request('edit', 'apply_changes', { changes: [{ path, operation: 'replace', edits: [{ old_string, new_string }] }] });
@@ -51,7 +71,7 @@ const examples: SpecExample[] = [
     output: batch('example-multiple', [request('edit', 'apply_changes', { changes: [{ path: 'src/options.ts', operation: 'replace', edits: [
       { old_string: 'const size = 1;', new_string: 'const size = 2;' }, { old_string: 'const enabled = false;', new_string: 'const enabled = true;' },
     ] }] })]) },
-  { title: 'Markdown 内嵌围栏', note: '围栏只是 JSON 字符串内容，完整保留原文。',
+  { title: 'Markdown 内嵌围栏', note: '正文块完整保留 Markdown；正式围栏比正文内的反引号围栏更长。',
     input: context('docs/fences.md', '````text\n原文\n````', true),
     output: batch('example-markdown', [request('write', 'apply_changes', { changes: [{ path: 'docs/fences.md', operation: 'overwrite', content: '# 说明\n\n````text\n新内容\n````' }] })]) },
   { title: '无扩展名与空文件', note: '每个目标明确路径；允许 content 为空。',
@@ -69,6 +89,12 @@ const examples: SpecExample[] = [
   { title: '按需申请并复用 AI 临时目录', note: '首次决定任务标识，后续原样复用；不切换其他命令 cwd，不自动清理。',
     input: '为当前 JSON 调试任务申请项目内 AI 临时目录。',
     output: batch('example-ai-temp', [request('temp', 'get_ai_temp_dir', { task_id: 'json-debug-20261012' })]) },
+  { title: '长 Python 先写脚本再运行', note: '先等待真实临时目录回执；脚本用原文块，启动命令保持简短，依赖文件创建成功。',
+    input: '上一轮 get_ai_temp_dir 已返回当前项目的 .mini-ai-ide/ai-temp/python-report。请在该目录新建 report.py，打印包含引号、中文和 Windows 路径的记录，再执行。',
+    output: batch('example-python-file', [
+      request('script', 'apply_changes', { changes: [{ path: '.mini-ai-ide/ai-temp/python-report/report.py', operation: 'create', content: 'from pathlib import PureWindowsPath\n\nrecord = {\n    "title": \'包含 "引号" 的中文标题\',\n    "path": str(PureWindowsPath(r"C:\\资料\\论文.pdf")),\n}\nprint(record["title"])\nprint(record["path"])\n' }] }),
+      request('run', 'run_command', { command: 'python .mini-ai-ide/ai-temp/python-report/report.py', shell: 'powershell', timeout_ms: 5000 }, ['script']),
+    ]) },
   { title: '读取并停止已知进程', note: '只使用 IDE 上一轮返回的 process_id；cursor 也来自真实结果。',
     input: '上一轮工具结果：{"process_id":"process-123","cursor":0,"status":"running"}。读取输出后停止该进程。',
     output: batch('example-process', [request('output', 'get_process_output', { process_id: 'process-123', cursor: 0, limit: 1000 }), request('stop', 'stop_process', { process_id: 'process-123' }, ['output'])]) },
@@ -86,7 +112,7 @@ function renderExamples(): string {
 export const FORMAT_SPEC = [TOOL_PROTOCOL_PROMPT, '工具示例（输入 → 输出；外层围栏内是演示，不执行）', renderExamples()].join('\n\n');
 
 /** 自定义格式要求的长度上限；强制工具协议始终由程序附带。 */
-export const MAX_CUSTOM_FORMAT_SPEC_LENGTH = 10000;
+export const MAX_CUSTOM_FORMAT_SPEC_LENGTH = 15000;
 
 /** 空白回落完整内置模板；自定义原文逐字保留，不能移除强制工具协议。 */
 export function resolveFormatSpec(custom: string | null | undefined): string {

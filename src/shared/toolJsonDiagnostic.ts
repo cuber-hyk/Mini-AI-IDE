@@ -1,4 +1,4 @@
-export const TOOL_JSON_RESEND_INSTRUCTION = '请修正以上错误，并重新输出一个完整、合法的 mini-ai-tools JSON 围栏；不要只返回补丁或残片。';
+export const TOOL_JSON_RESEND_INSTRUCTION = '请修正以上错误，并重新输出一个完整、合法的 mini-ai-tools 围栏（短 JSON 清单及其引用的全部原文块）；不要只返回补丁或残片。';
 
 /** 只提供解析事实；草稿 owner 决定修补或完整重发，不修复原文。 */
 export function formatToolJsonDiagnostic(source: string, error: unknown): string {

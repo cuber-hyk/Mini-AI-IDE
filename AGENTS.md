@@ -14,6 +14,8 @@ Mini-AI-IDE 是一个 **Windows 桌面工具**：左侧展示可切换的多项�
 
 本项目**不是**：通用浏览器、反检测浏览器、批量自动化工具、网页端 API 客户端、指纹伪装工具或任意网页自动化工具。
 
+**唯一工具协议**：顶层完整 mini-ai-tools 围栏内先版本1 JSON清单，后可选具名原文块（@@body/@@end）。只有command、文件content、old_string/new_string及草稿替换content可用text_ref；路径和控制参数不插值。原文块解析归shared/toolTextBodies.ts，协议门面仍为toolProtocol.ts；组装完整字符串后走原权限、去重与执行owner，不从普通代码块推测执行。长脚本优先写真实临时目录后短命令运行。草稿只在主进程内存按真实draft_id/version替换manifest或已有正文块，未知/歧义整批拒绝；新版格式由用户重新附带到旧会话。详见工具能力与`docs/adr/2026-10-16-tool-text-bodies.md`。
+
 ## 2. 技术栈与运行环境
 
 | 项 | 值 |

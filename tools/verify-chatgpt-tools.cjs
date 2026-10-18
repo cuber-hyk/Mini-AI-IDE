@@ -240,7 +240,30 @@ app.whenReady().then(async()=>{
  assert.equal(changedFiles.filter(item=>/^long-chain-\d{2}\.txt$/.test(item.relative)&&item.change==='created').length,rounds,'三十个文件恰好各创建一次');
  assert.equal((await fs.readdir(root)).filter(name=>/^long-chain-\d{2}\.txt$/.test(name)).length,rounds);
  assert.equal(await run("typeof editorBridge === 'undefined' && typeof require === 'undefined' && typeof globalThis.__miniAIReplyChanges === 'undefined'"),true,'长链后网页主世界仍无本地能力');
- console.log(JSON.stringify({fixture:'ChatGPT 原生离线闭环',baselineChecks:11,rounds,executedRequests:rounds*2,watcherRecoveries:recoveries.map(item=>item.round),sameMessageRemounts:remounts,ordinaryDomChange:true,historyMounts:['asynchronous','synchronous'],historyReplayBlocked:true,exactlyOnce:true,clipboardMatches:true,officialSiteVerified:false}));
+ // 原生DOM正文块：同一正式代码框、真实磁盘写入、清单修复与真实composer回传。
+ const { joinToolTextEnvelope }=require('../src/shared/toolTextBodies.ts');
+ const rawContent='\t原文 "quotes" C:\\资料  \n```python\nprint("资料")\n```\n\n';
+ const rawManifest=id=>JSON.stringify({protocol_version:1,batch_id:id,requests:[{id:'create',tool:'apply_changes',args:{changes:[{path:id+'.txt',operation:'create',content:{text_ref:'source'}}]}}]});
+ const appendRaw=async(id,text)=>run(`(()=>{const item=appendReply(${JSON.stringify(id)},'get_project_info',{},false);item.code.textContent=${JSON.stringify(text)};item.turn.dataset.talvtTurnState='complete';item.turn.append(item.footer)})()`);
+ const rawBefore=await run('received.length'),rawCopiesBefore=copies.length;
+ await appendRaw('raw-body-native',joinToolTextEnvelope({manifest:rawManifest('raw-body-native'),bodies:[{id:'source',text:rawContent}]}));
+ await until(async()=>await run('received.length')===rawBefore+1,'原生原文块必须执行并真实回传');
+ await until(async()=>(await readAutoReply(window.webContents)).completion==='complete'&&system.getState().resultReturn?.phase==='sent','前一回传运输及网页生成结束后才模拟下一回复');
+ assert.equal(await fs.readFile(path.join(root,'raw-body-native.txt'),'utf8'),rawContent);
+ const fixedManifest=rawManifest('raw-draft-native');
+ await appendRaw('raw-draft-bad',joinToolTextEnvelope({manifest:fixedManifest.slice(0,-1)+',}',bodies:[{id:'source',text:rawContent}]}));
+ await until(async()=>await run('received.length')===rawBefore+2,'原生短清单错误应回传真实草稿身份');
+ await until(async()=>(await readAutoReply(window.webContents)).completion==='complete'&&system.getState().continuation?.phase==='waiting_reply','诊断运输及网页生成结束后才模拟修复回复');
+ await assert.rejects(fs.access(path.join(root,'raw-draft-native.txt')),{code:'ENOENT'});
+ const rawDraft=/草稿 ([\w-]+)；修订稿版本 (\d+)/.exec(system.getState().batchError.error);assert.ok(rawDraft);
+ await appendRaw('raw-draft-fix',joinToolTextEnvelope({manifest:JSON.stringify({repair_draft:{draft_id:rawDraft[1],version:Number(rawDraft[2]),body_id:'manifest',content:{text_ref:'fixed'}}}),bodies:[{id:'fixed',text:fixedManifest}]}));
+ await until(async()=>await run('received.length')===rawBefore+3,'短清单修复须保留正文并回传一次');
+ assert.equal(await fs.readFile(path.join(root,'raw-draft-native.txt'),'utf8'),rawContent);
+ assert.equal(copies.length,rawCopiesBefore+2,'真实执行各复制一次，网页来源解析诊断不自动复制');
+ const rawReceived=await run('received');
+ assert.equal(rawReceived[rawBefore],copies[rawCopiesBefore],'正文块结果与复制同源');
+ assert.equal(rawReceived[rawBefore+2],copies[rawCopiesBefore+1],'修复后真实结果与复制同源');
+ console.log(JSON.stringify({fixture:'ChatGPT 原生离线闭环',baselineChecks:11,rounds,executedRequests:rounds*2,textBodies:{nativeRoundTrip:true,manifestRepair:true,originalPreserved:true},watcherRecoveries:recoveries.map(item=>item.round),sameMessageRemounts:remounts,ordinaryDomChange:true,historyMounts:['asynchronous','synchronous'],historyReplayBlocked:true,exactlyOnce:true,clipboardMatches:true,officialSiteVerified:false}));
 }).catch(async error=>{
  failed=true;
  console.error(error.stack||error);

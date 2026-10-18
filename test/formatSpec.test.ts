@@ -25,6 +25,7 @@ const expected: Record<string, string> = {
   'src/debug.ts': '', 'src/options.ts': 'const size = 2;\nconst enabled = true;',
   'docs/fences.md': '# 说明\n\n````text\n新内容\n````',
   '.env': 'PORT=4000', LICENSE: '新的许可说明', 'empty.txt': '', 'smoke.sh': 'printf "ok\\n"\n',
+  '.mini-ai-ide/ai-temp/python-report/report.py': 'from pathlib import PureWindowsPath\n\nrecord = {\n    "title": \'包含 "引号" 的中文标题\',\n    "path": str(PureWindowsPath(r"C:\\资料\\论文.pdf")),\n}\nprint(record["title"])\nprint(record["path"])\n',
 };
 test('完整工具示例可解析，包装及原文上下文只读，实际文件操作符合用户意图', async t => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'format-tool-examples-'));
@@ -32,7 +33,7 @@ test('完整工具示例可解析，包装及原文上下文只读，实际文�
   const seenTools = new Set<string>();
   for (const spec of [FORMAT_SPEC]) {
     assert.equal(parseToolBatch(spec).kind, 'none', '复制完整提示词不能执行其中的示例');
-    assert.equal((spec.match(/示例 \d+｜/g) || []).length, 16);
+    assert.equal((spec.match(/示例 \d+｜/g) || []).length, 17);
     for (const [index, example] of spec.split(/示例 \d+｜/).slice(1).entries()) {
       const input = unwrapped(example.split('【我给你的】')[1]!.split('【你该给我的】')[0]!);
       const output = unwrapped(example.split('【你该给我的】')[1]!);
@@ -70,6 +71,24 @@ test('完整工具示例可解析，包装及原文上下文只读，实际文�
   }
   assert.deepEqual([...seenTools].sort(), [...TOOL_NAMES].sort(), '完整版覆盖所有正式工具');
 });
+test('默认示例把复杂正文移出 JSON，末尾换行及内嵌围栏仍由正式协议原样还原', () => {
+  for (const title of ['新建文件', 'Markdown 内嵌围栏', '长 Python 先写脚本再运行']) {
+    const example = FORMAT_SPEC.split(/示例 \d+｜/).find(part => part.startsWith(title));
+    assert.ok(example);
+    const output = unwrapped(example.split('【你该给我的】')[1]!);
+    assert.match(output, /"text_ref":"text-\d+"/);
+    assert.match(output, /^@@body text-\d+$/m);
+    assert.equal(parseToolBatch(output).kind, 'batch');
+    if (title === '长 Python 先写脚本再运行') {
+      const parsed = parseToolBatch(output);
+      assert.equal(parsed.kind, 'batch');
+      if (parsed.kind !== 'batch') continue;
+      assert.deepEqual(parsed.batch.requests[1]!.depends_on, ['script']);
+      assert.equal(parsed.batch.requests[1]!.args.command, 'python .mini-ai-ide/ai-temp/python-report/report.py');
+      assert.match(output, /print\(record\["path"\]\)\n\n@@end/);
+    }
+  }
+});
 test('任何格式复制和 prompt 组装都提供唯一协议，冲突自定义原文仍逐字保留', () => {
   const custom = '\n自定义：请只输出普通文件代码块。\n';
   const resolved = resolveFormatSpec(custom);
@@ -95,10 +114,13 @@ test('默认和自定义提示提前说明草稿修复只能使用 IDE 真实回
   for (const prompt of [FORMAT_SPEC, resolveFormatSpec('回答保持简洁')]) {
     assert.match(prompt, /repair_draft/);
     assert.match(prompt, /真实 draft_id 和当前 version/);
-    assert.match(prompt, /不得凭空编造 ID 或版本/);
+    assert.match(prompt, /不得凭空编造\s*ID\s*或版本/);
     assert.match(prompt, /未执行内存草稿/);
     assert.match(prompt, /修复完整合法后仍走原工具权限检查/);
-    assert.match(prompt, /草稿失效时，修正错误后重发完整合法批次/);
+    assert.match(prompt, /无可用草稿、无法确定边界或多次无进展时，重发完整合法未执行批次/);
+    assert.match(prompt, /"body_id":"manifest"/);
+    assert.match(prompt, /"content":\{"text_ref":"fixed"\}/);
+    assert.match(prompt, /不重复长正文/);
   }
   assert.equal(parseToolBatch(FORMAT_SPEC).kind, 'none', '修复说明与示例不能产生实际调用');
 });

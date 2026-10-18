@@ -18,6 +18,7 @@ import vm from 'node:vm';
 
 import { COLLECT_STRATEGIES, collectReply, normalizeStrategyOutput } from '../src/main/replyCollector';
 import { parseToolBatch } from '../src/shared/toolProtocol';
+import { joinToolTextEnvelope } from '../src/shared/toolTextBodies';
 
 /** 取指定策略脚本（按 id，避免下标写死） */
 function scriptOf(id: string): string {
@@ -119,6 +120,19 @@ function replyPage(code: string, operation = '覆盖全文', language = 'typescr
 }
 
 const ALL_STRATEGIES = COLLECT_STRATEGIES.map((strategy) => strategy.id);
+
+it('DeepSeek三套只读采集原样保留正式原文块、缩进、内嵌围栏和尾换行', () => {
+  const content = '\tprint("中文", r"C:\\data")  \n```python\nexample\n```\n\n';
+  const source = joinToolTextEnvelope({ manifest: JSON.stringify({ protocol_version: 1, batch_id: 'raw-dom', requests: [
+    { id: 'create', tool: 'apply_changes', args: { changes: [{ path: 'raw.py', operation: 'create', content: { text_ref: 'source' } }] } },
+  ] }), bodies: [{ id: 'source', text: content }] });
+  const container = fakeEl('div', 'ds-markdown'); appendBlock(container, null, null, source, 'mini-ai-tools');
+  for (const id of ALL_STRATEGIES) {
+    const text = runScript(id, pageOf([{ node: container }]))[0]!;
+    const parsed = parseToolBatch(text); assert.equal(parsed.kind, 'batch', id);
+    if (parsed.kind === 'batch') assert.equal((parsed.batch.requests[0]!.args.changes as Array<{ content: string }>)[0]!.content, content);
+  }
+});
 
 describe('采集策略脚本（只读 DOM）', () => {
   for (const id of ALL_STRATEGIES) {

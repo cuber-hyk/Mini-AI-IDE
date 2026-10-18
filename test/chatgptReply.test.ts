@@ -7,6 +7,7 @@ import { isFirstPromptSession, isPendingFirstPromptSession } from '../src/main/f
 import { collectReply } from '../src/main/replyCollector';
 import { readAutoReply, ReplyMonitor } from '../src/main/tools/replyObservation';
 import { parseToolBatch } from '../src/shared/toolProtocol';
+import { joinToolTextEnvelope } from '../src/shared/toolTextBodies';
 import { replyWatchScript } from '../src/main/tools/replyChangeWatcher';
 
 /** 只模拟 DOM 查询；业务判据在生产脚本中运行。 */
@@ -70,6 +71,17 @@ function turn(code: string, options: { complete?: boolean; role?: string; langua
 }
 const run = (script: string, document: Node, extra: Record<string, unknown> = {}) => vm.runInNewContext(script, { document, URL, location: { href: 'https://chatgpt.com/c/one' }, ...extra });
 const batch = JSON.stringify({ protocol_version: 1, batch_id: 'gpt-batch', requests: [{ id: 'read-one', tool: 'read_file', args: { path: 'a.txt' } }] });
+
+it('ChatGPT代码框采集的具名原文保留空白与嵌套围栏，不读取工具栏文字进正文', () => {
+  const content = '\n\tprint("中文", r"C:\\资料")  \n````markdown\n# 示例\n````\n\n';
+  const source = joinToolTextEnvelope({ manifest: JSON.stringify({ protocol_version: 1, batch_id: 'raw-gpt-dom', requests: [
+    { id: 'run', tool: 'run_command', args: { shell: 'powershell', command: { text_ref: 'source' } } },
+  ] }), bodies: [{ id: 'source', text: content }] });
+  const current = turn(source); const document = el('body', {}, [current.frame]);
+  const collected = run(CHATGPT_COLLECT_SCRIPT, document)[0];
+  const parsed = parseToolBatch(collected); assert.equal(parsed.kind, 'batch');
+  if (parsed.kind === 'batch') assert.equal(parsed.batch.requests[0]!.args.command, content);
+});
 
 function prependAssistant(current: ReturnType<typeof turn>) {
   const earlier = turn('earlier assistant tools');
