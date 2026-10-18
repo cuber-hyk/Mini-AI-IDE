@@ -7,6 +7,8 @@ interface HarnessOptions {
   store: ToolStore;
   root: () => string | null;
   session: () => string;
+  /** 执行账本包含账号命名空间；页面来源核验仍使用原会话 URL。 */
+  ledgerSession?: (session: string) => string;
   execute: (root: string, request: ToolRequest, started: (data: unknown) => void, selection: ToolSelection) => Promise<unknown>;
   selected?: (selection: ToolSelection | null) => void;
   current?: (selection: ToolSelection) => boolean;
@@ -142,6 +144,14 @@ export class ToolHarness {
     this.report('已停止尚未执行的请求；已启动工具的实际结果仍会保留');
   }
 
+  /** 更换原生网页来源时释放旧选择；URL 相同也不沿用另一账号的选择身份。 */
+  resetSource(): void {
+    if (this.waiting > 0) throw new Error('工具正在执行，不能更换网页来源');
+    this.generation++;
+    this.clearResults();
+    this.publish();
+  }
+
   reportDiagnostic(sourceText: string, error: string, sourceKind: 'error' | 'repair' = 'error', source?: 'manual'): void {
     if (this.options.store.getLoadError()) { this.publish(); return; }
     this.getCopyResults();
@@ -222,7 +232,7 @@ export class ToolHarness {
     await this.options.store.ready();
     if (!this.current(root, session, generation, selection)) { this.options.stopped?.(selection, '项目、会话已变化或批次已停止；未执行'); this.report('项目、会话已变化或批次已停止；未执行'); return; }
     // 在任何副作用及权限对话框之前落盘；落盘失败则整个批次不执行。
-    const reservation = await this.options.store.reserve(root, session, batch, selection.source);
+    const reservation = await this.options.store.reserve(root, this.options.ledgerSession?.(session) ?? session, batch, selection.source);
     if (reservation.kind === 'conflict') {
       const message = `批次 ${batch.batch_id} 的 ID 被不同内容复用；未执行`;
       this.options.stopped?.(selection, message); this.report(message); return;

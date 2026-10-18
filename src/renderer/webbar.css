@@ -30,6 +30,16 @@ html, body {
 .webbar-platform-control:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 2px; }
 .webbar-platform:disabled { pointer-events: none; }
 .webbar-platform-hint { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.deepseek-accounts, .deepseek-account-form { display: inline-flex; align-items: center; gap: 2px; min-width: 0; }
+.deepseek-accounts { flex: 0 1 150px; }
+.deepseek-account-control { flex: 1 1 auto; min-width: 0; }
+.deepseek-account { width: 100%; min-width: 0; padding: 0 4px; text-overflow: ellipsis; }
+.deepseek-account option { background: var(--ui-surface); color: var(--ui-text); }
+.deepseek-account:disabled { pointer-events: none; }
+.deepseek-account-form { flex: 1 1 auto; }
+.deepseek-account-name { width: 100%; min-width: 30px; height: var(--ui-control-height); border: 1px solid var(--ui-border); border-radius: var(--ui-radius); padding: 0 6px; background: var(--ui-control); color: var(--ui-text); font: inherit; }
+.deepseek-account-name:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: 2px; }
+.deepseek-account-name:disabled { opacity: .45; }
 .tool-workspace-status {
   min-width: 0;
   color: var(--text-dim);
@@ -61,6 +71,22 @@ html, body {
 .ui-icon.active { background: #5b8def29; border-color: #5b8def6b; color: var(--accent); }
 @media (max-width: 440px) { .collect-status:not(.switch-notice):not(.load-notice) { display: none; } }
 @media (max-width: 380px) { .bar-wide { gap: 2px; padding-left: 4px; } .tool-workspace-status { display: none; } .webbar-platform { width: 91px; } #btn-tool-workspace { padding: 0 5px; } }
+@media (max-width: 620px) { .tool-workspace-status { display: none; } .deepseek-accounts { flex-basis: 120px; } }
+@media (max-width: 440px) {
+  .bar-wide { gap: 2px; padding: 0 4px; }
+  .webbar-platform { width: 74px; padding: 0 2px; }
+  .deepseek-accounts { flex-basis: 100px; }
+  .deepseek-accounts .ui-icon, #btn-file-restore { width: 22px; }
+  .deepseek-account-name { min-width: 24px; padding: 0 2px; }
+  .deepseek-accounts.adding { flex-basis: 140px; min-width: 108px; }
+  .deepseek-accounts.adding .deepseek-account-name { min-width: 60px; }
+  .deepseek-accounts.adding ~ #btn-collect,
+  .deepseek-accounts.adding ~ #btn-reload-web-platform:not([hidden]) ~ #btn-tool-workspace { display: none; }
+  #btn-workspace-toggle { width: 24px; }
+  #btn-collect, #btn-tool-workspace, #btn-reload-web-platform { padding: 0 4px; max-width: 48px; overflow: hidden; text-overflow: ellipsis; }
+  #btn-reload-web-platform:not([hidden]) ~ #btn-collect { display: none; }
+  .collect-status { flex: 0 1 auto; }
+}
 .bar-wide .ui-button { background: transparent; border-color: transparent; }
 
 #btn-file-restore { background: transparent; border-color: transparent; }

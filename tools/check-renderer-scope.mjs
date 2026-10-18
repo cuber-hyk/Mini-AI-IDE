@@ -21,7 +21,7 @@ const root = path.resolve(import.meta.dirname, '..');
 const target = path.join(root, 'src/renderer/renderer.js');
 const out = path.join(root, 'tools/renderer-scope-report.json');
 
-const targets = [target, ...['promptComposer', 'localPrompt', 'editorToolbar', 'applicationUpdate', 'preview', 'webbar', 'editorWorkspace', 'editorTabs', 'fileExplorer', 'workspaceNavigation', 'workspaceLayout', 'fileWorkspace', 'filePreview', 'markdownImages', 'markdownEditor', 'markdownPresentation', 'markdownMath', 'markdownMermaid'].map(name => path.join(root, `src/renderer/${name}.js`))];
+const targets = [target, ...['promptComposer', 'localPrompt', 'editorToolbar', 'applicationUpdate', 'preview', 'webbar', 'deepseekAccounts', 'editorWorkspace', 'editorTabs', 'fileExplorer', 'workspaceNavigation', 'workspaceLayout', 'fileWorkspace', 'filePreview', 'markdownImages', 'markdownEditor', 'markdownPresentation', 'markdownMath', 'markdownMermaid'].map(name => path.join(root, `src/renderer/${name}.js`))];
 const host = ts.createCompilerHost({ allowJs: true, checkJs: true, noEmit: true });
 host.writeFile = () => {};
 

@@ -4,7 +4,7 @@
  * 与编辑器/preview 同样的约束：`sandbox: true` 下**不能 require 相对路径模块**，
  * 因此通道名必须内联为字面量（自检会比对，防漂移）。
  *
- * 暴露的接口刻意最小化：只允许只读采集、失败官网重载、工具摘要与单一面板恢复，
+ * 暴露的接口刻意最小化：只允许只读采集、平台/账号切换与添加、失败官网重载、工具摘要与面板恢复，
  * **不能**读写文件、不能访问 Node、不能向网页写入任何内容。
  */
 import { contextBridge, ipcRenderer } from 'electron';
@@ -12,6 +12,8 @@ import { contextBridge, ipcRenderer } from 'electron';
 const CH = {
   getWebPlatform: 'ui:get-web-platform',
   setWebPlatform: 'ui:set-web-platform',
+  setDeepSeekAccount: 'ui:set-deepseek-account',
+  addDeepSeekAccount: 'ui:add-deepseek-account',
   reloadWebPlatform: 'ui:reload-web-platform',
   webPlatformState: 'ui:web-platform-state',
   restoreFileWorkspace: 'ui:restore-file-workspace',
@@ -26,6 +28,8 @@ const CH = {
 const bridge = {
   getWebPlatform: () => ipcRenderer.invoke(CH.getWebPlatform),
   setWebPlatform: (platform: unknown) => ipcRenderer.invoke(CH.setWebPlatform, platform),
+  setDeepSeekAccount: (id: unknown) => ipcRenderer.invoke(CH.setDeepSeekAccount, id),
+  addDeepSeekAccount: (name: unknown) => ipcRenderer.invoke(CH.addDeepSeekAccount, name),
   reloadWebPlatform: () => ipcRenderer.invoke(CH.reloadWebPlatform),
   onWebPlatformState: (listener: (state: unknown) => void) => ipcRenderer.on(CH.webPlatformState, (_event, state) => listener(state)),
   restoreFileWorkspace: () => ipcRenderer.invoke(CH.restoreFileWorkspace),

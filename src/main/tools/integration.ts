@@ -49,6 +49,7 @@ interface Options {
   allowLocalFixture?: boolean;
   skills?: SkillService;
   interactionBusy?: () => boolean;
+  ledgerSession?: (web: WebContents, session: string) => string;
 }
 const READ_TOOLS = new Set(['get_project_info', 'list_directory', 'search_files', 'read_file', 'search_text']);
 const hash = (value: string | Buffer) => createHash('sha256').update(value).digest('hex');
@@ -318,6 +319,7 @@ export async function createToolIntegration(options: Options) {
   });
   let watcher = createWatcher();
   harness = new ToolHarness({ store, root: () => options.files.getRoot(), session: () => sessionKeyOf(web.getURL()),
+    ledgerSession: session => options.ledgerSession?.(web, session) ?? session,
     current: selection => webActive && !disposed && selectionRevisions.get(selection) === revision &&
       (selection.source !== 'manual' || selectionNavigations.get(selection) === navigationRevision),
     selected: selection => {
@@ -521,6 +523,7 @@ export async function createToolIntegration(options: Options) {
       await sender.dispose();
       if (disposed) return;
       unbindNavigationGuard(); web = next; sender = nextSender ?? createSender(web); bindNavigationGuard();
+      harness.resetSource();
       monitor = new ReplyMonitor(web, readOptions); watcher = createWatcher();
       auto.reset(true); changes.reset(); changeSession = sessionKeyOf(web.getURL());
       toolAttachments.reset(); resultReturn?.invalidate();

@@ -30,6 +30,11 @@
   let reloadRequest = 0;
   let reloadPendingPlatform = null;
   let reloadError = '';
+  const accountsUI = window.createDeepSeekAccountsUI && window.createDeepSeekAccountsUI({
+    onSelect: function (id) { return switchPlatformState(function () { return bridge.setDeepSeekAccount(id); }); },
+    onAdd: function (name) { return switchPlatformState(function () { return bridge.addDeepSeekAccount(name); }); },
+    onError: function (message) { if (message) showSwitchError(message); else clearSwitchError(); renderPlatform(); },
+  });
   function reloading() { return platform && (platform.reloading || reloadPendingPlatform === platform.platform); }
   function supported() { return platform && ['deepseek', 'chatgpt'].includes(platform.platform) && !platform.switching && !switching && !platform.error && !reloading(); }
   function platformReason() {
@@ -46,6 +51,7 @@
     el.platformControl.title = el.platform.title;
     el.platformControl.tabIndex = el.platform.disabled ? 0 : -1;
     el.platformHint.textContent = blocked || platformReason() || '';
+    if (accountsUI) accountsUI.render(platform, { switching: switching });
     el.collect.disabled = collecting || !supported();
     el.reload.hidden = !platform || !platform.error;
     el.reload.disabled = !platform || platform.switching || switching || Boolean(blocked) || Boolean(reloading());
@@ -62,7 +68,7 @@
     renderToolStatus();
   }
   function receivePlatform(next, keepFeedback = false) {
-    if (platform && platform.platform !== next.platform) { reloadRequest += 1; reloadPendingPlatform = null; reloadError = ''; }
+    if (platform && (platform.platform !== next.platform || accountId(platform) !== accountId(next))) { reloadRequest += 1; reloadPendingPlatform = null; reloadError = ''; }
     if (!next.error) reloadError = '';
     platform = next; platformReadError = ''; renderPlatform(keepFeedback);
   }
@@ -90,11 +96,12 @@
   bridge.onToolWorkspaceStatus(function (state) { statusReceived = true; summary = state; renderToolStatus(); });
   bridge.onWebPlatformState(function (next) {
     platformStateVersion += 1;
-    const changed = !platform || platform.platform !== next.platform || platform.switching !== next.switching || platform.error !== next.error || platform.reloading !== next.reloading;
+    const changed = !platform || platform.platform !== next.platform || accountId(platform) !== accountId(next) || platform.switching !== next.switching || platform.error !== next.error || platform.reloading !== next.reloading;
     const keepFeedback = !changed;
     if (changed) platformVersion += 1;
     receivePlatform(next, keepFeedback);
   });
+  function accountId(state) { return state && state.deepseekAccounts && state.deepseekAccounts.activeId; }
   const initialPlatformVersion = platformStateVersion;
   renderPlatform();
   void bridge.getWebPlatform().then(function (next) { if (initialPlatformVersion === platformStateVersion) receivePlatform(next); })
@@ -127,19 +134,24 @@
       if (request === reloadRequest) { reloadPendingPlatform = null; renderPlatform(); }
     }
   });
-  el.platform.addEventListener('change', async function () {
-    if (el.platform.disabled || !platform || switching) { renderPlatform(); return; }
-    const requested = el.platform.value;
-    if (!['deepseek', 'chatgpt'].includes(requested) || requested === platform.platform) { renderPlatform(); return; }
-    const version = platformVersion; switching = true; clearSwitchError(); renderPlatform();
-    try { const next = await bridge.setWebPlatform(requested); if (version === platformVersion) receivePlatform(next); }
+  async function switchPlatformState(action) {
+    if (!platform || platform.switching || switching || platform.switchBlockedReason) { renderPlatform(); return false; }
+    const version = platformStateVersion; platformVersion += 1; switching = true; clearSwitchError(); renderPlatform();
+    try { const next = await action(); if (version === platformStateVersion) receivePlatform(next); return true; }
     catch (error) {
       console.error('[web-platform] 切换失败', error);
       const refreshVersion = platformStateVersion;
       try { const next = await bridge.getWebPlatform(); if (refreshVersion === platformStateVersion) receivePlatform(next); }
       catch (refreshError) { console.error('[web-platform] 切换后状态读取失败', refreshError); if (refreshVersion === platformStateVersion) platform = null; }
       showSwitchError(platform && platform.switchBlockedReason || '暂时无法切换，请稍后重试');
+      return false;
     } finally { switching = false; renderPlatform(); }
+  }
+  el.platform.addEventListener('change', async function () {
+    if (el.platform.disabled || !platform || switching) { renderPlatform(); return; }
+    const requested = el.platform.value;
+    if (!['deepseek', 'chatgpt'].includes(requested) || requested === platform.platform) { renderPlatform(); return; }
+    await switchPlatformState(function () { return bridge.setWebPlatform(requested); });
   });
   void bridge.getToolWorkspaceStatus().then(function (state) {
     if (!statusReceived) { summary = state; renderToolStatus(); }

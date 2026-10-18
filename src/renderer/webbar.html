@@ -22,6 +22,18 @@
         </select>
         <span id="web-platform-hint" class="webbar-platform-hint"></span>
         </span>
+        <span id="deepseek-accounts" class="deepseek-accounts" hidden>
+          <span id="deepseek-account-control" class="webbar-platform-control deepseek-account-control" role="group" aria-label="DeepSeek 账号" aria-describedby="deepseek-account-hint" tabindex="0">
+            <select id="deepseek-account" class="ui-button deepseek-account" aria-label="DeepSeek 账号" aria-describedby="deepseek-account-hint" disabled></select>
+            <span id="deepseek-account-hint" class="webbar-platform-hint"></span>
+          </span>
+          <button id="btn-add-deepseek-account" type="button" class="ui-icon" aria-label="添加 DeepSeek 账号" title="添加 DeepSeek 账号，首次使用需手动登录" disabled><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg></button>
+          <span id="deepseek-account-form" class="deepseek-account-form" role="group" aria-label="添加 DeepSeek 账号" hidden>
+            <input id="deepseek-account-name" class="deepseek-account-name" type="text" maxlength="32" autocomplete="off" aria-label="账号备注" placeholder="账号备注" title="输入 1–32 字账号备注，首次使用需手动登录" />
+            <button id="btn-confirm-deepseek-account" type="button" class="ui-icon" aria-label="确认添加账号" title="保存备注并打开新账号" disabled><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3 8 3 3 7-7"/></svg></button>
+            <button id="btn-cancel-deepseek-account" type="button" class="ui-icon" aria-label="取消添加账号" title="取消添加账号"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 4 8 8m0-8-8 8"/></svg></button>
+          </span>
+        </span>
         <span id="tool-workspace-status" class="tool-workspace-status" role="status" aria-live="polite">正在读取工具状态</span>
         <span class="spacer"></span>
         <span id="collect-status" class="collect-status" role="status" aria-live="polite"></span>
@@ -31,6 +43,7 @@
         <button id="btn-file-restore" type="button" class="ui-icon" aria-label="展开文件工作区" title="展开文件工作区" hidden><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1"/><path d="M11 2.5v11"/></svg></button>
       </div>
     </div>
+    <script src="./deepseekAccounts.js"></script>
     <script src="./webbar.js"></script>
   </body>
 </html>

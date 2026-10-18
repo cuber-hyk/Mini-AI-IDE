@@ -1,9 +1,9 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-13
+updated: 2026-10-18
 owner: 胡运宽
-source_of_truth: [src/main/sharedSessionInstance.ts, test/sharedSessionInstance.test.ts, tools/verify-shared-session-instance.cjs, "docs/adr/2026-10-02-honest-electron-identity.md","docs/adr/2026-10-02-zero-injection-and-automation-trace-baseline.md","tools/reachability-probe/main.js","src/main/index.ts","src/main/diagnose.ts","src/main/selfTest.ts","test/limits-and-ua.test.ts"]
+source_of_truth: [src/shared/deepseekAccounts.ts, src/main/deepseekAccounts.ts, src/main/deepseekAccountViews.ts, test/deepseekAccounts.test.ts, test/deepseekAccountSwitch.test.ts, tools/run-deepseek-accounts-probe.cjs, tools/verify-deepseek-accounts.cjs, src/main/sharedSessionInstance.ts, test/sharedSessionInstance.test.ts, tools/verify-shared-session-instance.cjs, "docs/adr/2026-10-02-honest-electron-identity.md","docs/adr/2026-10-02-zero-injection-and-automation-trace-baseline.md","tools/reachability-probe/main.js","src/main/index.ts","src/main/diagnose.ts","src/main/selfTest.ts","test/limits-and-ua.test.ts"]
 ---
 
 # 能力：会话与登录持久化
@@ -18,11 +18,12 @@ source_of_truth: [src/main/sharedSessionInstance.ts, test/sharedSessionInstance.
 
 | 项 | 值 |
 |---|---|
-| **DeepSeek 分区** | **`persist:postcheck`** |
+| **DeepSeek 默认账号分区** | **`persist:postcheck`**，保留现有登录 |
+| **DeepSeek 附加账号分区** | **`persist:postcheck-ds-N`**，N 为创建时保存的单调编号 |
 | **ChatGPT 分区** | **`persist:postcheck-02`** |
-| 磁盘目录 | `%APPDATA%\mini-ai-ide\Partitions\postcheck` 与 `postcheck-02` |
+| 磁盘目录 | `%APPDATA%\mini-ai-ide\Partitions\postcheck`、`postcheck-ds-N` 与 `postcheck-02` |
 | 命名理由 | 中性，不含应用名/项目名，长期留痕在磁盘上也不暴露工具身份 |
-| 多平台 | 每个平台固定独立分区，切换复用已有视图，启动默认 DeepSeek；ChatGPT 普通对话接入纯文本协作，用户已于 2026-10-12 确认完整 IDE 跨重启登录保持验收通过，见 `web-platforms.md` |
+| 多平台/账号 | 每平台及本地账号固定独立分区，切换复用已有视图，启动默认 DeepSeek 的默认账号；ChatGPT 普通对话协作见 `web-platforms.md` |
 | 实验隔离 | 需要隔离实验时用后缀（如 `persist:postcheck-experiment`），**不得**用后缀替代正式分区 |
 
 ## ⚠️ 跨应用迁移禁忌（实测教训）
@@ -99,19 +100,19 @@ P2 期间把 P0b 工具（`reachability-probe`）的 profile 目录整体迁移�
 
 ## 规则
 
-1. **分区固定**：固定在上述常量。**禁止每次启动随机生成分区名**——随机分区等价于每次都是新浏览器，是最典型的异常登录信号。
+1. **分区固定**：默认账号和 ChatGPT 沿用上述常量；附加 DeepSeek 账号只按持久化编号映射分区。**禁止每次启动随机生成分区名**。
 2. **分区名中性**：不得包含应用名、项目名或任何可识别本工具身份的字符串。
 3. **禁止随意改名**：改名等于换一个新浏览器，会丢弃登录态并迫使重新登录。**改名视为破坏性操作**，需评估后再做。
 4. **登录方式**：不预设。P0b 实测中"手机号 + 短信验证码"与"微信扫码"入口均可用；以实测最稳的方式为准。
 5. **不共享**：不得与用户日常浏览器的 profile 混用。
 6. 会话数据只存放于分区内；应用自身的配置与状态不得写入该分区。
 7. **禁止跨应用迁移 profile 目录**（见上方禁忌一节）。
-8. **首次登录必须在本应用内完成**；P0b 工具的登录态不会、也不能被本应用复用。
+8. **首次登录必须在本应用的对应账号会话内完成**；P0b 工具的登录态不与本应用共享。`deepseek-accounts.json` 只存备注和编号，认证由 Chromium 分区保存；资料损坏或保存失败必须明确报错，不清空或迁移原资料。
 
 ## 验收
 
 - 重启应用后无需重新登录即可继续对话（由 `npm run diagnose` 的 `verdict === 'SESSION_OK'` 判定）。
-- 代码中分区名为常量，运行期未创建任何随机命名的分区目录。
+- 默认分区为常量，附加账号分区按持久化编号稳定派生，重启和切换不生成新编号；原生隔离验收入口为 `tools/verify-deepseek-accounts.cjs`，仅使用临时合成资料。真实账号登录保持由用户现场确认。
 - 抓包显示会话相关请求的 Cookie 完全来自该分区。
 - UA 与会话分区**正交**：UA 处理规则见 `app-shell` 能力文档与 ADR-0001，不要写入分区名。
 

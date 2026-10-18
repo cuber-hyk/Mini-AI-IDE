@@ -33,6 +33,7 @@ async function fixture(t: any, disabled = false) {
       return { hasReplies: Boolean(reply) };
     } });
   const system = await createToolIntegration({ files, web, editor, disabled,
+    ledgerSession: (current, session) => current === web ? session : JSON.stringify(['deepseek-account', 'account-1', session]),
     ipc: { handle(channel: string, fn: any) { handlers.set(channel, fn); } } as any,
     workspace: { editor: { isDirty: () => false, current: { documents: [] } }, run: (fn: any) => fn() } as any,
     returnPath: new ReturnPathService(files), storePath: path.join(root, 'tools.json'),
@@ -40,7 +41,11 @@ async function fixture(t: any, disabled = false) {
     sender: { async send(text, _session, _kind, current) { if (!current()) return { ok: false }; sent.push(text); return { ok: true }; }, async cancel(kind) { cancelled.push(kind); }, async dispose() {} },
   });
   t.after(async () => { await system.dispose(); await fs.rm(root, { recursive: true, force: true }); });
-  return { root, system, sent, copies, cancelled, get reads() { return reads; }, get marks() { return marks; },
+  return { root, system, sent, copies, cancelled, web,
+    otherWeb: () => Object.assign(new EventEmitter(), { getURL: web.getURL, isDestroyed: web.isDestroyed,
+      executeJavaScript: web.executeJavaScript, executeJavaScriptInIsolatedWorld: web.executeJavaScriptInIsolatedWorld }),
+    sender: { async send(text: string, _session: string, _kind: unknown, current: () => boolean) { if (!current()) return { ok: false }; sent.push(text); return { ok: true }; }, async cancel() {}, async dispose() {} },
+    get reads() { return reads; }, get marks() { return marks; },
     call: (channel: string, ...args: unknown[]) => handlers.get(channel)({ sender: editor, senderFrame: editor.mainFrame }, ...args),
     setReply(text: string) { reply = text; }, setAsk(fn: typeof asking) { asking = fn; }, setRead(fn: typeof beforeRead) { beforeRead = fn; }, setMark(fn: typeof beforeMark) { beforeMark = fn; },
     async ready() { await until(() => Boolean(waiter)); },
@@ -58,6 +63,38 @@ it('隐藏 DeepSeek 阻止手动采集、需求发送与自动监听，automatic
   assert.equal((await f.call(CHANNELS.sendToolResults)).ok, false);
   await delay(30); assert.equal(f.reads, 0); assert.deepEqual(f.sent, []);
   await assert.rejects(fs.stat(path.join(f.root, 'hidden.txt')), { code: 'ENOENT' });
+});
+
+it('不同账号相同URL和相同批次分别执行，切回默认账号仍按原账本去重', async t => {
+  const f = await fixture(t); await f.call(CHANNELS.setToolConfig, { permission: 'full' });
+  const text = batch('same-account-batch', 'apply_changes', { changes: [{ path: 'account.txt', operation: 'overwrite', content: 'executed' }] });
+  await fs.writeFile(path.join(f.root, 'account.txt'), 'initial');
+  f.setReply(text); await f.system.accept(text, 'complete'); await until(() => !f.system.getState().busy);
+  assert.equal(await fs.readFile(path.join(f.root, 'account.txt'), 'utf8'), 'executed');
+  await fs.writeFile(path.join(f.root, 'account.txt'), 'other account pending');
+  await f.system.setWebActive(false); await f.system.bindWeb(f.otherWeb() as any, f.sender); await f.system.setWebActive(true);
+  assert.equal((await f.call(CHANNELS.copyToolResults)).ok, true, '上一账号真实结果仍可复制');
+  await f.system.accept(text, 'complete'); await until(() => !f.system.getState().busy);
+  assert.equal(await fs.readFile(path.join(f.root, 'account.txt'), 'utf8'), 'executed', '相同网址不会把其他账号误判为已执行');
+  await fs.writeFile(path.join(f.root, 'account.txt'), 'keep after return');
+  await f.system.setWebActive(false); await f.system.bindWeb(f.web, f.sender); await f.system.setWebActive(true);
+  await f.system.accept(text, 'complete'); await until(() => !f.system.getState().busy);
+  assert.equal(await fs.readFile(path.join(f.root, 'account.txt'), 'utf8'), 'keep after return', '原账号账本保持防重放');
+  const entries = JSON.parse(await fs.readFile(path.join(f.root, 'tools.json'), 'utf8')).ledger;
+  assert.equal(entries.length, 2); assert.notEqual(entries[0].scope, entries[1].scope);
+});
+
+it('账号实际重绑撤回待发送和附件资格，切到相同URL也不补发上一账号结果', async t => {
+  const f = await fixture(t); await f.call(CHANNELS.setToolConfig, { permission: 'full', automatic: true, sendIntervalSeconds: 1 });
+  await until(() => f.reads > 0); const text = batch('old-account'); f.setReply(text); await f.system.accept(text, 'complete');
+  await until(() => f.system.getState().continuation?.phase === 'countdown');
+  await f.system.setWebActive(false); await f.system.bindWeb(f.otherWeb() as any, f.sender); f.setReply(''); await f.system.setWebActive(true);
+  assert.equal((await f.call(CHANNELS.sendToolResults)).ok, false);
+  assert.equal((await f.call(CHANNELS.copyToolResults)).ok, true);
+  await delay(1100); assert.deepEqual(f.sent, []);
+  await f.call(CHANNELS.setToolConfig, { sendIntervalSeconds: 0 });
+  await f.notify(batch('new-account')); await until(() => f.sent.length === 1);
+  assert.match(f.sent[0]!, /new-account/); assert.doesNotMatch(f.sent[0]!, /old-account/);
 });
 
 it('切平台撤销倒计时并保留复制，返回 DeepSeek 不补发已完成的旧结果', async t => {

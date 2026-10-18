@@ -1,7 +1,7 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-17
+updated: 2026-10-18
 owner: 胡运宽
 source_of_truth: [docs/capabilities/markdown-editing.md, test/webBackgroundPolicy.test.ts, tools/verify-web-background.cjs, src/main/toolWorkspaceStatus.ts, src/renderer/toolAttention.js, test/toolWorkspaceStatus.test.ts, test/toolAttention.test.ts, src/main/settings.ts, test/promptSettingsMigration.test.ts, docs/capabilities/skills-and-local-prompt.md, src/main/localPromptController.ts, src/main/skills.ts, src/main/webComposerSender.ts, src/renderer/fileWorkspace.js, test/fileWorkspace.test.ts, docs/adr/2026-10-07-workspace-ui-shell-layout.md, src/main/workspaceLayoutController.ts, src/main/workspaceService.ts, src/renderer/workspaceLayout.js, src/renderer/workspaceNavigation.js, src/renderer/webbar.html, src/renderer/webbar.js, src/renderer/webbar.css, src/main/webbarPreload.ts, src/shared/contract.ts, test/workspaceLayoutController.test.ts, src/main/tools/autoContinuation.ts, src/main/tools/webResultSender.ts, test/autoContinuation.test.ts, test/webResultSender.test.ts, tools/verify-web-result-sender.cjs, src/renderer/preview.css, src/main/previewPreload.ts, test/changeTree.test.ts, docs/adr/2026-10-02-honest-electron-identity.md, docs/adr/2026-10-02-filesystem-permission-model.md, DESIGN.md, design-tokens.json, src/main/windowLayout.ts, src/main/layoutProbe.ts, src/main/tools/changeReview.ts, src/renderer/preview.js, src/renderer/editorToolbar.js, src/renderer/ui.css, test/windowLayout.test.ts, test/toolChanges.test.ts, test/editorToolbar.test.ts, src/main/index.ts, src/renderer/index.html, src/renderer/style.css, src/renderer/promptComposer.js, test/promptComposer.test.ts, src/renderer/toolPanelLayout.js, test/toolPanelLayout.test.ts, src/main/workspaceController.ts, src/main/workspaceProbe.ts, src/renderer/fileExplorer.js, src/renderer/fileIcons.js, src/renderer/fileExplorer.css, src/renderer/editorTabs.js, src/renderer/editorWorkspace.js, test/editorWorkspace.test.ts, test/fileExplorer.test.ts, test/fileIcons.test.ts, test/workspaceController.test.ts, tools/verify-startup-sequence.cjs, tools/verify-workspace-zoom.cjs]
 ---
@@ -50,13 +50,14 @@ DeepSeek 的 `webPagePreferences` 与 ChatGPT 的 `webPreferences` 显式设置 
 
 ## 进程契约
 
-默认创建 **5 个 `WebContentsView`**，首次切换 ChatGPT 后增至 6 个（下表另列主进程）：
+默认创建 **5 个 `WebContentsView`**，首次切换 ChatGPT 后增至 6 个；每个首次打开的附加 DeepSeek 账号再增加一个独立官网视图（下表另列主进程）：
 
 | 进程 | 职责 | 硬性约束 |
 |---|---|---|
 | **main** | 窗口与分栏布局、IPC 路由、本地文件读取、会话分区配置、提示词设置的持久化、启动自检、安装版软件更新 | 绝不发起或代理大模型相关网络请求；限定需求/结果写入共用 WebComposerSender，见技能/本地需求及结果回传 ADR；更新模块专用网络例外见 `application-update.md` 与 ADR-0005 |
 | **editor renderer**（`persist:editor-ui`） | 铺满窗口的本地工作区外壳，含项目导航、Monaco、文件树、工具结果与需求编写 | `nodeIntegration:false`、`contextIsolation:true`、`sandbox:true`；无文件系统能力；CSP `connect-src 'none'` |
 | **webview renderer**（`persist:postcheck`） | 加载目标平台网页 | 顶级独立视图；无本地桥。隔离世界 1004 只读采集，1005 仅回传当前真实工具结果，不开放任意网页操作 |
+| **DeepSeek 附加账号 renderer**（`persist:postcheck-ds-N`） | 各自保存登录并按需复用网页 | 与默认账号相同的原生隔离；仅活动视图具有采集/发送资格，账号切换统一归 WebPlatformController，见 `web-platforms.md` |
 | **ChatGPT renderer**（`persist:postcheck-02`） | 首次切换创建，官网普通对话纯文本协作 | 顶级独立沙箱，无 preload/本地桥；隔离世界只读采集与限定纯文本发送，复用工具执行流程，登录弹窗同分区，见 `web-platforms.md` |
 | **webbar renderer**（`persist:editor-ui`） | 中间网页区顶部工具条：平台选择、活动平台只读采集、紧凑工具状态与查看工具、切换左侧工作区、恢复收起的文件区 | 平台只接固定 ID，其余为原有窄入口；不能读写文件或向网页写入内容。不提供任意 URL 或通用布局入口 |
 | **preview renderer**（`persist:editor-ui`） | 右文件区正文的只读变更查看：文件筛选、实际修改前后差异和执行状态；最右目录树不被覆盖 | 无文件读取／应用入口；撤销请求复用原工具 owner，不能扩大写盘能力 |

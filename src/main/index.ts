@@ -7,7 +7,9 @@ import { ComposerDraftBackup } from './composerDraftBackup';
 import { WEB_PLATFORMS, webPlatformSwitchBlock } from '../shared/webPlatform';
 import { webPlatformOf } from '../shared/webConversation';
 import { WebPlatformController } from './webPlatformController';
-import { createChatGPTView } from './webPlatformView';
+import { createChatGPTView, createDeepSeekAccountView } from './webPlatformView';
+import { DeepSeekAccountStore } from './deepseekAccounts';
+import { DeepSeekAccountViews } from './deepseekAccountViews';
 import { WebLoadingView } from './webLoadingView';
 import { SharedSessionInstance } from './sharedSessionInstance';
 /**
@@ -133,8 +135,10 @@ async function bootstrap(): Promise<void> {
 
   const fileService = new FileService();
   let settings: SettingsStore;
+  let accountStore: DeepSeekAccountStore;
   try {
     settings = new SettingsStore(SELF_TEST ? SELF_TEST_SETTINGS_FILE : PRODUCTION_SETTINGS_FILE);
+    accountStore = new DeepSeekAccountStore(path.join(app.getPath('userData'), 'deepseek-accounts.json'));
   } catch (err) {
     if (!SELF_TEST && !UI_PROBE && !WORKSPACE_PROBE) {
       dialog.showErrorBox('设置读取或升级失败', err instanceof Error ? err.message : String(err));
@@ -535,7 +539,17 @@ async function loadLocalView(
       tools.invalidate(event.oldRelPath, event.isDirectory);
       editorView.webContents.send(CHANNELS.entryChanged, event);
     }, () => tools.getReviewState().records.length > 0 || returnPath.undoCount > 0);
+  const accountViews = new DeepSeekAccountViews(webView, partition => {
+    const view = createDeepSeekAccountView(partition);
+    view.setVisible(false);
+    win.contentView.addChildView(view, 2);
+    return view;
+  });
   const tools = await createToolIntegration({
+    ledgerSession: (web, session) => {
+      const id = accountViews.idOf(web);
+      return id && id !== 'default' ? JSON.stringify(['deepseek-account', id, session]) : session;
+    },
     interactionBusy: () => localPrompt?.isSending === true,
     ipc: ipcMain, editor: editorView.webContents, web: webView.webContents,
     notifyState: state => { toolWorkspaceStatus.publish(state); refreshPlatformSwitch?.(); },
@@ -569,6 +583,7 @@ async function loadLocalView(
   let platformRevision = 0;
   const platforms = new WebPlatformController({
     ipc: ipcMain, editor: editorView.webContents, webbar: webBarView.webContents, deepseek: webView,
+    accountStore, accountViews,
     createChatGPT: () => {
       const view = createChatGPTView();
       view.setVisible(false);

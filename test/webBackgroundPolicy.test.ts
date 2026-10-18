@@ -4,8 +4,8 @@ import * as path from 'node:path';
 import { it } from 'node:test';
 import ts from 'typescript';
 
-it('官网输出在遮挡时仍需更新；后台策略只在两个官网视图配置，不扩大为全局开关', () => {
-  for (const [file, owner] of [['index.ts', 'webPagePreferences'], ['webPlatformView.ts', 'webPreferences']]) {
+it('官网及独立账号输出在遮挡时仍需更新；后台策略只限官网视图，不扩大为全局开关', () => {
+  for (const [file, owner, count] of [['index.ts', 'webPagePreferences', 1], ['webPlatformView.ts', 'webPreferences', 2]] as const) {
     const source = ts.createSourceFile(file, readFileSync(path.join(__dirname, '../src/main', file), 'utf8'), ts.ScriptTarget.Latest, true);
     const policies: Array<{ owner: string; value: ts.SyntaxKind }> = [];
     function visit(node: ts.Node) {
@@ -19,6 +19,6 @@ it('官网输出在遮挡时仍需更新；后台策略只在两个官网视图�
       ts.forEachChild(node, visit);
     }
     visit(source);
-    assert.deepEqual(policies, [{ owner, value: ts.SyntaxKind.FalseKeyword }]);
+    assert.deepEqual(policies, Array.from({ length: count }, () => ({ owner, value: ts.SyntaxKind.FalseKeyword })));
   }
 });

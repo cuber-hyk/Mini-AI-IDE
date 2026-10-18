@@ -1,9 +1,9 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-15
+updated: 2026-10-18
 owner: 胡运宽
-source_of_truth: [src/main/webLoadingView.ts, src/renderer/webLoading.html, src/renderer/webLoading.css, tools/verify-web-loading.cjs, tools/verify-deepseek-startup.cjs, src/main/composerDraftBackup.ts, test/composerDraftBackup.test.ts, src/main/firstPromptSession.ts, src/main/tools/replyChangeWatcher.ts, test/chatgptReply.test.ts, test/replyChangeWatcher.test.ts, src/main/tools/replySource.ts, test/replySource.test.ts, src/shared/webPlatform.ts, src/main/webPlatformController.ts, src/main/webPlatformView.ts, src/main/index.ts, src/main/tools/integration.ts, src/main/localPromptController.ts, src/main/workspaceLayoutController.ts, src/renderer/webbar.js, src/renderer/promptComposer.js, src/renderer/toolHarness.js, test/webPlatformController.test.ts, test/toolPlatformActivity.test.ts, test/webPlatformUi.test.ts, src/main/chatgptPage.ts, src/shared/webConversation.ts, src/main/webComposerSender.ts, test/chatgptToolIntegration.test.ts, tools/verify-chatgpt-composer.cjs, tools/verify-chatgpt-tools.cjs, tools/verify-web-platform.cjs, docs/adr/2026-10-11-web-platform-switching.md]
+source_of_truth: [src/shared/deepseekAccounts.ts, src/main/deepseekAccounts.ts, src/main/deepseekAccountViews.ts, test/deepseekAccounts.test.ts, test/deepseekAccountSwitch.test.ts, tools/run-deepseek-accounts-probe.cjs, tools/verify-deepseek-accounts.cjs, src/main/webLoadingView.ts, src/renderer/webLoading.html, src/renderer/webLoading.css, tools/verify-web-loading.cjs, tools/verify-deepseek-startup.cjs, src/main/composerDraftBackup.ts, test/composerDraftBackup.test.ts, src/main/firstPromptSession.ts, src/main/tools/replyChangeWatcher.ts, test/chatgptReply.test.ts, test/replyChangeWatcher.test.ts, src/main/tools/replySource.ts, test/replySource.test.ts, src/shared/webPlatform.ts, src/main/webPlatformController.ts, src/main/webPlatformView.ts, src/main/index.ts, src/main/tools/integration.ts, src/main/localPromptController.ts, src/main/workspaceLayoutController.ts, src/renderer/webbar.js, src/renderer/promptComposer.js, src/renderer/toolHarness.js, test/webPlatformController.test.ts, test/toolPlatformActivity.test.ts, test/webPlatformUi.test.ts, src/main/chatgptPage.ts, src/shared/webConversation.ts, src/main/webComposerSender.ts, test/chatgptToolIntegration.test.ts, tools/verify-chatgpt-composer.cjs, tools/verify-chatgpt-tools.cjs, tools/verify-web-platform.cjs, docs/adr/2026-10-11-web-platform-switching.md]
 ---
 
 # 官网平台
@@ -13,7 +13,11 @@ source_of_truth: [src/main/webLoadingView.ts, src/renderer/webLoading.html, src/
 顶栏具名选择框在 DeepSeek / ChatGPT 间直接切换，每次启动默认 DeepSeek。仅活动平台运行采集、权限执行和限定发送；两平台共用工具协议、权限、执行、复制及 automatic 单开关。ChatGPT 接入普通首页与 `/c/<id>` 会话的需求、工具结果及其授权附件，不接入 GPTs、项目专属路径或特殊编辑界面；未知地址或 DOM 状态暂停，不猜测控件。
 
 ChatGPT 支持本地需求中用户选择、拖入及粘贴的附件，以及当前官网工具批经权限批准的 `attach_file` 附件；手动 JSON 来源仍禁止上传。主进程复用暂存、文件身份校验和分块读取，网页只获得本次字节，不获得文件路径或磁盘桥。两平台均最多 50 个、单文件最多 100 MiB，官网实际格式和额度另有限制。程序发送遇到官网已有附件仍暂停，避免夹带文件；附件批要求空输入，不使用纯文本工具结果的草稿备份替换。
-平台复用各自原生视图，分别使用 persist:postcheck 与 persist:postcheck-02 固定分区，首次进入 ChatGPT 才创建。切换不重载已创建的网页、不清除登录态；登录资料不与用户浏览器或独立验证工具共享。正式应用首次需自行登录。无 iframe、网页 preload、Node、本地桥、凭据读取或指纹伪造。
+DeepSeek 默认账号沿用 persist:postcheck，顶栏可通过本地备注添加/选择账号；附加账号固定使用 persist:postcheck-ds-N，首次选择才创建原生视图。ChatGPT 固定 persist:postcheck-02，首次进入才创建。切换复用视图、不重载网页、不清除登录态；启动进入默认 DeepSeek 账号。登录资料不与用户浏览器或验证工具共享，新账号首次手动登录，失效或官网验证仍需用户处理。无 iframe、网页 preload、Node、本地桥、凭据读取或指纹伪造。
+
+账号元数据 owner 为 `deepseekAccounts.ts`，稳定编号/分区合同为 `shared/deepseekAccounts.ts`，原生缓存为 `deepseekAccountViews.ts`，顶栏 owner 为 `renderer/deepseekAccounts.js`。账号仅为本地标签，应用不读取真实身份，不提供删除、改名或自动登录。`ui:set-deepseek-account` 与 `ui:add-deepseek-account` 仅本地顶栏主 frame 可用；已有账号 ID/备注之外不接受其他控制参数。资料损坏不清空，新增视图打开失败保留已保存条目并恢复原账号，可重新选择。
+
+同平台账号切换复用以下忙门禁和撤回流程，准备前后均复核忙状态。`bindWeb` 清除上一网页选择，账号与平台共用活动修订；错误/加载/重载按原生视图隔离，后台账号事件不污染当前界面。附加账号的工具执行账本按稳定账号 ID 隔离；默认账号原有去重记录保留。历史与旧结果不会因切换复活发送资格。
 
 工具执行、存活后台进程及需求/结果发送期间拒绝切换；自动回传倒计时可先撤回再切换。已完成结果和需求草稿保留，可继续复制，旧批次和附件不补发；automatic 配置保留，活动网页重新绑定到同一工具流程时，先释放旧监听与运输，建立新历史基线；上一批展示结果仅保留复制资格，切回任何平台均不补发。跨异步回执以平台修订和活动守卫防止旧动作继续执行。
 

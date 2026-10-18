@@ -17,6 +17,8 @@ import type { ManualToolJsonExecution } from './manualToolJson';
 export const CHANNELS = {
   getWebPlatform: 'ui:get-web-platform',
   setWebPlatform: 'ui:set-web-platform',
+  setDeepSeekAccount: 'ui:set-deepseek-account',
+  addDeepSeekAccount: 'ui:add-deepseek-account',
   reloadWebPlatform: 'ui:reload-web-platform',
   webPlatformState: 'ui:web-platform-state',
   readFilePreview: 'fs:read-file-preview',
