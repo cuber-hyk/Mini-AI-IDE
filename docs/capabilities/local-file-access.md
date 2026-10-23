@@ -1,7 +1,7 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-17
+updated: 2026-10-23
 owner: 胡运宽
 source_of_truth: [docs/capabilities/markdown-editing.md, src/renderer/workspaceNavigation.js, docs/adr/2026-10-07-workspace-ui-shell-layout.md, docs/adr/2026-10-02-filesystem-permission-model.md, src/main/fileService.ts, src/main/fileManagement.ts, src/main/workspaceService.ts, src/main/workspaceController.ts, src/main/editorSession.ts, src/main/settings.ts, src/shared/contract.ts, src/main/preload.ts, src/renderer/editorWorkspace.js, src/renderer/editorTabs.js, src/renderer/fileExplorer.js, src/renderer/fileIcons.js, src/renderer/fileExplorer.css, test/workspaceService.test.ts, test/fileManagement.test.ts, test/workspaceController.test.ts, test/fileExplorer.test.ts, test/fileIcons.test.ts, test/editorSession.test.ts, test/editorWorkspace.test.ts, test/fileService.test.ts, src/main/filePreview.ts, src/main/filePreviewZoom.ts, src/main/workspaceFileDrag.ts, docs/adr/2026-10-11-native-workspace-file-drag.md, test/workspaceFileDrag.test.ts, tools/verify-workspace-file-drag.cjs, src/main/filePreviewIpc.ts, src/main/docxArchive.ts, src/shared/filePreview.ts, src/shared/imageDimensions.ts, src/renderer/filePreview.js, src/renderer/filePreview.css, test/filePreview.test.ts, test/filePreviewZoom.test.ts, test/filePreviewIpc.test.ts, test/filePreviewRenderer.test.ts, test/imageDimensions.test.ts, tools/verify-file-preview.cjs, src/main/tools/aiTempDirectory.ts, test/aiTempDirectory.test.ts, tools/measure-directory-list.ts, tools/verify-file-tree-refresh.cjs]
 ---
@@ -49,7 +49,7 @@ source_of_truth: [docs/capabilities/markdown-editing.md, src/renderer/workspaceN
 
 - `WorkspaceService` 负责根目录验证、恢复、最近记录和工作区注册列表，`WorkspaceController` 是项目导航、顶部按钮、文件菜单、最近目录及关闭目录的统一入口。左侧 `workspaceNavigation.js` 按主进程列表索引切换或移除项目，不接受任意路径。
 - 启动仅恢复上次成功打开的目录；`recentRoots` 最近 5 项按成功打开时间排序，`workspaceRoots` 常驻列表按加入顺序保存、不受 5 项限制，均按 Windows 路径大小写不敏感去重。没有工作区列表字段的设置从上次目录与最近目录初始化；显式空列表保持为空。原目录失效时进入空白状态并提示重新选择；不恢复文件或光标。
-- 添加项目通过系统选择目录；移除仅取消工作区注册，不删除磁盘文件，也不清空最近记录。移除活动项目先执行未保存确认，再关闭当前根；取消或保存失败保持原项目与列表。一次只激活一个本地项目，切换不绑定或切换官网会话，不实现后台 AI 并行。
+- 添加项目通过系统选择目录；移除仅取消工作区注册，不删除磁盘文件，也不清空最近记录。移除活动项目先执行未保存确认，再关闭当前根；取消或保存失败保持原项目与列表。一次只激活一个本地项目，项目按钮不绑定或导航官网。具体已绑定会话可联动官网；官网触发跨项目使用 `EditorSession.saveAll` 经原 IPC 静默保存全部脏文件，保存成功后由 `WorkspaceController.openSessionWorkspace` 串行切根，失败保留项目/草稿。其他目录与退出保存规则不变，不实现后台 AI 并行；见 `workspace-sessions.md`。
 - 设置以临时文件写入后原子替换，成功后才更新内存和根目录。取消、目录验证失败或持久化失败不切换原目录；关闭目录清空恢复记录，保留历史。
 - 关闭标签检查该文件，切换／关闭目录和退出检查所有未保存标签，提供“保存／放弃／取消”。保存失败或取消保留缓冲；放弃只有在后续操作成功时才替换或清空缓冲。
 - 目录操作、文件操作和 AI 写盘串行执行；保存回执允许在离开确认等待期间完成。请求捕获根目录或版本，旧目录读写结果不得复用到新目录。

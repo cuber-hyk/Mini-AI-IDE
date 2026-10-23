@@ -2,7 +2,7 @@
 artifact_type: adr
 status: accepted
 created: 2026-10-07
-updated: 2026-10-10
+updated: 2026-10-23
 owner: 胡运宽
 source_of_truth: [src/main/toolWorkspaceStatus.ts, src/renderer/toolAttention.js, src/renderer/fileWorkspace.js, src/renderer/editorTabs.js, test/fileWorkspace.test.ts, test/toolAttention.test.ts, src/main/windowLayout.ts, src/main/workspaceLayoutController.ts, src/main/workspaceService.ts, src/main/workspaceController.ts, src/main/settings.ts, src/shared/contract.ts, src/main/preload.ts, src/renderer/workspaceLayout.js, src/renderer/workspaceNavigation.js, src/renderer/index.html, test/windowLayout.test.ts, test/workspaceLayoutController.test.ts, test/workspaceService.test.ts, DESIGN.md]
 ---
@@ -25,7 +25,7 @@ Electron 官网与本地编辑器必须保持独立渲染进程，不能为方�
 6. 新布局参数接口仅允许编辑器主 frame 的白名单字段和有限范围数值；webbar 的工具摘要查询及打开入口均为零参数且限本地顶栏主 frame，preview 保留原窄接口。布局移动不改变编辑器根目录权限、工具权限、网页只读采集及唯一工具结果回传边界。
 7. 本地主题参考 deepseek-harness 的中性深灰层级，背景、侧栏、控件、悬停、选中及边界统一维护在 `design-tokens.json`；本地页面、Monaco 和提示词设置面板同源取色。
 8. 工具标签关闭仅隐藏展示并保留执行、结果与阅读位置。真实新批次开始时，仅右侧文件区已展开且工具页未显示才自动打开工具标签；右侧已折叠则保持折叠，工具页已显示时不重复打开；同批普通进度和成功完成不切换标签；新批准请求、执行失败或回传暂停自动恢复文件区、切换工具并展开相关内容，同一事件仅一次，初始化、历史恢复与重复广播不触发。不主动聚焦批准按钮或重建文件模型。文件区最大化/收起位于标签栏，目录树在自身标题栏收起，隐藏时在标签栏恢复，路径仅在目录面板保留。
-9. 一次只有一个当前本地项目和一个官网视图。项目切换保持当前官网对话，不保存或恢复项目会话映射，不承诺后台 AI 任务并行。后续并行需另行决定任务归属、独立网页上下文、迟到结果和回传目标。
+9. 一次只有一个当前本地项目和一个活动官网视图。项目按钮保持当前官网对话；用户显式绑定的会话条目及官网反向同步遵循 `2026-10-23-workspace-session-bindings.md`，不承诺后台 AI 任务并行。后续并行需另行决定任务归属、独立网页上下文、迟到结果和回传目标。
 
 ## Alternatives Considered
 

@@ -123,7 +123,7 @@
       }
     }
 
-    async function save(path) {
+    async function save(path, silent) {
       sync();
       const doc = documents.get(key(path || state.currentPath));
       if (!doc || !state.root || doc.kind) return true;
@@ -138,7 +138,7 @@
           doc.dirty = dirty(doc);
           if (state.currentPath === doc.path) state.savedText = text;
           options.changed();
-          options.setInfo('已保存 ' + target + ' · ' + (result.byteLength || 0) + ' 字节');
+          if (!silent) options.setInfo('已保存 ' + target + ' · ' + (result.byteLength || 0) + ' 字节');
           return doc.text === text;
         } catch (error) {
           if (epoch === generation) options.setInfo('保存失败：' + String(error), true);
@@ -230,7 +230,7 @@
       if (typeChanged) options.setInfo('文件类型已改变，请重新打开预览');
     }
     bridge.onEditorRequest(async function (request) {
-      if (request.kind === 'save') await bridge.editorReply(request.id, await save(request.path));
+      if (request.kind === 'save') await bridge.editorReply(request.id, await save(request.path, request.silent === true));
     });
     return { open, save, close, reload, clear, entryChanged, report, contentChanged, isDirty };
   };

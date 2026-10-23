@@ -19,6 +19,11 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron';
 
 /** 与 src/shared/contract.ts 的 CHANNELS 必须逐字一致（自检会校验） */
 const CH = {
+  getWorkspaceSessions: 'workspace:get-sessions',
+  bindWorkspaceSession: 'workspace:bind-session',
+  openWorkspaceSession: 'workspace:open-session',
+  unbindWorkspaceSession: 'workspace:unbind-session',
+  workspaceSessionsState: 'workspace:sessions-state',
   getWebPlatform: 'ui:get-web-platform',
   webPlatformState: 'ui:web-platform-state',
   readFilePreview: 'fs:read-file-preview',
@@ -82,6 +87,11 @@ const CH = {
   promptStatus: 'ui:prompt-status',
 } as const;
 const bridge = {
+  getWorkspaceSessions: () => ipcRenderer.invoke(CH.getWorkspaceSessions),
+  bindWorkspaceSession: (index: number) => ipcRenderer.invoke(CH.bindWorkspaceSession, index),
+  openWorkspaceSession: (id: string) => ipcRenderer.invoke(CH.openWorkspaceSession, id),
+  unbindWorkspaceSession: (id: string) => ipcRenderer.invoke(CH.unbindWorkspaceSession, id),
+  onWorkspaceSessionsState: (listener: (state: unknown) => void) => ipcRenderer.on(CH.workspaceSessionsState, (_event, state) => listener(state)),
   onComposerDraftSaved: (listener: (event: unknown) => void) => ipcRenderer.on(CH.composerDraftSaved, (_event, data) => listener(data)),
   getWebPlatform: () => ipcRenderer.invoke(CH.getWebPlatform),
   onWebPlatformState: (listener: (state: unknown) => void) => ipcRenderer.on(CH.webPlatformState, (_event, state) => listener(state)),
@@ -117,7 +127,7 @@ const bridge = {
   copyEntryPath: (relPath: string, relative: boolean, root: string) => ipcRenderer.invoke(CH.copyEntryPath, relPath, relative, root),
   confirmLeave: (path?: string, root?: string) => ipcRenderer.invoke(CH.confirmLeave, path, root),
   reportEditorState: (state: unknown) => ipcRenderer.send(CH.editorState, state),
-  onEditorRequest: (listener: (request: { id: number; kind: 'save'; path: string }) => void) => ipcRenderer.on(CH.editorRequest, (_e, request) => listener(request)),
+  onEditorRequest: (listener: (request: { id: number; kind: 'save'; path: string; silent?: boolean }) => void) => ipcRenderer.on(CH.editorRequest, (_e, request) => listener(request)),
   editorReply: (id: number, ok: boolean) => ipcRenderer.invoke(CH.editorReply, id, ok),
   onEntryChanged: (listener: (event: unknown) => void) => ipcRenderer.on(CH.entryChanged, (_e, event) => listener(event)),
   getRoot: () => ipcRenderer.invoke(CH.getRoot),

@@ -13,8 +13,14 @@ import type { ToolSettingsAnchor, ToolSettingsVisibility } from './toolSettings'
 import type { FilePreviewResult, FilePreviewZoom } from './filePreview';
 import type { WebPlatformState } from './webPlatform';
 import type { ManualToolJsonExecution } from './manualToolJson';
+import type { WorkspaceSessionsState } from './workspaceSessions';
 
 export const CHANNELS = {
+  getWorkspaceSessions: 'workspace:get-sessions',
+  bindWorkspaceSession: 'workspace:bind-session',
+  openWorkspaceSession: 'workspace:open-session',
+  unbindWorkspaceSession: 'workspace:unbind-session',
+  workspaceSessionsState: 'workspace:sessions-state',
   getWebPlatform: 'ui:get-web-platform',
   setWebPlatform: 'ui:set-web-platform',
   setDeepSeekAccount: 'ui:set-deepseek-account',
@@ -528,6 +534,11 @@ export interface EditorDiffSibling {
 
 /** preload 通过 contextBridge 暴露给渲染进程的唯一接口面 */
 export interface EditorBridge {
+  getWorkspaceSessions(): Promise<WorkspaceSessionsState>;
+  bindWorkspaceSession(index: number): Promise<WorkspaceSessionsState>;
+  openWorkspaceSession(id: string): Promise<WorkspaceSessionsState>;
+  unbindWorkspaceSession(id: string): Promise<WorkspaceSessionsState>;
+  onWorkspaceSessionsState(listener: (state: WorkspaceSessionsState) => void): void;
   onComposerDraftSaved(listener: (event: { root: string; relPath: string; revision: number }) => void): void;
   getWebPlatform(): Promise<WebPlatformState>;
   onWebPlatformState(listener: (state: WebPlatformState) => void): void;
@@ -563,7 +574,7 @@ export interface EditorBridge {
   copyEntryPath(relPath: string, relative: boolean, root: string): Promise<FileOperationResult>;
   confirmLeave(path?: string, root?: string): Promise<{ ok: boolean }>;
   reportEditorState(state: EditorState): void;
-  onEditorRequest(listener: (request: { id: number; kind: 'save'; path: string }) => void): void;
+  onEditorRequest(listener: (request: { id: number; kind: 'save'; path: string; silent?: boolean }) => void): void;
   editorReply(id: number, ok: boolean): Promise<{ ok: boolean }>;
   onEntryChanged(listener: (event: EntryChangedEvent) => void): void;
   getRoot(): Promise<RootInfo>;

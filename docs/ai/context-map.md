@@ -12,6 +12,8 @@
 
 ## 按任务类型路由
 
+项目下网页会话绑定、平台账号分组与双向选中先读 `docs/capabilities/workspace-sessions.md`、`docs/adr/2026-10-23-workspace-session-bindings.md`。身份/白名单归 `src/shared/workspaceSessions.ts`，元数据归 `src/main/workspaceSessionStore.ts`，活动主 frame 监听、协调与窄 IPC 归 `src/main/workspaceSessions.ts`；官网导航复用 `webPlatformController.ts`，静默保存归 `editorSession.ts` 与 `workspaceController.ts`、`renderer/editorWorkspace.js`，列表归 `renderer/workspaceNavigation.js/css`。回归为 `test/workspaceSessionStore.test.ts`、`test/workspaceSessions.test.ts`、`test/workspaceSessionNavigation.test.ts`、`test/workspaceSessionsUi.test.ts` 与 `tools/verify-workspace-sessions.cjs`；不自动绑定历史或新会话，不读取认证/私有API。
+
 关闭、托盘、退出残留与二次启动先读 `docs/capabilities/app-shell.md` 的“关闭、托盘与退出”。状态与托盘 owner 为 `src/main/applicationLifecycle.ts`，主流程只在 `index.ts` 接线；设置归 `settings.ts`，单实例恢复归 `sharedSessionInstance.ts`。回归为 `test/applicationLifecycle.test.ts`、`tools/verify-application-lifecycle.cjs`；原生夹具同一隔离资料目录连续启动，等待真实销毁及命令清理，不访问官网。
 
 Markdown 实时/源码编辑、数学公式及 Mermaid 先读 `docs/capabilities/markdown-editing.md` 和 `docs/adr/2026-10-17-markdown-document-kernel.md`。文件/保存 owner 仍为 `src/renderer/editorWorkspace.js`；Markdown 内核为 `markdownEditor.js`，源码装饰为 `markdownPresentation.js`，数学/图表分别归 `markdownMath.js`、`markdownMermaid.js`，图片路径读取归 `markdownImages.js`。本地 ESM 构建归 `scripts/build-markdown.mjs`，只由静态资源构建调用；原生验收为 `tools/verify-markdown-editor.cjs`，不使用官网、CDP 或外部资源。真实 OS 中文候选窗仍需人工验收，合成 composition 不替代该证据。

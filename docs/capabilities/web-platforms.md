@@ -1,12 +1,14 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-18
+updated: 2026-10-23
 owner: 胡运宽
 source_of_truth: [src/shared/deepseekAccounts.ts, src/main/deepseekAccounts.ts, src/main/deepseekAccountViews.ts, test/deepseekAccounts.test.ts, test/deepseekAccountSwitch.test.ts, tools/run-deepseek-accounts-probe.cjs, tools/verify-deepseek-accounts.cjs, src/main/webLoadingView.ts, src/renderer/webLoading.html, src/renderer/webLoading.css, tools/verify-web-loading.cjs, tools/verify-deepseek-startup.cjs, src/main/composerDraftBackup.ts, test/composerDraftBackup.test.ts, src/main/firstPromptSession.ts, src/main/tools/replyChangeWatcher.ts, test/chatgptReply.test.ts, test/replyChangeWatcher.test.ts, src/main/tools/replySource.ts, test/replySource.test.ts, src/shared/webPlatform.ts, src/main/webPlatformController.ts, src/main/webPlatformView.ts, src/main/index.ts, src/main/tools/integration.ts, src/main/localPromptController.ts, src/main/workspaceLayoutController.ts, src/renderer/webbar.js, src/renderer/promptComposer.js, src/renderer/toolHarness.js, test/webPlatformController.test.ts, test/toolPlatformActivity.test.ts, test/webPlatformUi.test.ts, src/main/chatgptPage.ts, src/shared/webConversation.ts, src/main/webComposerSender.ts, test/chatgptToolIntegration.test.ts, tools/verify-chatgpt-composer.cjs, tools/verify-chatgpt-tools.cjs, tools/verify-web-platform.cjs, docs/adr/2026-10-11-web-platform-switching.md]
 ---
 
 # 官网平台
+
+用户可在本地项目下显式收藏普通正式会话，点击条目经 `WebPlatformController.navigateConversation` 复用活动平台/账号视图并导航规范地址；新视图首次直接请求目标会话，不先加载首页。该内部方法只接严格会话身份与活动守卫，没有任意 URL IPC。官网主 frame 导航双向同步归 `WorkspaceSessions`，不依赖 automatic、不自动绑定，跨项目先静默保存及隔离旧运输；见 `workspace-sessions.md` 和项目会话绑定 ADR。
 
 两平台官网视图均采用原生后台调度，窗口遮挡、隐藏与最小化不会因默认后台节流停止必要计时器和画面帧；资源影响见 `app-shell.md`。两平台自动采集共用 `replySource.ts` 的回复顺序、历史指纹与快照封存规则，回看不会授予新轮资格；来源无法核实时保留手动采集。平台关闭工具能力的门禁仍独立生效。
 

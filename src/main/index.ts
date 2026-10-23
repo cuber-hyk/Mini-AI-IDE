@@ -48,6 +48,7 @@ import { registerToolWorkspaceStatus } from './toolWorkspaceStatus';
 import { runLayoutProbe } from './layoutProbe';
 import { WorkspaceService } from './workspaceService';
 import { WorkspaceController } from './workspaceController';
+import { WorkspaceSessions } from './workspaceSessions';
 import { configureWorkspaceProbe, runWorkspaceProbe } from './workspaceProbe';
 import { createApplicationUpdater, type ApplicationUpdater } from './appUpdater';
 import { registerApplicationUpdateIpc } from './applicationUpdateIpc';
@@ -524,6 +525,7 @@ async function loadLocalView(
   const returnPath = new ReturnPathService(fileService);
 
   let announcedRevision = workspace.getState().revision;
+  let workspaceSessions: WorkspaceSessions | undefined;
   const workspaceController = new WorkspaceController(win, editorView.webContents, fileService, workspace,
     (info) => {
       if (info.revision !== announcedRevision) {
@@ -534,6 +536,7 @@ async function loadLocalView(
         tools.reset();
       }
       notifyRootChanged(info); buildApplicationMenu();
+      workspaceSessions?.workspaceChanged();
     },
     (event) => {
       returnPath.invalidate(event.oldRelPath, event.isDirectory);
@@ -553,7 +556,7 @@ async function loadLocalView(
     },
     interactionBusy: () => localPrompt?.isSending === true,
     ipc: ipcMain, editor: editorView.webContents, web: webView.webContents,
-    notifyState: state => { toolWorkspaceStatus.publish(state); refreshPlatformSwitch?.(); },
+    notifyState: state => { toolWorkspaceStatus.publish(state); refreshPlatformSwitch?.(); workspaceSessions?.refreshAvailability(); },
     review: previewView.webContents, skills,
     // Keep the full sender contract: local prompts pass their current-scope guard and staged attachments.
     sender: composerSender,
@@ -585,6 +588,7 @@ async function loadLocalView(
   const platforms = new WebPlatformController({
     ipc: ipcMain, editor: editorView.webContents, webbar: webBarView.webContents, deepseek: webView,
     accountStore, accountViews,
+    stateChanged: () => workspaceSessions?.platformChanged(),
     createChatGPT: () => {
       const view = createChatGPTView();
       view.setVisible(false);
@@ -613,10 +617,22 @@ async function loadLocalView(
         await tools.bindWeb(next, nextSender);
         activeWeb = next; composerSender = nextSender;
       }
-      await tools.setWebActive(!state.switching);
+      await tools.setWebActive(!state.switching && workspaceSessions?.canRun !== false);
     },
   });
   const platformChannels = platforms.register();
+  workspaceSessions = new WorkspaceSessions({
+    ipc: ipcMain, editor: editorView.webContents, workspace: workspaceController,
+    file: path.join(app.getPath('userData'), SELF_TEST || UI_PROBE || DIAGNOSE ? 'workspace-sessions-probe.json' : 'workspace-sessions.json'),
+    source: () => ({ web: activeWeb, platform: platforms.state.platform,
+      accountId: platforms.state.platform === 'deepseek' ? accountViews.selectedId : 'default' }),
+    available: () => !closeApproved && !platforms.state.switching && !platforms.state.error && !platforms.state.reloading,
+    accountName: (platform, id) => platform === 'chatgpt' ? '默认账号' : accountStore.accounts.find(account => account.id === id)?.name ?? '账号不可用',
+    switchBlock: () => webPlatformSwitchBlock(tools.getState(), localPrompt?.isSending),
+    navigate: (target, current) => platforms.navigateConversation(target, current),
+    setActive: async active => { if (!active) localPrompt?.cancel(false); await tools.setWebActive(active); },
+  });
+  const workspaceSessionChannels = workspaceSessions.register();
   refreshPlatformSwitch = () => platforms.refreshSwitchAvailability();
   localPrompt = new LocalPromptController({ ipc: ipcMain, editor: editorView.webContents, settings, skills, attachments: new LocalPromptAttachments(),
     sendingChanged: refreshPlatformSwitch,
@@ -625,7 +641,7 @@ async function loadLocalView(
     sender: { send: (text, session, _kind, current, attachments) => tools.sendLocalPrompt(text, session, current, attachments), cancel: kind => composerSender.cancel(kind) },
     resolveWorkspacePath: relative => fileService.resolveSafePath(relative).then(result => result.ok ? { ok: true, absolute: result.absolute } : { ok: false, error: result.error }),
     root: () => fileService.getRoot(), session: () => sessionKeyOf(activeWeb.getURL()),
-    webAvailable: () => !platforms.state.switching && !platforms.state.error && !platforms.state.reloading && (WORKSPACE_PROBE || webPlatformOf(activeWeb.getURL()) !== null),
+    webAvailable: () => workspaceSessions?.canRun !== false && !platforms.state.switching && !platforms.state.error && !platforms.state.reloading && (WORKSPACE_PROBE || webPlatformOf(activeWeb.getURL()) !== null),
     busy: () => { const state = tools.getState(); return state.busy || state.resultReturn?.phase === 'sending' || ['countdown', 'sending', 'waiting_tools'].includes(state.continuation?.phase ?? ''); },
     disabled: SELF_TEST || (UI_PROBE && !WORKSPACE_PROBE) || DIAGNOSE });
   const localPromptChannels = localPrompt.register();
@@ -658,7 +674,7 @@ async function loadLocalView(
   const registeredChannels = [
     ...registerWorkspaceFileDrag(ipcMain, editorView.webContents, fileService, file => app.getFileIcon(file, { size: 'small' })),
     ...registerFilePreviewIpc(ipcMain, editorView.webContents, fileService),
-    ...tools.channels, ...localPromptChannels, ...platformChannels,
+    ...tools.channels, ...localPromptChannels, ...platformChannels, ...workspaceSessionChannels,
     ...registerToolSettingsIpc(ipcMain, { editor: editorView.webContents, panel: () => toolSettingsWindow!.contents,
       current: () => toolSettingsWindow!.current, getState: getToolSettings,
       viewport: () => { const bounds = editorView.getBounds(), zoom = editorView.webContents.getZoomFactor(); return { width: bounds.width / zoom, height: bounds.height / zoom }; },
@@ -1005,6 +1021,7 @@ async function loadLocalView(
       });
     },
     cleanup: async () => {
+      workspaceSessions?.dispose();
       // 保留官网及编辑器，直到异步工具运输撤回和所属命令停止完成。
       if (!viewsClosing) await tools.dispose();
       viewsClosing = true;

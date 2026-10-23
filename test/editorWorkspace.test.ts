@@ -18,19 +18,28 @@ async function fixture(path = 'a.txt') {
   const state = { root: 'A', currentPath: null as string | null, currentKind: null as string | null, currentText: '', savedText: '' };
   let leave = true; let write = true; let writeLater: any; let read: any = async () => ({ ok: true, text: 'saved', encoding: 'utf8' });
   let report: any; let reports = 0; let shown: any; let tabs: any; let focus: any; const writes: any[] = []; const disposed: any[] = [];
+  const notices: string[] = []; let editorRequest: any;
   let previewRead: any = async () => ({ ok: true, kind: 'image', bytes: new Uint8Array([1]), mimeType: 'image/png' });
   const bridge = { reportEditorState(value: any) { report = value; reports++; }, confirmLeave: async () => ({ ok: leave }), readFile: (...args: any[]) => read(...args),
     readFilePreview: (...args: any[]) => previewRead(...args),
-    writeFile: async (...args: any[]) => { writes.push(args); return writeLater ? writeLater(...args) : { ok: write }; }, onEditorRequest() {}, editorReply: async () => ({ ok: true }) };
+    writeFile: async (...args: any[]) => { writes.push(args); return writeLater ? writeLater(...args) : { ok: write }; }, onEditorRequest(listener: any) { editorRequest = listener; }, editorReply: async () => ({ ok: true }) };
   const context: any = { window: {} }; vm.runInNewContext(fs.readFileSync('src/renderer/editorWorkspace.js', 'utf8'), context);
   const workspace = context.window.createEditorWorkspace({ state, bridge, ready: async () => {}, kindForPath: filePreviewKind,
-    changed() { workspace.report(); }, highlight() {}, setInfo() {}, renderTabs(value: any) { tabs = value; }, captureViewState() { return { cursor: 8 }; },
+    changed() { workspace.report(); }, highlight() {}, setInfo(text: string) { notices.push(text); }, renderTabs(value: any) { tabs = value; }, captureViewState() { return { cursor: 8 }; },
     createModel(path: string, text: string) { return { path, text }; }, showDocument(doc: any, requestedFocus: boolean) { shown = doc; focus = requestedFocus; },
     disposeModel(model: any) { disposed.push(model); }, renameModel() {}, replaceContent(doc: any, text: string) { if (doc.model) doc.model.text = text; } });
   await workspace.open(path); state.currentText = 'draft'; workspace.report();
-  return { state, workspace, writes, disposed, shown: () => shown, focus: () => focus, report: () => report, reportCount: () => reports, tabs: () => tabs,
+  return { state, workspace, writes, disposed, notices, requestSave: (silent: boolean) => editorRequest({ id: 1, kind: 'save', path: state.currentPath, silent }), shown: () => shown, focus: () => focus, report: () => report, reportCount: () => reports, tabs: () => tabs,
     cancel() { leave = false; }, allow() { leave = true; }, failSave() { write = false; }, writeLater(fn: any) { writeLater = fn; }, readLater(fn: any) { read = fn; }, previewLater(fn: any) { previewRead = fn; } };
 }
+
+it('会话联动保存静默成功，失败仍报告真实原因并保留脏文本', async () => {
+  const f = await fixture(); f.notices.length = 0;
+  await f.requestSave(true); assert.equal(f.writes.length, 1); assert.deepEqual(f.notices, []); assert.equal(f.workspace.isDirty(), false);
+  f.state.currentText = 'next draft'; f.workspace.report(); f.failSave();
+  await f.requestSave(true); assert.equal(f.workspace.isDirty(), true); assert.equal(f.state.currentText, 'next draft');
+  assert.match(f.notices.at(-1)!, /保存失败/);
+});
 
 it('自动打开备份不聚焦且保留原脏缓冲模型与视图，普通打开仍聚焦', async () => {
   const f = await fixture(); const original = f.shown();

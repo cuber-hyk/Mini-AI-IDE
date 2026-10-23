@@ -96,3 +96,35 @@ it('永久删除确认期间切换根会拒绝，原回收站仍使用独立通�
   assert.equal((await f.invoke(CHANNELS.deleteEntry, 'a.txt', f.root)).ok, false);
   assert.equal(await fs.readFile(path.join(f.root, 'a.txt'), 'utf8'), 'keep'); assert.equal(f.notifications.length, 1);
 });
+
+it('官网联动跨项目使用真实保存回执，不询问未保存或预览记录', async t => {
+  const f = await fixture(t); const other = path.join(f.root, 'other'); await fs.mkdir(other);
+  f.workspace.open(other); f.workspace.open(f.root);
+  await fs.writeFile(path.join(f.root, 'draft.txt'), 'before');
+  f.controller.editor.update({ root: f.root, path: 'draft.txt', documents: [{ path: 'draft.txt', dirty: true }] });
+  (f.view as any).send = (_channel: string, request: any) => {
+    assert.equal(request.silent, true);
+    void f.controller.write(request.path, 'after').then((saved: any) => {
+      f.controller.editor.update({ root: f.root, path: 'draft.txt', documents: [{ path: 'draft.txt', dirty: !saved.ok }] });
+      f.controller.editor.reply(request.id, saved.ok);
+    });
+  };
+  const result = await f.controller.openSessionWorkspace(other, true, () => true);
+  assert.equal(result.ok, true); assert.equal(f.files.getRoot(), other);
+  assert.equal(await fs.readFile(path.join(f.root, 'draft.txt'), 'utf8'), 'after'); assert.equal(f.dialogs.length, 0);
+});
+
+it('静默保存失败或保存期间会话已变化时保留原项目与草稿', async t => {
+  for (const stale of [false, true]) {
+    const f = await fixture(t); const other = path.join(f.root, 'other'); await fs.mkdir(other);
+    f.workspace.open(other); f.workspace.open(f.root); let current = true;
+    f.controller.editor.update({ root: f.root, path: 'draft.txt', documents: [{ path: 'draft.txt', dirty: true }] });
+    (f.view as any).send = (_channel: string, request: any) => {
+      if (stale) { current = false; f.controller.editor.update({ root: f.root, path: 'draft.txt', documents: [{ path: 'draft.txt', dirty: false }] }); }
+      f.controller.editor.reply(request.id, stale);
+    };
+    const result = await f.controller.openSessionWorkspace(other, true, () => current);
+    assert.equal(result.ok, false); assert.equal(f.files.getRoot(), f.root); assert.equal(f.dialogs.length, 0);
+    if (!stale) assert.equal(f.controller.editor.hasDirty, true);
+  }
+});

@@ -21,7 +21,7 @@ export class WorkspaceController {
       const result = await dialog.showMessageBox(this.window, { type: 'question', title: '未保存的修改',
         message: `保存 ${file} 的修改吗？`, buttons: ['保存', '放弃', '取消'], defaultId: 0, cancelId: 2, noLink: true });
       return result.response === 0 ? 'save' : result.response === 1 ? 'discard' : 'cancel';
-    }, (id, path) => this.view.send(CHANNELS.editorRequest, { id, kind: 'save', path }));
+    }, (id, path, silent) => this.view.send(CHANNELS.editorRequest, { id, kind: 'save', path, ...(silent ? { silent: true } : {}) }));
   }
 
   run<T>(operation: () => Promise<T> | T): Promise<T> {
@@ -59,6 +59,16 @@ export class WorkspaceController {
     });
   }
 
+  /** 会话 owner 仅传入已注册项目；官网触发时静默保存，本地点击沿用原离开保护。 */
+  openSessionWorkspace(root: string, automatic: boolean, current: () => boolean): Promise<RootInfo> {
+    return this.run(async () => {
+      const state = this.workspace.getState();
+      const registered = state.workspaceRoots.find(item => item.toLowerCase() === root.toLowerCase());
+      if (!current() || !registered) return { ...state, ok: false, error: '会话或项目已变化，未切换项目' };
+      return this.changeRoot(registered, undefined, automatic, current);
+    });
+  }
+
   removeWorkspace(index: number): Promise<RootInfo> {
     const root = this.workspace.getState().workspaceRoots[index];
     return this.run(async () => {
@@ -73,17 +83,20 @@ export class WorkspaceController {
     });
   }
 
-  private async changeRoot(root: string | null, removeRoot?: string): Promise<RootInfo> {
+  private async changeRoot(root: string | null, removeRoot?: string, silent = false, current = () => true): Promise<RootInfo> {
     const before = this.workspace.getState();
     if (root !== before.root) {
-      if (!await this.editor.canLeave()) return { ...before, ok: false, canceled: true };
-      if (this.hasRecords()) {
+      if (silent ? !await this.editor.saveAll() : !await this.editor.canLeave()) {
+        return { ...before, ok: false, ...(silent ? { error: '自动保存未完成，保留当前项目和草稿；请保存后重新选择会话' } : { canceled: true }) };
+      }
+      if (!silent && this.hasRecords()) {
         const response = await dialog.showMessageBox(this.window, { type: 'question', title: '切换目录',
           message: '切换目录将清空当前变更预览和 AI 撤销记录。已保存的文件内容保留。',
           buttons: ['继续', '取消'], defaultId: 1, cancelId: 1, noLink: true });
         if (response.response !== 0) return { ...before, ok: false, canceled: true };
       }
     }
+    if (!current() || before.revision !== this.workspace.getState().revision) return { ...this.workspace.getState(), ok: false, error: '会话或项目已变化，未切换项目' };
     const result = removeRoot !== undefined ? this.workspace.remove(removeRoot)
       : root === null ? this.workspace.close() : this.workspace.open(root);
     if (result.ok) {

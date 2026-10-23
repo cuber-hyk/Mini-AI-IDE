@@ -210,6 +210,48 @@ function fixture() {
     block(reason: WebPlatformState['switchBlockedReason']) { blocked = reason; controller.refreshSwitchAvailability(); } };
 }
 
+it('绑定会话跨平台直接打开正式地址，首次不先加载首页；网络等待释放平台准备锁', async () => {
+  const f = fixture();
+  try {
+    const opening = f.controller.navigateConversation({ platform: 'chatgpt', accountId: 'default', conversationId: 'saved-chat' }, () => true);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(f.chatgpt.urls, ['https://chatgpt.com/c/saved-chat']);
+    assert.equal(f.controller.state.platform, 'chatgpt'); assert.equal(f.controller.state.switching, false);
+    f.chatgpt.loading.resolve(); await opening;
+    assert.equal(f.controller.getView('chatgpt').webContents, f.chatgpt.value);
+  } finally { f.controller.dispose(); }
+});
+
+it('同平台会话导航也先撤回旧运输，准备期间失效或忙状态不会启动导航', async () => {
+  const f = fixture(); let prepared = 0; let current = true;
+  const target = { platform: 'deepseek' as const, accountId: 'default', conversationId: 'saved-chat' };
+  try {
+    f.prepare(async () => { prepared++; current = false; });
+    await assert.rejects(f.controller.navigateConversation(target, () => current), /会话选择已变化/);
+    assert.equal(prepared, 1); assert.deepEqual(f.deepseek.urls, []); assert.equal(f.controller.state.switching, false);
+    f.block('工具正在执行，完成后可切换');
+    await assert.rejects(f.controller.navigateConversation(target, () => true), /工具正在执行/);
+    assert.deepEqual(f.deepseek.urls, []);
+    f.block(undefined); f.prepare(async () => { prepared++; });
+    const opening = f.controller.navigateConversation(target, () => true);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(f.deepseek.urls, ['https://chat.deepseek.com/a/chat/s/saved-chat']);
+    f.deepseek.loading.resolve(); await opening;
+  } finally { f.controller.dispose(); }
+});
+
+it('绑定导航身份不能指定任意URL、未注册账号或特殊会话', async () => {
+  const f = fixture();
+  try {
+    for (const target of [
+      { platform: 'deepseek', accountId: 'account-9', conversationId: 'saved' },
+      { platform: 'chatgpt', accountId: 'account-1', conversationId: 'saved' },
+      { platform: 'chatgpt', accountId: 'default', conversationId: '../g/secret' },
+    ]) await assert.rejects(f.controller.navigateConversation(target as any, () => true));
+    assert.deepEqual(f.deepseek.urls, []); assert.equal(f.creations(), 0);
+  } finally { f.controller.dispose(); }
+});
+
 it('权威忙原因即时广播并在入口拒绝切换，忙结束后恢复且不重新加载官网', async () => {
   const f=fixture();
   try {

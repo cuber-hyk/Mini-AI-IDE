@@ -52,3 +52,29 @@ it('Windows 别名同样保护后台草稿，删除文件夹不能漏掉反斜�
   session.update({ root: 'A', path: 'other.txt', documents: [{ path: 'SUB\\a.txt', dirty: true }] });
   assert.equal(session.isDirty('sub/A.TXT'), true); assert.equal(await session.canLeave('sub', true), false); assert.deepEqual(asked, ['SUB\\a.txt']);
 });
+
+it('会话联动静默保存所有脏标签，不询问或放弃任何草稿', async () => {
+  const requested: string[] = []; let asked = 0;
+  const session = new EditorSession(async () => { asked++; return 'cancel'; }, (id, path, silent) => {
+    assert.equal(silent, true); requested.push(path);
+    const state = session.current; state.documents.find(doc => doc.path === path)!.dirty = false;
+    session.update(state); session.reply(id, true);
+  });
+  session.update({ root: 'A', path: 'b.txt', documents: [{ path: 'a.txt', dirty: true }, { path: 'b.txt', dirty: true }, { path: 'clean.txt', dirty: false }] });
+  assert.equal(await session.saveAll(), true); assert.deepEqual(requested, ['a.txt', 'b.txt']); assert.equal(asked, 0);
+});
+
+it('静默保存失败、超时或期间新增脏文件都不能丢弃草稿离开', async () => {
+  for (const mode of ['failed', 'timeout', 'new-dirty', 'same-dirty']) {
+    const session = new EditorSession(async () => { throw new Error('不应询问'); }, (id) => {
+      if (mode === 'timeout') return;
+      const state = session.current;
+      if (mode !== 'same-dirty') state.documents[0]!.dirty = false;
+      if (mode === 'new-dirty') state.documents.push({ path: 'new.txt', dirty: true });
+      session.update(state); session.reply(id, mode !== 'failed');
+    }, 10);
+    session.update({ root: 'A', path: 'a.txt', documents: [{ path: 'a.txt', dirty: true }] });
+    assert.equal(await session.saveAll(), false, mode);
+    assert.equal(session.current.root, 'A');
+  }
+});

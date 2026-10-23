@@ -290,6 +290,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     // 以下三个是后加的，漏在这里会让 E1/E2 误报（用户实测脚本报 missing 却查不到实现）：
     CHANNELS.chromeState,   // → webbar
     CHANNELS.webPlatformState,
+    CHANNELS.workspaceSessionsState,
     CHANNELS.fileChanged,   // → 编辑器（落盘广播）
     CHANNELS.openPromptPanel, // → 编辑器（请求打开提示词面板；面板本体是独立视图）
   ];
@@ -308,7 +309,7 @@ export async function runSelfTest(input: SelfTestInput): Promise<{
     const perFile: Record<string, string[]> = {};
     for (const f of preloadFiles) {
       const src = fs.readFileSync(path.join(__dirname, f), 'utf8');
-      const found = [...src.matchAll(/'((?:fs|ui|return|preview|review|editor|tools|skills):[a-z-]+)'/g)].map((m) => m[1] as string);
+      const found = [...src.matchAll(/'((?:fs|ui|return|preview|review|editor|tools|skills|workspace):[a-z-]+)'/g)].map((m) => m[1] as string);
       perFile[f] = found;
       literals.push(...found);
     }

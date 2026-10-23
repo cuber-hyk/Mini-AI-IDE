@@ -8,7 +8,7 @@ export class EditorSession {
   private pending: { id: number; root: string | null; path: string; finish: (ok: boolean) => void } | null = null;
 
   constructor(private readonly ask: (file: string) => Promise<'save' | 'discard' | 'cancel'>,
-    private readonly request: (id: number, path: string) => void, private readonly timeout = 15_000) {}
+    private readonly request: (id: number, path: string, silent?: boolean) => void, private readonly timeout = 15_000) {}
 
   update(state: EditorState): void { this.state = { ...state, documents: state.documents.map(doc => ({ ...doc })) }; }
   get current(): EditorState { return { ...this.state, documents: this.state.documents.map(doc => ({ ...doc })) }; }
@@ -24,6 +24,28 @@ export class EditorSession {
     return true;
   }
 
+  /** 网页会话联动专用：全部草稿真实保存成功后才能离开，不询问或放弃内容。 */
+  async saveAll(): Promise<boolean> {
+    const before = this.current;
+    for (const document of before.documents.filter(doc => doc.dirty)) {
+      if (this.state.root !== before.root || !this.state.documents.some(doc => doc.path === document.path)) return false;
+      if (!await this.saveDocument(before.root, document.path, true)) return false;
+    }
+    return this.state.root === before.root && !this.hasDirty;
+  }
+
+  private saveDocument(root: string | null, path: string, silent = false): Promise<boolean> {
+    if (this.pending) return Promise.resolve(false);
+    return new Promise<boolean>((resolve) => {
+      const id = ++this.sequence;
+      const timer = setTimeout(() => this.pending?.id === id && this.pending.finish(false), this.timeout);
+      this.pending = { id, root, path, finish: (ok) => {
+        clearTimeout(timer); this.pending = null; resolve(ok);
+      } };
+      this.request(id, path, silent);
+    });
+  }
+
   async canLeave(path?: string, directory = false): Promise<boolean> {
     const before = this.current;
     const matches = (target: string) => !path || pathKey(target) === pathKey(path) ||
@@ -34,15 +56,7 @@ export class EditorSession {
       if (this.state.root !== before.root || !this.state.documents.some(doc => doc.path === document.path)) return false;
       if (choice === 'cancel') return false;
       if (choice === 'save') {
-        if (this.pending) return false;
-        const saved = await new Promise<boolean>((resolve) => {
-          const id = ++this.sequence;
-          const timer = setTimeout(() => this.pending?.id === id && this.pending.finish(false), this.timeout);
-          this.pending = { id, root: before.root, path: document.path, finish: (ok) => {
-            clearTimeout(timer); this.pending = null; resolve(ok);
-          } };
-          this.request(id, document.path);
-        });
+        const saved = await this.saveDocument(before.root, document.path);
         if (!saved) return false;
       }
       approved.add(document.path);

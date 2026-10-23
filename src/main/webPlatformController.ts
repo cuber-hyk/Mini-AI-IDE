@@ -4,6 +4,7 @@ import { CHANNELS } from '../shared/contract';
 import { WEB_PLATFORMS, type WebPlatform, type WebPlatformState, type WebPlatformSwitchBlock } from '../shared/webPlatform';
 import type { DeepSeekAccountStore } from './deepseekAccounts';
 import type { DeepSeekAccountViews } from './deepseekAccountViews';
+import { workspaceConversationUrl, type WorkspaceConversation } from '../shared/workspaceSessions';
 
 interface Options {
   ipc: Pick<IpcMain, 'handle' | 'removeHandler'>;
@@ -19,6 +20,7 @@ interface Options {
   contentReady?: (web: WebContents) => Promise<boolean>;
   accountStore?: DeepSeekAccountStore;
   accountViews?: DeepSeekAccountViews;
+  stateChanged?: () => void;
 }
 
 /** 加载完成仍可能是 SPA 空壳；只读返回是否已有可见内容，不读取正文回主进程。 */
@@ -255,6 +257,7 @@ export class WebPlatformController {
     if (!topbarOnly) this.options.loadingChanged?.(state.platform, this.loading.has(view));
     this.resumeReadiness.get(view)?.();
     this.lastSwitchBlockedReason = state.switchBlockedReason;
+    this.options.stateChanged?.();
     for (const owner of topbarOnly ? [this.options.webbar] : [this.options.webbar, this.options.editor]) {
       if (!owner.isDestroyed()) owner.mainFrame.send(CHANNELS.webPlatformState, state);
     }
@@ -305,7 +308,42 @@ export class WebPlatformController {
     return this.state;
   }
 
-  private async switchTo(platform: WebPlatform, accountId?: string): Promise<WebPlatformState> {
+  /** 只供本地会话 owner：从严格身份构造地址，复用原切换/运输撤回门禁。 */
+  async navigateConversation(target: WorkspaceConversation, current: () => boolean): Promise<void> {
+    const url = workspaceConversationUrl(target);
+    if (target.platform === 'deepseek' && target.accountId !== 'default' &&
+      !this.options.accountStore?.accounts.some(account => account.id === target.accountId)) throw new Error('绑定的账号已不可用');
+    this.requireSwitchable();
+    if (!current()) throw new Error('会话选择已变化');
+    if (this.current.platform !== target.platform || target.platform === 'deepseek' && target.accountId !== (this.options.accountViews?.selectedId ?? 'default')) {
+      await this.switchTo(target.platform, target.platform === 'deepseek' ? target.accountId : undefined, true);
+    }
+    this.requireSwitchable();
+    if (!current()) throw new Error('会话选择已变化');
+    const previous = this.state;
+    const preparation = { ...previous, switching: true };
+    this.current = preparation; this.broadcast();
+    try {
+      await this.options.prepareSwitch(); this.requireLive();
+      const blocked = this.options.switchBlock?.();
+      if (blocked) throw new Error(blocked);
+      if (!current()) throw new Error('会话选择已变化');
+      const view = this.getView(target.platform);
+      this.startedViews.add(view);
+      // 先提交原生导航，再释放准备锁；网络等待不锁住顶栏平台选择。
+      const loading = view.webContents.loadURL(url);
+      // 捕获网络失败，避免 publish 异步期间出现未处理的拒绝。
+      const result = loading.then(() => null, error => error);
+      await this.publish({ platform: target.platform, switching: false });
+      const error = await result;
+      if (error) throw error;
+    } catch (error) {
+      if (!this.disposed && this.current === preparation) await this.publish({ platform: target.platform, switching: false });
+      throw error;
+    }
+  }
+
+  private async switchTo(platform: WebPlatform, accountId?: string, deferInitialLoad = false): Promise<WebPlatformState> {
     this.requireSwitchable();
     const previousAccount = this.options.accountViews?.selectedId;
     if (this.current.platform === platform && (accountId === undefined || accountId === previousAccount)) throw new Error('当前已是该平台或账号');
@@ -349,7 +387,7 @@ export class WebPlatformController {
       throw error;
     }
     const view = this.getView(platform);
-    if (!this.startedViews.has(view)) {
+    if (!deferInitialLoad && !this.startedViews.has(view)) {
       this.startedViews.add(view);
       // 网络加载不占切换锁，慢页面也能立即切回 DeepSeek。
       void view.webContents.loadURL(WEB_PLATFORMS[platform].url).catch(() => { /* 主frame加载失败由watchLoads记录，错误页完成不代表成功。 */ });

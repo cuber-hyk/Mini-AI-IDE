@@ -4,7 +4,7 @@ body { display: block; }
 .workspace-navigation, .toolbar, .editor-wrap, .sidebar, .collaboration-dock, .tool-workspace { position: absolute; margin: 0; min-width: 0; max-width: none; }
 .layout { position: absolute; inset: 0; display: block; pointer-events: none; }
 .layout > * { pointer-events: auto; }
-.workspace-navigation { display: flex; flex-direction: column; background: var(--ui-surface); border-right: 1px solid var(--ui-border); overflow: hidden; padding: 20px 12px 12px; }
+.workspace-navigation { display: flex; flex-direction: column; background: var(--ui-surface); border-right: 1px solid var(--ui-border); overflow: hidden; padding: 16px 8px 8px; }
 /* 品牌字体 Baloo 2（OFL，本地字体文件）；仅用于左上角品牌名。 */
 @font-face {
   font-family: 'Baloo 2';
@@ -13,29 +13,66 @@ body { display: block; }
   font-display: swap;
   src: url(./fonts/Baloo2-700.ttf) format('truetype');
 }
-.workspace-brand { display: flex; align-items: center; gap: 7px; padding: 0 8px 28px; white-space: nowrap; }
+.workspace-brand { display: flex; align-items: center; gap: 6px; padding: 0 6px 18px; white-space: nowrap; }
 .workspace-brand-mark { width: 24px; height: 24px; flex: none; color: var(--ui-text); }
 .workspace-brand-name { font-family: 'Baloo 2', 'Segoe UI', system-ui, sans-serif; font-weight: 700; font-size: 23px; line-height: 1; letter-spacing: .01em; padding-top: 3px; }
 .workspace-brand > .workspace-product { font-size: 11px; border: 1px solid var(--ui-border); border-radius: 4px; padding: 1px 4px; }
 .workspace-brand .update-wrap { display: flex; flex: 0 0 auto; }
 .workspace-brand .update-trigger { width: 26px; height: 26px; }
 .workspace-brand > button { margin-left: auto; font-size: 20px; background: transparent; border-color: transparent; }
-.workspace-heading { display: flex; align-items: center; justify-content: space-between; padding: 4px 8px 10px; color: var(--ui-muted); font-size: 12px; }
+.workspace-heading { display: flex; align-items: center; justify-content: space-between; padding: 0 6px 6px; color: var(--ui-muted); font-size: 12px; }
 .workspace-heading button { background: transparent; border-color: transparent; font-size: 20px; }
-.workspace-search { width: 100%; border: 1px solid var(--ui-border); background: var(--ui-bg); border-radius: 7px; padding: 7px 10px; color: var(--ui-text); font: inherit; outline-offset: 2px; }
-.workspace-list { flex: 1; min-height: 0; margin: 12px 0 0; padding: 0; list-style: none; overflow: auto; }
-.workspace-row { display: flex; align-items: center; min-height: 42px; margin: 3px 0; padding: 2px 4px; border-radius: 8px; }
-.workspace-row:hover, .workspace-row.active { background: color-mix(in srgb, var(--ui-text) 8%, transparent); }
-.workspace-project { display: flex; gap: 9px; align-items: center; flex: 1; min-width: 0; padding: 8px 4px; background: transparent; color: var(--ui-text); border: 0; text-align: left; font: inherit; cursor: pointer; }
-.workspace-project > .tree-icon { flex: 0 0 20px; width: 20px; height: 20px; }
+.workspace-search-wrap { position: relative; flex: 0 0 auto; }
+.workspace-search-wrap > svg { position: absolute; left: 9px; top: 8px; width: 14px; height: 14px; fill: none; stroke: var(--ui-muted); stroke-width: 1.4; pointer-events: none; }
+.workspace-search { display: block; width: 100%; height: 30px; border: 1px solid color-mix(in srgb, var(--ui-border) 75%, transparent); background: color-mix(in srgb, var(--ui-bg) 55%, transparent); border-radius: var(--ui-radius); padding: 4px 8px 4px 29px; color: var(--ui-text); font: inherit; font-size: 12px; outline-offset: 1px; }
+.workspace-search::placeholder { color: var(--ui-muted); }
+.workspace-list { flex: 1; min-height: 0; margin: 10px 0 0; padding: 0 2px 8px 0; list-style: none; overflow: auto; scrollbar-gutter: stable; }
+.workspace-list::-webkit-scrollbar { width: 3px; }
+.workspace-item { min-width: 0; margin: 2px 0; }
+.workspace-row { position: relative; display: flex; align-items: center; min-height: 34px; padding: 0 3px; border-radius: 5px; gap: 2px; }
+.workspace-expand, .workspace-expand-placeholder { flex: 0 0 16px; width: 16px; height: 24px; }
+.workspace-expand { display: grid; place-items: center; padding: 0; border: 0; background: transparent; color: var(--ui-muted); cursor: pointer; border-radius: 3px; }
+.workspace-expand svg, .workspace-bind svg, .workspace-project-more svg, .workspace-session-more svg, .workspace-session > svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.3; stroke-linecap: round; stroke-linejoin: round; flex: 0 0 auto; }
+.workspace-expand svg { width: 12px; height: 12px; }
+.workspace-expand[aria-expanded="true"] svg { transform: rotate(90deg); }
+.workspace-row:hover { background: color-mix(in srgb, var(--ui-text) 4%, transparent); }
+.workspace-row.active { background: color-mix(in srgb, var(--ui-text) 6%, transparent); }
+.workspace-project { display: flex; gap: 7px; align-items: center; flex: 1; min-width: 0; min-height: 34px; padding: 5px 2px; background: transparent; color: var(--ui-text); border: 0; text-align: left; font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; }
+.workspace-row.active .workspace-project { font-weight: 600; }
+.workspace-project > .tree-icon { flex: 0 0 16px; width: 16px; height: 16px; color: var(--ui-accent); }
+.workspace-project > .tree-icon svg { width: 16px; height: 16px; }
 .workspace-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-name small { display: block; overflow: hidden; text-overflow: ellipsis; color: var(--ui-muted); font-size: 10px; }
-.workspace-remove { opacity: 0; border: 0; background: transparent; color: var(--ui-muted); width: 24px; height: 28px; font-size: 18px; cursor: pointer; }
-.workspace-row:hover .workspace-remove, .workspace-row:focus-within .workspace-remove { opacity: 1; }
-.workspace-message, .workspace-footnote { padding: 0 8px; color: var(--ui-muted); font-size: 11px; overflow-wrap: anywhere; }
+.workspace-bind-control, .workspace-project-more { visibility: hidden; }
+.workspace-row.active .workspace-bind-control, .workspace-row:hover .workspace-bind-control, .workspace-row:focus-within .workspace-bind-control,
+.workspace-row:hover .workspace-project-more, .workspace-row:focus-within .workspace-project-more, .workspace-row.menu-open .workspace-project-more { visibility: visible; }
+.workspace-bind-control { display: flex; flex: 0 0 24px; border-radius: 4px; }
+.workspace-bind, .workspace-project-more, .workspace-session-more { display: grid; place-items: center; flex: 0 0 24px; width: 24px; height: 26px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--ui-muted); cursor: pointer; }
+.workspace-bind:hover:not(:disabled), .workspace-project-more:hover:not(:disabled), .workspace-session-more:hover:not(:disabled), .workspace-expand:hover { background: var(--ui-hover); color: var(--ui-text); }
+.workspace-project-sessions { min-width: 0; margin: 1px 0 6px 11px; padding-left: 12px; border-left: 1px solid color-mix(in srgb, var(--ui-border) 65%, transparent); }
+.workspace-session-hint { margin: 2px 4px 5px; color: var(--ui-muted); font-size: 10px; overflow-wrap: anywhere; }
+.workspace-session-heading { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 8px 3px 3px; color: var(--ui-muted); font-size: 10px; line-height: 16px; }
+.workspace-sessions { margin: 0; padding: 0; list-style: none; }
+.workspace-session-row { position: relative; display: flex; align-items: center; min-width: 0; min-height: 30px; padding: 0 2px 0 7px; border-radius: 4px; }
+.workspace-session-row:hover { background: var(--ui-hover); }
+.workspace-session-row.selected { background: color-mix(in srgb, var(--ui-accent) 17%, transparent); }
+.workspace-session-row.selected::before { content: ''; position: absolute; left: 0; top: 7px; bottom: 7px; width: 2px; border-radius: 2px; background: var(--ui-accent); }
+.workspace-session { display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; min-height: 30px; padding: 4px 2px; border: 0; background: transparent; color: var(--ui-text); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.workspace-session > svg { width: 13px; height: 13px; color: var(--ui-muted); }
+.workspace-session-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.workspace-session-more { visibility: hidden; }
+.workspace-session-row:hover .workspace-session-more, .workspace-session-row:focus-within .workspace-session-more, .workspace-session-row.selected .workspace-session-more, .workspace-session-row.menu-open .workspace-session-more { visibility: visible; }
+.workspace-navigation button:disabled { cursor: default; }
+.workspace-bind:disabled, .workspace-session:disabled { opacity: .5; }
+.workspace-expand:focus-visible, .workspace-bind:focus-visible, .workspace-session:focus-visible, .workspace-project-more:focus-visible, .workspace-session-more:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: -2px; }
+.workspace-message { padding: 0 6px; color: var(--ui-muted); font-size: 11px; overflow-wrap: anywhere; }
 .workspace-message:empty { display: none; }
-.workspace-footnote { margin-bottom: 0; }
-.workspace-project:focus-visible, .workspace-remove:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: -2px; }
+.workspace-project:focus-visible { outline: 2px solid var(--ui-accent); outline-offset: -2px; }
+.workspace-action-menu { min-width: 0; width: max-content; max-width: calc(100vw - 8px); border-radius: var(--ui-radius); }
+.workspace-action-menu button { white-space: normal; font-size: 11px; }
+@media (hover: none) {
+  .workspace-bind-control, .workspace-project-more, .workspace-session-more { visibility: visible; }
+}
 .workspace-restore { position: fixed; top: 5px; left: 6px; z-index: 5; width: 36px; height: 36px; border: 0; border-radius: 12px; background: transparent; color: var(--ui-text); }
 .workspace-restore.ui-icon:hover:not(:disabled) { border-color: transparent; background: var(--ui-hover); }
 .workspace-divider, .resizer, .sidebar-resizer { position: absolute; width: 6px; min-width: 6px; border: 0; background: transparent; z-index: 8; touch-action: none; cursor: col-resize; }
