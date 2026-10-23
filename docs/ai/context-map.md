@@ -12,6 +12,8 @@
 
 ## 按任务类型路由
 
+关闭、托盘、退出残留与二次启动先读 `docs/capabilities/app-shell.md` 的“关闭、托盘与退出”。状态与托盘 owner 为 `src/main/applicationLifecycle.ts`，主流程只在 `index.ts` 接线；设置归 `settings.ts`，单实例恢复归 `sharedSessionInstance.ts`。回归为 `test/applicationLifecycle.test.ts`、`tools/verify-application-lifecycle.cjs`；原生夹具同一隔离资料目录连续启动，等待真实销毁及命令清理，不访问官网。
+
 Markdown 实时/源码编辑、数学公式及 Mermaid 先读 `docs/capabilities/markdown-editing.md` 和 `docs/adr/2026-10-17-markdown-document-kernel.md`。文件/保存 owner 仍为 `src/renderer/editorWorkspace.js`；Markdown 内核为 `markdownEditor.js`，源码装饰为 `markdownPresentation.js`，数学/图表分别归 `markdownMath.js`、`markdownMermaid.js`，图片路径读取归 `markdownImages.js`。本地 ESM 构建归 `scripts/build-markdown.mjs`，只由静态资源构建调用；原生验收为 `tools/verify-markdown-editor.cjs`，不使用官网、CDP 或外部资源。真实 OS 中文候选窗仍需人工验收，合成 composition 不替代该证据。
 
 本地工作区缩放/需求区越界先读`docs/capabilities/app-shell.md`的本地布局验收及工作区布局说明；原生几何归`windowLayout.ts`、应用/广播归`workspaceLayoutController.ts`，CSS映射与dock测量归`src/renderer/workspaceLayout.js`，输入增高归`promptComposer.js`。验收owner为`src/main/layoutProbe.ts`，离线生命周期/故障注入入口`tools/verify-workspace-zoom.cjs`；先区分原生与CSS视口、实际缩放及遮挡状态，不将后台旧帧直接当作产品布局错误。

@@ -8,27 +8,30 @@ export class WebLoadingView {
     sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true,
     partition: 'web-loading-ui',
   } });
+  private readonly contents = this.view.webContents;
   private platform: WebPlatform = 'deepseek';
   private loaded = false;
 
   constructor() {
     this.view.setBackgroundColor('#151517');
-    this.view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-    this.view.webContents.on('will-navigate', event => event.preventDefault());
+    this.contents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    this.contents.on('will-navigate', event => event.preventDefault());
   }
 
   async load(): Promise<void> {
-    await this.view.webContents.loadFile(path.join(__dirname, '../renderer/webLoading.html'));
+    await this.contents.loadFile(path.join(__dirname, '../renderer/webLoading.html'));
     this.loaded = true;
     this.setPlatform(this.platform);
   }
 
   setPlatform(platform: WebPlatform): void {
     this.platform = platform;
-    if (!this.loaded || this.view.webContents.isDestroyed()) return;
+    if (!this.loaded || this.contents.isDestroyed()) return;
     const label = platform === 'chatgpt' ? 'ChatGPT' : 'DeepSeek';
-    void this.view.webContents.executeJavaScript(`document.getElementById('platform').textContent = ${JSON.stringify(label)}; void 0;`).catch(() => {});
+    void this.contents.executeJavaScript(`document.getElementById('platform').textContent = ${JSON.stringify(label)}; void 0;`).catch(() => {});
   }
 
-  dispose(): void { if (!this.view.webContents.isDestroyed()) this.view.webContents.close(); }
+  dispose(): void {
+    if (!this.contents.isDestroyed()) this.contents.close();
+  }
 }

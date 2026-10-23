@@ -25,7 +25,7 @@ import { SharedSessionInstance } from './sharedSessionInstance';
  *  - UA：移除 `Electron/<ver>` 与应用名标记，保留真实内核版本（ADR-0001）；
  *  - 会话分区：固定 `persist:postcheck`，复用 P0b 已登录会话（见 session-persistence 能力文档）。
  */
-import { app, BaseWindow, clipboard, dialog, ipcMain, Menu, screen, session, WebContentsView } from 'electron';
+import { app, BaseWindow, clipboard, dialog, ipcMain, Menu, screen, session, webContents, WebContentsView } from 'electron';
 import * as path from 'node:path';
 
 import { CHANNELS, type PromptPanelState, type PromptComposerStatus, type SavePromptSpecResult, type ReturnPreview, type RootInfo } from '../shared/contract';
@@ -54,7 +54,8 @@ import { registerApplicationUpdateIpc } from './applicationUpdateIpc';
 import { ApplicationUpdateWindow } from './applicationUpdateWindow';
 import { ToolSettingsWindow } from './toolSettingsWindow';
 import { registerToolSettingsIpc, toolSettingsState } from './toolSettingsIpc';
-import { createToolIntegration, readAutoReply, registerToolShutdown } from './tools/integration';
+import { createToolIntegration, readAutoReply } from './tools/integration';
+import { ApplicationLifecycle, closeApplicationContents, createApplicationTray } from './applicationLifecycle';
 
 /* ------------------------------------------------------------------ *
  * 常量
@@ -175,13 +176,13 @@ async function bootstrap(): Promise<void> {
   }
 
   /* ---------------- 窗口与两个视图 ---------------- */
-  const win = new BaseWindow({ width: 1600, height: 960, minWidth: 1080, minHeight: 600, show: !SELF_TEST && !STARTUP_PROBE, title: 'Mini-AI-IDE' });
+  const win = new BaseWindow({ width: 1600, height: 960, minWidth: 1080, minHeight: 600, show: false, title: 'Mini-AI-IDE' });
   startupMark('window-created');
-  sharedInstance.setWindow(win);
   let updater: ApplicationUpdater | null = null;
   let toolSettingsWindow: ToolSettingsWindow | null = null;
   let closeApproved = false;
   let closePending = false;
+  let viewsClosing = false;
   const editorView = new WebContentsView({
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -294,7 +295,7 @@ async function bootstrap(): Promise<void> {
     { editor: editorView, web: webView, webbar: webBarView, preview: previewView, loading: webLoading.view }, settings,
     () => buildApplicationMenu());
   let layout = layoutController.layout;
-  function relayout(): void { layoutController.apply(); layout = layoutController.layout; }
+  function relayout(): void { if (closeApproved || win.isDestroyed()) return; layoutController.apply(); layout = layoutController.layout; }
   relayout();
   promptView.setBounds(PROMPT_HIDDEN_BOUNDS);
   promptView.setVisible(false);
@@ -425,12 +426,12 @@ async function loadLocalView(
   const target = path.join(__dirname, '..', 'renderer', fileName);
   let lastErr: unknown = null;
   for (let i = 1; i <= attempts; i += 1) {
-    if (win.isDestroyed() || view.webContents.isDestroyed()) return false;
+    if (closeApproved || win.isDestroyed() || view.webContents.isDestroyed()) return false;
     try {
       await view.webContents.loadFile(target);
-      return !win.isDestroyed() && !view.webContents.isDestroyed();
+      return !closeApproved && !win.isDestroyed() && !view.webContents.isDestroyed();
     } catch (err) {
-      if (win.isDestroyed() || view.webContents.isDestroyed()) return false;
+      if (closeApproved || win.isDestroyed() || view.webContents.isDestroyed()) return false;
       lastErr = err;
       const detail = err instanceof Error ? err.message : String(err);
       process.stderr.write(`[load] ${fileName} 第 ${i}/${attempts} 次加载失败：${detail}\n`);
@@ -600,6 +601,7 @@ async function loadLocalView(
     },
     applyView: view => layoutController.setWebView(view),
     loadingChanged: (platform, loading) => {
+      if (closeApproved || win.isDestroyed()) return;
       webLoading.setPlatform(platform);
       layoutController.setLoadingViewVisible(loading);
     },
@@ -885,6 +887,17 @@ async function loadLocalView(
           label: '设置',
           submenu: [
             {
+              label: '关闭主窗口时',
+              submenu: ([['quit', '直接退出'], ['tray', '缩小至托盘']] as const).map(([behavior, label]) => ({
+                label, type: 'radio' as const, checked: settings.get().closeBehavior === behavior,
+                click: () => {
+                  try { settings.update({ closeBehavior: behavior }); }
+                  catch (error) { void dialog.showMessageBox(win, { type: 'error', message: '关闭行为保存失败', detail: String(error) }); }
+                  buildApplicationMenu();
+                },
+              })),
+            },
+            {
               label: '修改提示词…',
               accelerator: 'CmdOrCtrl+Shift+P',
               click: () => showPromptPanel(),
@@ -975,47 +988,45 @@ async function loadLocalView(
   });
 
   // 编辑器可交互前安装退出保护，辅助页面失败也必须经过未保存检查。
-  registerToolShutdown(app, () => workspaceController.run(async () => {
-    promptPanelRevision += 1;
-    if (!closeApproved && !updater?.installing && !await workspaceController.editor.canLeave()) return false;
-    try { layoutController.flushPendingLayout(); }
-    catch (error) {
-      void dialog.showMessageBox(win, { type: 'error', message: '分栏布局保存失败，请重试退出', detail: String(error) });
-      return false;
-    }
-    closeApproved = true;
-    // 菜单退出也先关闭窗口，停止清理期间新增编辑或工具请求。
-    if (!win.isDestroyed()) win.close(); return true;
-  }), () => tools.dispose(), error => process.stderr.write(`[tools] 退出时停止命令失败：${String(error)}\n`));
-  win.on('close', (event) => {
-    promptPanelRevision += 1;
-    // 仅安装进行中复用更新器的离开批准；安装失败恢复普通退出保护。
-    if (closeApproved || updater?.installing || SELF_TEST || UI_PROBE || DIAGNOSE) {
-      try { layoutController.flushPendingLayout(); }
-      catch (error) {
-        event.preventDefault(); closeApproved = false;
-        void dialog.showMessageBox(win, { type: 'error', message: '分栏布局保存失败，请重试关闭', detail: String(error) });
-      }
-      return;
-    }
-    event.preventDefault();
-    if (closePending) return;
-    closePending = true;
-    void workspaceController.run(async () => {
-      try { if (await workspaceController.editor.canLeave()) { layoutController.flushPendingLayout(); closeApproved = true; win.close(); } }
-      catch (error) { void dialog.showMessageBox(win, { type: 'error', message: '关闭前保存失败，请重试关闭', detail: String(error) }); }
-      finally { closePending = false; }
-    });
+  const editorContents = editorView.webContents;
+  new ApplicationLifecycle(app, win, {
+    closeBehavior: () => SELF_TEST || UI_PROBE || DIAGNOSE ? 'quit' : settings.get().closeBehavior,
+    approve: () => {
+      closePending = true;
+      return workspaceController.run(async () => {
+        promptPanelRevision += 1;
+        if (!win.isDestroyed() && !updater?.installing && !SELF_TEST && !UI_PROBE && !DIAGNOSE) {
+          if (workspaceController.editor.hasDirty) { win.show(); win.focus(); }
+          if (!await workspaceController.editor.canLeave()) { closePending = false; return false; }
+        }
+        layoutController.flushPendingLayout();
+        closeApproved = true;
+        return true;
+      });
+    },
+    cleanup: async () => {
+      // 保留官网及编辑器，直到异步工具运输撤回和所属命令停止完成。
+      if (!viewsClosing) await tools.dispose();
+      viewsClosing = true;
+      toolSettingsWindow?.dispose(); updateWindow.dispose(); updater?.dispose();
+      platforms.dispose(); webLoading.dispose();
+      // 本应用进程内的所有视图，包括已分离的本地面板、官网账号及开发者工具。
+      // 先确认其他视图已释放，再关闭编辑器，失败时保留文件/退出操作入口。
+      await closeApplicationContents(webContents.getAllWebContents().filter(contents => contents !== editorContents));
+      await closeApplicationContents([editorContents]);
+      workspaceController.editor.reset();
+    },
+    hideAuxiliary: () => { promptPanelRevision += 1; toolSettingsWindow?.hide(false); updateWindow.hide(); },
+    createTray: createApplicationTray,
+    failed: error => {
+      closePending = false; closeApproved = viewsClosing;
+      process.stderr.write(`[app] 关闭或退出失败：${error instanceof Error ? error.stack : String(error)}\n`);
+      if (!win.isDestroyed()) void dialog.showMessageBox(win, { type: 'error', message: '关闭或退出失败，请重试', detail: String(error) });
+    },
   });
-  win.on('closed', () => {
-    platforms.dispose();
-    webLoading.dispose();
-    toolSettingsWindow?.dispose();
-    updateWindow.dispose();
-    updater?.dispose();
-    workspaceController.editor.reset();
-    app.quit();
-  });
+  // 生命周期保护安装后才交付窗口；初始化中的第二次启动仍由实例 owner 保留激活请求。
+  sharedInstance.setWindow(win);
+  if (!SELF_TEST && !STARTUP_PROBE) win.show();
   startupMark('editor-load-start');
   try {
     if (!await loadLocalView(editorView, 'index.html')) return;
@@ -1031,7 +1042,7 @@ async function loadLocalView(
 
     // 必需状态和 IPC 已就绪；辅助页面继续串行加载，但不再阻塞编辑器。
     const loading = await webLoadingReady;
-    if (win.isDestroyed()) return;
+    if (closeApproved || win.isDestroyed()) return;
     if (!loading.ok) throw loading.error;
     if (!await loadLocalView(promptView, 'prompt.html')) return;
     startupMark('prompt-loaded');
@@ -1043,7 +1054,7 @@ async function loadLocalView(
     // webbar / preview 订阅布局广播，加载完成后补发当前初态。
     relayout();
   } catch (error) {
-    if (win.isDestroyed()) return;
+    if (closeApproved || win.isDestroyed()) return;
     if (SELF_TEST || UI_PROBE || DIAGNOSE) throw error;
     process.stderr.write(`[load] 本地界面启动失败：${String(error)}\n`);
     await dialog.showMessageBox(win, { type: 'error', message: '本地界面加载失败，请保存文件后重新打开应用', detail: String(error) });
@@ -1052,6 +1063,8 @@ async function loadLocalView(
   } finally {
     resolvePromptReady(false);
   }
+
+  if (closeApproved || win.isDestroyed()) return;
 
   if (SELF_TEST) {
     const fixtures = createFixtures();

@@ -1,7 +1,7 @@
 ---
 artifact_type: capability
 status: current
-updated: 2026-10-13
+updated: 2026-10-23
 owner: 胡运宽
 source_of_truth: [src/shared/applicationUpdate.ts, src/main/updateService.ts, src/main/appUpdater.ts, src/main/applicationUpdateIpc.ts, src/main/updateInstaller.ts, src/renderer/applicationUpdate.js, src/renderer/applicationUpdate.css, src/main/applicationUpdateWindow.ts, src/main/updatePreload.ts, src/renderer/update.html, src/renderer/updateDialog.js, docs/adr/2026-10-09-independent-update-window.md, test/updateService.test.ts, test/applicationUpdate.test.ts, test/applicationUpdateIpc.test.ts, test/updateInstaller.test.ts, electron-builder.config.cjs, scripts/prepare-release.mjs]
 ---
@@ -27,7 +27,7 @@ ApplicationUpdateWindow 持有与主 BaseWindow 关联的非模态 BrowserWindow
 - 下载成功后保留“重启并安装”按钮，直到用户明确点击；关闭窗口可以稍后安装，普通关闭软件不安装更新。
 - 安装前经 `WorkspaceController.run()` 和 `EditorSession.canLeave()` 处理所有未保存文件。取消、保存失败或窗口已销毁时不调用安装器；安装中复用该批准，不重复询问放弃的草稿。
 - 安装包启动成功后才退出应用；启动参数由 Node 在 Windows 上负责转义，避免含空格的安装目录被 NSIS 拆分。退出排在安装器进程收到 `spawn` 后的下一事件循环，给 NSIS 初始化和接管当前安装目录留出机会。启动失败则在窗口报错并保留窗口，用户重新检查、下载和安装。等待启动期间仍走普通退出保护，不通过更新库预先排程退出，也不在失败后回落到 shell 打开或自动提权。
-- 窗口关闭后取消在途下载，晚到的事件不广播新状态、不安装。
+- 完整退出应用时取消在途下载，晚到的事件不广播新状态、不安装；缩小主窗口至托盘仅隐藏更新窗口，保留下载。更新安装后的显式退出不受托盘偏好影响，走应用统一的工具清理与视图销毁流程，见 `app-shell.md`。
 
 ## 支持判定与数据
 

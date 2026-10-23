@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
-import type { App, IpcMain, WebContents } from 'electron';
+import type { IpcMain, WebContents } from 'electron';
 import { CHANNELS } from '../../shared/contract';
 import { parseToolBatch, type ToolRequest, type ToolState, type ToolCollectionState } from '../../shared/toolProtocol';
 import { TOOL_JSON_RESEND_INSTRUCTION } from '../../shared/toolJsonDiagnostic';
@@ -76,22 +76,7 @@ function scriptReferences(command: string): { paths: string[]; reliable: boolean
   return { paths, reliable };
 }
 
-/** 主进程保持存活，等所属命令停止完成再退出，避免清理刚启动就被 app.quit 中断。 */
-export function registerToolShutdown(application: Pick<App, 'on' | 'quit'>, approve: () => Promise<boolean>, dispose: () => Promise<void>, failed: (error: unknown) => void): void {
-  let pending = false; let approved = false;
-  application.on('before-quit', event => {
-    if (approved) return;
-    event.preventDefault(); if (pending) return; pending = true;
-    void (async () => {
-      let allowed: boolean;
-      try { allowed = await approve(); }
-      catch (error) { pending = false; failed(error); return; }
-      if (!allowed) { pending = false; return; }
-      await dispose().catch(failed);
-      approved = true; application.quit();
-    })();
-  });
-}
+export { registerToolShutdown } from '../applicationLifecycle';
 
 /** 授权绑定实际目标与命令/项目脚本，而不是可变的友好名字。 */
 export async function describeTool(root: string, request: ToolRequest): Promise<{ external: boolean; fingerprint: string; canRemember: boolean }> {

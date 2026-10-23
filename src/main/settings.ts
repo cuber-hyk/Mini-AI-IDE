@@ -24,7 +24,11 @@ export interface WorkspaceLayoutSettings {
   treeVisible: boolean;
 }
 
+export type CloseBehavior = 'quit' | 'tray';
+
 export interface Settings {
+  /** 主窗口关闭按钮的行为；菜单中的退出始终完整退出。 */
+  closeBehavior: CloseBehavior;
   localPrompt: LocalPromptOptions;
   /** 上次打开的根目录（绝对路径）；目录不存在时启动会忽略并清空 */
   lastRoot: string | null;
@@ -50,6 +54,7 @@ export interface Settings {
 }
 
 const DEFAULTS: Settings = {
+  closeBehavior: 'tray',
   localPrompt: { includeInitialization: true },
   lastRoot: null,
   recentRoots: [],
@@ -74,6 +79,8 @@ const DEFAULTS: Settings = {
  */
 export const PRODUCTION_SETTINGS_FILE = 'settings.json';
 export const SELF_TEST_SETTINGS_FILE = 'settings.selftest.json';
+
+function normalizeCloseBehavior(value: unknown): CloseBehavior { return value === 'quit' ? 'quit' : 'tray'; }
 
 /** Windows 路径按大小写不敏感去重；失效目录保留，打开时再报告错误。 */
 export function normalizeRecentRoots(value: unknown): string[] {
@@ -139,6 +146,7 @@ export class SettingsStore {
     const next = {
       ...this.cache,
       ...patch,
+      closeBehavior: patch.closeBehavior === undefined ? this.cache.closeBehavior : normalizeCloseBehavior(patch.closeBehavior),
       recentRoots: normalizeRecentRoots(patch.recentRoots ?? this.cache.recentRoots),
       workspaceRoots: normalizeWorkspaceRoots(patch.workspaceRoots ?? this.cache.workspaceRoots),
       localPrompt: normalizeLocalPrompt(patch.localPrompt === undefined ? this.cache.localPrompt : patch.localPrompt),
@@ -156,6 +164,7 @@ export class SettingsStore {
       const raw = fs.readFileSync(this.file, 'utf8');
       const parsed = JSON.parse(raw) as Partial<Settings> & Record<string, unknown>;
       const out: Settings = { ...DEFAULTS, recentRoots: [], workspaceRoots: [] };
+      out.closeBehavior = normalizeCloseBehavior(parsed.closeBehavior);
       if (typeof parsed.lastRoot === 'string' && parsed.lastRoot.length > 0) out.lastRoot = parsed.lastRoot;
       out.recentRoots = normalizeRecentRoots(parsed.recentRoots);
       // 仅首次升级初始化；已明确保存的空列表不能从最近历史重新填回。
